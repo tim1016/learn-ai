@@ -8,13 +8,17 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryLimit,
+    ConfirmedRecoveryShape,
     ExtendedLimitProposal,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import confirmed_flatten_reference_price
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan, SafeFlattenPlanLeg
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
@@ -33,12 +37,13 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
-from app.broker.contract.errors import BrokerOrderRejected
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
@@ -49,6 +54,7 @@ from app.broker.contract.models import (
     TimeInForce,
 )
 from app.schemas.market_liveness import TopOfBookQuote
+from app.services.broker_v2_panel.sqlite_panel_adapter import _recent_fill_view
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 
 ACCOUNT_ID = "PA-FLATTEN"
@@ -550,15 +556,29 @@ _XH_POLICY = ProgramLegPolicy(
 )
 _PRE_MARKET_MS = 1_700_136_000_000  # 2023-11-16 07:00 ET
 _OVERNIGHT_MS = 1_700_100_000_000  # 2023-11-15 21:00 ET
+_JUST_BEFORE_POST_CLOSE_MS = 1_700_096_395_000  # 2023-11-15 19:59:55 ET
+_JUST_AFTER_POST_CLOSE_MS = 1_700_096_410_000  # 2023-11-15 20:00:10 ET
 
 
-def _confirmed_limit_shape(side: OrderSide = OrderSide.SELL) -> LegShape:
-    return LegShape(
-        order_type=OrderType.LIMIT,
-        time_in_force=TimeInForce.DAY,
-        limit_price=99.95,
-        extended_hours=True,
-        side=side,
+def _live_quote(now_ms: int) -> TopOfBookQuote:
+    return TopOfBookQuote(
+        symbol="SPY", bid=100.00, ask=100.05, source="ibkr.market_data.status",
+        observed_at_ms=now_ms,
+    )
+
+
+def _confirmed_limit_shape(side: OrderSide = OrderSide.SELL) -> ConfirmedRecoveryShape:
+    return ConfirmedRecoveryShape(
+        shape=LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=99.95,
+            extended_hours=True,
+            side=side,
+        ),
+        # Still inside its session at the fixture's clock.
+        valid_until_ms=FIXTURE_RTH_MS + 3_600_000,
+        reference_quote=_live_quote(FIXTURE_RTH_MS),
     )
 
 
@@ -576,7 +596,7 @@ async def test_execute_safe_flatten_plan_reduces_with_the_confirmed_extended_lim
 
     await execute_safe_flatten_plan(
         repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
-        reducing_shape=_confirmed_limit_shape(),
+        confirmed_shape=_confirmed_limit_shape(),
     )
 
     ((leg,),) = (trade.submitted_legs,)
@@ -600,30 +620,34 @@ async def test_execute_safe_flatten_plan_refuses_a_shape_priced_for_the_other_si
     with pytest.raises(SafeFlattenExecutionError, match="priced for"):
         await execute_safe_flatten_plan(
             repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
-            reducing_shape=_confirmed_limit_shape(OrderSide.BUY),
+            confirmed_shape=_confirmed_limit_shape(OrderSide.BUY),
         )
 
     assert trade.submit_calls == []
     assert repo.active_exit_for_strategy(SID) is None
 
 
-async def _stopped_facade_at(repo: ClerkSqliteRepository, now_ms: int) -> tuple[
-    SqliteAlpacaClerkFacade, _FakeTrade, Any
-]:
-    """A stopped bot holding +10, reconciled at ``now_ms`` under an extended window."""
+async def _stopped_facade_at(
+    repo: ClerkSqliteRepository, now_ms: int, *, trade: _FakeTrade | None = None
+) -> tuple[SqliteAlpacaClerkFacade, _FakeTrade, Any]:
+    """A stopped bot holding +10, reconciled at ``now_ms`` under an extended window.
+
+    The Clerk's live IBKR quote is read at whatever the repository clock says.
+    """
     await _held_position(repo)
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
     )
     _walk_clock_to(repo, now_ms)
-    trade = _FakeTrade()
+    trade = trade or _FakeTrade()
     facade = SqliteAlpacaClerkFacade(
         account_mode="paper",
         repo=repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
         program_leg_policy=_XH_POLICY,
+        quote_source=lambda _symbol, quote_now_ms: _live_quote(quote_now_ms),
     )
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
@@ -676,6 +700,93 @@ async def test_a_pre_market_flatten_sends_the_operators_confirmed_limit(
     assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (
         OrderType.LIMIT, TimeInForce.DAY, 99.95, True,
     )
+    # The quote the limit was priced against is durable with the EXIT, so a
+    # fill's realized slippage is measured from the bid the Clerk saw at send.
+    (reducing,) = result.orders
+    assert confirmed_flatten_reference_price(repo, reducing.order_ref) == 100.00
+    fill = FillRecord(
+        account_id=ACCOUNT_ID, sid=SID, intent_id="flatten", order_ref=reducing.order_ref,
+        event_key="execution:flatten-1", symbol="SPY", side=OrderSide.SELL, quantity=10.0,
+        fill_price=99.90, filled_at_ms=_PRE_MARKET_MS + 1_000, fee=None,
+    )
+    view = _recent_fill_view(fill, authority_account_id=ACCOUNT_ID, repository=repo)
+    assert view.slippage_reference_price == 100.00
+    assert view.slippage_bps == pytest.approx(10.0, abs=1e-9, rel=0)
+
+
+async def test_a_limit_past_the_band_is_refused_before_any_exit_is_accepted(
+    crashed_with_exposure,
+) -> None:
+    """Owner decision 2026-09-19: no more than 2 × 20 bps below the 100.00 bid."""
+    repo, _clock = crashed_with_exposure
+    facade, trade, current_context = await _stopped_facade_at(repo, _PRE_MARKET_MS)
+
+    with pytest.raises(RecoveryExecutionError) as excinfo:
+        await _execute(
+            facade,
+            current_context,
+            confirmed_limit=ConfirmedRecoveryLimit(
+                limit_price=Decimal("99.59"), quote_observed_at_ms=_PRE_MARKET_MS
+            ),
+        )
+
+    assert excinfo.value.refusal is not None
+    assert excinfo.value.refusal.reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
+    assert trade.submit_calls == []
+    assert repo.active_exit_for_strategy(SID) is None
+
+
+class _LookupOutageTrade(_FakeTrade):
+    """Broker lookups fail while ``lookups_fail`` holds, so entry proof defers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lookups_fail = True
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        if self.lookups_fail:
+            self.lookup_calls.append(client_order_id)
+            raise BrokerUnavailable("broker lookups are down")
+        return await super().get_order_by_client_order_id(client_order_id)
+
+
+async def test_a_confirmed_limit_never_goes_out_after_its_session_ends(
+    crashed_with_exposure,
+) -> None:
+    """Backend review of #2007: confirmed at 19:59:55, the reduction deferred by
+    an unproven entry, and the next pass at 20:00:10 must send nothing — the
+    EXIT fails through EXIT_NOT_FLAT so the entry is free to price again."""
+    repo, _clock = crashed_with_exposure
+    trade = _LookupOutageTrade()
+    facade, trade, current_context = await _stopped_facade_at(
+        repo, _JUST_BEFORE_POST_CLOSE_MS, trade=trade
+    )
+
+    result = await _execute(
+        facade,
+        current_context,
+        confirmed_limit=ConfirmedRecoveryLimit(
+            limit_price=Decimal("99.95"), quote_observed_at_ms=_JUST_BEFORE_POST_CLOSE_MS
+        ),
+    )
+    assert result.orders == ()
+    active = repo.active_exit_for_strategy(SID)
+    assert active is not None
+    effect_operation_id = active.effect_operation_id
+
+    _walk_clock_to(repo, _JUST_AFTER_POST_CLOSE_MS)
+    trade.lookups_fail = False
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade)
+
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_strategy(SID) is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=SID,
+    ) is not None
 
 
 async def test_a_pre_market_flatten_without_a_confirmed_limit_sends_nothing(

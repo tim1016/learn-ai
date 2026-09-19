@@ -2,8 +2,9 @@
 
 Regular session: the market DAY leg every EXIT has always been. The broker's
 declared PRE/POST window: an extended-hours DAY limit the operator confirms
-against IBKR's live bid and ask. Anything else: a typed refusal naming when
-the next session opens -- never a market order the vendor queues to 09:30.
+against IBKR's live bid and ask, inside a band of twice the sealed exit
+allowance through the book. Anything else: a typed refusal naming when the
+next session opens -- never a market order the vendor queues to 09:30.
 """
 
 from __future__ import annotations
@@ -18,9 +19,12 @@ from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy, ProgramLegRefu
 from app.broker.alpaca.clerk.recovery_reduction import (
     RECOVERY_QUOTE_MAX_AGE_MS,
     ConfirmedRecoveryLimit,
+    ConfirmedRecoveryShape,
     ExtendedLimitProposal,
     RegularSessionReduction,
     price_recovery_reduction,
+    realized_slippage_bps,
+    recovery_leg_verdict,
     recovery_reduction_shape,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
@@ -71,13 +75,15 @@ def test_pre_market_sell_suggests_the_bid_less_the_sealed_exit_allowance() -> No
 
     pricing = price_recovery_reduction(side=OrderSide.SELL, now_ms=now, policy=_POLICY, quote=quote)
 
-    # floor_tick(100.00 × (1 − 20 / 10⁴)) = 99.80
+    # suggested: floor_tick(100.00 × (1 − 20 / 10⁴)) = 99.80
+    # band:      floor_tick(100.00 × (1 − 2 × 20 / 10⁴)) = 99.60
     assert pricing == ExtendedLimitProposal(
         phase="PRE",
         side=OrderSide.SELL,
         quote=quote,
         exit_allowance_bps=Decimal("20"),
         suggested_limit_price=Decimal("99.80"),
+        band_limit_price=Decimal("99.60"),
     )
 
 
@@ -87,9 +93,14 @@ def test_after_hours_buy_to_cover_suggests_the_ask_plus_the_allowance() -> None:
 
     pricing = price_recovery_reduction(side=OrderSide.BUY, now_ms=now, policy=_POLICY, quote=quote)
 
-    # ceil_tick(50.01 × (1 + 20 / 10⁴)) = ceil_tick(50.11002) = 50.12
+    # suggested: ceil_tick(50.01 × (1 + 20 / 10⁴)) = ceil_tick(50.11002) = 50.12
+    # band:      ceil_tick(50.01 × (1 + 40 / 10⁴)) = ceil_tick(50.21004) = 50.22
     assert isinstance(pricing, ExtendedLimitProposal)
-    assert (pricing.phase, pricing.suggested_limit_price) == ("POST", Decimal("50.12"))
+    assert (pricing.phase, pricing.suggested_limit_price, pricing.band_limit_price) == (
+        "POST",
+        Decimal("50.12"),
+        Decimal("50.22"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -153,29 +164,50 @@ def test_a_sub_penny_bid_that_prices_to_zero_is_a_typed_refusal() -> None:
 # --- execution: what the operator's confirmation turns into -----------------
 
 
-def _shape(now_ms: int, confirmed: ConfirmedRecoveryLimit | None, *, policy: ProgramLegPolicy = _POLICY):
+def _shape(
+    now_ms: int,
+    confirmed: ConfirmedRecoveryLimit | None,
+    *,
+    side: OrderSide = OrderSide.SELL,
+    quote: TopOfBookQuote | None = None,
+    no_live_quote: bool = False,
+    policy: ProgramLegPolicy = _POLICY,
+) -> ConfirmedRecoveryShape | None:
+    """The shape at ``now_ms``; the Clerk's live quote defaults to one read at ``now_ms``."""
+    current = None if no_live_quote else quote or _quote(observed_at_ms=now_ms)
     return recovery_reduction_shape(
-        side=OrderSide.SELL,
+        side=side,
         symbol="SPY",
         quantity=10.0,
         now_ms=now_ms,
         policy=policy,
         confirmed=confirmed,
+        current_quote=current,
     )
+
+
+def _limit(price: str, *, observed_at_ms: int) -> ConfirmedRecoveryLimit:
+    return ConfirmedRecoveryLimit(limit_price=Decimal(price), quote_observed_at_ms=observed_at_ms)
+
+
+def _refused(now_ms: int, confirmed: ConfirmedRecoveryLimit | None, **kwargs: object) -> ProgramLegRefused:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        _shape(now_ms, confirmed, **kwargs)  # type: ignore[arg-type]
+    return excinfo.value
 
 
 def test_regular_session_confirmation_is_the_market_day_default() -> None:
     assert _shape(_at(10), None) is None
 
 
-def test_extended_session_confirmation_is_an_extended_day_limit_at_the_operators_price() -> None:
+def test_a_pre_market_limit_is_valid_until_the_regular_open_and_keeps_its_reference_quote() -> None:
     now = _at(7)
-    confirmed = ConfirmedRecoveryLimit(limit_price=Decimal("99.95"), quote_observed_at_ms=now - 4_000)
+    current = _quote(observed_at_ms=now)
 
-    shape = _shape(now, confirmed)
+    confirmed = _shape(now, _limit("99.95", observed_at_ms=now - 4_000), quote=current)
 
-    assert shape is not None
-    leg = shape.apply(symbol="SPY", quantity=10.0)
+    assert confirmed is not None
+    leg = confirmed.shape.apply(symbol="SPY", quantity=10.0)
     assert (leg.side, leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (
         OrderSide.SELL,
         OrderType.LIMIT,
@@ -183,62 +215,174 @@ def test_extended_session_confirmation_is_an_extended_day_limit_at_the_operators
         99.95,
         True,
     )
+    assert confirmed.valid_until_ms == _at(9, 30)
+    assert confirmed.reference_quote == current
+
+
+def test_an_after_hours_limit_is_valid_until_the_declared_close() -> None:
+    now = _at(17)
+
+    confirmed = _shape(now, _limit("99.95", observed_at_ms=now))
+
+    assert confirmed is not None and confirmed.valid_until_ms == _at(20)
 
 
 @pytest.mark.parametrize("age_ms", [RECOVERY_QUOTE_MAX_AGE_MS + 1, -1])
 def test_a_confirmation_against_a_stale_or_future_quote_asks_for_a_refresh(age_ms: int) -> None:
     now = _at(7)
-    confirmed = ConfirmedRecoveryLimit(limit_price=Decimal("99.95"), quote_observed_at_ms=now - age_ms)
 
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        _shape(now, confirmed)
+    refused = _refused(now, _limit("99.95", observed_at_ms=now - age_ms))
 
-    assert _refusal(excinfo) == "RECOVERY_QUOTE_STALE"
+    assert refused.reason_code == "RECOVERY_QUOTE_STALE"
+
+
+def test_a_confirmed_quote_newer_than_any_the_clerk_holds_is_refused() -> None:
+    """The client cannot vouch for freshness the server cannot see."""
+    now = _at(7)
+
+    refused = _refused(
+        now,
+        _limit("99.95", observed_at_ms=now - 1_000),
+        quote=_quote(observed_at_ms=now - 2_000),
+    )
+
+    assert refused.reason_code == "RECOVERY_QUOTE_STALE"
 
 
 def test_a_quote_exactly_at_the_bound_is_still_confirmable() -> None:
     now = _at(7)
-    confirmed = ConfirmedRecoveryLimit(
-        limit_price=Decimal("99.95"), quote_observed_at_ms=now - RECOVERY_QUOTE_MAX_AGE_MS
-    )
 
-    assert _shape(now, confirmed) is not None
+    assert _shape(now, _limit("99.95", observed_at_ms=now - RECOVERY_QUOTE_MAX_AGE_MS)) is not None
+
+
+def test_sending_needs_a_live_quote_now() -> None:
+    now = _at(7)
+
+    refused = _refused(now, _limit("99.95", observed_at_ms=now), no_live_quote=True)
+
+    assert refused.reason_code == "RECOVERY_QUOTE_UNAVAILABLE"
 
 
 def test_extended_session_without_a_confirmed_limit_refuses() -> None:
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        _shape(_at(7), None)
+    assert _refused(_at(7), None).reason_code == "RECOVERY_LIMIT_REQUIRED"
 
-    assert _refusal(excinfo) == "RECOVERY_LIMIT_REQUIRED"
+
+def test_extended_session_without_allowances_cannot_bound_a_confirmed_limit() -> None:
+    now = _at(7)
+
+    refused = _refused(
+        now,
+        _limit("99.95", observed_at_ms=now),
+        policy=ProgramLegPolicy(window=_WINDOW, allowances=None),
+    )
+
+    assert refused.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 def test_a_limit_confirmed_before_the_open_is_refused_once_the_regular_session_starts() -> None:
     now = _at(9, 30)
-    confirmed = ConfirmedRecoveryLimit(limit_price=Decimal("99.95"), quote_observed_at_ms=now - 1_000)
 
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        _shape(now, confirmed)
+    refused = _refused(now, _limit("99.95", observed_at_ms=now - 1_000))
 
-    assert _refusal(excinfo) == "RECOVERY_SESSION_CHANGED"
+    assert refused.reason_code == "RECOVERY_SESSION_CHANGED"
 
 
 def test_confirming_while_no_session_is_open_refuses_with_the_next_open() -> None:
     now = _at(20)
-    confirmed = ConfirmedRecoveryLimit(limit_price=Decimal("99.95"), quote_observed_at_ms=now - 1_000)
 
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        _shape(now, confirmed)
+    refused = _refused(now, _limit("99.95", observed_at_ms=now - 1_000))
 
-    assert _refusal(excinfo) == "NO_SESSION_OPEN"
-    assert excinfo.value.refusal.available_at_ms == _at(4, day=date(2026, 9, 3))
+    assert refused.reason_code == "NO_SESSION_OPEN"
+    assert refused.refusal.available_at_ms == _at(4, day=date(2026, 9, 3))
 
 
 @pytest.mark.parametrize("price", ["99.955", "0"])
 def test_a_price_alpaca_would_reject_is_refused_before_the_exit_is_accepted(price: str) -> None:
     now = _at(7)
-    confirmed = ConfirmedRecoveryLimit(limit_price=Decimal(price), quote_observed_at_ms=now)
 
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        _shape(now, confirmed)
+    refused = _refused(now, _limit(price, observed_at_ms=now))
 
-    assert _refusal(excinfo) == "RECOVERY_LIMIT_PRICE_INVALID"
+    assert refused.reason_code == "RECOVERY_LIMIT_PRICE_INVALID"
+
+
+# --- the band: how far through the book a confirmed limit may go -----------
+
+
+def test_a_sell_limit_at_the_band_is_accepted_and_one_tick_past_it_refused() -> None:
+    """Band = 2 × 20 bps below the 100.00 bid = 99.60 (owner decision 2026-09-19)."""
+    now = _at(7)
+
+    assert _shape(now, _limit("99.60", observed_at_ms=now)) is not None
+    assert _refused(now, _limit("99.59", observed_at_ms=now)).reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
+
+
+def test_a_fat_fingered_sell_cannot_sweep_the_book() -> None:
+    now = _at(7)
+
+    assert _refused(now, _limit("0.01", observed_at_ms=now)).reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
+
+
+def test_a_cover_above_the_band_over_the_ask_is_refused() -> None:
+    """Band = 2 × 20 bps above the 100.05 ask = ceil_tick(100.4502) = 100.46."""
+    now = _at(7)
+
+    assert _shape(now, _limit("100.46", observed_at_ms=now), side=OrderSide.BUY) is not None
+    refused = _refused(now, _limit("100.47", observed_at_ms=now), side=OrderSide.BUY)
+    assert refused.reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
+
+
+def test_a_sell_limit_above_the_bid_is_not_a_slippage_risk_and_is_accepted() -> None:
+    now = _at(7)
+
+    assert _shape(now, _limit("101.00", observed_at_ms=now)) is not None
+
+
+# --- the one send-now rule every recovery leg passes -----------------------
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "verdict"),
+    [(_at(10), "send"), (_at(7), "wait"), (_at(17), "wait"), (_at(21), "wait")],
+)
+def test_a_market_recovery_leg_goes_out_only_inside_the_regular_session(now_ms: int, verdict: str) -> None:
+    assert recovery_leg_verdict(extended_hours=False, valid_until_ms=None, now_ms=now_ms) == verdict
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "valid_until_ms", "verdict"),
+    [
+        (_at(9, 29), _at(9, 30), "send"),
+        (_at(9, 30), _at(9, 30), "expired"),
+        (_at(21), _at(20), "expired"),
+        (_at(7), None, "expired"),
+    ],
+)
+def test_a_confirmed_limit_is_never_sent_past_the_session_it_was_priced_in(
+    now_ms: int, valid_until_ms: int | None, verdict: str
+) -> None:
+    assert recovery_leg_verdict(extended_hours=True, valid_until_ms=valid_until_ms, now_ms=now_ms) == verdict
+
+
+# --- realized slippage ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("side", "reference", "fill", "expected_bps"),
+    [
+        (OrderSide.SELL, 100.0, 99.9, 10.0),
+        (OrderSide.SELL, 100.0, 100.1, -10.0),
+        (OrderSide.BUY, 50.0, 50.05, 10.0),
+        (OrderSide.BUY, 50.0, 49.95, -10.0),
+    ],
+)
+def test_realized_slippage_is_positive_when_the_fill_is_worse_than_the_reference(
+    side: OrderSide, reference: float, fill: float, expected_bps: float
+) -> None:
+    assert realized_slippage_bps(side=side, reference_price=reference, fill_price=fill) == pytest.approx(
+        expected_bps, abs=1e-9, rel=0
+    )
+
+
+def test_realized_slippage_needs_a_positive_reference() -> None:
+    with pytest.raises(ValueError, match="reference_price"):
+        realized_slippage_bps(side=OrderSide.SELL, reference_price=0.0, fill_price=1.0)

@@ -17,11 +17,16 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   HistoricalExecutionRecoveryPlan,
+  SqliteExtendedLimitConfirmation,
   SqliteExtendedLimitPricing,
   SqliteSafeFlattenPlan,
   SqliteSafeFlattenPricing,
 } from '../../../../api/alpaca.types';
-import { ExtendedFlattenTicketComponent } from '../../shared/extended-flatten-ticket/extended-flatten-ticket.component';
+import {
+  ExtendedFlattenTicketComponent,
+  formatLimitPrice,
+} from '../../shared/extended-flatten-ticket/extended-flatten-ticket.component';
+import { FlattenFillsComponent } from '../../shared/flatten-fills/flatten-fills.component';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
 import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
@@ -45,7 +50,12 @@ import {
   accountWorkspaceOriginTabRoute,
   accountWorkspaceTabLabel,
 } from '../../../../fleet/account-workspace';
-import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
+import {
+  laneKey,
+  resourceTarget,
+  type ResourceTarget,
+  withCommand,
+} from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
   fencedTarget,
@@ -85,8 +95,8 @@ interface HistoricalExecutionRecoveryDraft {
 interface PreparedSafeFlatten {
   readonly plan: SqliteSafeFlattenPlan;
   readonly pricing: SqliteSafeFlattenPricing | null;
-  /** The Prepare action whose token re-checks the plan and refreshes the quote. */
-  readonly prepareAction: PanelAction;
+  /** When this browser received ``pricing`` — what the ticket ages the quote by. */
+  readonly receivedAtMs: number;
   /** The lane shown when the operator prepared. */
   readonly target: ResourceTarget;
   readonly sid: string;
@@ -121,6 +131,7 @@ const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ExtendedFlattenTicketComponent,
+    FlattenFillsComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
@@ -227,7 +238,22 @@ export class BotPanelShellComponent {
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
   /** Changes for route reuse and for a rebinding of the same visible lane. */
-  private readonly routeIdentity = computed(() => this.target());
+  /** The lane and bot this page is showing, as a value.
+   *
+   * A key, not the target object: `target()` rebuilds on any lane-directory
+   * change, and comparing object identity made an in-flight request look like
+   * a route change (it discarded a flatten the operator had just confirmed)
+   * and reset every draft below on an ordinary refresh. */
+  private readonly routeIdentity = computed(() => {
+    const target = this.target();
+    return `${laneKey(
+      target.broker,
+      target.clerkId,
+      target.routingEpoch,
+      target.bindingGeneration,
+      target.accountId,
+    )}::${this.sid()}`;
+  });
   protected readonly preparedFlatten = linkedSignal({
     source: this.routeIdentity,
     computation: (): PreparedSafeFlatten | null => null,
@@ -236,16 +262,32 @@ export class BotPanelShellComponent {
   protected readonly reductionPricing = computed(() => this.preparedFlatten()?.pricing ?? null);
   /** The priced extended-hours ticket, present only for a single-leg plan in PRE/POST. */
   protected readonly extendedFlattenTicket = computed<
-    { readonly pricing: SqliteExtendedLimitPricing; readonly quantity: number } | null
+    {
+      readonly pricing: SqliteExtendedLimitPricing;
+      readonly quantity: number;
+      readonly receivedAtMs: number;
+    } | null
   >(() => {
     const prepared = this.preparedFlatten();
     const pricing = prepared?.pricing;
     if (prepared === null || pricing?.kind !== 'extended_limit' || prepared.plan.legs.length !== 1) {
       return null;
     }
-    return { pricing, quantity: prepared.plan.legs[0].quantity };
+    return {
+      pricing,
+      quantity: prepared.plan.legs[0].quantity,
+      receivedAtMs: prepared.receivedAtMs,
+    };
   });
+  /** Fills of an operator-priced flatten, with the slippage the Clerk measured (#2007). */
+  protected readonly flattenFills = computed(() =>
+    (this.panel()?.recent_fills ?? []).filter(
+      (fill) => fill.slippage_bps !== null && fill.slippage_bps !== undefined,
+    ),
+  );
   private readonly extendedFlattenOpen = computed(() => this.extendedFlattenTicket() !== null);
+  /** One quote refresh at a time: a slow check must not overlap the next tick. */
+  private flattenQuoteInFlight = false;
   /** While a ticket is open the quote refreshes on its own, so what the
    * operator confirms is never older than one refresh. */
   private readonly extendedFlattenQuoteRefresh = effect((onCleanup) => {
@@ -542,7 +584,7 @@ export class BotPanelShellComponent {
           : {
             plan,
             pricing: check.reduction_pricing ?? null,
-            prepareAction: action,
+            receivedAtMs: Date.now(),
             target,
             sid,
             quoteError: null,
@@ -569,21 +611,32 @@ export class BotPanelShellComponent {
   /**
    * Re-read the prepared plan and its live IBKR quote, quietly (#2007).
    *
-   * A failure keeps the plan and names why beside the ticket: the quote then
-   * ages past the Clerk's bound and the ticket refuses to send it, so a stale
-   * price can never be confirmed by accident.
+   * The token is always the Prepare action the panel presents *now*: the
+   * Clerk re-mints it every reconciliation pass (~15 s), so re-checking with
+   * the one captured at Prepare would 409 within a pass and the ticket would
+   * never see a fresh quote again. A token that has just rotated is not a
+   * failure — the panel poll catches up — so it refreshes the panel and
+   * retries once instead of shouting at the operator. Anything else is named
+   * beside the ticket, and the quote then ages past the Clerk's bound and
+   * cannot be sent.
    */
-  protected async refreshFlattenQuote(): Promise<void> {
+  protected async refreshFlattenQuote(retryOnStaleToken = true): Promise<void> {
     const prepared = this.preparedFlatten();
-    if (prepared === null || this.actionPending()) return;
+    const prepare = this.presentedAction('prepare_safe_flatten');
+    if (prepared === null || this.actionPending() || this.flattenQuoteInFlight) return;
+    if (prepare === undefined) {
+      this.preparedFlatten.set({
+        ...prepared,
+        quoteError: 'This bot no longer presents Prepare safe flatten; refresh the panel.',
+      });
+      return;
+    }
+    this.flattenQuoteInFlight = true;
     try {
       const check = await this.brokers.checkSqliteSafeFlatten(
         prepared.target.clerkId,
         this.requiredAccountId(prepared.target),
-        {
-          action_id: 'prepare_safe_flatten',
-          concurrency_token: prepared.prepareAction.concurrency_token,
-        },
+        { action_id: 'prepare_safe_flatten', concurrency_token: prepare.concurrency_token },
         prepared.sid,
       );
       if (this.preparedFlatten() !== prepared) return;
@@ -591,52 +644,69 @@ export class BotPanelShellComponent {
       this.preparedFlatten.set(
         plan === null
           ? null
-          : { ...prepared, plan, pricing: check.reduction_pricing ?? null, quoteError: null },
+          : {
+            ...prepared,
+            plan,
+            pricing: check.reduction_pricing ?? null,
+            receivedAtMs: Date.now(),
+            quoteError: null,
+          },
       );
     } catch (error) {
       if (this.preparedFlatten() !== prepared) return;
-      this.preparedFlatten.set({
-        ...prepared,
-        quoteError: this.describeRejection(error, prepared.prepareAction).message,
-      });
+      const rejection = this.describeRejection(error, prepare);
+      if (rejection.reasonCode === 'stale_action_token' && retryOnStaleToken) {
+        this.flattenQuoteInFlight = false;
+        await this.liveStore.refresh();
+        await this.refreshFlattenQuote(false);
+        return;
+      }
+      this.preparedFlatten.set({ ...prepared, quoteError: rejection.message });
+    } finally {
+      this.flattenQuoteInFlight = false;
     }
   }
 
-  /** Send the extended-hours flatten at the operator's confirmed limit (#2007). */
-  protected async sendExtendedFlatten(limitPrice: number): Promise<void> {
+  /**
+   * Send the extended-hours flatten at exactly the limit the operator reviewed (#2007).
+   *
+   * The panel is re-read first so the execute token is the freshest one the
+   * Clerk has minted; without that a flatten lands inside the window after a
+   * reconciliation pass rotated the token and is refused for staleness, which
+   * is the worst possible moment to make an operator click twice.
+   */
+  protected async sendExtendedFlatten(confirmation: SqliteExtendedLimitConfirmation): Promise<void> {
     const prepared = this.preparedFlatten();
-    const pricing = prepared?.pricing;
-    const execute = this.panel()?.actions.find(
-      (candidate) => candidate.action_id === 'execute_safe_flatten',
-    );
-    if (
-      prepared === null
-      || pricing?.kind !== 'extended_limit'
-      || execute === undefined
-      || this.actionPending()
-    ) {
+    if (prepared === null || prepared.pricing?.kind !== 'extended_limit' || this.actionPending()) {
       return;
     }
     const requestIdentity = this.routeIdentity();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
+      await this.liveStore.refresh();
+      if (requestIdentity !== this.routeIdentity()) return;
+      const execute = this.presentedAction('execute_safe_flatten');
+      if (execute === undefined) {
+        throw new Error('This bot no longer presents a safe flatten; refresh and prepare again.');
+      }
       const result = await this.panelSvc.executeExtendedSafeFlatten(
         this.commandTarget(prepared.target),
         prepared.sid,
         execute.concurrency_token,
-        { limit_price: limitPrice, quote_observed_at_ms: pricing.quote_observed_at_ms },
+        confirmation,
       );
       if (requestIdentity !== this.routeIdentity()) return;
       this.preparedFlatten.set(null);
+      const price = formatLimitPrice(confirmation.limit_price);
       const receipt: ActionReceiptView = {
-        actionId: execute.action_id,
+        actionId: 'execute_safe_flatten',
         outcome: 'success',
         receiptId: result.receipt_id,
         recordedAtMs: result.recorded_at_ms,
         message: result.applied
-          ? `Limit order sent at $${limitPrice.toFixed(limitPrice >= 1 ? 2 : 4)}. It fills only `
-            + 'at that price or better; await its fill before treating exposure as flat.'
+          ? `Limit order sent at $${price}. It fills only at that price or better; await its `
+            + 'fill before treating exposure as flat.'
           : 'This flatten had already been sent; the durable result was replayed.',
         remediation: null,
       };
@@ -645,13 +715,26 @@ export class BotPanelShellComponent {
       await this.liveStore.refresh();
     } catch (error) {
       if (requestIdentity !== this.routeIdentity()) return;
-      const receipt = this.errorReceipt(error, execute);
+      const rejection = deriveActionRejection(error, 'Action "Execute safe flatten" failed.');
+      const receipt: ActionReceiptView = {
+        actionId: 'execute_safe_flatten',
+        outcome: rejection.outcome,
+        receiptId: null,
+        recordedAtMs: Date.now(),
+        message: rejection.message,
+        remediation: rejection.why,
+      };
       this.actionReceipt.set(receipt);
       this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);
     }
+  }
+
+  /** The named action as the panel presents it right now, with its current token. */
+  private presentedAction(actionId: PanelAction['action_id']): PanelAction | undefined {
+    return this.panel()?.actions.find((candidate) => candidate.action_id === actionId);
   }
 
   private commandTarget(target: ResourceTarget): ResourceTarget {

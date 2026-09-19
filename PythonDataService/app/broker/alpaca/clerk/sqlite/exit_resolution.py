@@ -7,6 +7,10 @@ import hashlib
 import logging
 
 from app.broker.alpaca.clerk.program_leg import LegShape, regular_session_shape
+from app.broker.alpaca.clerk.recovery_reduction import (
+    RECOVERY_LIMIT_SESSION_ENDED,
+    recovery_leg_verdict,
+)
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -48,7 +52,6 @@ from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
-from app.services.session_authority import session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +155,20 @@ async def _resolve_claimed(
     reducing = next((order for order in orders if order.role == "REDUCING"), None)
     assert entries
     symbol = _single_entry_symbol(repo, entries)
+    recovery = _is_recovery_exit(repo, effect_operation_id)
+    if recovery and reducing is None:
+        # Decided before any broker contact, so a recovery EXIT waiting for
+        # the open does not poll the broker all night. The leg actually
+        # created is checked again below, after the side reconciliation.
+        accepted = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
+        if not _recovery_leg_may_proceed(
+            repo,
+            effect_operation_id=effect_operation_id,
+            extended_hours=accepted is not None and accepted.extended_hours,
+            order_ref=_primary_entry_ref(repo, entries),
+            symbol=symbol,
+        ):
+            return _snapshot(repo, effect_operation_id)
     if not await _prove_entry_set_terminal(
         repo,
         effect_operation_id=effect_operation_id,
@@ -181,8 +198,18 @@ async def _resolve_claimed(
         if not position_quantity_is_nonzero(remaining_qty):
             _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
             return _snapshot(repo, effect_operation_id)
-        shape = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
-        if shape is None and _recovery_reduction_waits_for_the_open(repo, effect_operation_id):
+        shape = _resolved_reducing_shape(
+            repo,
+            effect_operation_id=effect_operation_id,
+            reducing_side=OrderSide.SELL if remaining_qty > 0 else OrderSide.BUY,
+        )
+        if recovery and not _recovery_leg_may_proceed(
+            repo,
+            effect_operation_id=effect_operation_id,
+            extended_hours=shape.extended_hours,
+            order_ref=_primary_entry_ref(repo, entries),
+            symbol=symbol,
+        ):
             return _snapshot(repo, effect_operation_id)
         require_capability(
             repo,
@@ -248,37 +275,132 @@ async def _resolve_claimed(
                     ),
                 )
             return _snapshot(repo, effect_operation_id)
-        fold_failed(
+        _fold_exit_not_flat(
             repo,
             effect_operation_id=effect_operation_id,
             order_ref=reducing.order_ref,
+            symbol=symbol,
+            attributed_qty=final_qty,
             summary_code="EXIT_NOT_FLAT",
             reason="The reducing order resolved without flattening the position.",
-            why=f"attributed_qty={final_qty} remains for {symbol!r} after terminal evidence.",
-            transition_kind="EXIT_NOT_FLAT",
-        )
-        raise_uncertainty(
-            repo,
-            strategy_instance_id=effect.strategy_instance_id,
-            reason_code=EXIT_NOT_FLAT_REASON_CODE,
             headline="A completed EXIT left attributed exposure",
             explanation=(
                 f"The reducing order became terminal while {final_qty:g} {symbol} "
                 "remained attributed to this strategy."
             ),
-            operator_impact=(
-                "New exposure is paused for this strategy; exact risk reduction "
-                "and reconciliation remain available."
-            ),
             next_step="Run another EXIT or reconcile until attributed exposure is flat.",
-            evidence_refs=(reducing.order_ref,),
-            cause_facts=ExitNotFlatCause(
-                symbol=symbol.upper(),
-                attributed_qty=final_qty,
-            ).to_mapping(),
-            severity="error",
         )
     return _snapshot(repo, effect_operation_id)
+
+
+def _fold_exit_not_flat(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    symbol: str,
+    attributed_qty: float,
+    summary_code: str,
+    reason: str,
+    headline: str,
+    explanation: str,
+    next_step: str,
+) -> None:
+    """Fail the EXIT and raise the ``EXIT_NOT_FLAT`` episode exposure is still held under.
+
+    The episode is what flags the bot for the operator and what the stuck-EXIT
+    watchdog re-drives once the regular session opens.
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    fold_failed(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        summary_code=summary_code,
+        reason=reason,
+        why=f"attributed_qty={attributed_qty} remains for {symbol!r}.",
+        transition_kind="EXIT_NOT_FLAT",
+    )
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=effect.strategy_instance_id,
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        headline=headline,
+        explanation=explanation,
+        operator_impact=(
+            "New exposure is paused for this strategy; exact risk reduction "
+            "and reconciliation remain available."
+        ),
+        next_step=next_step,
+        evidence_refs=(order_ref,),
+        cause_facts=ExitNotFlatCause(
+            symbol=symbol.upper(),
+            attributed_qty=attributed_qty,
+        ).to_mapping(),
+        severity="error",
+    )
+
+
+def _recovery_leg_may_proceed(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    extended_hours: bool,
+    order_ref: str,
+    symbol: str,
+) -> bool:
+    """Apply ``recovery_leg_verdict`` to a recovery EXIT's leg; ``True`` only to send it.
+
+    ``wait`` holds a market leg until a pass inside the regular session
+    (#2007): the vendor would queue it to the open, and an order nobody priced
+    must not sit at the broker. ``expired`` fails the EXIT through
+    ``EXIT_NOT_FLAT`` when exposure remains, so a confirmed limit is never
+    carried past the session it was priced in and the entry is free for the
+    operator to price again.
+    """
+    verdict = recovery_leg_verdict(
+        extended_hours=extended_hours,
+        valid_until_ms=_accepted_facts(repo, effect_operation_id).reducing_valid_until_ms,
+        now_ms=repo.clock(),
+    )
+    if verdict == "send":
+        return True
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    remaining_qty = repo.position(effect.strategy_instance_id, symbol)
+    if not position_quantity_is_nonzero(remaining_qty):
+        # Nothing to reduce: the ordinary flow proves the EXIT attributed-flat.
+        return True
+    if verdict == "wait":
+        logger.debug(
+            "a recovery reduction waits for the regular session",
+            extra={
+                "action": "recovery_reduction_waits_for_regular_session",
+                "account_id": repo.account_id,
+                "effect_operation_id": effect_operation_id,
+            },
+        )
+        return False
+    _fold_exit_not_flat(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        symbol=symbol,
+        attributed_qty=remaining_qty,
+        summary_code=RECOVERY_LIMIT_SESSION_ENDED.reason_code,
+        reason=RECOVERY_LIMIT_SESSION_ENDED.explanation,
+        headline="A confirmed flatten limit expired unsent",
+        explanation=(
+            f"The limit confirmed for {symbol} was not sent before its session ended; "
+            f"{remaining_qty:g} {symbol} remains attributed to this strategy."
+        ),
+        next_step=(
+            f"{RECOVERY_LIMIT_SESSION_ENDED.next_step} Automatic re-drives resume "
+            "at the regular open."
+        ),
+    )
+    return False
 
 
 def _single_entry_symbol(repo: ClerkSqliteRepository, entries: list[OrderResource]) -> str:
@@ -488,6 +610,17 @@ async def _refresh_terminal_entries(
     return True
 
 
+def _accepted_facts(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitAcceptedFacts:
+    """This EXIT's own ``EXIT_ACCEPTED`` facts; every EXIT has exactly one."""
+    acceptance = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id,
+        transition_kind="EXIT_ACCEPTED",
+    )
+    if acceptance is None:
+        raise AssertionError(f"EXIT effect {effect_operation_id!r} has no acceptance transition")
+    return ExitAcceptedFacts.from_facts_json(acceptance["facts_json"])
+
+
 def _accepted_reducing_shape(
     repo: ClerkSqliteRepository, *, effect_operation_id: str
 ) -> LegShape | None:
@@ -495,40 +628,27 @@ def _accepted_reducing_shape(
 
     Read here rather than threaded from the caller so a reduction created on
     a later pass — the 15 s reconciliation sweep, the stuck-EXIT watchdog,
-    restart recovery — carries the deciding program's shape instead of
-    silently falling back to a market DAY order the vendor queues to the
-    next regular open.
+    restart recovery — carries the deciding program's (or the operator's
+    confirmed) shape instead of silently falling back to a market DAY order
+    the vendor queues to the next regular open.
     """
-    transition = repo.first_effect_transition(
-        effect_operation_id=effect_operation_id, transition_kind="EXIT_ACCEPTED"
-    )
-    if transition is None:
-        return None
-    return ExitAcceptedFacts.from_facts_json(transition["facts_json"]).reducing_shape()
+    return _accepted_facts(repo, effect_operation_id).reducing_shape()
 
 
-def _create_reducing_order(
-    repo: ClerkSqliteRepository,
-    *,
-    effect_operation_id: str,
-    symbol: str,
-    quantity: float,
-    shape: LegShape | None,
-) -> OrderResource:
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
-    side = "sell" if quantity > 0 else "buy"
-    order_ref = build_order_ref(
-        build_bot_order_namespace(effect.strategy_instance_id),
-        _deterministic_intent_id(effect_operation_id),
-    )
-    # The shape was priced for the side the deciding program expected to
-    # reduce. Cancellation can resolve to the other one; a limit priced for
-    # the wrong side would be unmarketable, so the regular-session leg —
-    # which is always executable — takes over. This is the one place a shape
-    # can meet a side its author did not expect, so it holds the only side
-    # reconciliation in the codebase (ruling R11).
-    reducing_side = OrderSide(side)
+def _resolved_reducing_shape(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, reducing_side: OrderSide
+) -> LegShape:
+    """The leg this EXIT's reduction is created with: its recorded shape, side-reconciled.
+
+    The shape was priced for the side its author expected to reduce.
+    Cancellation can resolve to the other one; a limit priced for the wrong
+    side would be unmarketable, so the regular-session leg — which is always
+    executable — takes over. This is the one place a shape can meet a side
+    its author did not expect, so it holds the only side reconciliation in the
+    codebase (ruling R11). A recovery EXIT's result still passes
+    ``recovery_leg_verdict`` before it is created.
+    """
+    shape = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
     resolved = regular_session_shape(reducing_side) if shape is None else shape
     if resolved.side is not reducing_side:
         logger.warning(
@@ -537,18 +657,35 @@ def _create_reducing_order(
                 "action": "reducing_leg_shape_side_mismatch",
                 "effect_operation_id": effect_operation_id,
                 "shaped_side": resolved.side.value,
-                "reducing_side": side,
+                "reducing_side": reducing_side.value,
             },
         )
         resolved = regular_session_shape(reducing_side)
+    return resolved
+
+
+def _create_reducing_order(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    symbol: str,
+    quantity: float,
+    shape: LegShape,
+) -> OrderResource:
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    order_ref = build_order_ref(
+        build_bot_order_namespace(effect.strategy_instance_id),
+        _deterministic_intent_id(effect_operation_id),
+    )
     facts = ExitReducingOrderCreatedFacts(
         symbol=symbol,
-        side=side.upper(),
+        side=shape.side.value.upper(),
         quantity=abs(quantity),
-        order_type=resolved.order_type.value,
-        time_in_force=resolved.time_in_force.value,
-        limit_price=resolved.limit_price,
-        extended_hours=resolved.extended_hours,
+        order_type=shape.order_type.value,
+        time_in_force=shape.time_in_force.value,
+        limit_price=shape.limit_price,
+        extended_hours=shape.extended_hours,
     )
     repo.append_transition(
         TransitionInput(
@@ -623,7 +760,18 @@ async def _submit_reducing_order(
         limit_price=facts.limit_price,
         extended_hours=facts.extended_hours,
     )
-    if _is_recovery_exit(repo, effect_operation_id) and not broker.bind_latest_recovery_bar(
+    recovery = _is_recovery_exit(repo, effect_operation_id)
+    # A resubmission after an outage or a restart replays the leg created
+    # earlier; the clock may have moved past where it could be sent.
+    if recovery and not _recovery_leg_may_proceed(
+        repo,
+        effect_operation_id=effect_operation_id,
+        extended_hours=facts.extended_hours,
+        order_ref=reducing.order_ref,
+        symbol=facts.symbol,
+    ):
+        return
+    if recovery and not broker.bind_latest_recovery_bar(
         reducing.client_order_id,
         symbol=facts.symbol,
     ):
@@ -676,43 +824,24 @@ async def _submit_reducing_order(
     )
 
 
-def _recovery_reduction_waits_for_the_open(
-    repo: ClerkSqliteRepository, effect_operation_id: str
-) -> bool:
-    """Must this unshaped recovery EXIT hold its reduction until the regular session?
+def confirmed_flatten_reference_price(repo: ClerkSqliteRepository, order_ref: str) -> float | None:
+    """The bid (sell) or ask (cover) an operator-confirmed flatten's fills are measured from.
 
-    A recovery EXIT with no recorded shape -- the watchdog's re-drive, or a
-    safe flatten confirmed inside the regular session whose entry proof slid
-    past 16:00 -- reduces market DAY, which the vendor queues to the next open
-    outside 09:30-16:00. It waits instead (#2007, owner decision 2026-09-19):
-    no order the operator did not see priced ever sits at the broker. The
-    effect stays accepted and the reconciliation sweep creates the reduction
-    on its first pass inside the regular session. A decision-driven EXIT keeps
-    ruling R5 -- whatever shape its acceptance recorded is rebuilt as is.
+    ``None`` unless ``order_ref`` is the reducing order of an EXIT that
+    recorded a confirmed limit's reference quote (#2007) — every other fill
+    has no confirmed price to have slipped from.
     """
-    if not _is_recovery_exit(repo, effect_operation_id):
-        return False
-    if session_state_at_ms(now_ms=repo.clock()).phase == "RTH":
-        return False
-    logger.info(
-        "an unshaped recovery reduction waits for the regular session",
-        extra={
-            "action": "recovery_reduction_waits_for_regular_session",
-            "account_id": repo.account_id,
-            "effect_operation_id": effect_operation_id,
-        },
-    )
-    return True
+    order = repo.order(order_ref)
+    if order is None or order.role != "REDUCING":
+        return None
+    facts = _accepted_facts(repo, order.effect_operation_id)
+    if facts.reducing_side is None:
+        return None
+    return facts.reference_bid if facts.reducing_side == OrderSide.SELL.value else facts.reference_ask
 
 
 def _is_recovery_exit(repo: ClerkSqliteRepository, effect_operation_id: str) -> bool:
-    acceptance = repo.first_effect_transition(
-        effect_operation_id=effect_operation_id,
-        transition_kind="EXIT_ACCEPTED",
-    )
-    if acceptance is None:
-        raise AssertionError(f"EXIT effect {effect_operation_id!r} has no acceptance transition")
-    decision_id = ExitAcceptedFacts.from_facts_json(acceptance["facts_json"]).decision_id
+    decision_id = _accepted_facts(repo, effect_operation_id).decision_id
     return decision_id.startswith(_RECOVERY_DECISION_PREFIXES)
 
 
@@ -848,4 +977,4 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
     )
 
 
-__all__ = ["cancel_and_prove_owned_entry", "resolve_exit"]
+__all__ = ["cancel_and_prove_owned_entry", "confirmed_flatten_reference_price", "resolve_exit"]

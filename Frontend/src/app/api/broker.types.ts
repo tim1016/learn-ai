@@ -13809,6 +13809,8 @@ export interface components {
             ask: number;
             /** Ask Size */
             ask_size: number | null;
+            /** Band Limit Price */
+            band_limit_price: number;
             /** Bid */
             bid: number;
             /** Bid Size */
@@ -13834,6 +13836,8 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /** Spread Warning Bps */
+            spread_warning_bps: number;
             /** Suggested Limit Price */
             suggested_limit_price: number;
             /** Symbol */
@@ -20247,6 +20251,10 @@ export interface components {
              * @default false
              */
             simulated?: boolean;
+            /** Slippage Bps */
+            slippage_bps?: number | null;
+            /** Slippage Reference Price */
+            slippage_reference_price?: number | null;
             /** Symbol */
             symbol: string;
         };

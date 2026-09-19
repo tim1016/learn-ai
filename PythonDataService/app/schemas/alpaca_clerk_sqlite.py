@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
     RECOVERY_QUOTE_MAX_AGE_MS,
+    RECOVERY_SPREAD_WARNING_BPS,
     ConfirmedRecoveryLimit,
     ExtendedLimitProposal,
     RecoveryReductionPricing,
@@ -498,6 +499,11 @@ class ExtendedLimitFlattenPricing(BaseModel):
     quote_max_age_ms: int
     exit_allowance_bps: float
     suggested_limit_price: float
+    # The furthest-through-the-book price the Clerk accepts: twice the exit
+    # allowance past the bid (sell) or ask (cover), owner decision 2026-09-19.
+    band_limit_price: float
+    # A bid-ask spread wider than this, in bps of the mid, is flagged.
+    spread_warning_bps: float
 
 
 class RefusedFlattenPricing(BaseModel):
@@ -532,9 +538,9 @@ def safe_flatten_pricing_response(
     if isinstance(pricing, ExtendedLimitProposal):
         quote = pricing.quote
         return ExtendedLimitFlattenPricing(
-            phase="PRE" if pricing.phase == "PRE" else "POST",
+            phase=pricing.phase,
             symbol=quote.symbol,
-            side="sell" if pricing.side.value == "sell" else "buy",
+            side=pricing.side.value,
             bid=quote.bid,
             ask=quote.ask,
             bid_size=quote.bid_size,
@@ -543,6 +549,8 @@ def safe_flatten_pricing_response(
             quote_max_age_ms=RECOVERY_QUOTE_MAX_AGE_MS,
             exit_allowance_bps=float(pricing.exit_allowance_bps),
             suggested_limit_price=float(pricing.suggested_limit_price),
+            band_limit_price=float(pricing.band_limit_price),
+            spread_warning_bps=float(RECOVERY_SPREAD_WARNING_BPS),
         )
     return RegularSessionFlattenPricing()
 
@@ -567,7 +575,7 @@ class ExtendedLimitConfirmationRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    limit_price: float = Field(gt=0)
+    limit_price: float = Field(gt=0, allow_inf_nan=False)
     quote_observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
 
     def to_confirmed(self) -> ConfirmedRecoveryLimit:

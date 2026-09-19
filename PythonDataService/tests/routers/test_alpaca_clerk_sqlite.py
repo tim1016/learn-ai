@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.active_authority import (
@@ -39,7 +40,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
-from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionResult
+from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionError,
+    RecoveryExecutionResult,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     RepositoryPoisoned,
@@ -52,6 +56,7 @@ from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
 from app.schemas.alpaca_clerk_sqlite import HistoricalExecutionRecoveryPlanResponse
 from app.schemas.market_liveness import TopOfBookQuote
+from app.utils.error_handlers import request_validation_exception_handler
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -1050,6 +1055,7 @@ async def test_bot_recovery_check_carries_the_live_extended_hours_pricing(
             quote=quote,
             exit_allowance_bps=Decimal("20"),
             suggested_limit_price=Decimal("99.80"),
+            band_limit_price=Decimal("99.60"),
         )
 
     monkeypatch.setattr(_active_facade(), "price_safe_flatten", price)
@@ -1075,6 +1081,8 @@ async def test_bot_recovery_check_carries_the_live_extended_hours_pricing(
         "quote_max_age_ms": 10_000,
         "exit_allowance_bps": 20.0,
         "suggested_limit_price": 99.8,
+        "band_limit_price": 99.6,
+        "spread_warning_bps": 50.0,
     }
 
 
@@ -1141,6 +1149,50 @@ async def test_bot_recovery_execute_forwards_the_operators_confirmed_limit(
     assert seen == [
         ConfirmedRecoveryLimit(limit_price=Decimal("99.95"), quote_observed_at_ms=1_700_136_000_000)
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_flatten_names_its_typed_reason(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def execute(_facade, *, request, current_context):
+        del request, current_context
+        raise RecoveryExecutionError(
+            "No trading session is open now.", refusal=no_session_open(1_700_125_200_000)
+        )
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "execute_recovery_action", execute)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            json={"action_id": "execute_safe_flatten", "concurrency_token": "token"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert (detail["reason"], detail["reason_code"], detail["available_at_ms"]) == (
+        "recovery_execution_rejected",
+        "NO_SESSION_OPEN",
+        1_700_125_200_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_non_finite_limit_price_is_a_validation_error_not_a_crash(api: FastAPI) -> None:
+    # The production app's own handler, which keeps a 422 echoing Infinity JSON-safe.
+    api.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            content=(
+                '{"action_id": "execute_safe_flatten", "concurrency_token": "token", '
+                '"extended_limit": {"limit_price": Infinity, "quote_observed_at_ms": 1}}'
+            ),
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

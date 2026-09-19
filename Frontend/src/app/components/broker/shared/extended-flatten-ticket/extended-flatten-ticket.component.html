@@ -5,7 +5,8 @@
     <p-tag severity="warn" [value]="phaseLabel()" />
   </header>
   <p class="m-0 text-sm">
-    Outside regular hours a flatten is a limit order: it fills only at your price or better.
+    Outside regular hours a flatten is a limit order: it fills only at your price or better, and
+    only as deep as the book goes.
   </p>
 
   <dl class="m-0 grid grid-cols-[repeat(auto-fit,minmax(8rem,1fr))] gap-3">
@@ -13,14 +14,14 @@
       <dt class="text-xs text-[var(--text-secondary)]">Bid</dt>
       <dd class="m-0 mt-1 tabular-nums">
         {{ quote.bid | currency: 'USD' : 'symbol' : '1.2-4' }}
-        @if (quote.bid_size !== null) { <span class="text-[var(--text-secondary)]">× {{ quote.bid_size }}</span> }
+        <span class="text-[var(--text-secondary)]">× {{ quote.bid_size ?? 'size n/a' }}</span>
       </dd>
     </div>
     <div class="min-w-0">
       <dt class="text-xs text-[var(--text-secondary)]">Ask</dt>
       <dd class="m-0 mt-1 tabular-nums">
         {{ quote.ask | currency: 'USD' : 'symbol' : '1.2-4' }}
-        @if (quote.ask_size !== null) { <span class="text-[var(--text-secondary)]">× {{ quote.ask_size }}</span> }
+        <span class="text-[var(--text-secondary)]">× {{ quote.ask_size ?? 'size n/a' }}</span>
       </dd>
     </div>
     <div class="min-w-0">
@@ -33,53 +34,70 @@
     <div class="min-w-0">
       <dt class="text-xs text-[var(--text-secondary)]">IBKR quote</dt>
       <dd class="m-0 mt-1">
-        {{ quoteAgeSeconds() }} s old ·
-        <app-timestamp-display [value]="quote.quote_observed_at_ms" mode="local" />
+        {{ quoteAgeSeconds() }} s old · <app-timestamp-display [value]="quote.quote_observed_at_ms" mode="local" />
       </dd>
     </div>
     <div class="min-w-0">
       <dt class="text-xs text-[var(--text-secondary)]">Suggested limit</dt>
       <dd class="m-0 mt-1 tabular-nums">
         {{ quote.suggested_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}
-        <span class="text-[var(--text-secondary)]">({{ anchorLabel() }} {{ quote.exit_allowance_bps }} bps)</span>
+        <span class="text-[var(--text-secondary)]">({{ bookSideLabel() }} {{ isSell() ? '−' : '+' }} {{ quote.exit_allowance_bps }} bps)</span>
       </dd>
+    </div>
+    <div class="min-w-0">
+      <dt class="text-xs text-[var(--text-secondary)]">Furthest accepted</dt>
+      <dd class="m-0 mt-1 tabular-nums">{{ quote.band_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}</dd>
     </div>
   </dl>
 
   @if (quoteStale()) {
-    <p-message severity="warn" class="w-full">
-      This quote is more than {{ quote.quote_max_age_ms / 1000 }} seconds old. Refresh it before sending.
-    </p-message>
+    <p-message severity="warn" class="w-full">This quote is more than {{ quote.quote_max_age_ms / 1000 }} seconds old. Refresh it before sending.</p-message>
+  }
+  @if (wideSpread()) {
+    <p-message severity="warn" class="w-full">The spread is wider than {{ quote.spread_warning_bps }} bps: expect a poor fill.</p-message>
+  }
+  @if (thinBook()) {
+    <p-message severity="warn" class="w-full">Only {{ isSell() ? quote.bid_size : quote.ask_size }} shown at the {{ bookSideLabel() }}; your {{ quantity() }} may fill further through the book, down to your limit.</p-message>
   }
 
   <div class="flex flex-wrap items-end gap-2">
     <label class="grid gap-1" for="extended-flatten-limit">
       <span class="text-xs font-semibold">Limit price (USD)</span>
-      <input #limitInput pInputText id="extended-flatten-limit" type="text" inputmode="decimal"
-        autocomplete="off" [value]="limitText()" [attr.aria-invalid]="limitPrice() === null"
-        (input)="onLimitInput(limitInput.value)" />
+      <input #limitInput pInputText id="extended-flatten-limit" type="text" inputmode="decimal" autocomplete="off"
+        [value]="limitText()" [attr.aria-invalid]="limitPrice() === null || outsideBand()"
+        aria-describedby="extended-flatten-limit-note" (input)="onLimitInput(limitInput.value)" />
     </label>
     <button pButton type="button" severity="secondary" (click)="useSuggested()">Use suggested</button>
     <button pButton type="button" severity="secondary" [disabled]="pending()" (click)="refresh.emit()">Refresh quote</button>
   </div>
-  @if (limitPrice() === null) {
-    <p class="m-0 text-xs text-[var(--bear)]" role="alert">Enter a positive limit price.</p>
-  } @else if (fillNote(); as note) {
-    <p class="m-0 text-xs text-[var(--text-secondary)]">{{ note }}</p>
-  }
+  <p id="extended-flatten-limit-note" class="m-0 text-xs" role="status"
+    [style.color]="limitPrice() === null || outsideBand() ? 'var(--bear)' : null">
+    @if (limitPrice() === null) {
+      Enter a positive price like 512.30.
+    } @else if (outsideBand()) {
+      Past the Clerk's band — the furthest it accepts is {{ quote.band_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}.
+    } @else {
+      {{ throughBookBps() | number: '1.1-1' }} bps {{ isSell() ? 'below' : 'above' }} the {{ bookSideLabel() }};
+      worst case against it {{ worstCaseCost() | currency: 'USD' }} on {{ quantity() }} shares.
+      {{ restingNote() }}
+    }
+  </p>
 
-  @if (!confirming()) {
-    <button pButton type="button" [disabled]="!canSend()" (click)="review()">Review limit order</button>
-  } @else {
+  @if (reviewed(); as order) {
     <div class="grid gap-2 rounded-[var(--radius)] border border-[var(--border)] p-3" role="group" aria-label="Confirm the limit order">
       <p class="m-0 font-semibold">
-        {{ sideLabel() }} {{ quantity() }} {{ quote.symbol }} at limit
-        {{ limitPrice() | currency: 'USD' : 'symbol' : '1.2-4' }}, extended hours, good for today.
+        {{ sideLabel() }} {{ order.quantity }} {{ quote.symbol }} at limit ${{ order.limitText }}, extended hours, good for today.
       </p>
+      <p class="m-0 text-xs text-[var(--text-secondary)]">
+        Reviewed against bid {{ order.bid | currency: 'USD' : 'symbol' : '1.2-4' }} / ask {{ order.ask | currency: 'USD' : 'symbol' : '1.2-4' }}.
+      </p>
+      @if (reviewInvalid(); as why) { <p class="m-0 text-xs text-[var(--bear)]" role="alert">{{ why }}</p> }
       <div class="flex flex-wrap gap-2">
-        <button pButton type="button" severity="danger" [disabled]="!canSend()" (click)="confirmSend()">Send limit order</button>
+        <button #sendButton pButton type="button" severity="danger" [disabled]="reviewInvalid() !== null || pending()" (click)="confirmSend()">Send limit order</button>
         <button pButton type="button" severity="secondary" (click)="cancel()">Cancel</button>
       </div>
     </div>
+  } @else {
+    <button #reviewButton pButton type="button" [disabled]="!canReview()" (click)="review()">Review limit order</button>
   }
 </section>

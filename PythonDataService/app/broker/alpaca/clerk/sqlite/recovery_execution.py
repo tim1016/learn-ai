@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
 from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource
@@ -29,7 +30,15 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
 
 
 class RecoveryExecutionError(Exception):
-    """A presented capability has no live mutation dispatcher."""
+    """A presented capability has no live mutation dispatcher, or refused to run.
+
+    ``refusal`` is the typed reason when the reduction's shape refused it
+    (#2007): its code and, for a clock refusal, when it becomes possible.
+    """
+
+    def __init__(self, message: str, *, refusal: LegRefusal | None = None) -> None:
+        super().__init__(message)
+        self.refusal = refusal
 
 
 class ActiveSqliteRecoveryFacade(Protocol):
@@ -222,7 +231,7 @@ async def execute_recovery_action(
             # A rejected reduction (or any other executability failure) surfaces
             # as an honest error, never a silent applied=True while exposure
             # remains (Codex review 2026-08-25 P1).
-            raise RecoveryExecutionError(str(exc)) from exc
+            raise RecoveryExecutionError(str(exc), refusal=exc.refusal) from exc
         # Every captured recovery EXIT is a durably committed reduction: the
         # reducing order is either already at the broker (``orders``) or the
         # reconciliation sweep re-drives it. A transient deferral therefore

@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
+from app.broker.alpaca.clerk.recovery_reduction import regular_session_open
 from app.broker.alpaca.clerk.sqlite.exit import (
     accept_recovery_exit,
     resolve_accepted_exit,
@@ -49,7 +50,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     reason_age_policy,
 )
 from app.broker.contract.ports import BrokerTradePort
-from app.services.session_authority import session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,7 @@ async def redrive_or_escalate_stale_exits(
     # its policy.
     redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
     now_ms = repo.clock()
-    # The canonical calendar alone answers "regular session?" -- no broker
-    # window is needed to know it is not 09:30-16:00 (half-days included).
-    if session_state_at_ms(now_ms=now_ms).phase != "RTH":
+    if not regular_session_open(now_ms):
         return
     for instance in repo.strategy_instances():
         sid = instance["strategy_instance_id"]

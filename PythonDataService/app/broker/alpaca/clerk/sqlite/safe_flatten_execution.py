@@ -12,10 +12,11 @@ and gating evidence. Idempotent: the decision id is derived from the plan's
 version token, so a retried execute re-drives the same durable EXIT instead of
 minting a second reduction.
 
-How the reduction goes out is the caller's ``reducing_shape`` (#2007): the
-operator's confirmed extended-hours limit, recorded on the EXIT's acceptance,
-or ``None`` for the regular-session market DAY leg. This module does not read
-the clock or a quote; the facade decides the shape before anything here runs.
+How the reduction goes out is the caller's ``confirmed_shape`` (#2007): the
+operator's confirmed extended-hours limit and the end of the session it was
+priced in, recorded on the EXIT's acceptance, or ``None`` for the
+regular-session market DAY leg. This module does not read the clock or a
+quote; the facade decides the shape before anything here runs.
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ import hashlib
 import logging
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.program_leg import LegShape
+from app.broker.alpaca.clerk.program_leg import LegRefusal
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
 from app.broker.alpaca.clerk.sqlite.exit import (
     RecoveryRunActiveError,
     accept_recovery_exit,
@@ -42,7 +44,15 @@ logger = logging.getLogger(__name__)
 
 
 class SafeFlattenExecutionError(Exception):
-    """The prepared plan cannot be executed against current custody."""
+    """The prepared plan cannot be executed against current custody.
+
+    ``refusal`` names the typed reason when the shape of the reduction — not
+    custody — refused it (#2007), so the transport can say which one.
+    """
+
+    def __init__(self, message: str, *, refusal: LegRefusal | None = None) -> None:
+        super().__init__(message)
+        self.refusal = refusal
 
 
 # An EXIT effect the reducing broker order failed to reach (broker rejection,
@@ -76,7 +86,7 @@ async def execute_safe_flatten_plan(
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     account_id: str,
-    reducing_shape: LegShape | None = None,
+    confirmed_shape: ConfirmedRecoveryShape | None = None,
 ) -> SafeFlattenResult:
     if plan.account_id != account_id:
         raise SafeFlattenExecutionError(
@@ -95,8 +105,8 @@ async def execute_safe_flatten_plan(
             )
     # A confirmed limit is one price for one leg: it can reduce exactly the
     # leg it was priced for, never a sibling or the opposite side.
-    if reducing_shape is not None and (
-        len(plan.legs) != 1 or plan.legs[0].side != reducing_shape.side.value
+    if confirmed_shape is not None and (
+        len(plan.legs) != 1 or plan.legs[0].side != confirmed_shape.shape.side.value
     ):
         raise SafeFlattenExecutionError(
             "The confirmed limit was priced for a different reduction than this plan presents; "
@@ -135,7 +145,7 @@ async def execute_safe_flatten_plan(
                     # Resume can land between recheck and capture (approved-
                     # carryover resumes are legitimate with exposure held).
                     forbid_active_run=True,
-                    reducing_shape=reducing_shape,
+                    confirmed_shape=confirmed_shape,
                 )
             except RecoveryRunActiveError as exc:
                 raise SafeFlattenExecutionError(

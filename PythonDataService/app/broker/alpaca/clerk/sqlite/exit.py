@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from app.broker.alpaca.clerk.program_leg import LegShape
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
@@ -107,8 +108,12 @@ def _accept_exit_capture(
     resolve_run_id: Callable[[OrderResource], str],
     decision_receipt: AtomicDecisionReceipt | None,
     reducing_shape: LegShape | None = None,
+    confirmed_shape: ConfirmedRecoveryShape | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
+
+    A deciding program's ``reducing_shape`` or an operator's
+    ``confirmed_shape`` — never both — is durable with the acceptance.
 
     The run identity is supplied by ``resolve_run_id``: a strategy decision
     binds to the currently ACTIVE run (``accept_exit``); a recovery EXIT binds
@@ -160,7 +165,11 @@ def _accept_exit_capture(
             decision_id=decision_id,
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
-        ).with_reducing_shape(reducing_shape)
+        ).with_reducing_shape(
+            reducing_shape if confirmed_shape is None else confirmed_shape.shape,
+            valid_until_ms=None if confirmed_shape is None else confirmed_shape.valid_until_ms,
+            reference_quote=None if confirmed_shape is None else confirmed_shape.reference_quote,
+        )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
@@ -265,7 +274,7 @@ def accept_recovery_exit(
     decision_id: str,
     entry_order_ref: str,
     forbid_active_run: bool = False,
-    reducing_shape: LegShape | None = None,
+    confirmed_shape: ConfirmedRecoveryShape | None = None,
 ) -> ExitSubmission:
     """Capture one reduction-only recovery EXIT without the active-run fence.
 
@@ -294,11 +303,12 @@ def accept_recovery_exit(
     key is ``(strategy_instance_id, decision_id)`` only — see
     ``_exit_identity`` — so each namespace must be unique per intent).
 
-    ``reducing_shape`` is the operator's confirmed extended-hours limit
+    ``confirmed_shape`` is the operator's confirmed extended-hours limit
     (#2007), durable with the acceptance exactly as a deciding program's shape
-    is (see ``accept_exit``). ``None`` — every watchdog re-drive, and a safe
-    flatten inside the regular session — reduces market DAY, and only inside
-    the regular session (``exit_resolution._recovery_reduction_waits_for_the_open``).
+    is (see ``accept_exit``), together with the end of the session it was
+    priced in. ``None`` — every watchdog re-drive, and a safe flatten inside
+    the regular session — reduces market DAY. Either way the leg reaches the
+    broker only through ``recovery_reduction.recovery_leg_verdict``.
     """
 
     def resolve_run_id(target: OrderResource) -> str:
@@ -317,7 +327,7 @@ def accept_recovery_exit(
         entry_order_ref=entry_order_ref,
         resolve_run_id=resolve_run_id,
         decision_receipt=None,
-        reducing_shape=reducing_shape,
+        confirmed_shape=confirmed_shape,
     )
 
 

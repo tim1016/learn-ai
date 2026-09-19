@@ -696,10 +696,13 @@ async def _execute_presented_recovery_action(
             },
         ) from exc
     except RecoveryExecutionError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason": "recovery_execution_rejected", "message": str(exc)},
-        ) from exc
+        detail: dict[str, object] = {"reason": "recovery_execution_rejected", "message": str(exc)}
+        if exc.refusal is not None:
+            # The typed refusal, so a client can tell a stale quote or a closed
+            # session from a custody refusal without parsing prose (#2007).
+            detail["reason_code"] = exc.refusal.reason_code
+            detail["available_at_ms"] = exc.refusal.available_at_ms
+        raise HTTPException(status_code=409, detail=detail) from exc
     except ExecutionCoverageResolutionUnavailable as exc:
         raise HTTPException(
             status_code=409,

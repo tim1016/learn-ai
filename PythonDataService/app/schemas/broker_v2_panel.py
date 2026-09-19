@@ -480,6 +480,11 @@ class RecentFillView(BaseModel):
     simulated: bool = False
     authority_account_id: str | None = None
     authority_kind: AuthorityKind | None = None
+    # A fill of an operator-confirmed extended-hours flatten (#2007): the bid
+    # (sell) or ask (cover) its limit was priced against, and how many bps
+    # worse than that the fill came in (positive = worse).
+    slippage_reference_price: float | None = None
+    slippage_bps: float | None = None
 
     @model_validator(mode="after")
     def simulated_row_names_its_synthesized_authority(self) -> RecentFillView:

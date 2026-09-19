@@ -42,6 +42,7 @@
         <app-extended-flatten-ticket
           [pricing]="ticket.pricing"
           [quantity]="ticket.quantity"
+          [quoteReceivedAtMs]="ticket.receivedAtMs"
           [pending]="actionPending()"
           (send)="sendExtendedFlatten($event)"
           (refresh)="refreshFlattenQuote()"
@@ -50,6 +51,12 @@
           <p class="flatten-quote-error" role="alert">Quote refresh failed: {{ quoteError }}</p>
         }
       }
+    </div>
+  }
+
+  @if (flattenFills().length > 0) {
+    <div class="panel-feedback">
+      <app-flatten-fills [fills]="flattenFills()" />
     </div>
   }
 

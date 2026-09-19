@@ -41,15 +41,16 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
-    LegShape,
     ProgramLegPolicy,
     ProgramLegRefused,
     shape_program_leg,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryLimit,
+    ConfirmedRecoveryShape,
     QuoteSource,
     RecoveryReductionPricing,
+    flatten_session,
     price_recovery_reduction,
     recovery_reduction_shape,
 )
@@ -132,7 +133,7 @@ from app.services.market_liveness import (
     liveness_blocks_entry,
     market_liveness_fact,
 )
-from app.services.session_authority import SessionAuthorityState, session_state_at_ms
+from app.services.session_authority import SessionAuthorityState
 
 if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
@@ -659,9 +660,7 @@ class SqliteAlpacaClerkFacade:
         authority's broker declares -- the same window an extended-session
         program leg is shaped against.
         """
-        return session_state_at_ms(
-            now_ms=self._repo.clock(), extended_window=self.program_leg_policy.window
-        )
+        return flatten_session(now_ms=self._repo.clock(), policy=self.program_leg_policy)
 
     def price_safe_flatten(
         self, plan: SafeFlattenPlan
@@ -705,7 +704,7 @@ class SqliteAlpacaClerkFacade:
             trade=self._trade,
             intake=self._intake,
             account_id=self.account_id,
-            reducing_shape=self._safe_flatten_shape(plan, confirmed_limit),
+            confirmed_shape=self._safe_flatten_shape(plan, confirmed_limit),
         )
         logger.info(
             "operator safe flatten executed",
@@ -721,7 +720,7 @@ class SqliteAlpacaClerkFacade:
 
     def _safe_flatten_shape(
         self, plan: SafeFlattenPlan, confirmed_limit: ConfirmedRecoveryLimit | None
-    ) -> LegShape | None:
+    ) -> ConfirmedRecoveryShape | None:
         """The one leg's reducing shape, or a ``SafeFlattenExecutionError`` naming why not.
 
         A multi-leg plan is prepare-only (the recovery policy never presents it
@@ -735,14 +734,20 @@ class SqliteAlpacaClerkFacade:
                 )
             return None
         (leg,) = plan.legs
+        now_ms = self._repo.clock()
         try:
             return recovery_reduction_shape(
                 side=OrderSide(leg.side),
                 symbol=leg.symbol,
                 quantity=leg.quantity,
-                now_ms=self._repo.clock(),
+                now_ms=now_ms,
                 policy=self.program_leg_policy,
                 confirmed=confirmed_limit,
+                # Read at send, never taken from the client: the band and the
+                # quote's freshness are judged against what the Clerk sees now.
+                current_quote=(
+                    None if confirmed_limit is None else self._quote_source(leg.symbol, now_ms)
+                ),
             )
         except ProgramLegRefused as exc:
             logger.info(
@@ -754,7 +759,9 @@ class SqliteAlpacaClerkFacade:
                     "reason_code": exc.reason_code,
                 },
             )
-            raise SafeFlattenExecutionError(f"{exc.explanation} {exc.next_step}") from exc
+            raise SafeFlattenExecutionError(
+                f"{exc.explanation} {exc.next_step}", refusal=exc.refusal
+            ) from exc
 
     async def execute_for_instance(
         self,

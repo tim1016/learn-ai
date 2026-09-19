@@ -16,9 +16,16 @@ Nothing here builds a market order for the vendor to queue to the next open
 The suggested price is only a suggestion — the operator may edit it — so what
 reaches the broker is the confirmed price, never one recomputed here.
 
-Formula (the suggested limit):
-    sell: floor_tick( bid × (1 − exit_bps / 10⁴) )
-    buy:  ceil_tick(  ask × (1 + exit_bps / 10⁴) )
+Formula (the suggested limit, and the band a confirmed limit must stay inside):
+    suggested sell: floor_tick( bid × (1 − exit_bps / 10⁴) )
+    suggested buy:  ceil_tick(  ask × (1 + exit_bps / 10⁴) )
+    band sell:      limit ≥ floor_tick( bid × (1 − k · exit_bps / 10⁴) )
+    band buy:       limit ≤ ceil_tick(  ask × (1 + k · exit_bps / 10⁴) )
+    where k = RECOVERY_BAND_ALLOWANCE_MULTIPLE and bid/ask are the Clerk's
+    live quote at send.
+Formula (realized slippage of a fill, in bps, positive = worse than the reference):
+    sell: (reference_bid − fill_price) / reference_bid × 10⁴
+    buy:  (fill_price − reference_ask) / reference_ask × 10⁴
 Reference: docs/references/alpaca-extended-hours.md § "Operator flatten outside
     the regular session"; owner decisions 2026-09-19 on #2007.
 Canonical implementation: this file for the session rule;
@@ -32,6 +39,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -48,7 +56,6 @@ from app.schemas.market_liveness import TopOfBookQuote
 from app.services.session_authority import (
     TRADEABLE_EXTENDED_PHASES,
     SessionAuthorityState,
-    TradingSessionPhase,
     session_state_at_ms,
 )
 
@@ -62,6 +69,22 @@ RECOVERY_QUOTE_MAX_AGE_MS = 10_000
 
 Owner decision 2026-09-19: send the confirmed price, but ask for a refresh if
 the bid/ask the operator looked at is more than about ten seconds old.
+"""
+
+RECOVERY_BAND_ALLOWANCE_MULTIPLE = Decimal(2)
+"""How far through the book a confirmed limit may go, in multiples of the sealed exit allowance.
+
+Owner decision 2026-09-19: refuse a price more than twice the allowance past
+the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
+The owner wants this configurable at deploy time later; until then it is one
+named value, not a per-call parameter.
+"""
+
+RECOVERY_SPREAD_WARNING_BPS = 50
+"""A bid-ask spread wider than this, in bps of the mid, is flagged before sending.
+
+Owner decision 2026-09-19. Presentation only: the Clerk sends it to the
+operator's ticket rather than the browser holding its own number.
 """
 
 RECOVERY_QUOTE_UNAVAILABLE = LegRefusal(
@@ -121,6 +144,35 @@ def no_session_open(opens_at_ms: int | None) -> LegRefusal:
     )
 
 
+RECOVERY_LIMIT_OUTSIDE_BAND = LegRefusal(
+    reason_code="RECOVERY_LIMIT_OUTSIDE_BAND",
+    explanation=(
+        "The limit is further through the book than twice the sealed exit allowance "
+        "from the live bid (sell) or ask (cover)."
+    ),
+    next_step="Check the price against the live quote and confirm again.",
+)
+
+RECOVERY_LIMIT_SESSION_ENDED = LegRefusal(
+    reason_code="RECOVERY_LIMIT_SESSION_ENDED",
+    explanation=(
+        "The session this limit was confirmed in ended before it could be sent; a "
+        "confirmed price is never carried into another session."
+    ),
+    next_step="Flatten again in the current session.",
+)
+
+type ExtendedPhase = Literal["PRE", "POST"]
+type RecoveryLegVerdict = Literal["send", "wait", "expired"]
+"""May a recovery EXIT's reducing leg go to the broker now?
+
+``send`` — yes. ``wait`` — a market leg outside the regular session: hold it,
+the next pass inside the regular session sends it. ``expired`` — an
+operator-confirmed limit past the end of the session it was priced in: it is
+never sent, and the EXIT fails so the operator can price again.
+"""
+
+
 @dataclass(frozen=True)
 class RegularSessionReduction:
     """Inside the regular session: the market DAY leg; no quote is needed."""
@@ -130,11 +182,13 @@ class RegularSessionReduction:
 class ExtendedLimitProposal:
     """What the operator is shown before confirming an extended-hours flatten."""
 
-    phase: TradingSessionPhase
+    phase: ExtendedPhase
     side: OrderSide
     quote: TopOfBookQuote
     exit_allowance_bps: Decimal
     suggested_limit_price: Decimal
+    # The furthest-through-the-book price the Clerk accepts against this quote.
+    band_limit_price: Decimal
 
 
 type RecoveryReductionPricing = RegularSessionReduction | ExtendedLimitProposal
@@ -146,6 +200,35 @@ class ConfirmedRecoveryLimit:
 
     limit_price: Decimal
     quote_observed_at_ms: int
+
+
+@dataclass(frozen=True)
+class ConfirmedRecoveryShape:
+    """The operator's confirmed extended-hours leg, and when it stops being sendable.
+
+    ``valid_until_ms`` is the end of the session the price was confirmed in:
+    09:30 for a pre-market confirmation, the declared close for after-hours.
+    """
+
+    shape: LegShape
+    valid_until_ms: int
+    # The Clerk's live quote at send: the reference realized slippage is
+    # measured from, at most ten seconds newer than the one the operator saw.
+    reference_quote: TopOfBookQuote
+
+
+def regular_session_open(now_ms: int) -> bool:
+    """Is ``now_ms`` inside the canonical calendar's regular session (half-days included)?"""
+    return session_state_at_ms(now_ms=now_ms).phase == "RTH"
+
+
+def flatten_session(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthorityState:
+    """The session an operator's flatten would go out in at ``now_ms``.
+
+    The calendar's regular session widened by the window the broker declares
+    -- the same window an extended-session program leg is shaped against.
+    """
+    return session_state_at_ms(now_ms=now_ms, extended_window=policy.window)
 
 
 def price_recovery_reduction(
@@ -167,21 +250,17 @@ def price_recovery_reduction(
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     if quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
-    anchor = quote.bid if side is OrderSide.SELL else quote.ask
-    try:
-        suggested = marketable_limit_price(
-            side=side,
-            anchor=Decimal(str(anchor)),
-            allowance_bps=policy.allowances.exit_bps,
-        )
-    except ValueError as exc:
-        raise ProgramLegRefused(RECOVERY_QUOTE_UNPRICEABLE) from exc
     return ExtendedLimitProposal(
-        phase=state.phase,
+        phase=_extended_phase(state),
         side=side,
         quote=quote,
         exit_allowance_bps=policy.allowances.exit_bps,
-        suggested_limit_price=suggested,
+        suggested_limit_price=_through_the_book(
+            side, quote, policy.allowances.exit_bps
+        ),
+        band_limit_price=_through_the_book(
+            side, quote, policy.allowances.exit_bps * RECOVERY_BAND_ALLOWANCE_MULTIPLE
+        ),
     )
 
 
@@ -193,13 +272,18 @@ def recovery_reduction_shape(
     now_ms: int,
     policy: ProgramLegPolicy,
     confirmed: ConfirmedRecoveryLimit | None,
-) -> LegShape | None:
+    current_quote: TopOfBookQuote | None,
+) -> ConfirmedRecoveryShape | None:
     """The shape the operator's confirmed flatten reduces with.
 
     ``None`` is the regular-session market DAY leg — the shape a recovery EXIT
     with no recorded shape already builds. An extended-session shape is the
-    operator's own price, checked against the clock and Alpaca's precision rule
-    here, before any EXIT is accepted, so nothing downstream can reject it.
+    operator's own price, checked here, before any EXIT is accepted, against
+    the clock, the live quote the Clerk holds now, and Alpaca's precision rule.
+
+    The confirmed quote must be one the Clerk could have served: no later
+    than the quote it holds now, and no more than ten seconds old. A client
+    cannot vouch for freshness the server cannot see.
     """
     state = _tradeable_state(now_ms=now_ms, policy=policy)
     if state.phase == "RTH":
@@ -208,8 +292,19 @@ def recovery_reduction_shape(
         return None
     if confirmed is None:
         raise ProgramLegRefused(RECOVERY_LIMIT_REQUIRED)
-    if not 0 <= now_ms - confirmed.quote_observed_at_ms <= RECOVERY_QUOTE_MAX_AGE_MS:
+    if policy.allowances is None:
+        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
+    if current_quote is None:
+        raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
+    if (
+        confirmed.quote_observed_at_ms > current_quote.observed_at_ms
+        or now_ms - confirmed.quote_observed_at_ms > RECOVERY_QUOTE_MAX_AGE_MS
+    ):
         raise ProgramLegRefused(RECOVERY_QUOTE_STALE)
+    if state.next_transition_ms is None:
+        # A declared window always names its next transition; without one there
+        # is no session end to bound the confirmed price by.
+        raise ProgramLegRefused(no_session_open(None))
     shape = LegShape(
         order_type=OrderType.LIMIT,
         time_in_force=TimeInForce.DAY,
@@ -223,25 +318,89 @@ def recovery_reduction_shape(
         shape.apply(symbol=symbol, quantity=quantity)
     except ValidationError as exc:
         raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
-    return shape
+    band = _through_the_book(
+        side, current_quote, policy.allowances.exit_bps * RECOVERY_BAND_ALLOWANCE_MULTIPLE
+    )
+    past_band = (
+        confirmed.limit_price < band if side is OrderSide.SELL else confirmed.limit_price > band
+    )
+    if past_band:
+        raise ProgramLegRefused(RECOVERY_LIMIT_OUTSIDE_BAND)
+    return ConfirmedRecoveryShape(
+        shape=shape,
+        valid_until_ms=state.next_transition_ms,
+        reference_quote=current_quote,
+    )
+
+
+def recovery_leg_verdict(
+    *, extended_hours: bool, valid_until_ms: int | None, now_ms: int
+) -> RecoveryLegVerdict:
+    """The one rule every recovery EXIT's reducing leg passes before the broker sees it.
+
+    Applied to the leg actually about to be sent — after the side
+    reconciliation that can turn a confirmed limit into a market leg (R11),
+    and on every resubmission — so no path reaches the broker around it.
+    """
+    if extended_hours:
+        return "send" if valid_until_ms is not None and now_ms < valid_until_ms else "expired"
+    return "send" if regular_session_open(now_ms) else "wait"
+
+
+def realized_slippage_bps(*, side: OrderSide, reference_price: float, fill_price: float) -> float:
+    """How much worse than the reference a reducing fill came in, in bps (positive = worse).
+
+    The reference is the bid for a sell and the ask for a cover, taken from the
+    quote the Clerk priced the operator's limit against.
+    """
+    if reference_price <= 0:
+        raise ValueError(f"reference_price must be positive; got {reference_price}")
+    signed = reference_price - fill_price if side is OrderSide.SELL else fill_price - reference_price
+    return signed / reference_price * 10_000
+
+
+def _through_the_book(side: OrderSide, quote: TopOfBookQuote, allowance_bps: Decimal) -> Decimal:
+    """The price ``allowance_bps`` past the bid (sell) or ask (cover), marketably rounded."""
+    anchor = quote.bid if side is OrderSide.SELL else quote.ask
+    try:
+        return marketable_limit_price(
+            side=side, anchor=Decimal(str(anchor)), allowance_bps=allowance_bps
+        )
+    except ValueError as exc:
+        raise ProgramLegRefused(RECOVERY_QUOTE_UNPRICEABLE) from exc
 
 
 def _tradeable_state(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthorityState:
     """The session now, or a refusal naming the next open when none is tradeable."""
-    state = session_state_at_ms(now_ms=now_ms, extended_window=policy.window)
+    state = flatten_session(now_ms=now_ms, policy=policy)
     if state.phase != "RTH" and state.phase not in TRADEABLE_EXTENDED_PHASES:
         raise ProgramLegRefused(no_session_open(state.next_transition_ms))
     return state
 
 
+def _extended_phase(state: SessionAuthorityState) -> ExtendedPhase:
+    return "PRE" if state.phase == "PRE" else "POST"
+
+
 __all__ = [
+    "RECOVERY_BAND_ALLOWANCE_MULTIPLE",
+    "RECOVERY_LIMIT_OUTSIDE_BAND",
+    "RECOVERY_LIMIT_SESSION_ENDED",
     "RECOVERY_QUOTE_MAX_AGE_MS",
+    "RECOVERY_SPREAD_WARNING_BPS",
     "ConfirmedRecoveryLimit",
+    "ConfirmedRecoveryShape",
     "ExtendedLimitProposal",
+    "ExtendedPhase",
     "QuoteSource",
+    "RecoveryLegVerdict",
     "RecoveryReductionPricing",
     "RegularSessionReduction",
+    "flatten_session",
     "no_session_open",
     "price_recovery_reduction",
+    "realized_slippage_bps",
+    "recovery_leg_verdict",
     "recovery_reduction_shape",
+    "regular_session_open",
 ]

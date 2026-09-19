@@ -15623,6 +15623,10 @@
             ],
             "title": "Ask Size"
           },
+          "band_limit_price": {
+            "title": "Band Limit Price",
+            "type": "number"
+          },
           "bid": {
             "title": "Bid",
             "type": "number"
@@ -15671,6 +15675,10 @@
             "title": "Side",
             "type": "string"
           },
+          "spread_warning_bps": {
+            "title": "Spread Warning Bps",
+            "type": "number"
+          },
           "suggested_limit_price": {
             "title": "Suggested Limit Price",
             "type": "number"
@@ -15691,7 +15699,9 @@
           "quote_observed_at_ms",
           "quote_max_age_ms",
           "exit_allowance_bps",
-          "suggested_limit_price"
+          "suggested_limit_price",
+          "band_limit_price",
+          "spread_warning_bps"
         ],
         "title": "ExtendedLimitFlattenPricing",
         "type": "object"
@@ -30243,6 +30253,28 @@
             "default": false,
             "title": "Simulated",
             "type": "boolean"
+          },
+          "slippage_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Bps"
+          },
+          "slippage_reference_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Reference Price"
           },
           "symbol": {
             "title": "Symbol",

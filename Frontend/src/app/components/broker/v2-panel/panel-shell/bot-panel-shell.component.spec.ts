@@ -361,13 +361,16 @@ const EXECUTE_SAFE_FLATTEN_ACTION = {
   confirmation: null,
 } satisfies PanelAction;
 
-function extendedFlattenSnapshot(): BotPanelLiveSnapshot {
+function extendedFlattenSnapshot(prepareToken = 'plan-token-17'): BotPanelLiveSnapshot {
   const snapshot = safeFlattenSnapshot();
   return {
     ...snapshot,
     panel: {
       ...snapshot.panel,
-      actions: [PREPARE_SAFE_FLATTEN_ACTION, EXECUTE_SAFE_FLATTEN_ACTION],
+      actions: [
+        { ...PREPARE_SAFE_FLATTEN_ACTION, concurrency_token: prepareToken },
+        EXECUTE_SAFE_FLATTEN_ACTION,
+      ],
     },
   };
 }
@@ -960,6 +963,14 @@ describe('BotPanelShellComponent', () => {
   });
 
   describe('an extended-hours safe flatten (#2007)', () => {
+    /** Let a multi-step flow finish: a send refreshes the panel, posts, then refreshes again. */
+    async function settle(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
+      for (let step = 0; step < 4; step += 1) {
+        await fixture.whenStable();
+        fixture.detectChanges();
+      }
+    }
+
     async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
       const { fixture } = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -984,7 +995,7 @@ describe('BotPanelShellComponent', () => {
 
     it('shows the live IBKR quote and sends the confirmed limit through the custody route', async () => {
       const observedAtMs = Date.now();
-      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
       brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
@@ -1000,6 +1011,8 @@ describe('BotPanelShellComponent', () => {
           quote_max_age_ms: 10_000,
           exit_allowance_bps: 20,
           suggested_limit_price: 479.13,
+          band_limit_price: 478.17,
+          spread_warning_bps: 50,
         },
       } satisfies SqliteRecoveryActionCheck);
       const fixture = await prepareFlatten();
@@ -1009,11 +1022,11 @@ describe('BotPanelShellComponent', () => {
       expect(within(ticket).getByText(/\$480\.10/)).toBeTruthy();
       expect(within(ticket).getByText(/\$480\.20/)).toBeTruthy();
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await fixture.whenStable();
       fixture.detectChanges();
       expect(within(ticket).getByText(/Sell 2\.5 QQQ at limit \$479\.13/)).toBeTruthy();
       fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
-      await fixture.whenStable();
-      fixture.detectChanges();
+      await settle(fixture);
 
       expect(mockService.executeExtendedSafeFlatten).toHaveBeenCalledWith(
         expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'DUM284968' }),
@@ -1024,6 +1037,44 @@ describe('BotPanelShellComponent', () => {
       expect(mockService.runBotAction).not.toHaveBeenCalled();
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
         .toBeNull();
+    });
+
+    it('recovers from a rotated Prepare token instead of dead-ending the ticket', async () => {
+      // The Clerk re-mints the token every reconciliation pass, so a refresh
+      // that meets a rotated one must refresh the panel and retry with the
+      // token it now presents — never strand the ticket (#2007 review).
+      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot('plan-token-18'));
+      const extendedCheck = {
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+          bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+          quote_observed_at_ms: Date.now(), quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20, suggested_limit_price: 479.13,
+          band_limit_price: 478.17, spread_warning_bps: 50,
+        },
+      } satisfies SqliteRecoveryActionCheck;
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+      const fixture = await prepareFlatten();
+      brokersMock.checkSqliteSafeFlatten.mockRejectedValueOnce(
+        new HttpErrorResponse({
+          status: 409,
+          error: { detail: { reason: 'stale_action_token', message: 'The plan changed.' } },
+        }),
+      );
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Refresh quote' }));
+      await settle(fixture);
+
+      // Prepare, the refused refresh, then the retry — each with whatever
+      // token the panel presented at the time.
+      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(3);
+      expect(mockService.getLiveSnapshot.mock.calls.length).toBeGreaterThan(1);
+      expect(screen.queryByText(/Quote refresh failed/)).toBeNull();
+      expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();
     });
 
     it('names when the next session opens instead of offering a ticket', async () => {

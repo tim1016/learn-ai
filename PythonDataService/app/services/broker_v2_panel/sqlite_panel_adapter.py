@@ -11,7 +11,9 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.recovery_reduction import realized_slippage_bps
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
+from app.broker.alpaca.clerk.sqlite.exit_resolution import confirmed_flatten_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
@@ -50,7 +52,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     sqlite_catalog_rollup,
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
-from app.services.session_authority import TradingSessionPhase
+from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, TradingSessionPhase
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -162,7 +164,11 @@ def adapt_sqlite_panel(
                 []
                 if economics is None
                 else [
-                    _recent_fill_view(fill, authority_account_id=projection.account_id)
+                    _recent_fill_view(
+                        fill,
+                        authority_account_id=projection.account_id,
+                        repository=repository,
+                    )
                     for fill in economics.recent_fills
                 ]
             ),
@@ -441,13 +447,12 @@ def _panel_action(
     *,
     flatten_phase: TradingSessionPhase | None = None,
 ) -> PanelAction:
-    blocker = (
-        _capability_blocker(capability)
-        if not capability.available
-        else _flatten_session_blocker(flatten_phase)
-        if capability.action_id == "execute_safe_flatten"
-        else None
-    )
+    if not capability.available:
+        blocker: OperatorBlocker | None = _capability_blocker(capability)
+    elif capability.action_id == "execute_safe_flatten":
+        blocker = _flatten_session_blocker(flatten_phase)
+    else:
+        blocker = None
     confirmation = capability.confirmation
     return PanelAction(
         action_id=capability.action_id,
@@ -508,7 +513,7 @@ def _flatten_session_blocker(phase: TradingSessionPhase | None) -> OperatorBlock
     """
     if phase is None or phase == "RTH":
         return None
-    priced_here = phase in ("PRE", "POST")
+    priced_here = phase in TRADEABLE_EXTENDED_PHASES
     return OperatorBlocker.for_host(
         condition_id=(
             "EXTENDED_HOURS_FLATTEN_NEEDS_A_LIMIT" if priced_here else "NO_SESSION_OPEN"
@@ -657,7 +662,12 @@ def _working_order_view(
     )
 
 
-def _recent_fill_view(fill: FillRecord, *, authority_account_id: str) -> RecentFillView:
+def _recent_fill_view(
+    fill: FillRecord,
+    *,
+    authority_account_id: str,
+    repository: ClerkSqliteRepository | None = None,
+) -> RecentFillView:
     """Adapt one S2 fill record to the existing panel wire contract.
 
     Stamps the authority the fill was actually read from (#1729 AC #8). This
@@ -665,8 +675,16 @@ def _recent_fill_view(fill: FillRecord, *, authority_account_id: str) -> RecentF
     without the stamp here a production fill row reaches the panel carrying no
     authority at all while its sibling decision row carries one — the exact
     asymmetry the single-authority guard exists to make impossible.
+
+    A fill of an operator-confirmed extended-hours flatten also carries its
+    realized slippage from the quote the limit was priced against (#2007).
     """
     kind = authority_kind_for_account(authority_account_id)
+    reference_price = (
+        None
+        if repository is None
+        else confirmed_flatten_reference_price(repository, fill.order_ref)
+    )
     return RecentFillView(
         order_ref=fill.order_ref,
         symbol=fill.symbol,
@@ -677,6 +695,14 @@ def _recent_fill_view(fill: FillRecord, *, authority_account_id: str) -> RecentF
         simulated=kind in SIMULATED_AUTHORITY_KINDS,
         authority_account_id=authority_account_id,
         authority_kind=kind,
+        slippage_reference_price=reference_price,
+        slippage_bps=(
+            None
+            if reference_price is None
+            else realized_slippage_bps(
+                side=fill.side, reference_price=reference_price, fill_price=fill.fill_price
+            )
+        ),
     )
 
 

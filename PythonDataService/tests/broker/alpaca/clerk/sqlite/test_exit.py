@@ -54,6 +54,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at,
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
+NEXT_OPEN_MS = 1_700_145_060_000  # 2023-11-16 09:31 ET, the session after FIXTURE_RTH_MS
 
 
 @pytest.fixture
@@ -1837,6 +1838,53 @@ async def test_an_unshaped_recovery_reduction_waits_for_the_regular_session(
         "market",
         False,
     )
+
+
+async def test_a_market_recovery_reduction_is_never_resubmitted_outside_the_regular_session(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Backend review of #2007: created at 10:00, its submit lost to an outage;
+    the resubmission after 16:00 must wait for the next open, not queue a
+    market order the vendor holds to 09:30."""
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-outage000001-1",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    outage = _FakeTrade(
+        lookup_results=[recovered, recovered],
+        submit_error=BrokerUnavailable("broker is down"),
+    )
+    await resolve_accepted_exit(repo, accepted=accepted, trade=outage)
+    assert len(outage.submit_calls) == 1
+
+    _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
+    after_close = _FakeTrade(lookup_results=[None])
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close)
+
+    assert after_close.submit_calls == []
+
+    _walk_clock_to(repo, NEXT_OPEN_MS)
+    at_open = _FakeTrade(
+        lookup_results=[None],
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=at_open)
+
+    ((leg, _client_order_id),) = at_open.submit_calls
+    assert (leg.side, leg.order_type, leg.extended_hours) == ("sell", "market", False)
 
 
 async def test_accept_recovery_exit_is_idempotent_per_decision_id(
