@@ -19,6 +19,7 @@ from typing import Any
 
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.clerk.account_authority import (
+    canonical_alpaca_account_id,
     live_account_id_for_shadow_account,
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
@@ -125,10 +126,8 @@ class AlpacaLiveGraduationService:
                 next_action="Restore the clerk and refresh this page.",
             )
         if runtime.selected_account_authority_kind == "real_live":
-            if runtime.selected_account_id != account_id:
-                raise self._wrong_account(account_id)
             return LiveGraduationStatus(
-                account_id=account_id,
+                account_id=self._served_account(runtime.selected_account_id, account_id),
                 configured_mode="live",
                 authority="live",
                 state="graduated",
@@ -144,11 +143,8 @@ class AlpacaLiveGraduationService:
                 detail="Graduation begins only from the isolated Shadow account world.",
                 next_action="Restore the Live profile's Shadow authority and refresh this page.",
             )
-        selected = runtime.selected_account_id
-        if selected is None or live_account_id_for_shadow_account(selected) != account_id:
-            raise self._wrong_account(account_id)
         return LiveGraduationStatus(
-            account_id=account_id,
+            account_id=self._served_account(runtime.selected_account_id, account_id),
             configured_mode="live",
             authority="shadow",
             state="review_available",
@@ -166,12 +162,13 @@ class AlpacaLiveGraduationService:
                 status.headline,
                 status.next_action or "Refresh the account authority state.",
             )
-        evidence = await self._capture_broker_evidence(account_id)
+        served_account_id = status.account_id
+        evidence = await self._capture_broker_evidence(served_account_id)
         async with graduation_mutation_fence():
             try:
                 plan, backup_reference = await asyncio.to_thread(
                     self._prepare_domain_plan,
-                    account_id,
+                    served_account_id,
                     evidence,
                 )
             except (CutoverRefused, RecoveryRefused, OSError, ValueError) as exc:
@@ -231,9 +228,10 @@ class AlpacaLiveGraduationService:
                 current.headline,
                 current.next_action or "Refresh the account authority state.",
             )
+        served_account_id = current.account_id
         try:
             plan, backup_path = await asyncio.to_thread(
-                self._read_persisted_plan, account_id, plan_id
+                self._read_persisted_plan, served_account_id, plan_id
             )
         except (OSError, ValueError, TypeError, KeyError) as exc:
             raise LiveGraduationRefused(
@@ -241,7 +239,7 @@ class AlpacaLiveGraduationService:
                 "The reviewed graduation plan is missing or unreadable.",
                 "Prepare a fresh graduation review.",
             ) from exc
-        if plan.account_id != account_id or plan.plan_id != plan_id:
+        if plan.account_id != served_account_id or plan.plan_id != plan_id:
             raise LiveGraduationRefused(
                 "graduation_plan_mismatch",
                 "The reviewed plan does not belong to this account.",
@@ -251,7 +249,7 @@ class AlpacaLiveGraduationService:
         # snapshot. apply_cutover() refuses when this evidence disagrees with
         # the plan's stored evidence, which is the only thing that catches a
         # position or order opened during the confirmation window.
-        evidence = await self._capture_broker_evidence(account_id)
+        evidence = await self._capture_broker_evidence(served_account_id)
         async with graduation_mutation_fence():
             try:
                 receipt = await asyncio.to_thread(
@@ -268,7 +266,7 @@ class AlpacaLiveGraduationService:
                     "Nothing was forced. Prepare a fresh review after resolving the changed evidence.",
                 ) from exc
         return LiveGraduationApplyOutcome(
-            account_id=account_id,
+            account_id=served_account_id,
             plan_id=plan.plan_id,
             state="restart_scheduled",
             receipt_reference=receipt.receipt_reference,
@@ -432,6 +430,25 @@ class AlpacaLiveGraduationService:
         except ValueError as exc:
             raise ValueError("graduation plan backup escapes the clerk root") from exc
         return plan, backup_path
+
+    @classmethod
+    def _served_account(cls, selected_account_id: str | None, account_id: str) -> str:
+        """The live account this worker serves, in Alpaca's spelling, when the route names it.
+
+        Public routes carry the canonical (lowercase) account while custody keeps
+        Alpaca's spelling, so the route is matched case-insensitively against the
+        live account the selected authority serves (a ``shadow:`` custody id
+        observes its live account). Every later step -- broker evidence, the
+        account folder, the cutover plan -- uses the returned spelling, never the
+        route's: the broker reports Alpaca's spelling and the folders are named
+        by it.
+        """
+        if selected_account_id is None:
+            raise cls._wrong_account(account_id)
+        served_account_id = live_account_id_for_shadow_account(selected_account_id)
+        if canonical_alpaca_account_id(served_account_id) != canonical_alpaca_account_id(account_id):
+            raise cls._wrong_account(account_id)
+        return served_account_id
 
     @staticmethod
     def _wrong_account(account_id: str) -> LiveGraduationRefused:
