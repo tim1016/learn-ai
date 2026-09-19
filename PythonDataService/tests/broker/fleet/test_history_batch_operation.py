@@ -20,10 +20,15 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.fleet.errors import FleetAgentTokenRefused
-from app.config import settings
+from app.config import fleet_settings, settings
 from app.data_lake.polygon_fetcher import PolygonBar
-from app.services.broker_v2_panel import chart_projection_service, history_batch_client
-from app.services.broker_v2_panel.history_batch_client import RemoteHistoryBatchClient
+from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
+from app.services.broker_v2_panel import (
+    chart_projection_service,
+    history_batch_client,
+    history_batch_walk,
+)
+from app.services.broker_v2_panel.chart_projection_service import build_history_chart
 from app.utils.error_handlers import install_fleet_control_error_handler
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -218,8 +223,21 @@ sys.stdout.write(json.dumps(paths))
         {"required_bar_count": chart_projection_service.MAX_HISTORY_REQUIRED_BAR_COUNT + 1},
         {"as_of_ms": -1},
         {"as_of_ms": MAX_TIMESTAMP_MS + 1},
+        # The walk crashes outside a narrower range than the int64 domain:
+        # as_of_ms=0 raises ValueError inside session_start_for_bar_count
+        # (the UTC->ET conversion pushes the date before the walk's own
+        # Unix-epoch floor), and a value near MAX_TIMESTAMP_MS raises
+        # OverflowError (pandas' nanosecond Timestamp ceiling, ~2262-04-11).
+        # Both must 422 at the schema boundary, never 500 inside the walk.
+        {"as_of_ms": 0},
+        {"as_of_ms": MAX_TIMESTAMP_MS},
+        {"as_of_ms": "1700000000000"},
+        {"as_of_ms": 1.7e12},
+        {"as_of_ms": True},
         {"clerk_id": ""},
         {"symbol": ""},
+        {"symbol": "123-not-a-symbol"},
+        {"extra_field": "unexpected"},
     ],
 )
 async def test_invalid_requests_are_rejected(overrides: dict[str, object]) -> None:
@@ -254,17 +272,31 @@ def _complete_1m_bars(*, count: int, now_ms: int) -> list[PolygonBar]:
     ]
 
 
-async def test_one_clerk_request_causes_exactly_one_http_call_despite_widening(
+class _RecordingTransport(ASGITransport):
+    """An ``ASGITransport`` that records every request it forwards."""
+
+    def __init__(self, *, app: FastAPI, calls: list[httpx.Request]) -> None:
+        super().__init__(app=app)
+        self._calls = calls
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self._calls.append(request)
+        return await super().handle_async_request(request)
+
+
+async def test_get_history_chart_causes_exactly_one_http_call_despite_widening(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Acceptance criterion (#2204): a fake vendor requiring several widening
-    iterations still produces exactly one Clerk -> coordinator HTTP request.
-
-    Drives the real ``RemoteHistoryBatchClient`` against the real
-    ``internal_fleet`` router (full auth + validation + walk), with the
-    vendor call (``chart_projection_service.fetch_aggregate_bars``) faked to
-    require two widening iterations before it satisfies the target count --
-    mirroring ``test_history_extends_backward_when_sparse_aggregates_underfill_budget``.
+    """Acceptance criterion (issue #2204 gate F4): a fake vendor requiring
+    several widening iterations still produces exactly one Clerk ->
+    coordinator HTTP request -- proven through the real Clerk-side entry
+    point (``build_history_chart``, under a real ``FLEET_ROLE=clerk_agent``
+    provider selection), not by calling ``RemoteHistoryBatchClient.fetch_batch``
+    directly. Calling ``fetch_batch`` directly is true by construction (it IS
+    the one HTTP call) and stays green even if a Clerk-side widening loop, or
+    a "retry once on any notice", were reintroduced around it in
+    ``build_history_chart`` -- driving through the real entry point is what
+    makes this test able to fail.
     """
     monkeypatch.setattr(chart_projection_service, "_INDICATOR_WARMUP_BARS", 3)
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "a-real-looking-key")
@@ -275,33 +307,155 @@ async def test_one_clerk_request_causes_exactly_one_http_call_despite_widening(
         vendor_calls.append((start, end))
         return supplied[-300:] if len(vendor_calls) == 1 else supplied[:3]
 
-    monkeypatch.setattr(chart_projection_service, "fetch_aggregate_bars", fake_fetch_aggregate_bars)
+    monkeypatch.setattr(history_batch_walk, "fetch_aggregate_bars", fake_fetch_aggregate_bars)
 
     app = _build_app({_CLERK_ID: _TOKEN})
     http_calls: list[httpx.Request] = []
 
-    class _RecordingTransport(ASGITransport):
-        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            http_calls.append(request)
-            return await super().handle_async_request(request)
-
     def _fake_build_internal_client(*, read_timeout_s=None, **_kwargs):
         return httpx.AsyncClient(
-            transport=_RecordingTransport(app=app),
+            transport=_RecordingTransport(app=app, calls=http_calls),
             timeout=httpx.Timeout(10.0, read=read_timeout_s),
         )
 
     monkeypatch.setattr(history_batch_client, "build_internal_client", _fake_build_internal_client)
+    monkeypatch.setattr(fleet_settings, "ROLE", "clerk_agent")
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", "http://127.0.0.1")
+    monkeypatch.setattr(fleet_settings, "AGENT_SERVICE_TOKEN", _TOKEN)
+    monkeypatch.setattr(fleet_settings, "CLERK_ID", _CLERK_ID)
+    monkeypatch.setattr(history_batch_client, "_CACHED_PROVIDER", None)
 
-    client = RemoteHistoryBatchClient(
-        base_url="http://127.0.0.1", clerk_id=_CLERK_ID, agent_service_token=_TOKEN
+    result = await build_history_chart(
+        "1m",
+        [],
+        strategy_instance_id="sid-widening-probe",
+        symbol="ILLQ",
+        batch_provider=history_batch_client.build_history_batch_provider(),
+        now_ms=_NOW,
     )
-    batch = await client.fetch_batch("ILLQ", "1m", 303, _NOW)
 
     assert len(http_calls) == 1, "exactly one Clerk -> coordinator HTTP request"
     assert len(vendor_calls) == 2, "the coordinator widened backward more than once"
-    assert batch.overlay_notices == []
-    assert len(batch.bars) == 303
-    starts = [bar.start_ms for bar in batch.bars]
+    assert result.overlay_notices == []
+    assert len(result.indicator_bars) == 303
+    starts = [bar.start_ms for bar in result.indicator_bars]
     assert starts == sorted(starts)
-    assert all(isinstance(bar.start_ms, int) for bar in batch.bars)
+    assert all(isinstance(bar.start_ms, int) for bar in result.indicator_bars)
+
+
+async def test_batch_provider_is_awaited_exactly_once_per_build_history_chart_call() -> None:
+    """FR-008: one internal request per public history attempt -- pinned as a
+    call-count invariant on the provider itself, for both a healthy batch and
+    a notice-only one. A Clerk-side retry-on-notice regression would call the
+    provider twice for the notice-only case without necessarily changing any
+    other observable assertion in this file.
+    """
+    calls = 0
+
+    async def _healthy_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        nonlocal calls
+        calls += 1
+        return HistoryBatchResponse(
+            bars=[], source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms
+        )
+
+    await build_history_chart(
+        "1m", [], strategy_instance_id="sid-a", symbol="SPY",
+        batch_provider=_healthy_provider, now_ms=_NOW,
+    )
+    assert calls == 1
+
+    calls = 0
+
+    async def _notice_only_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        nonlocal calls
+        calls += 1
+        from app.schemas.broker_v2_panel import ChartOverlayNoticeView
+
+        return HistoryBatchResponse(
+            bars=[],
+            source="polygon",
+            overlay_notices=[
+                ChartOverlayNoticeView(
+                    code="coordinator_unavailable", message="unavailable", source="polygon"
+                )
+            ],
+            effective_as_of_ms=query.as_of_ms,
+        )
+
+    await build_history_chart(
+        "1m", [], strategy_instance_id="sid-b", symbol="SPY",
+        batch_provider=_notice_only_provider, now_ms=_NOW,
+    )
+    assert calls == 1
+
+
+async def test_half_day_history_batch_round_trips_through_the_real_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Golden round-trip (issue #2204 gate F5): the Black Friday half-day
+    case through the real ``RemoteHistoryBatchClient`` and the real
+    ``internal_fleet`` router -- not just the in-process walk unit tests --
+    so the relocation's equivalence is pinned across the wire too, not only
+    within one process.
+
+    2025-11-28 (the day after Thanksgiving) is a real NYSE half-day: the
+    session closes at 13:00 ET (1764352800000 ms UTC) rather than the usual
+    16:00 ET. A daily bar dated that session must carry that early close as
+    its ``end_ms``, not midnight-plus-one-day -- exactly the invariant
+    ``test_daily_bar_completes_at_session_close_not_midnight_plus_one_day``
+    pins in-process.
+    """
+    black_friday = 1764340200000  # 2025-11-28 09:30 ET session open, ms UTC
+    black_friday_close = 1764352800000  # 2025-11-28 13:00 ET session close, ms UTC
+    now_ms = black_friday_close + 3_600_000  # well after the half-day closed
+    monkeypatch.setattr(chart_projection_service, "_INDICATOR_WARMUP_BARS", 0)
+    # `monkeypatch.setitem`, not `setattr` with a replacement dict: both
+    # `chart_projection_service` and `history_batch_walk` hold their own name
+    # binding to the *same* dict object, so only an in-place mutation is
+    # visible to both (a `setattr` here would rebind only the former).
+    monkeypatch.setitem(
+        chart_projection_service.HISTORY_TIMEFRAME_SPECS,
+        "1d",
+        chart_projection_service._HistoryTimeframeSpec(1, "day", 1),
+    )
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "a-real-looking-key")
+
+    half_day_bar = PolygonBar(
+        t_ms=black_friday, open=1.0, high=2.0, low=0.5, close=1.5, volume=10, vwap=1.2, n=3
+    )
+
+    async def fake_fetch_aggregate_bars(symbol, start, end, api_key, *, multiplier, timespan, adjusted=False):
+        return [half_day_bar]
+
+    monkeypatch.setattr(history_batch_walk, "fetch_aggregate_bars", fake_fetch_aggregate_bars)
+
+    app = _build_app({_CLERK_ID: _TOKEN})
+    http_calls: list[httpx.Request] = []
+
+    def _fake_build_internal_client(*, read_timeout_s=None, **_kwargs):
+        return httpx.AsyncClient(
+            transport=_RecordingTransport(app=app, calls=http_calls),
+            timeout=httpx.Timeout(10.0, read=read_timeout_s),
+        )
+
+    monkeypatch.setattr(history_batch_client, "build_internal_client", _fake_build_internal_client)
+    monkeypatch.setattr(fleet_settings, "ROLE", "clerk_agent")
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", "http://127.0.0.1")
+    monkeypatch.setattr(fleet_settings, "AGENT_SERVICE_TOKEN", _TOKEN)
+    monkeypatch.setattr(fleet_settings, "CLERK_ID", _CLERK_ID)
+    monkeypatch.setattr(history_batch_client, "_CACHED_PROVIDER", None)
+
+    result = await build_history_chart(
+        "1d",
+        [],
+        strategy_instance_id="sid-half-day",
+        symbol="SPY",
+        batch_provider=history_batch_client.build_history_batch_provider(),
+        now_ms=now_ms,
+    )
+
+    assert len(http_calls) == 1
+    assert result.overlay_notices == []
+    assert [bar.start_ms for bar in result.bars] == [black_friday]
+    assert [bar.end_ms for bar in result.bars] == [black_friday_close]

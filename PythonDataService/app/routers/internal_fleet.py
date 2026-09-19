@@ -42,12 +42,8 @@ from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
 from app.config import settings
-from app.schemas.broker_v2_panel import ChartHistoryTimeframe
-from app.services.broker_v2_panel.chart_projection_service import (
-    MAX_HISTORY_REQUIRED_BAR_COUNT,
-    build_coordinator_history_batch,
-)
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.schemas.fleet_history_batch import HistoryBatchRequest, HistoryBatchResponse
+from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
 
 logger = logging.getLogger(__name__)
 
@@ -95,24 +91,6 @@ class ConfirmRequest(BaseModel):
     routing_epoch: int = Field(ge=1)
     effective_profile_id: str | None = None
     effective_revision: int | None = None
-
-
-class HistoryBatchRequest(BaseModel):
-    """One Clerk's request for a complete backward-walked history batch.
-
-    Issue #2204: the sixth ``/internal/fleet/*`` operation. Carries only
-    clerk id, symbol, the closed timeframe vocabulary, a required bar count
-    bounded by the existing display+warmup policy, and the ``as_of_ms``
-    anchor -- no ``date`` or ISO timestamp crosses this boundary
-    (``temporal-rigor.md``); the coordinator does the ms->ET date conversion
-    with the canonical NYSE calendar helpers.
-    """
-
-    clerk_id: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
-    timeframe: ChartHistoryTimeframe
-    required_bar_count: int = Field(gt=0, le=MAX_HISTORY_REQUIRED_BAR_COUNT)
-    as_of_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 def _service(request: Request) -> FleetControlService:
@@ -327,13 +305,13 @@ async def confirm_assignment(
     return _assignment_body(assignment)
 
 
-@router.post("/history/batch", response_model=None)
+@router.post("/history/batch", response_model=HistoryBatchResponse)
 async def history_batch(
     payload: HistoryBatchRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
     x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
-) -> dict[str, Any] | Response:
+) -> HistoryBatchResponse | Response:
     """Serve one complete backward-walked Polygon history batch (issue #2204).
 
     This process's own ``POLYGON_API_KEY`` is the usable one -- only a
@@ -346,20 +324,13 @@ async def history_batch(
     _authorized_agent(
         request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
     )
-    batch = await build_coordinator_history_batch(
+    return await build_coordinator_history_batch(
         symbol=payload.symbol,
         timeframe=payload.timeframe,
         required_bar_count=payload.required_bar_count,
         as_of_ms=payload.as_of_ms,
         polygon_api_key=settings.POLYGON_API_KEY,
     )
-    return {
-        "bars": [bar.model_dump(mode="json") for bar in batch.bars],
-        "overlay_notices": [
-            notice.model_dump(mode="json") for notice in batch.overlay_notices
-        ],
-        "effective_as_of_ms": batch.effective_as_of_ms,
-    }
 
 
 __all__ = ["router"]

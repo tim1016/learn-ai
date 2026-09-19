@@ -27,8 +27,10 @@ from app.lean_sidecar.trading_calendar import (
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ChartOverlayNoticeView
+from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.broker_v2_panel import (
     chart_projection_service,
+    history_batch_walk,
     panel_chart_data_source,
     panel_data_source,
 )
@@ -59,20 +61,22 @@ def _batch_provider_from_source(bar_source):
     """Adapt a per-window ``bar_source`` fake into a ``HistoryBatchProvider``.
 
     Issue #2204 moved the backward Polygon walk out of ``build_history_chart``
-    and into ``fetch_complete_history_batch`` (the fleet-coordinator-only
-    entry point). This wraps that relocated walk so every existing
-    ``build_history_chart`` test can keep injecting a ``bar_source`` fake
-    exactly as before -- the walk math, warmup/display planning and
-    truncation it exercises are unchanged, just reached through the new
-    ``batch_provider`` seam instead of a direct parameter.
+    and into ``history_batch_walk.fetch_complete_history_batch`` (the
+    fleet-coordinator-only entry point, issue #2204 gate F5 relocated it off
+    ``chart_projection_service`` entirely). This wraps that relocated walk so
+    every existing ``build_history_chart`` test can keep injecting a
+    ``bar_source`` fake exactly as before -- the walk math, warmup/display
+    planning and truncation it exercises are unchanged, just reached through
+    the new ``batch_provider`` seam (one ``HistoryBatchQuery``, gate F2) instead
+    of a direct parameter.
     """
 
-    async def _provider(symbol, timeframe, required_bar_count, as_of_ms):
-        return await chart_projection_service.fetch_complete_history_batch(
-            symbol=symbol,
-            timeframe=timeframe,
-            required_bar_count=required_bar_count,
-            as_of_ms=as_of_ms,
+    async def _provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        return await history_batch_walk.fetch_complete_history_batch(
+            symbol=query.symbol,
+            timeframe=query.timeframe,
+            required_bar_count=query.required_bar_count,
+            as_of_ms=query.as_of_ms,
             bar_source=bar_source,
         )
 
@@ -252,7 +256,7 @@ async def test_history_truncates_at_each_configured_display_cap(
     """Each timeframe's own cap is exercised, not just the pytest parameter.
 
     The previous version asserted ``display_bars > 0``, which passes for any
-    cap and so could not catch a regression in ``_HISTORY_TIMEFRAME_SPECS``.
+    cap and so could not catch a regression in ``HISTORY_TIMEFRAME_SPECS``.
     """
     span_ms = _TIMEFRAME_SPAN_MS[timeframe]
     supplied = (
@@ -372,7 +376,7 @@ async def test_daily_bar_completes_at_session_close_not_midnight_plus_one_day(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(
-        chart_projection_service._HISTORY_TIMEFRAME_SPECS,
+        chart_projection_service.HISTORY_TIMEFRAME_SPECS,
         "1d",
         chart_projection_service._HistoryTimeframeSpec(1, "day", 1),
     )
@@ -550,7 +554,9 @@ async def test_history_fill_markers_within_window() -> None:
     assert result.fill_markers[0].price == 500.0
 
 
-async def test_coordinator_batch_empty_polygon_key_returns_notice_with_no_fetch() -> None:
+async def test_coordinator_batch_empty_polygon_key_returns_notice_with_no_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Regression for issue #2203, relocated for #2204.
 
     The fleet-coordinator role is the only process ever holding a usable
@@ -563,20 +569,17 @@ async def test_coordinator_batch_empty_polygon_key_returns_notice_with_no_fetch(
     async def _unexpected_fetch(*_args: object, **_kwargs: object) -> list:
         pytest.fail("must not fetch from Polygon when the key is empty")
 
-    original = chart_projection_service.fetch_aggregate_bars
-    chart_projection_service.fetch_aggregate_bars = _unexpected_fetch  # type: ignore[assignment]
-    try:
-        batch = await chart_projection_service.build_coordinator_history_batch(
-            symbol="SPY",
-            timeframe="1m",
-            required_bar_count=300,
-            as_of_ms=_NOW,
-            polygon_api_key="",
-        )
-    finally:
-        chart_projection_service.fetch_aggregate_bars = original
+    monkeypatch.setattr(history_batch_walk, "fetch_aggregate_bars", _unexpected_fetch)
+    batch = await history_batch_walk.build_coordinator_history_batch(
+        symbol="SPY",
+        timeframe="1m",
+        required_bar_count=300,
+        as_of_ms=_NOW,
+        polygon_api_key="",
+    )
 
     assert batch.bars == []
+    assert batch.source == "polygon"
     assert [notice.code for notice in batch.overlay_notices] == ["polygon_api_key_missing"]
     assert batch.overlay_notices[0].source == "polygon"
 
@@ -585,15 +588,17 @@ async def test_fetch_complete_history_batch_polygon_auth_error_returns_notice_wi
     """Regression for issue #2203, relocated for #2204.
 
     Before #2203's fix, ``PolygonAuthError`` escaped the walk unhandled. The
-    walk now lives in ``fetch_complete_history_batch`` (the
-    fleet-coordinator-only entry point) rather than ``build_history_chart``,
-    so this proves the classification survived the relocation.
+    walk now lives in ``history_batch_walk.fetch_complete_history_batch``
+    (the fleet-coordinator-only entry point, relocated off
+    ``chart_projection_service`` by issue #2204 gate F5) rather than
+    ``build_history_chart``, so this proves the classification survived the
+    relocation.
     """
 
     async def _source(symbol, start, end, multiplier, timespan):
         raise PolygonAuthError("Polygon 401 for SPY: bad key", 401)
 
-    batch = await chart_projection_service.fetch_complete_history_batch(
+    batch = await history_batch_walk.fetch_complete_history_batch(
         symbol="SPY",
         timeframe="1m",
         required_bar_count=300,
@@ -611,9 +616,10 @@ async def test_build_history_chart_forwards_batch_notices_with_no_bars_fabricate
     whatever ``batch_provider`` returns -- healthy or notice-only -- passes
     straight through with no bars fabricated."""
 
-    async def _degraded_provider(symbol, timeframe, required_bar_count, as_of_ms):
-        return chart_projection_service.CompleteHistoryBatch(
+    async def _degraded_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        return HistoryBatchResponse(
             bars=[],
+            source="polygon",
             overlay_notices=[
                 ChartOverlayNoticeView(
                     code="coordinator_unavailable",
@@ -622,7 +628,7 @@ async def test_build_history_chart_forwards_batch_notices_with_no_bars_fabricate
                     source="polygon",
                 )
             ],
-            effective_as_of_ms=as_of_ms,
+            effective_as_of_ms=query.as_of_ms,
         )
 
     result = await build_history_chart(
@@ -894,9 +900,9 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
         calls.append((broker, account_id, sid, from_ms, to_ms))
         return SimpleNamespace(status=status, fills=SimpleNamespace(fills=expected_fills))
 
-    async def empty_batch_provider(symbol, timeframe, required_bar_count, as_of_ms):
-        return chart_projection_service.CompleteHistoryBatch(
-            bars=[], overlay_notices=[], effective_as_of_ms=as_of_ms
+    async def empty_batch_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        return HistoryBatchResponse(
+            bars=[], source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms
         )
 
     monkeypatch.setattr(
@@ -928,17 +934,78 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
     assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]
 
 
-def test_get_history_chart_never_imports_a_direct_polygon_fetch() -> None:
-    """Acceptance criterion (issue #2204): production Clerk history assembly
-    never calls Polygon directly, and the direct fetch is deleted rather than
-    retained as a fallback -- a structural assertion that it is gone from the
-    module entirely, not merely unused at runtime."""
-    import inspect
+async def test_get_history_chart_under_clerk_agent_never_reaches_polygon_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance criterion (issue #2204 gate F5), behavioural rather than a
+    source grep: a real ``clerk_agent`` history request succeeds end to end
+    while the vendor fetch is patched to raise if it is ever called. A grep
+    for "fetch_aggregate_bars" would pass even if the walk were re-imported
+    under a different name; this does not."""
+    import httpx
 
-    assert not hasattr(panel_chart_data_source, "fetch_aggregate_bars")
-    source = inspect.getsource(panel_chart_data_source)
-    assert "fetch_aggregate_bars" not in source
-    assert "polygon_fetcher" not in source
+    from app.config import fleet_settings
+    from app.services.broker_v2_panel import history_batch_client
+
+    async def _unreachable_fetch(*_args: object, **_kwargs: object) -> list:
+        pytest.fail("a clerk_agent history request must never call Polygon directly")
+
+    monkeypatch.setattr(history_batch_walk, "fetch_aggregate_bars", _unreachable_fetch)
+    monkeypatch.setattr(fleet_settings, "ROLE", "clerk_agent")
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(fleet_settings, "AGENT_SERVICE_TOKEN", "svct_" + "1" * 32)
+    monkeypatch.setattr(fleet_settings, "CLERK_ID", "clrk_probe00000000000000000aa")
+    monkeypatch.setattr(history_batch_client, "_CACHED_PROVIDER", None)
+
+    def _coordinator_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "bars": [],
+                "source": "polygon",
+                "overlay_notices": [],
+                "effective_as_of_ms": _NOW,
+            },
+        )
+
+    def _fake_build_internal_client(*, read_timeout_s=None, **_kwargs):
+        return httpx.AsyncClient(transport=httpx.MockTransport(_coordinator_handler))
+
+    monkeypatch.setattr(history_batch_client, "build_internal_client", _fake_build_internal_client)
+
+    status = BotStatusView(
+        strategy_instance_id=SID,
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+        running=True,
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        active_run_id="run-1",
+        duty_outcome=None,
+        binding_created_at_ms=_NOW - 60_000,
+        last_transition_at_ms=_NOW - 60_000,
+    )
+
+    async def validate_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def chart_evidence(
+        broker: str, account_id: str, sid: str, *, from_ms: int, to_ms: int
+    ) -> SimpleNamespace:
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=()))
+
+    monkeypatch.setattr(panel_chart_data_source, "validate_account", validate_account)
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
+
+    result = await panel_chart_data_source.get_history_chart(
+        "alpaca", "paper-account", SID, "1m"
+    )
+
+    assert result.bars == []
+    assert result.overlay_notices == []
 
 
 async def test_history_chart_forwards_coordinator_unavailable_from_the_batch_provider(
@@ -978,9 +1045,10 @@ async def test_history_chart_forwards_coordinator_unavailable_from_the_batch_pro
     ) -> SimpleNamespace:
         return SimpleNamespace(status=status, fills=SimpleNamespace(fills=()))
 
-    async def degraded_provider(symbol, timeframe, required_bar_count, as_of_ms):
-        return chart_projection_service.CompleteHistoryBatch(
+    async def degraded_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        return HistoryBatchResponse(
             bars=[],
+            source="polygon",
             overlay_notices=[
                 ChartOverlayNoticeView(
                     code="coordinator_unavailable",
@@ -989,7 +1057,7 @@ async def test_history_chart_forwards_coordinator_unavailable_from_the_batch_pro
                     source="polygon",
                 )
             ],
-            effective_as_of_ms=as_of_ms,
+            effective_as_of_ms=query.as_of_ms,
         )
 
     monkeypatch.setattr(panel_chart_data_source, "validate_account", validate_account)
