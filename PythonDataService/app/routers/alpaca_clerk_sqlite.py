@@ -83,6 +83,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     StartRunRequest,
     StopRunRequest,
     TimelinePageResponse,
+    safe_flatten_pricing_response,
 )
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
@@ -461,8 +462,13 @@ async def _check_recovery_action(
     Mutation executors call the same ``recheck_recovery_action`` immediately
     before their durable command/effect path.  This transport seam lets the
     existing confirmation component refresh evidence before confirmation.
+
+    A single-leg safe-flatten plan also carries how it would go out *now*
+    (#2007): market inside the regular session, the live IBKR quote and a
+    suggested limit in PRE/POST, or why nothing can be sent.
     """
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
+    repo = facade.repository
     try:
         context = await asyncio.to_thread(
             _read_projection,
@@ -500,8 +506,18 @@ async def _check_recovery_action(
                 ).model_dump(mode="json"),
             },
         ) from exc
+    plan = capability.reduction_plan
+    if plan is None:
+        return RecoveryActionCheckResponse(
+            capability=RecoveryCapabilityResponse.model_validate(capability)
+        )
     return RecoveryActionCheckResponse(
-        capability=RecoveryCapabilityResponse.model_validate(capability)
+        capability=RecoveryCapabilityResponse.model_validate(capability),
+        reduction_pricing=safe_flatten_pricing_response(
+            facade.price_safe_flatten(plan),
+            proposed_limit_price=body.proposed_limit_price,
+            quantity=plan.legs[0].quantity if len(plan.legs) == 1 else 0.0,
+        ),
     )
 
 
@@ -664,6 +680,9 @@ async def _execute_presented_recovery_action(
                 concurrency_token=body.concurrency_token,
                 execution_ref=body.execution_ref,
                 reason=body.reason,
+                confirmed_limit=(
+                    None if body.extended_limit is None else body.extended_limit.to_confirmed()
+                ),
             ),
             current_context=current_context,
         )
@@ -684,10 +703,13 @@ async def _execute_presented_recovery_action(
             },
         ) from exc
     except RecoveryExecutionError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason": "recovery_execution_rejected", "message": str(exc)},
-        ) from exc
+        detail: dict[str, object] = {"reason": "recovery_execution_rejected", "message": str(exc)}
+        if exc.refusal is not None:
+            # The typed refusal, so a client can tell a stale quote or a closed
+            # session from a custody refusal without parsing prose (#2007).
+            detail["reason_code"] = exc.refusal.reason_code
+            detail["available_at_ms"] = exc.refusal.available_at_ms
+        raise HTTPException(status_code=409, detail=detail) from exc
     except ExecutionCoverageResolutionUnavailable as exc:
         raise HTTPException(
             status_code=409,

@@ -37,7 +37,27 @@
 
   @if (reductionPlan(); as plan) {
     <div class="panel-feedback">
-      <app-safe-flatten-plan [plan]="plan" />
+      <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
+      @if (extendedFlattenTicket(); as ticket) {
+        <app-extended-flatten-ticket
+          [pricing]="ticket.pricing"
+          [quantity]="ticket.quantity"
+          [quoteReceivedAtMs]="ticket.receivedAtMs"
+          [pending]="actionPending()"
+          (send)="sendExtendedFlatten($event)"
+          (priceCheck)="priceExtendedFlatten($event)"
+          (refresh)="refreshFlattenQuote()"
+        />
+        @if (preparedFlatten()?.quoteError; as quoteError) {
+          <p class="flatten-quote-error" role="alert">Quote refresh failed: {{ quoteError }}</p>
+        }
+      }
+    </div>
+  }
+
+  @if (flattenFills().length > 0) {
+    <div class="panel-feedback">
+      <app-flatten-fills [fills]="flattenFills()" />
     </div>
   }
 

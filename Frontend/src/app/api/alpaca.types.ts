@@ -57,6 +57,15 @@ export type SqliteRecoveryAction = components['schemas']['RecoveryCapabilityResp
 export type SqliteRecoveryActionCheck = components['schemas']['RecoveryActionCheckResponse'];
 export type SqliteRecoveryResult = components['schemas']['RecoveryActionExecuteResponse'];
 export type SqliteSafeFlattenPlan = components['schemas']['SafeFlattenPlanResponse'];
+// How a single-leg safe flatten would go out now (#2007): market inside the
+// regular session, an operator-confirmed limit in PRE/POST, or refused.
+export type SqliteSafeFlattenPricing = NonNullable<SqliteRecoveryActionCheck['reduction_pricing']>;
+export type SqliteExtendedLimitPricing = components['schemas']['ExtendedLimitFlattenPricing'];
+export type SqliteRefusedFlattenPricing = components['schemas']['RefusedFlattenPricing'];
+export type SqliteProposedLimitEvaluation =
+  components['schemas']['ProposedLimitEvaluationResponse'];
+export type SqliteExtendedLimitConfirmation =
+  components['schemas']['ExtendedLimitConfirmationRequest'];
 export type SqliteTimelineEntry = components['schemas']['TimelineEntryResponse'];
 export type SqliteTimelinePage = components['schemas']['TimelinePageResponse'];
 export type HistoricalExecutionRecoveryPlan =

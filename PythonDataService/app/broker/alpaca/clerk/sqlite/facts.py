@@ -42,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import LegShape
     from app.broker.contract.models import BrokerOrderLeg
+    from app.schemas.market_liveness import TopOfBookQuote
 
 FACTS_SCHEMA_VERSION = 1
 
@@ -203,7 +204,15 @@ _REDUCING_SHAPE_DEFAULTS: Mapping[str, Any] = {
 # fields above are all at their defaults for a regular-session leg, so the
 # side is the only field that can say "a deciding program recorded a shape
 # here" — and it is written only when that shape is not the regular one.
-_ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {**_REDUCING_SHAPE_DEFAULTS, "reducing_side": None}
+_ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
+    **_REDUCING_SHAPE_DEFAULTS,
+    "reducing_side": None,
+    "reducing_valid_until_ms": None,
+    "reducing_confirmed_quantity": None,
+    "reference_bid": None,
+    "reference_ask": None,
+    "reference_quote_observed_at_ms": None,
+}
 
 
 def _omit_defaults(payload: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
@@ -256,16 +265,39 @@ class ExitAcceptedFacts:
     time_in_force: str = "day"
     limit_price: float | None = None
     extended_hours: bool = False
+    # When an operator-confirmed recovery limit stops being sendable: the end
+    # of the session it was priced in (#2007). ``None`` for every other EXIT.
+    reducing_valid_until_ms: int | None = None
+    # The reduction the operator actually reviewed before confirming a price
+    # (#2007). Cancellation resolves the real quantity several steps later; if
+    # it no longer matches, their confirmation does not cover it.
+    reducing_confirmed_quantity: float | None = None
+    # The live IBKR quote the Clerk priced an operator's confirmed limit
+    # against — the reference its realized slippage is measured from (#2007).
+    reference_bid: float | None = None
+    reference_ask: float | None = None
+    reference_quote_observed_at_ms: int | None = None
 
-    def with_reducing_shape(self, shape: LegShape | None) -> ExitAcceptedFacts:
-        """Record the deciding program's reducing shape, unless it is the default.
+    def with_reducing_shape(
+        self,
+        shape: LegShape | None,
+        *,
+        valid_until_ms: int | None = None,
+        reference_quote: TopOfBookQuote | None = None,
+        confirmed_quantity: float | None = None,
+    ) -> ExitAcceptedFacts:
+        """Record the reducing shape, unless it is the default.
 
         A regular-session shape is exactly what ``_create_reducing_order``
         builds when no shape was recorded, so writing it out would add
         nothing but would change the canonical JSON of every regular-hours
         EXIT acceptance — and every sealed receipt hashed over one. An EXIT
-        with no deciding program at all (safe flatten, the watchdog,
-        recovery) records nothing and still yields market DAY.
+        with no confirmed or decided shape (a watchdog re-drive, a safe
+        flatten inside the regular session) records nothing and still yields
+        market DAY. ``valid_until_ms`` bounds an operator's confirmed limit,
+        ``reference_quote`` is the quote it was priced against, and
+        ``confirmed_quantity`` is the reduction they reviewed; all three are
+        recorded only with the shape they belong to.
         """
         from app.broker.alpaca.clerk.program_leg import regular_session_shape
 
@@ -278,6 +310,13 @@ class ExitAcceptedFacts:
             time_in_force=shape.time_in_force.value,
             limit_price=shape.limit_price,
             extended_hours=shape.extended_hours,
+            reducing_valid_until_ms=valid_until_ms,
+            reducing_confirmed_quantity=confirmed_quantity,
+            reference_bid=None if reference_quote is None else reference_quote.bid,
+            reference_ask=None if reference_quote is None else reference_quote.ask,
+            reference_quote_observed_at_ms=(
+                None if reference_quote is None else reference_quote.observed_at_ms
+            ),
         )
 
     def reducing_shape(self) -> LegShape | None:

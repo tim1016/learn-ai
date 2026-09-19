@@ -75,7 +75,12 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _hold_transition
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
+    _clock_at,
+    _hold_transition,
+    _walk_clock_to,
+)
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -2190,11 +2195,15 @@ async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Pat
 
 WATCHDOG_SID = "wd-bot"
 WATCHDOG_RUN = "wd-run-1"
+# The watchdog re-drives only inside the regular session (#2007), so its clock
+# starts at ``FIXTURE_RTH_MS``.
+WATCHDOG_POST_T0 = 1_700_085_600_000  # 2023-11-15 17:00 ET, after-hours
+WATCHDOG_NEXT_OPEN = 1_700_145_060_000  # 2023-11-16 09:31 ET
 
 
 @pytest.fixture
 def clocked_repo(tmp_path: Path):
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(FIXTURE_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
@@ -2289,6 +2298,67 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
     assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
     assert len(trade.submit_calls) == 1  # the recovery reducing order reached the broker
+
+
+async def test_watchdog_waits_for_the_operator_outside_the_regular_session(
+    clocked_repo,
+) -> None:
+    """#2007, owner decision 2026-09-19: outside 09:30-16:00 nothing is sent
+    automatically -- no market order the vendor would queue to the open, and no
+    re-drive attempt burned toward EXIT_STUCK while the operator is the one who
+    must act."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _walk_clock_to(repo, WATCHDOG_POST_T0)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    policy = _exit_not_flat_redrive_policy()
+    trade = _FakeTrade()
+
+    for _ in range(policy.max_count + 2):
+        clock.advance(policy.after_ms + 1)
+        await reconcile_account(
+            repo,
+            read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+            trade=trade,
+        )
+
+    assert trade.submit_calls == []
+    assert repo.active_exit_for_strategy(WATCHDOG_SID) is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_STUCK_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    ) is not None
+
+
+async def test_watchdog_resumes_its_first_redrive_at_the_regular_open(clocked_repo) -> None:
+    repo, _clock = clocked_repo
+    await _held_position(repo)
+    _walk_clock_to(repo, WATCHDOG_POST_T0)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    _walk_clock_to(repo, WATCHDOG_NEXT_OPEN)
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=trade,
+    )
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+    assert len(trade.submit_calls) == 1
 
 
 async def test_reconcile_account_does_not_redrive_a_fresh_exit_not_flat(clocked_repo) -> None:

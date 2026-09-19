@@ -8,6 +8,7 @@ import { of } from 'rxjs';
 import type {
   HistoricalExecutionRecoveryPlan,
   SqliteRecoveryAction,
+  SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
@@ -348,6 +349,32 @@ function safeFlattenSnapshot(): BotPanelLiveSnapshot {
   });
 }
 
+/** The unpriced Execute safe flatten, as the adapter presents it in PRE/POST (#2007). */
+const EXECUTE_SAFE_FLATTEN_ACTION = {
+  action_id: 'execute_safe_flatten',
+  revision: 17,
+  concurrency_token: 'execute-token-17',
+  enabled: false,
+  label: 'Execute safe flatten',
+  explanation: 'Submit the prepared reduction as recovery EXIT custody.',
+  blockers: [],
+  confirmation: null,
+} satisfies PanelAction;
+
+function extendedFlattenSnapshot(prepareToken = 'plan-token-17'): BotPanelLiveSnapshot {
+  const snapshot = safeFlattenSnapshot();
+  return {
+    ...snapshot,
+    panel: {
+      ...snapshot.panel,
+      actions: [
+        { ...PREPARE_SAFE_FLATTEN_ACTION, concurrency_token: prepareToken },
+        EXECUTE_SAFE_FLATTEN_ACTION,
+      ],
+    },
+  };
+}
+
 function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
   return liveSnapshot({
     ...PANEL,
@@ -507,6 +534,24 @@ const mockService = {
     concurrency_token: 'start-token',
     message: 'Bot start requested.',
   }),
+  executeExtendedSafeFlatten: vi.fn().mockResolvedValue({
+    action_id: 'execute_safe_flatten',
+    outcome: 'success',
+    applied: true,
+    receipt_id: 'order-ref-flatten-1',
+    recorded_at_ms: 1_753_800_000_200,
+    command: null,
+    reconciliation: null,
+    orders: [{
+      order_ref: 'order-ref-flatten-1',
+      client_order_id: 'order-ref-flatten-1',
+      broker_order_id: 'alp-flatten-1',
+      role: 'REDUCING',
+      broker_state: 'accepted',
+      submitted_at_ms: 1_753_800_000_150,
+      updated_at_ms: 1_753_800_000_200,
+    }],
+  }),
   prepareHistoricalExecutionRecovery: vi.fn().mockResolvedValue(HISTORICAL_RECOVERY_PLAN),
   confirmHistoricalExecutionRecovery: vi.fn().mockResolvedValue({
     uncertainty_id: HISTORICAL_RECOVERY_PLAN.uncertainty_id,
@@ -519,7 +564,10 @@ const mockService = {
 };
 
 const brokersMock = {
-  checkSqliteRecoveryAction: vi.fn().mockResolvedValue(SAFE_FLATTEN_CAPABILITY),
+  checkSqliteSafeFlatten: vi.fn().mockResolvedValue({
+    capability: SAFE_FLATTEN_CAPABILITY,
+    reduction_pricing: { kind: 'regular_session' },
+  } satisfies SqliteRecoveryActionCheck),
 };
 
 const marketDataMock = {
@@ -738,7 +786,10 @@ describe('BotPanelShellComponent', () => {
     });
     expect(within(planRegion).getByText('Qqq')).toBeTruthy();
     expect(within(planRegion).getByText('2.5')).toBeTruthy();
-    expect(brokersMock.checkSqliteRecoveryAction).toHaveBeenCalledWith(
+    expect(within(planRegion).getByText(/Inside the regular session this flatten is a market order/))
+      .toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+    expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledWith(
       'clrk_spec',
       'DUM284968',
       { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
@@ -883,9 +934,9 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('discards a safe-flatten response after route identity changes', async () => {
-    const pendingCapability = deferred<SqliteRecoveryAction>();
+    const pendingCapability = deferred<SqliteRecoveryActionCheck>();
     mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
-    brokersMock.checkSqliteRecoveryAction.mockReturnValueOnce(
+    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(
       pendingCapability.promise,
     );
     const { fixture } = await render(BotPanelShellComponent, {
@@ -910,13 +961,249 @@ describe('BotPanelShellComponent', () => {
 
     fixture.componentRef.setInput('sid', 'sid-002');
     fixture.detectChanges();
-    pendingCapability.resolve(SAFE_FLATTEN_CAPABILITY);
+    pendingCapability.resolve({ capability: SAFE_FLATTEN_CAPABILITY, reduction_pricing: null });
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.queryByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeNull();
+  });
+
+  describe('an extended-hours safe flatten (#2007)', () => {
+    /** Let a multi-step flow finish: a send refreshes the panel, posts, then refreshes again. */
+    async function settle(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
+      for (let step = 0; step < 4; step += 1) {
+        await fixture.whenStable();
+        fixture.detectChanges();
+      }
+    }
+
+    async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: mockService },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      await switchLens(fixture, 'operator');
+      fireEvent.click(screen.getByRole('button', { name: /Ready Prepare safe flatten/i }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    /** The Clerk's pricing, carrying its reading of the suggested price. */
+    const EXTENDED_CHECK_WITH_READING = (observedAtMs: number): SqliteRecoveryActionCheck => ({
+      capability: SAFE_FLATTEN_CAPABILITY,
+      reduction_pricing: {
+        kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+        bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+        quote_observed_at_ms: observedAtMs, quote_max_age_ms: 10_000,
+        exit_allowance_bps: 20, suggested_limit_price: 479.13, band_limit_price: 478.17,
+        spread: 0.1, spread_bps: 2.08, wide_spread: false, spread_warning_bps: 50,
+        proposal: {
+          limit_price: 479.13, through_book_bps: 20.2, worst_case_cost: 2.43,
+          outside_band: false, thin_book: false, resting: false,
+        },
+      },
+    });
+
+    it('shows the live IBKR quote and sends the confirmed limit through the custody route', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit',
+          phase: 'PRE',
+          symbol: 'QQQ',
+          side: 'sell',
+          bid: 480.1,
+          ask: 480.2,
+          bid_size: 300,
+          ask_size: 200,
+          quote_observed_at_ms: observedAtMs,
+          quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20,
+          suggested_limit_price: 479.13,
+          band_limit_price: 478.17,
+          spread: 0.1,
+          spread_bps: 2.08,
+          wide_spread: false,
+          spread_warning_bps: 50,
+          proposal: null,
+        },
+      } satisfies SqliteRecoveryActionCheck);
+      // Review asks the Clerk to read the operator's price; its answer is what
+      // the confirm pane shows and what Send sends.
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit',
+          phase: 'PRE',
+          symbol: 'QQQ',
+          side: 'sell',
+          bid: 480.1,
+          ask: 480.2,
+          bid_size: 300,
+          ask_size: 200,
+          quote_observed_at_ms: observedAtMs,
+          quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20,
+          suggested_limit_price: 479.13,
+          band_limit_price: 478.17,
+          spread: 0.1,
+          spread_bps: 2.08,
+          wide_spread: false,
+          spread_warning_bps: 50,
+          proposal: {
+            limit_price: 479.13,
+            through_book_bps: 20.2,
+            worst_case_cost: 2.43,
+            outside_band: false,
+            thin_book: false,
+            resting: false,
+          },
+        },
+      } satisfies SqliteRecoveryActionCheck);
+      const fixture = await prepareFlatten();
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      expect(within(ticket).getByText('Pre-market')).toBeTruthy();
+      expect(within(ticket).getByText(/\$480\.10/)).toBeTruthy();
+      expect(within(ticket).getByText(/\$480\.20/)).toBeTruthy();
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+      expect(within(ticket).getByText(/at limit \$479\.13/)).toBeTruthy();
+      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ proposed_limit_price: 479.13 }),
+        expect.anything(),
+      );
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      expect(mockService.executeExtendedSafeFlatten).toHaveBeenCalledWith(
+        expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'DUM284968' }),
+        'sid-001',
+        'execute-token-17',
+        { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
+      );
+      expect(mockService.runBotAction).not.toHaveBeenCalled();
+      expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
+        .toBeNull();
+      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+    });
+
+    it('never says an order was sent when none reached the broker', async () => {
+      // A durably accepted EXIT whose reducing order is still pending — a
+      // broker lookup outage, a transiently blocked REDUCE — has sent nothing,
+      // and telling the operator otherwise is the one thing worse than the
+      // outage itself (Codex review 2026-09-19).
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValue(EXTENDED_CHECK_WITH_READING(observedAtMs));
+      mockService.executeExtendedSafeFlatten.mockResolvedValueOnce({
+        action_id: 'execute_safe_flatten',
+        outcome: 'success',
+        applied: true,
+        receipt_id: 'effect-flatten-2',
+        recorded_at_ms: 1_753_800_000_200,
+        command: null,
+        reconciliation: null,
+        orders: [],
+      });
+      const fixture = await prepareFlatten();
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      expect(screen.getByText(/no order has reached the broker yet/)).toBeTruthy();
+      expect(screen.queryByText(/Limit order sent/)).toBeNull();
+    });
+
+    it('recovers from a rotated Prepare token instead of dead-ending the ticket', async () => {
+      // The Clerk re-mints the token every reconciliation pass, so a refresh
+      // that meets a rotated one must refresh the panel and retry with the
+      // token it now presents — never strand the ticket (#2007 review).
+      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot('plan-token-18'));
+      const extendedCheck = {
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+          bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+          quote_observed_at_ms: Date.now(), quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20, suggested_limit_price: 479.13,
+          band_limit_price: 478.17, spread: 0.1, spread_bps: 2.08, wide_spread: false,
+          spread_warning_bps: 50, proposal: null,
+        },
+      } satisfies SqliteRecoveryActionCheck;
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+      const fixture = await prepareFlatten();
+      brokersMock.checkSqliteSafeFlatten.mockRejectedValueOnce(
+        new HttpErrorResponse({
+          status: 409,
+          error: { detail: { reason: 'stale_action_token', message: 'The plan changed.' } },
+        }),
+      );
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Refresh quote' }));
+      await settle(fixture);
+
+      // Prepare, the refused refresh, then the retry — each with whatever
+      // token the panel presented at the time.
+      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(3);
+      const tokens = brokersMock.checkSqliteSafeFlatten.mock.calls.map(
+        (call: unknown[]) => (call[2] as { concurrency_token: string }).concurrency_token,
+      );
+      // Each call carries the token the panel presented at the time. The
+      // retry's *value* cannot be asserted here: this harness's live store
+      // does not push the second snapshot into the signal the shell reads, so
+      // the rotation itself is covered by the refresh path, not by this spec.
+      expect(tokens[1]).toBe('plan-token-17');
+      expect(tokens[2]).toBeDefined();
+      expect(mockService.getLiveSnapshot.mock.calls.length).toBeGreaterThan(1);
+      expect(screen.queryByText(/Quote refresh failed/)).toBeNull();
+      expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();
+    });
+
+    it('names when the next session opens instead of offering a ticket', async () => {
+      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'refused',
+          reason_code: 'NO_SESSION_OPEN',
+          explanation: 'No trading session is open now, so no reduction can be sent.',
+          next_step: 'Flatten again once the next session opens.',
+          available_at_ms: 1_753_862_400_000,
+        },
+      } satisfies SqliteRecoveryActionCheck);
+      await prepareFlatten();
+
+      const plan = await screen.findByRole('region', { name: 'Prepared safe-flatten reduction plan' });
+      expect(within(plan).getByText(/No trading session is open now/)).toBeTruthy();
+      expect(within(plan).getByText(
+        formatTimestampDisplay(1_753_862_400_000, { mode: 'et' }),
+      )).toBeTruthy();
+      expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+    });
   });
 
   it('renders the bot banner once, not re-mounted inside a lens, registers one lens-toggle host, and keeps run evidence out of Trader', async () => {

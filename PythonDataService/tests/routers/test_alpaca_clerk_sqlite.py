@@ -6,12 +6,14 @@ import asyncio
 import threading
 import time
 from dataclasses import fields
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.active_authority import (
@@ -20,14 +22,28 @@ from app.broker.alpaca.clerk.active_authority import (
     get_active_clerk_runtime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.recovery_reduction import (
+    ConfirmedRecoveryLimit,
+    ExtendedLimitProposal,
+    no_session_open,
+)
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryPlan,
 )
 from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
-from app.broker.alpaca.clerk.sqlite.projection_models import TimelinePage
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    RecoveryCapability,
+    SafeFlattenPlan,
+    SafeFlattenPlanLeg,
+    TimelinePage,
+)
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
+from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionError,
+    RecoveryExecutionResult,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     RepositoryPoisoned,
@@ -35,10 +51,12 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.timeline_query import TimelineFilters, _encode_cursor
 from app.broker.contract.errors import BrokerUnavailable
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.contract.models import BrokerAccountSnapshot, OrderSide
 from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
 from app.schemas.alpaca_clerk_sqlite import HistoricalExecutionRecoveryPlanResponse
+from app.schemas.market_liveness import TopOfBookQuote
+from app.utils.error_handlers import request_validation_exception_handler
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -1178,3 +1196,293 @@ async def test_reconcile_now_still_refuses_a_foreign_account(
     assert response.status_code == status, response.text
     assert response.json()["detail"]["reason"] == reason
     reconcile.assert_not_awaited()
+
+
+# ── #2007: the check route prices a flatten; execute carries the confirmed limit ──
+
+
+def _single_leg_flatten_capability() -> RecoveryCapability:
+    return RecoveryCapability(
+        action_id="prepare_safe_flatten",
+        label="Prepare safe flatten",
+        explanation="Prepare an exact reduction plan.",
+        available=True,
+        unavailable_reason_code=None,
+        unavailable_reason=None,
+        scope="CUSTODY_SUBJECT",
+        freshness="fresh",
+        evidence=(),
+        reduction_plan=SafeFlattenPlan(
+            version_token="plan-token",
+            account_id=ACCOUNT_ID,
+            authority_generation=1,
+            db_identity_token="db-1",
+            control_revision=7,
+            scope="CUSTODY_SUBJECT",
+            strategy_instance_id=SID,
+            reconciliation_id="reconciliation:1",
+            prepared_at_ms=1_700_136_000_000,
+            expires_at_ms=1_700_136_060_000,
+            legs=(
+                SafeFlattenPlanLeg(
+                    strategy_instance_id=SID,
+                    symbol="SPY",
+                    side="sell",
+                    quantity=10.0,
+                    position_updated_at_ms=1_700_135_000_000,
+                ),
+            ),
+        ),
+        confirmation=None,
+        next_step="Review the plan.",
+        concurrency_token="token",
+        execution_ref=None,
+        mutation=False,
+        primary=False,
+    )
+
+
+def _active_facade() -> SqliteAlpacaClerkFacade:
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    return runtime.clerk
+
+
+@pytest.mark.asyncio
+async def test_bot_recovery_check_carries_the_live_extended_hours_pricing(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capability = _single_leg_flatten_capability()
+    monkeypatch.setattr(
+        alpaca_clerk_sqlite, "recheck_recovery_action", lambda *_a, **_k: capability
+    )
+    quote = TopOfBookQuote(
+        symbol="SPY",
+        bid=100.00,
+        ask=100.05,
+        bid_size=300,
+        source="ibkr.market_data.status",
+        observed_at_ms=1_700_136_000_000,
+    )
+    priced: list[SafeFlattenPlan] = []
+
+    def price(plan: SafeFlattenPlan) -> ExtendedLimitProposal:
+        priced.append(plan)
+        return ExtendedLimitProposal(
+            phase="PRE",
+            side=OrderSide.SELL,
+            quote=quote,
+            exit_allowance_bps=Decimal("20"),
+            suggested_limit_price=Decimal("99.80"),
+            band_limit_price=Decimal("99.60"),
+        )
+
+    monkeypatch.setattr(_active_facade(), "price_safe_flatten", price)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/check",
+            json={"action_id": "prepare_safe_flatten", "concurrency_token": "token"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert priced == [capability.reduction_plan]
+    assert response.json()["reduction_pricing"] == {
+        "kind": "extended_limit",
+        "phase": "PRE",
+        "symbol": "SPY",
+        "side": "sell",
+        "bid": 100.0,
+        "ask": 100.05,
+        "bid_size": 300,
+        "ask_size": None,
+        "quote_observed_at_ms": 1_700_136_000_000,
+        "quote_max_age_ms": 10_000,
+        "exit_allowance_bps": 20.0,
+        "suggested_limit_price": 99.8,
+        "band_limit_price": 99.6,
+        "spread": pytest.approx(0.05, abs=1e-9),
+        "spread_bps": pytest.approx(4.99875, abs=1e-5),
+        "wide_spread": False,
+        "spread_warning_bps": 50.0,
+        "proposal": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_clerk_evaluates_the_price_the_operator_proposes(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every number the operator reads is the Clerk's; the browser computes none."""
+    capability = _single_leg_flatten_capability()
+    monkeypatch.setattr(
+        alpaca_clerk_sqlite, "recheck_recovery_action", lambda *_a, **_k: capability
+    )
+    monkeypatch.setattr(
+        _active_facade(),
+        "price_safe_flatten",
+        lambda _plan: ExtendedLimitProposal(
+            phase="PRE",
+            side=OrderSide.SELL,
+            quote=TopOfBookQuote(
+                symbol="SPY",
+                bid=100.00,
+                ask=100.05,
+                bid_size=4,
+                source="ibkr.market_data.status",
+                observed_at_ms=1_700_136_000_000,
+            ),
+            exit_allowance_bps=Decimal("20"),
+            suggested_limit_price=Decimal("99.80"),
+            band_limit_price=Decimal("99.60"),
+        ),
+    )
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/check",
+            json={
+                "action_id": "prepare_safe_flatten",
+                "concurrency_token": "token",
+                "proposed_limit_price": 99.70,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    proposal = response.json()["reduction_pricing"]["proposal"]
+    # $0.30 through a $100.00 bid, on the plan's ten shares against a book of four.
+    assert proposal["through_book_bps"] == pytest.approx(30.0, abs=1e-6)
+    assert proposal["worst_case_cost"] == pytest.approx(3.0, abs=1e-6)
+    assert (proposal["outside_band"], proposal["thin_book"], proposal["resting"]) == (
+        False,
+        True,
+        False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bot_recovery_check_names_when_the_next_session_opens(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        alpaca_clerk_sqlite,
+        "recheck_recovery_action",
+        lambda *_a, **_k: _single_leg_flatten_capability(),
+    )
+    monkeypatch.setattr(
+        _active_facade(), "price_safe_flatten", lambda _plan: no_session_open(1_700_125_200_000)
+    )
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/check",
+            json={"action_id": "prepare_safe_flatten", "concurrency_token": "token"},
+        )
+
+    assert response.status_code == 200, response.text
+    pricing = response.json()["reduction_pricing"]
+    assert (pricing["kind"], pricing["reason_code"], pricing["available_at_ms"]) == (
+        "refused",
+        "NO_SESSION_OPEN",
+        1_700_125_200_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bot_recovery_execute_forwards_the_operators_confirmed_limit(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[ConfirmedRecoveryLimit | None] = []
+
+    async def execute(_facade, *, request, current_context):
+        del current_context
+        seen.append(request.confirmed_limit)
+        return RecoveryExecutionResult(
+            action_id="execute_safe_flatten",
+            applied=True,
+            receipt_id="effect:1",
+            recorded_at_ms=1_700_136_001_000,
+        )
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "execute_recovery_action", execute)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            json={
+                "action_id": "execute_safe_flatten",
+                "concurrency_token": "token",
+                "extended_limit": {
+                    "limit_price": 99.95,
+                    "quote_observed_at_ms": 1_700_136_000_000,
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert seen == [
+        ConfirmedRecoveryLimit(limit_price=Decimal("99.95"), quote_observed_at_ms=1_700_136_000_000)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_flatten_names_its_typed_reason(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def execute(_facade, *, request, current_context):
+        del request, current_context
+        raise RecoveryExecutionError(
+            "No trading session is open now.", refusal=no_session_open(1_700_125_200_000)
+        )
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "execute_recovery_action", execute)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            json={"action_id": "execute_safe_flatten", "concurrency_token": "token"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert (detail["reason"], detail["reason_code"], detail["available_at_ms"]) == (
+        "recovery_execution_rejected",
+        "NO_SESSION_OPEN",
+        1_700_125_200_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_non_finite_limit_price_is_a_validation_error_not_a_crash(api: FastAPI) -> None:
+    # The production app's own handler, which keeps a 422 echoing Infinity JSON-safe.
+    api.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            content=(
+                '{"action_id": "execute_safe_flatten", "concurrency_token": "token", '
+                '"extended_limit": {"limit_price": Infinity, "quote_observed_at_ms": 1}}'
+            ),
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_an_extended_limit_on_any_other_recovery_action_is_refused(api: FastAPI) -> None:
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            json={
+                "action_id": "stop_bot_decisions",
+                "concurrency_token": "token",
+                "extended_limit": {
+                    "limit_price": 99.95,
+                    "quote_observed_at_ms": 1_700_136_000_000,
+                },
+            },
+        )
+
+    assert response.status_code == 422

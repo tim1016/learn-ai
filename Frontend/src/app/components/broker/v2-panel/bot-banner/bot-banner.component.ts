@@ -109,17 +109,22 @@ export class BotBannerComponent {
    * S6). Operator-only: a running bot's exposure belongs to the strategy,
    * and the banner must not invite the trader to fight it, and the trader
    * lens has no flatten action to promote in the first place.
+   *
+   * An armed flatten wins over a blocked one: outside the regular session the
+   * unpriced Execute is disabled and Prepare — where the limit is priced — is
+   * the way to flatten (#2007), so promoting the dead button would hide the
+   * live one in the overflow. With neither armed, the first presented shows
+   * its blocker.
    */
   protected readonly promotedFlattenAction = computed<PanelAction | null>(() => {
     if (!this.operator()) return null;
     const panel = this.panel();
     if (panel.health.running) return null;
     if (!Object.values(panel.exposure).some((quantity) => quantity !== 0)) return null;
-    for (const actionId of SAFE_FLATTEN_ACTION_IDS) {
-      const action = panel.actions.find((item) => item.action_id === actionId);
-      if (action) return action;
-    }
-    return null;
+    const presented = SAFE_FLATTEN_ACTION_IDS.flatMap((actionId) =>
+      panel.actions.filter((item) => item.action_id === actionId),
+    );
+    return presented.find((action) => action.enabled) ?? presented[0] ?? null;
   });
 
   protected readonly promotedFlattenTone = computed(() =>

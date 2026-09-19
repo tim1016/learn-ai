@@ -284,6 +284,29 @@ describe('BotBannerComponent', () => {
     expect(screen.queryByRole('button', { name: 'Prepare safe flatten' })).toBeNull();
   });
 
+  it('promotes Prepare when the backend presents Execute disabled (#2007)', async () => {
+    // Outside the regular session the unpriced Execute is blocked and Prepare
+    // is where the limit is priced; promoting the dead button would bury it.
+    await render(BotBannerComponent, {
+      inputs: inputs(
+        stoppedPanel({
+          exposure: { SPY: 3 },
+          actions: [
+            resume,
+            prepareFlatten,
+            { ...executeFlatten, enabled: false },
+          ],
+        }),
+        true,
+      ),
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.getByRole('button', { name: 'Prepare safe flatten' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'More operator actions' }));
+    expect(screen.getByRole('button', { name: /Execute safe flatten/ })).toBeTruthy();
+  });
+
   it('does not promote flatten for a stopped bot that is already flat', async () => {
     await render(BotBannerComponent, {
       inputs: inputs(stoppedPanel({ exposure: { SPY: 0 } }), true),

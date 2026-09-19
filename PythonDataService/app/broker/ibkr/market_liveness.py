@@ -15,7 +15,12 @@ from typing import Any
 
 from app.broker.ibkr.client import IbkrClient, get_client
 from app.broker.ibkr.contracts import qualify_underlying
-from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
+from app.broker.ibkr.models import _coerce_quote, _coerce_size
+from app.schemas.market_liveness import (
+    MarketStatusSnapshot,
+    SymbolTradingStatusEvidence,
+    TopOfBookQuote,
+)
 from app.utils.timestamps import Clock, now_ms_utc
 
 _SOURCE = "ibkr.market_data.status"
@@ -89,10 +94,35 @@ class IbkrMarketStatusSource:
         return self._snapshot(self._clock(), connected=True)
 
     def _snapshot(self, now: int, *, connected: bool) -> MarketStatusSnapshot:
+        symbols = self._symbols()
         return MarketStatusSnapshot(
             source=_SOURCE, connected=connected, observed_at_ms=now,
             connection_changed_at_ms=self._connection_changed_at_ms,
-            symbol_statuses=tuple(self._evidence(symbol, now) for symbol in self._symbols()),
+            symbol_statuses=tuple(self._evidence(symbol, now) for symbol in symbols),
+            quotes=(
+                tuple(quote for symbol in symbols if (quote := self._quote(symbol, now)) is not None)
+                if connected else ()
+            ),
+        )
+
+    def _quote(self, symbol: str, now: int) -> TopOfBookQuote | None:
+        """The live best bid and ask, or nothing when either side is absent.
+
+        Only a live (``marketDataType == 1``) book prices a limit: a delayed or
+        frozen quote is a number nobody can trade against now (#2007).
+        """
+        ticker = self._tickers.get(symbol)
+        if ticker is None or ticker.marketDataType != 1:
+            return None
+        bid = _coerce_quote(getattr(ticker, "bid", None))
+        ask = _coerce_quote(getattr(ticker, "ask", None))
+        if not bid or not ask:
+            return None
+        return TopOfBookQuote(
+            symbol=symbol, bid=bid, ask=ask,
+            bid_size=_coerce_size(getattr(ticker, "bidSize", None)),
+            ask_size=_coerce_size(getattr(ticker, "askSize", None)),
+            source=_SOURCE, observed_at_ms=now,
         )
 
     def _evidence(self, symbol: str, now: int) -> SymbolTradingStatusEvidence:

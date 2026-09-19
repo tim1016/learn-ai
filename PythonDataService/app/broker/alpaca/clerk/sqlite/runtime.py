@@ -40,9 +40,19 @@ from app.broker.alpaca.clerk.models import (
     RecoveryEvaluationObservation,
 )
 from app.broker.alpaca.clerk.program_leg import (
+    LegRefusal,
     ProgramLegPolicy,
     ProgramLegRefused,
     shape_program_leg,
+)
+from app.broker.alpaca.clerk.recovery_reduction import (
+    ConfirmedRecoveryLimit,
+    ConfirmedRecoveryShape,
+    QuoteSource,
+    RecoveryReductionPricing,
+    flatten_session,
+    price_recovery_reduction,
+    recovery_reduction_shape,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
@@ -100,6 +110,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
+    SafeFlattenExecutionError,
     SafeFlattenResult,
     execute_safe_flatten_plan,
 )
@@ -115,8 +126,14 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
+from app.schemas.market_liveness import TopOfBookQuote
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
-from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
+from app.services.market_liveness import (
+    get_market_liveness_store,
+    liveness_blocks_entry,
+    market_liveness_fact,
+)
+from app.services.session_authority import SessionAuthorityState
 
 if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
@@ -225,6 +242,7 @@ class SqliteAlpacaClerkFacade:
         program_leg_policy: ProgramLegPolicy | None = None,
         live_envelope: LiveEnvelopeGate | None = None,
         live_arming: ArmingGate | None = None,
+        quote_source: QuoteSource | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -263,6 +281,10 @@ class SqliteAlpacaClerkFacade:
         # ADR 0059 D11: per-instance arming, consulted at ENTER on the live
         # authority only; ``None`` on paper and under shadow.
         self._live_arming = live_arming
+        # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
+        # priced against -- the process's market-liveness store unless a test
+        # states the quote directly.
+        self._quote_source = quote_source or _live_top_of_book
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -631,19 +653,58 @@ class SqliteAlpacaClerkFacade:
                 operator_reason=reason,
             )
 
+    def flatten_session(self) -> SessionAuthorityState:
+        """The session an operator's flatten would go out in now (#2007).
+
+        The canonical calendar's regular session, widened by the window this
+        authority's broker declares -- the same window an extended-session
+        program leg is shaped against.
+        """
+        return flatten_session(now_ms=self._repo.clock(), policy=self.program_leg_policy)
+
+    def price_safe_flatten(
+        self, plan: SafeFlattenPlan
+    ) -> RecoveryReductionPricing | LegRefusal | None:
+        """How the plan's one reduction would go out now, for the operator to confirm.
+
+        ``None`` for a plan that is not a single leg: those are prepare-only,
+        and one confirmed price can only ever be for one leg. A refusal is
+        returned, not raised -- it is what the operator is shown.
+        """
+        if len(plan.legs) != 1:
+            return None
+        (leg,) = plan.legs
+        now_ms = self._repo.clock()
+        try:
+            return price_recovery_reduction(
+                side=OrderSide(leg.side),
+                now_ms=now_ms,
+                policy=self.program_leg_policy,
+                quote=self._quote_source(leg.symbol, now_ms),
+            )
+        except ProgramLegRefused as exc:
+            return exc.refusal
+
     async def execute_safe_flatten(
         self,
         *,
         plan: SafeFlattenPlan,
         reason: str | None = None,
+        confirmed_limit: ConfirmedRecoveryLimit | None = None,
     ) -> SafeFlattenResult:
-        """Execute the presented SafeFlattenPlan as recovery EXIT custody (F18)."""
+        """Execute the presented SafeFlattenPlan as recovery EXIT custody (F18).
+
+        The reduction's shape is decided here, from now, before any EXIT is
+        accepted (#2007): market DAY inside the regular session, the
+        operator's confirmed limit in PRE/POST, and a refusal otherwise.
+        """
         result = await execute_safe_flatten_plan(
             self._repo,
             plan=plan,
             trade=self._trade,
             intake=self._intake,
             account_id=self.account_id,
+            confirmed_shape=self._safe_flatten_shape(plan, confirmed_limit),
         )
         logger.info(
             "operator safe flatten executed",
@@ -656,6 +717,51 @@ class SqliteAlpacaClerkFacade:
             },
         )
         return result
+
+    def _safe_flatten_shape(
+        self, plan: SafeFlattenPlan, confirmed_limit: ConfirmedRecoveryLimit | None
+    ) -> ConfirmedRecoveryShape | None:
+        """The one leg's reducing shape, or a ``SafeFlattenExecutionError`` naming why not.
+
+        A multi-leg plan is prepare-only (the recovery policy never presents it
+        for execution); with no one leg to price, it keeps the unshaped
+        default, which waits for the regular session downstream.
+        """
+        if len(plan.legs) != 1:
+            if confirmed_limit is not None:
+                raise SafeFlattenExecutionError(
+                    "A confirmed limit prices exactly one reduction; this plan has several."
+                )
+            return None
+        (leg,) = plan.legs
+        now_ms = self._repo.clock()
+        try:
+            return recovery_reduction_shape(
+                side=OrderSide(leg.side),
+                symbol=leg.symbol,
+                quantity=leg.quantity,
+                now_ms=now_ms,
+                policy=self.program_leg_policy,
+                confirmed=confirmed_limit,
+                # Read at send, never taken from the client: the band and the
+                # quote's freshness are judged against what the Clerk sees now.
+                current_quote=(
+                    None if confirmed_limit is None else self._quote_source(leg.symbol, now_ms)
+                ),
+            )
+        except ProgramLegRefused as exc:
+            logger.info(
+                "operator safe flatten refused before any EXIT was accepted",
+                extra={
+                    "action": "safe_flatten_shape_refused",
+                    "account_id": self.account_id,
+                    "strategy_instance_id": leg.strategy_instance_id,
+                    "reason_code": exc.reason_code,
+                },
+            )
+            raise SafeFlattenExecutionError(
+                f"{exc.explanation} {exc.next_step}", refusal=exc.refusal
+            ) from exc
 
     async def execute_for_instance(
         self,
@@ -1409,6 +1515,11 @@ def _durable_decision_id(decision_id: str) -> str:
         return decision_id
     encoded = base64.urlsafe_b64encode(decision_id.encode("utf-8")).rstrip(b"=")
     return f"{_ENCODED_DECISION_PREFIX}{encoded.decode('ascii')}"
+
+
+def _live_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
+    """The process's fresh IBKR bid/ask for ``symbol``; asking subscribes it."""
+    return get_market_liveness_store().top_of_book(symbol, now_ms=now_ms)
 
 
 def _is_working_order(order: OrderResource) -> bool:

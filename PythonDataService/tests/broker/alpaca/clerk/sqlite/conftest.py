@@ -45,6 +45,25 @@ def _clock_at(start_ms: int) -> _TestClock:
     return _TestClock(start_ms)
 
 
+FIXTURE_RTH_MS = 1_700_060_400_000
+"""2023-11-15 10:00 ET (a Wednesday): inside the regular session, the morning
+after every ``1_700_000_000_xxx`` broker stamp these fixtures carry.
+
+``1_700_000_000_000`` itself is 17:13 ET -- after-hours -- which is where an
+unshaped recovery reduction waits for the regular session (#2007). A test of
+a regular-hours flatten starts here instead."""
+
+
+def _walk_clock_to(repo: ClerkSqliteRepository, target_ms: int) -> None:
+    """Advance to ``target_ms`` as a running Clerk would: its lease heartbeat renews throughout."""
+    clock = repo.clock
+    assert isinstance(clock, _TestClock)
+    step = repo.lease_ttl_ms // 3
+    while clock.value < target_ms:
+        clock.value = min(clock.value + step, target_ms)
+        repo.renew_execution_lease()
+
+
 def _hold_transition(
     *,
     reason_code: str = "UNEXPLAINED_ORDER_HOLD",

@@ -32,17 +32,17 @@ from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, Tim
     ],
 )
 def test_marketable_limit_price(side: OrderSide, close: Decimal, bps: Decimal, expected: Decimal) -> None:
-    assert marketable_limit_price(side=side, close=close, allowance_bps=bps) == expected
+    assert marketable_limit_price(side=side, anchor=close, allowance_bps=bps) == expected
 
 
 def test_a_negative_allowance_is_refused() -> None:
     with pytest.raises(ValueError, match="allowance_bps"):
-        marketable_limit_price(side=OrderSide.BUY, close=Decimal("10"), allowance_bps=Decimal("-1"))
+        marketable_limit_price(side=OrderSide.BUY, anchor=Decimal("10"), allowance_bps=Decimal("-1"))
 
 
-def test_a_non_positive_close_is_refused() -> None:
-    with pytest.raises(ValueError, match="close"):
-        marketable_limit_price(side=OrderSide.BUY, close=Decimal("0"), allowance_bps=Decimal("1"))
+def test_a_non_positive_anchor_is_refused() -> None:
+    with pytest.raises(ValueError, match="anchor"):
+        marketable_limit_price(side=OrderSide.BUY, anchor=Decimal("0"), allowance_bps=Decimal("1"))
 
 
 def test_allowances_come_from_settings_and_are_absent_when_unset() -> None:
@@ -94,14 +94,14 @@ def test_an_anchor_that_quantises_to_zero_is_refused() -> None:
     """
     with pytest.raises(ValueError, match="not a submittable limit price"):
         marketable_limit_price(
-            side=OrderSide.SELL, close=Decimal("100.00"), allowance_bps=Decimal("10000")
+            side=OrderSide.SELL, anchor=Decimal("100.00"), allowance_bps=Decimal("10000")
         )
 
 
 def test_a_sub_penny_close_floored_to_zero_is_refused() -> None:
     with pytest.raises(ValueError, match="not a submittable limit price"):
         marketable_limit_price(
-            side=OrderSide.SELL, close=Decimal("0.00005"), allowance_bps=Decimal("10")
+            side=OrderSide.SELL, anchor=Decimal("0.00005"), allowance_bps=Decimal("10")
         )
 
 
@@ -134,7 +134,7 @@ def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     whose anchor lands at or above $1 — so the sweep straddles it, including
     the 0.99999 → 1.0000 case the formula row calls out.
     """
-    price = marketable_limit_price(side=side, close=Decimal(close), allowance_bps=Decimal(bps))
+    price = marketable_limit_price(side=side, anchor=Decimal(close), allowance_bps=Decimal(bps))
 
     leg = BrokerOrderLeg(
         symbol="SPY",

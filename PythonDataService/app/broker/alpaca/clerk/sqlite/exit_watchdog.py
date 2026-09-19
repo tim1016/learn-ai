@@ -6,6 +6,14 @@ A terminal ``EXIT_NOT_FLAT`` folds its effect to ``failed``, which
 reach flat — without this step a stuck EXIT is re-driven never, forever
 (research directions 2026-08-24, Direction 1 RQ2). This runs as one step of
 the account reconciliation pass (``reconcile._reconcile_account_serialized``).
+
+It re-drives only inside the regular session (#2007, owner decision
+2026-09-19). A re-drive carries no deciding program, so outside 09:30-16:00
+it could only be a market order the vendor queues to the next open -- and an
+EXIT accepted to hold that order would own the entry the operator's own
+extended-hours safe flatten must target. So it waits for the operator: the
+``EXIT_NOT_FLAT`` episode stays raised and visible, no attempt is counted
+toward ``EXIT_STUCK``, and automatic re-drives resume at the regular open.
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
+from app.broker.alpaca.clerk.recovery_reduction import regular_session_open
 from app.broker.alpaca.clerk.sqlite.exit import (
     accept_recovery_exit,
     resolve_accepted_exit,
@@ -58,6 +67,8 @@ async def redrive_or_escalate_stale_exits(
     # its policy.
     redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
     now_ms = repo.clock()
+    if not regular_session_open(now_ms):
+        return
     for instance in repo.strategy_instances():
         sid = instance["strategy_instance_id"]
         episode = repo.active_uncertainty(

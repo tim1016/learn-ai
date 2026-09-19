@@ -7,12 +7,24 @@ as given.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from decimal import Decimal
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.broker.alpaca.clerk.program_leg import LegRefusal
+from app.broker.alpaca.clerk.recovery_reduction import (
+    RECOVERY_QUOTE_MAX_AGE_MS,
+    RECOVERY_SPREAD_WARNING_BPS,
+    ConfirmedRecoveryLimit,
+    ExtendedLimitProposal,
+    RecoveryReductionPricing,
+    evaluate_proposed_limit,
+    quote_spread_bps,
+)
 from app.broker.alpaca.clerk.sqlite.models import CommandResource
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, TimelinePage
@@ -451,18 +463,196 @@ class HistoricalExecutionRecoveryReceiptResponse(BaseModel):
 
 
 class RecoveryActionCheckRequest(BaseModel):
-    """Action-specific token checked against a fresh policy evaluation."""
+    """Action-specific token checked against a fresh policy evaluation.
+
+    ``proposed_limit_price`` asks what a specific extended-hours price would
+    do against the quote the Clerk holds (#2007) — the operator's review step.
+    It confirms nothing and sends nothing; only the execute route does that.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_id: RecoveryActionId
     concurrency_token: str = Field(min_length=1, max_length=128)
+    proposed_limit_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+class RegularSessionFlattenPricing(BaseModel):
+    """Inside the regular session the flatten is a market DAY order; no quote is needed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["regular_session"]
+
+
+class ProposedLimitEvaluationResponse(BaseModel):
+    """What the price the operator proposed does against the Clerk's quote (#2007).
+
+    Every number an operator reads before confirming is computed by the Clerk
+    and rendered as-is; the browser never derives one (AGENTS.md § "Python
+    owns all math").
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    limit_price: float
+    # Positive reaches through the touch; negative rests behind it.
+    through_book_bps: float
+    # Every share filling at the limit, measured against the touch, in dollars.
+    worst_case_cost: float
+    outside_band: bool
+    thin_book: bool
+    resting: bool
+
+
+class ExtendedLimitFlattenPricing(BaseModel):
+    """The live IBKR quote and suggested limit an operator confirms in PRE/POST (#2007).
+
+    ``suggested_limit_price`` is the bid less the sealed exit allowance for a
+    sell (the ask plus it to cover). It is a suggestion: the operator may send
+    another price, which the Clerk checks against Alpaca's precision rule.
+    ``proposal`` is present only when the operator asked what their own price
+    would do.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["extended_limit"]
+    phase: Literal["PRE", "POST"]
+    symbol: str
+    side: Literal["buy", "sell"]
+    bid: float
+    ask: float
+    bid_size: int | None
+    ask_size: int | None
+    quote_observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    quote_max_age_ms: int
+    exit_allowance_bps: float
+    suggested_limit_price: float
+    # The furthest-through-the-book price the Clerk accepts: twice the exit
+    # allowance past the bid (sell) or ask (cover), owner decision 2026-09-19.
+    band_limit_price: float
+    # The live spread in dollars and as bps of the mid, and whether that is
+    # wide enough to flag.
+    spread: float
+    spread_bps: float
+    wide_spread: bool
+    # A bid-ask spread wider than this, in bps of the mid, is flagged.
+    spread_warning_bps: float
+    proposal: ProposedLimitEvaluationResponse | None = None
+
+
+class RefusedFlattenPricing(BaseModel):
+    """No flatten can be sent now; ``available_at_ms`` is when one can, if the clock is why."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["refused"]
+    reason_code: str
+    explanation: str
+    next_step: str
+    available_at_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+
+
+SafeFlattenPricingResponse = Annotated[
+    RegularSessionFlattenPricing | ExtendedLimitFlattenPricing | RefusedFlattenPricing,
+    Field(discriminator="kind"),
+]
+
+
+def safe_flatten_pricing_response(
+    pricing: RecoveryReductionPricing | LegRefusal,
+    *,
+    proposed_limit_price: float | None = None,
+    quantity: float = 0.0,
+) -> SafeFlattenPricingResponse:
+    """The wire shape of the facade's ``price_safe_flatten`` answer.
+
+    ``proposed_limit_price`` is the operator's own price, evaluated by the
+    Clerk against the same quote so the browser only renders the result.
+    """
+    if isinstance(pricing, LegRefusal):
+        return RefusedFlattenPricing(
+            kind="refused",
+            reason_code=pricing.reason_code,
+            explanation=pricing.explanation,
+            next_step=pricing.next_step,
+            available_at_ms=pricing.available_at_ms,
+        )
+    if isinstance(pricing, ExtendedLimitProposal):
+        quote = pricing.quote
+        spread_bps = quote_spread_bps(quote)
+        proposal = (
+            None
+            if proposed_limit_price is None
+            else evaluate_proposed_limit(
+                proposal=pricing,
+                limit_price=Decimal(str(proposed_limit_price)),
+                quantity=quantity,
+            )
+        )
+        return ExtendedLimitFlattenPricing(
+            kind="extended_limit",
+            phase=pricing.phase,
+            symbol=quote.symbol,
+            side=pricing.side.value,
+            bid=quote.bid,
+            ask=quote.ask,
+            bid_size=quote.bid_size,
+            ask_size=quote.ask_size,
+            quote_observed_at_ms=quote.observed_at_ms,
+            quote_max_age_ms=RECOVERY_QUOTE_MAX_AGE_MS,
+            exit_allowance_bps=float(pricing.exit_allowance_bps),
+            suggested_limit_price=float(pricing.suggested_limit_price),
+            band_limit_price=float(pricing.band_limit_price),
+            spread=quote.ask - quote.bid,
+            spread_bps=spread_bps,
+            wide_spread=spread_bps > RECOVERY_SPREAD_WARNING_BPS,
+            spread_warning_bps=float(RECOVERY_SPREAD_WARNING_BPS),
+            proposal=(
+                None
+                if proposal is None
+                else ProposedLimitEvaluationResponse(
+                    limit_price=float(proposal.limit_price),
+                    through_book_bps=proposal.through_book_bps,
+                    worst_case_cost=proposal.worst_case_cost,
+                    outside_band=proposal.outside_band,
+                    thin_book=proposal.thin_book,
+                    resting=proposal.resting,
+                )
+            ),
+        )
+    return RegularSessionFlattenPricing(kind="regular_session")
 
 
 class RecoveryActionCheckResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     capability: RecoveryCapabilityResponse
+    # How a single-leg safe flatten would go out now (#2007); ``None`` for every
+    # other capability and for a prepare-only multi-leg plan.
+    reduction_pricing: SafeFlattenPricingResponse | None = None
+
+
+class ExtendedLimitConfirmationRequest(BaseModel):
+    """The limit an operator confirmed for an extended-hours safe flatten (#2007).
+
+    ``quote_observed_at_ms`` names the IBKR bid/ask the operator confirmed
+    against; the Clerk refuses a confirmation whose quote is more than ten
+    seconds old when it arrives. Alpaca's precision rule is checked against
+    the leg the Clerk would submit, not restated here.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    limit_price: float = Field(gt=0, allow_inf_nan=False)
+    quote_observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+
+    def to_confirmed(self) -> ConfirmedRecoveryLimit:
+        return ConfirmedRecoveryLimit(
+            limit_price=Decimal(str(self.limit_price)),
+            quote_observed_at_ms=self.quote_observed_at_ms,
+        )
 
 
 class RecoveryActionExecuteRequest(BaseModel):
@@ -474,6 +664,13 @@ class RecoveryActionExecuteRequest(BaseModel):
     concurrency_token: str = Field(min_length=1, max_length=128)
     execution_ref: str | None = Field(default=None, max_length=256)
     reason: str | None = Field(default=None, max_length=512)
+    extended_limit: ExtendedLimitConfirmationRequest | None = None
+
+    @model_validator(mode="after")
+    def _extended_limit_prices_only_a_flatten(self) -> RecoveryActionExecuteRequest:
+        if self.extended_limit is not None and self.action_id != "execute_safe_flatten":
+            raise ValueError("extended_limit prices only an execute_safe_flatten action")
+        return self
 
 
 class RecoveryActionExecuteResponse(BaseModel):

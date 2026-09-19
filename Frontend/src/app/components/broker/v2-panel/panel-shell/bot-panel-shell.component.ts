@@ -17,8 +17,16 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   HistoricalExecutionRecoveryPlan,
+  SqliteExtendedLimitConfirmation,
+  SqliteExtendedLimitPricing,
   SqliteSafeFlattenPlan,
+  SqliteSafeFlattenPricing,
 } from '../../../../api/alpaca.types';
+import {
+  ExtendedFlattenTicketComponent,
+  formatLimitPrice,
+} from '../../shared/extended-flatten-ticket/extended-flatten-ticket.component';
+import { FlattenFillsComponent } from '../../shared/flatten-fills/flatten-fills.component';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
 import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
@@ -42,7 +50,12 @@ import {
   accountWorkspaceOriginTabRoute,
   accountWorkspaceTabLabel,
 } from '../../../../fleet/account-workspace';
-import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
+import {
+  laneKey,
+  resourceTarget,
+  type ResourceTarget,
+  withCommand,
+} from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
   fencedTarget,
@@ -78,6 +91,22 @@ interface HistoricalExecutionRecoveryDraft {
   readonly sid: string;
 }
 
+/** A prepared safe flatten: the plan, how it would go out now, and what re-prices it. */
+interface PreparedSafeFlatten {
+  readonly plan: SqliteSafeFlattenPlan;
+  readonly pricing: SqliteSafeFlattenPricing | null;
+  /** When this browser received ``pricing`` — what the ticket ages the quote by. */
+  readonly receivedAtMs: number;
+  /** The lane shown when the operator prepared. */
+  readonly target: ResourceTarget;
+  readonly sid: string;
+  /** Why the last quote refresh failed; the quote then ages until it cannot be sent. */
+  readonly quoteError: string | null;
+}
+
+/** An extended-hours ticket re-reads the live quote this often while open (#2007). */
+const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
+
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
  *
@@ -101,6 +130,8 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    ExtendedFlattenTicketComponent,
+    FlattenFillsComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
@@ -207,11 +238,71 @@ export class BotPanelShellComponent {
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
   /** Changes for route reuse and for a rebinding of the same visible lane. */
-  private readonly routeIdentity = computed(() => this.target());
-  protected readonly reductionPlan = linkedSignal({
-    source: this.routeIdentity,
-    computation: (): SqliteSafeFlattenPlan | null => null,
+  /** The lane and bot this page is showing, as a value.
+   *
+   * A key, not the target object: `target()` rebuilds on any lane-directory
+   * change, and comparing object identity made an in-flight request look like
+   * a route change (it discarded a flatten the operator had just confirmed)
+   * and reset every draft below on an ordinary refresh. */
+  private readonly routeIdentity = computed(() => {
+    const target = this.target();
+    return `${laneKey(
+      target.broker,
+      target.clerkId,
+      target.routingEpoch,
+      target.bindingGeneration,
+      target.accountId,
+    )}::${this.sid()}`;
   });
+  protected readonly preparedFlatten = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): PreparedSafeFlatten | null => null,
+  });
+  protected readonly reductionPlan = computed(() => this.preparedFlatten()?.plan ?? null);
+  protected readonly reductionPricing = computed(() => this.preparedFlatten()?.pricing ?? null);
+  /** The priced extended-hours ticket, present only for a single-leg plan in PRE/POST. */
+  protected readonly extendedFlattenTicket = computed<
+    {
+      readonly pricing: SqliteExtendedLimitPricing;
+      readonly quantity: number;
+      readonly receivedAtMs: number;
+    } | null
+  >(() => {
+    const prepared = this.preparedFlatten();
+    const pricing = prepared?.pricing;
+    if (prepared === null || pricing?.kind !== 'extended_limit' || prepared.plan.legs.length !== 1) {
+      return null;
+    }
+    return {
+      pricing,
+      quantity: prepared.plan.legs[0].quantity,
+      receivedAtMs: prepared.receivedAtMs,
+    };
+  });
+  /** Fills of an operator-priced flatten, with the slippage the Clerk measured (#2007). */
+  protected readonly flattenFills = computed(() =>
+    (this.panel()?.recent_fills ?? []).filter(
+      (fill) => fill.slippage_bps !== null && fill.slippage_bps !== undefined,
+    ),
+  );
+  private readonly extendedFlattenOpen = computed(() => this.extendedFlattenTicket() !== null);
+  /** One quote refresh at a time: a slow check must not overlap the next tick. */
+  private flattenQuoteInFlight = false;
+  /** The in-flight refresh, so a Review can queue behind it instead of being dropped. */
+  private flattenQuoteRun: Promise<void> = Promise.resolve();
+  /** While a ticket is open the quote refreshes on its own, so what the
+   * operator confirms is never older than one refresh — except while the
+   * operator is reviewing a price, when a refresh would answer the Clerk's
+   * reading of it with a quote that carries no reading at all. */
+  private readonly extendedFlattenQuoteRefresh = effect((onCleanup) => {
+    if (!this.extendedFlattenOpen()) return;
+    const timer = setInterval(() => {
+      if (this.flattenPriceCheck() === null) void this.refreshFlattenQuote();
+    }, EXTENDED_FLATTEN_QUOTE_REFRESH_MS);
+    onCleanup(() => clearInterval(timer));
+  });
+  /** The price the Clerk is being asked to read, while it is being asked. */
+  private readonly flattenPriceCheck = signal<number | null>(null);
   protected readonly historicalRecoveryDraft = linkedSignal({
     source: this.routeIdentity,
     computation: (): HistoricalExecutionRecoveryDraft | null => null,
@@ -485,20 +576,32 @@ export class BotPanelShellComponent {
     const requestIdentity = this.routeIdentity();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
-    this.reductionPlan.set(null);
+    this.preparedFlatten.set(null);
     try {
-      const capability = await this.brokers.checkSqliteRecoveryAction(
+      const check = await this.brokers.checkSqliteSafeFlatten(
         target.clerkId,
         this.requiredAccountId(target),
         { action_id: 'prepare_safe_flatten', concurrency_token: action.concurrency_token },
         sid,
       );
       if (requestIdentity !== this.routeIdentity()) return;
-      this.reductionPlan.set(capability.reduction_plan);
+      const plan = check.capability.reduction_plan;
+      this.preparedFlatten.set(
+        plan === null
+          ? null
+          : {
+            plan,
+            pricing: check.reduction_pricing ?? null,
+            receivedAtMs: Date.now(),
+            target,
+            sid,
+            quoteError: null,
+          },
+      );
       this.messageService.add({
         severity: 'info',
-        summary: capability.label,
-        detail: capability.next_step,
+        summary: check.capability.label,
+        detail: check.capability.next_step,
       });
     } catch (error) {
       if (requestIdentity !== this.routeIdentity()) return;
@@ -511,6 +614,174 @@ export class BotPanelShellComponent {
     } finally {
       this.actionPending.set(false);
     }
+  }
+
+  /**
+   * Re-read the prepared plan and its live IBKR quote, quietly (#2007).
+   *
+   * The token is always the Prepare action the panel presents *now*: the
+   * Clerk re-mints it every reconciliation pass (~15 s), so re-checking with
+   * the one captured at Prepare would 409 within a pass and the ticket would
+   * never see a fresh quote again. A token that has just rotated is not a
+   * failure — the panel poll catches up — so it refreshes the panel and
+   * retries once instead of shouting at the operator. Anything else is named
+   * beside the ticket, and the quote then ages past the Clerk's bound and
+   * cannot be sent.
+   */
+  protected async refreshFlattenQuote(
+    retryOnStaleToken = true,
+    proposedLimitPrice: number | null = null,
+  ): Promise<void> {
+    const prepared = this.preparedFlatten();
+    const prepare = this.presentedAction('prepare_safe_flatten');
+    if (prepared === null || this.actionPending() || this.flattenQuoteInFlight) return;
+    if (prepare === undefined) {
+      this.preparedFlatten.set({
+        ...prepared,
+        quoteError: 'This bot no longer presents Prepare safe flatten; refresh the panel.',
+      });
+      return;
+    }
+    this.flattenQuoteInFlight = true;
+    this.flattenQuoteRun = (async () => {
+      try {
+        const check = await this.brokers.checkSqliteSafeFlatten(
+          prepared.target.clerkId,
+          this.requiredAccountId(prepared.target),
+          {
+            action_id: 'prepare_safe_flatten',
+            concurrency_token: prepare.concurrency_token,
+            ...(proposedLimitPrice === null ? {} : { proposed_limit_price: proposedLimitPrice }),
+          },
+          prepared.sid,
+        );
+        if (this.preparedFlatten() !== prepared) return;
+        const plan = check.capability.reduction_plan;
+        this.preparedFlatten.set(
+          plan === null
+            ? null
+            : {
+              ...prepared,
+              plan,
+              pricing: check.reduction_pricing ?? null,
+              receivedAtMs: Date.now(),
+              quoteError: null,
+            },
+        );
+      } catch (error) {
+        if (this.preparedFlatten() !== prepared) return;
+        const rejection = this.describeRejection(error, prepare);
+        if (rejection.reasonCode === 'stale_action_token' && retryOnStaleToken) {
+          this.flattenQuoteInFlight = false;
+          await this.liveStore.refresh();
+          await this.refreshFlattenQuote(false, proposedLimitPrice);
+          return;
+        }
+        this.preparedFlatten.set({ ...prepared, quoteError: rejection.message });
+      } finally {
+        this.flattenQuoteInFlight = false;
+      }
+    })();
+    await this.flattenQuoteRun;
+  }
+
+  /**
+   * Ask the Clerk what the operator's own price would do (#2007).
+   *
+   * The browser derives no execution or cost figure of its own, so Review is
+   * a round trip: the Clerk reads the price against the quote it holds, and
+   * the ticket confirms against that reading. The periodic quote refresh
+   * stands down while this runs, so the answer is not immediately replaced by
+   * a quote carrying no reading.
+   */
+  protected async priceExtendedFlatten(limitPrice: number): Promise<void> {
+    this.flattenPriceCheck.set(limitPrice);
+    try {
+      await this.flattenQuoteRun;
+      await this.refreshFlattenQuote(true, limitPrice);
+    } finally {
+      this.flattenPriceCheck.set(null);
+    }
+  }
+
+  /**
+   * Send the extended-hours flatten at exactly the limit the operator reviewed (#2007).
+   *
+   * The panel is re-read first so the execute token is the freshest one the
+   * Clerk has minted; without that a flatten lands inside the window after a
+   * reconciliation pass rotated the token and is refused for staleness, which
+   * is the worst possible moment to make an operator click twice.
+   */
+  protected async sendExtendedFlatten(confirmation: SqliteExtendedLimitConfirmation): Promise<void> {
+    const prepared = this.preparedFlatten();
+    if (prepared === null || prepared.pricing?.kind !== 'extended_limit' || this.actionPending()) {
+      return;
+    }
+    const requestIdentity = this.routeIdentity();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    try {
+      await this.liveStore.refresh();
+      if (requestIdentity !== this.routeIdentity()) return;
+      const execute = this.presentedAction('execute_safe_flatten');
+      if (execute === undefined) {
+        throw new Error('This bot no longer presents a safe flatten; refresh and prepare again.');
+      }
+      const result = await this.panelSvc.executeExtendedSafeFlatten(
+        this.commandTarget(prepared.target),
+        prepared.sid,
+        execute.concurrency_token,
+        confirmation,
+      );
+      if (requestIdentity !== this.routeIdentity()) return;
+      this.preparedFlatten.set(null);
+      const price = formatLimitPrice(confirmation.limit_price);
+      // "Sent" is a claim about the broker, so it is only made on the broker's
+      // own evidence. A durably accepted EXIT whose reducing order has not
+      // reached Alpaca — a lookup outage, a transiently blocked REDUCE — is
+      // pending, not sent, and saying otherwise would tell an operator their
+      // exposure is on its way out when nothing has left (Codex review
+      // 2026-09-19).
+      const reachedBroker = result.orders.some((order) => order.broker_order_id !== null);
+      const receipt: ActionReceiptView = {
+        actionId: 'execute_safe_flatten',
+        outcome: 'success',
+        receiptId: result.receipt_id,
+        recordedAtMs: result.recorded_at_ms,
+        message: !result.applied
+          ? 'This flatten had already been sent; the durable result was replayed.'
+          : reachedBroker
+            ? `Limit order sent at $${price}. It fills only at that price or better; await its `
+              + 'fill before treating exposure as flat.'
+            : `Flatten accepted at $${price}, but no order has reached the broker yet. `
+              + 'The Clerk keeps trying; nothing is flat until the order exists and fills.',
+        remediation: null,
+      };
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast('success', receipt.message));
+      await this.liveStore.refresh();
+    } catch (error) {
+      if (requestIdentity !== this.routeIdentity()) return;
+      const rejection = deriveActionRejection(error, 'Action "Execute safe flatten" failed.');
+      const receipt: ActionReceiptView = {
+        actionId: 'execute_safe_flatten',
+        outcome: rejection.outcome,
+        receiptId: null,
+        recordedAtMs: Date.now(),
+        message: rejection.message,
+        remediation: rejection.why,
+      };
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      await this.liveStore.refresh();
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  /** The named action as the panel presents it right now, with its current token. */
+  private presentedAction(actionId: PanelAction['action_id']): PanelAction | undefined {
+    return this.panel()?.actions.find((candidate) => candidate.action_id === actionId);
   }
 
   private commandTarget(target: ResourceTarget): ResourceTarget {

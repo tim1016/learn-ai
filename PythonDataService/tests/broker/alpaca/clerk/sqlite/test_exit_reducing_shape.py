@@ -14,8 +14,12 @@ import logging
 import pytest
 
 from app.broker.alpaca.clerk.program_leg import LegShape
-from app.broker.alpaca.clerk.sqlite.exit import accept_exit
-from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    confirmed_flatten_reference_price,
+    resolve_exit,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
@@ -23,6 +27,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
+from app.schemas.market_liveness import TopOfBookQuote
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
     RUN_ID,
@@ -227,6 +233,55 @@ async def test_a_shape_for_the_other_side_falls_back_to_market(
     assert leg.order_type is OrderType.MARKET
     assert leg.extended_hours is False
     assert any(getattr(r, "action", None) == "reducing_leg_shape_side_mismatch" for r in caplog.records)
+
+
+async def test_a_replaced_leg_reports_no_slippage_against_the_price_it_never_used(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """Codex review of #2007: R11 can replace an operator's confirmed limit with a
+    regular-session market leg on the other side. That leg was never priced from
+    the confirmed quote, so it has no reference to have slipped from."""
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    # The replaced leg is a regular-session market order, which only goes out
+    # inside the regular session.
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-abc",
+        entry_order_ref=entry_ref,
+        # Confirmed to cover a short; the attributed position is long, so
+        # cancellation resolves to a SELL and the confirmed leg cannot be used.
+        confirmed_shape=ConfirmedRecoveryShape(
+            shape=LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=100.10,
+                extended_hours=True,
+                side=OrderSide.BUY,
+            ),
+            valid_until_ms=repo.clock() + 3_600_000,
+            reference_quote=TopOfBookQuote(
+                symbol="SPY", bid=100.00, ask=100.05,
+                source="ibkr.market_data.status", observed_at_ms=repo.clock(),
+            ),
+            quantity=10.0,
+        ),
+    )
+    assert accepted.effect_operation_id is not None
+    trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted"))
+
+    resolved = await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade
+    )
+
+    ((leg, _),) = trade.submit_calls
+    assert (leg.order_type, leg.side, leg.extended_hours) == (
+        OrderType.MARKET, OrderSide.SELL, False,
+    )
+    assert resolved.reducing_order_ref is not None
+    assert confirmed_flatten_reference_price(repo, resolved.reducing_order_ref) is None
 
 
 async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(

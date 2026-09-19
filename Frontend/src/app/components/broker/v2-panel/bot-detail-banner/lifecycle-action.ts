@@ -1,5 +1,8 @@
 import type { OperatorMove } from '../../../../api/operator-blocker.types';
-import { BOT_COCKPIT_RECONCILE_ANCHOR } from '../../../../api/operator-blocker.types';
+import {
+  BOT_COCKPIT_RECONCILE_ANCHOR,
+  BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR,
+} from '../../../../api/operator-blocker.types';
 import type {
   ActionId,
   BotPanelView,
@@ -61,10 +64,12 @@ export function primaryActionForLens(
  * The panel commands a blocker's `confirm_in_form` anchor names, keyed by
  * anchor. The backend attaches the move; this map is the cockpit's answer to
  * "what does that anchor actually run here?" (`BOT_COCKPIT_RECONCILE_ANCHOR`
- * is authored in `sqlite_panel_adapter._capability_blocker`).
+ * is authored in `sqlite_panel_adapter._capability_blocker`,
+ * `BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR` in `_flatten_session_blocker`).
  */
 const MOVE_ANCHOR_ACTIONS: Readonly<Record<string, ActionId>> = {
   [BOT_COCKPIT_RECONCILE_ANCHOR]: 'reconcile_now',
+  [BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR]: 'prepare_safe_flatten',
 };
 
 /**

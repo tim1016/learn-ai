@@ -480,6 +480,16 @@ class RecentFillView(BaseModel):
     simulated: bool = False
     authority_account_id: str | None = None
     authority_kind: AuthorityKind | None = None
+    # The custody transition that materialized this fill: two partial fills of
+    # one order can share a millisecond and a price, so this is the only field
+    # that tells them apart (Codex review 2026-09-19).
+    event_key: str | None = None
+    # A fill of an operator-confirmed extended-hours flatten (#2007): the bid
+    # (sell) or ask (cover) its limit was priced against, and how much worse
+    # than that the fill came in (positive = worse) in bps and in dollars.
+    slippage_reference_price: float | None = None
+    slippage_bps: float | None = None
+    slippage_cost: float | None = None
 
     @model_validator(mode="after")
     def simulated_row_names_its_synthesized_authority(self) -> RecentFillView:
