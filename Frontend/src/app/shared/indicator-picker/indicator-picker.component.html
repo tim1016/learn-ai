@@ -87,8 +87,8 @@
 
   <!-- Categories / rows -->
   <div class="ip-cats" id="ip-rows">
-    <!-- An empty catalog is not a filter outcome; the host explains why it
-         is empty, so this stays neutral. -->
+    <!-- An empty catalog is not a filter outcome, so this stays neutral.
+         Explaining a failed catalog load is the host's job. -->
     @if (totalCatalog() === 0) {
       <div class="ip-empty">
         <strong>No indicators available</strong>
