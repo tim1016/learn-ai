@@ -17,8 +17,11 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   HistoricalExecutionRecoveryPlan,
+  SqliteExtendedLimitPricing,
   SqliteSafeFlattenPlan,
+  SqliteSafeFlattenPricing,
 } from '../../../../api/alpaca.types';
+import { ExtendedFlattenTicketComponent } from '../../shared/extended-flatten-ticket/extended-flatten-ticket.component';
 import { LensPreferenceService } from '../../shared/lens/lens-preference.service';
 import { LENS_QUERY_PARAM, parseLens, type DeskLens } from '../../../../shared/lens/lens';
 import { lensNavigationExtras } from '../../../../shared/lens/lens-url';
@@ -78,6 +81,22 @@ interface HistoricalExecutionRecoveryDraft {
   readonly sid: string;
 }
 
+/** A prepared safe flatten: the plan, how it would go out now, and what re-prices it. */
+interface PreparedSafeFlatten {
+  readonly plan: SqliteSafeFlattenPlan;
+  readonly pricing: SqliteSafeFlattenPricing | null;
+  /** The Prepare action whose token re-checks the plan and refreshes the quote. */
+  readonly prepareAction: PanelAction;
+  /** The lane shown when the operator prepared. */
+  readonly target: ResourceTarget;
+  readonly sid: string;
+  /** Why the last quote refresh failed; the quote then ages until it cannot be sent. */
+  readonly quoteError: string | null;
+}
+
+/** An extended-hours ticket re-reads the live quote this often while open (#2007). */
+const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
+
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
  *
@@ -101,6 +120,7 @@ interface HistoricalExecutionRecoveryDraft {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    ExtendedFlattenTicketComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
@@ -208,9 +228,30 @@ export class BotPanelShellComponent {
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
   /** Changes for route reuse and for a rebinding of the same visible lane. */
   private readonly routeIdentity = computed(() => this.target());
-  protected readonly reductionPlan = linkedSignal({
+  protected readonly preparedFlatten = linkedSignal({
     source: this.routeIdentity,
-    computation: (): SqliteSafeFlattenPlan | null => null,
+    computation: (): PreparedSafeFlatten | null => null,
+  });
+  protected readonly reductionPlan = computed(() => this.preparedFlatten()?.plan ?? null);
+  protected readonly reductionPricing = computed(() => this.preparedFlatten()?.pricing ?? null);
+  /** The priced extended-hours ticket, present only for a single-leg plan in PRE/POST. */
+  protected readonly extendedFlattenTicket = computed<
+    { readonly pricing: SqliteExtendedLimitPricing; readonly quantity: number } | null
+  >(() => {
+    const prepared = this.preparedFlatten();
+    const pricing = prepared?.pricing;
+    if (prepared === null || pricing?.kind !== 'extended_limit' || prepared.plan.legs.length !== 1) {
+      return null;
+    }
+    return { pricing, quantity: prepared.plan.legs[0].quantity };
+  });
+  private readonly extendedFlattenOpen = computed(() => this.extendedFlattenTicket() !== null);
+  /** While a ticket is open the quote refreshes on its own, so what the
+   * operator confirms is never older than one refresh. */
+  private readonly extendedFlattenQuoteRefresh = effect((onCleanup) => {
+    if (!this.extendedFlattenOpen()) return;
+    const timer = setInterval(() => void this.refreshFlattenQuote(), EXTENDED_FLATTEN_QUOTE_REFRESH_MS);
+    onCleanup(() => clearInterval(timer));
   });
   protected readonly historicalRecoveryDraft = linkedSignal({
     source: this.routeIdentity,
@@ -485,20 +526,32 @@ export class BotPanelShellComponent {
     const requestIdentity = this.routeIdentity();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
-    this.reductionPlan.set(null);
+    this.preparedFlatten.set(null);
     try {
-      const capability = await this.brokers.checkSqliteRecoveryAction(
+      const check = await this.brokers.checkSqliteSafeFlatten(
         target.clerkId,
         this.requiredAccountId(target),
         { action_id: 'prepare_safe_flatten', concurrency_token: action.concurrency_token },
         sid,
       );
       if (requestIdentity !== this.routeIdentity()) return;
-      this.reductionPlan.set(capability.reduction_plan);
+      const plan = check.capability.reduction_plan;
+      this.preparedFlatten.set(
+        plan === null
+          ? null
+          : {
+            plan,
+            pricing: check.reduction_pricing ?? null,
+            prepareAction: action,
+            target,
+            sid,
+            quoteError: null,
+          },
+      );
       this.messageService.add({
         severity: 'info',
-        summary: capability.label,
-        detail: capability.next_step,
+        summary: check.capability.label,
+        detail: check.capability.next_step,
       });
     } catch (error) {
       if (requestIdentity !== this.routeIdentity()) return;
@@ -507,6 +560,94 @@ export class BotPanelShellComponent {
       this.messageService.add(
         actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation),
       );
+      await this.liveStore.refresh();
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  /**
+   * Re-read the prepared plan and its live IBKR quote, quietly (#2007).
+   *
+   * A failure keeps the plan and names why beside the ticket: the quote then
+   * ages past the Clerk's bound and the ticket refuses to send it, so a stale
+   * price can never be confirmed by accident.
+   */
+  protected async refreshFlattenQuote(): Promise<void> {
+    const prepared = this.preparedFlatten();
+    if (prepared === null || this.actionPending()) return;
+    try {
+      const check = await this.brokers.checkSqliteSafeFlatten(
+        prepared.target.clerkId,
+        this.requiredAccountId(prepared.target),
+        {
+          action_id: 'prepare_safe_flatten',
+          concurrency_token: prepared.prepareAction.concurrency_token,
+        },
+        prepared.sid,
+      );
+      if (this.preparedFlatten() !== prepared) return;
+      const plan = check.capability.reduction_plan;
+      this.preparedFlatten.set(
+        plan === null
+          ? null
+          : { ...prepared, plan, pricing: check.reduction_pricing ?? null, quoteError: null },
+      );
+    } catch (error) {
+      if (this.preparedFlatten() !== prepared) return;
+      this.preparedFlatten.set({
+        ...prepared,
+        quoteError: this.describeRejection(error, prepared.prepareAction).message,
+      });
+    }
+  }
+
+  /** Send the extended-hours flatten at the operator's confirmed limit (#2007). */
+  protected async sendExtendedFlatten(limitPrice: number): Promise<void> {
+    const prepared = this.preparedFlatten();
+    const pricing = prepared?.pricing;
+    const execute = this.panel()?.actions.find(
+      (candidate) => candidate.action_id === 'execute_safe_flatten',
+    );
+    if (
+      prepared === null
+      || pricing?.kind !== 'extended_limit'
+      || execute === undefined
+      || this.actionPending()
+    ) {
+      return;
+    }
+    const requestIdentity = this.routeIdentity();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    try {
+      const result = await this.panelSvc.executeExtendedSafeFlatten(
+        this.commandTarget(prepared.target),
+        prepared.sid,
+        execute.concurrency_token,
+        { limit_price: limitPrice, quote_observed_at_ms: pricing.quote_observed_at_ms },
+      );
+      if (requestIdentity !== this.routeIdentity()) return;
+      this.preparedFlatten.set(null);
+      const receipt: ActionReceiptView = {
+        actionId: execute.action_id,
+        outcome: 'success',
+        receiptId: result.receipt_id,
+        recordedAtMs: result.recorded_at_ms,
+        message: result.applied
+          ? `Limit order sent at $${limitPrice.toFixed(limitPrice >= 1 ? 2 : 4)}. It fills only `
+            + 'at that price or better; await its fill before treating exposure as flat.'
+          : 'This flatten had already been sent; the durable result was replayed.',
+        remediation: null,
+      };
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast('success', receipt.message));
+      await this.liveStore.refresh();
+    } catch (error) {
+      if (requestIdentity !== this.routeIdentity()) return;
+      const receipt = this.errorReceipt(error, execute);
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);

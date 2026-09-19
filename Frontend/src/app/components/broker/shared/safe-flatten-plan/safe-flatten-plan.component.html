@@ -26,6 +26,24 @@
         </p-message>
       }
 
+      @if (refusal(); as refused) {
+        <p-message severity="warn" class="w-full">
+          <div class="grid gap-1">
+            <span>{{ refused.explanation }} {{ refused.next_step }}</span>
+            @if (refused.available_at_ms !== null) {
+              <span>
+                Next session opens
+                <app-timestamp-display [value]="refused.available_at_ms" mode="et" />.
+              </span>
+            }
+          </div>
+        </p-message>
+      } @else if (regularSession()) {
+        <p-message severity="secondary" class="w-full">
+          Inside the regular session this flatten is a market order.
+        </p-message>
+      }
+
       <dl class="m-0 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
         <div class="min-w-0">
           <dt class="text-xs text-[var(--text-secondary)]">Prepared</dt>

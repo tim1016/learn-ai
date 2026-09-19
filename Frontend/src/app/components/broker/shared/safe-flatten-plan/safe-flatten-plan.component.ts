@@ -6,11 +6,21 @@ import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import { timer } from 'rxjs';
 
-import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
+import type {
+  SqliteRefusedFlattenPricing,
+  SqliteSafeFlattenPlan,
+  SqliteSafeFlattenPricing,
+} from '../../../../api/alpaca.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 
-/** Pure presentation for one backend-authored, read-only reduction plan. */
+/**
+ * Pure presentation for one backend-authored, read-only reduction plan.
+ *
+ * `pricing` says how the plan's flatten would go out now (#2007): a market
+ * order inside the regular session, or why none can be sent. The priced
+ * extended-hours ticket is the host's to render — it is interactive.
+ */
 @Component({
   selector: 'app-safe-flatten-plan',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -26,6 +36,12 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 })
 export class SafeFlattenPlanComponent {
   readonly plan = input.required<SqliteSafeFlattenPlan>();
+  readonly pricing = input<SqliteSafeFlattenPricing | null>(null);
+  protected readonly regularSession = computed(() => this.pricing()?.kind === 'regular_session');
+  protected readonly refusal = computed<SqliteRefusedFlattenPricing | null>(() => {
+    const pricing = this.pricing();
+    return pricing?.kind === 'refused' ? pricing : null;
+  });
   private readonly displayClock = toSignal(timer(0, 1_000), { initialValue: 0 });
   protected readonly expired = computed(() => {
     this.displayClock();

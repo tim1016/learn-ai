@@ -119,6 +119,30 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(confirmed).resolves.toMatchObject({ receipt_id: 'coverage-resolution:2' });
   });
 
+  it('sends an extended-hours flatten with its confirmed limit to the bot custody route (#2007)', async () => {
+    const sent = service.executeExtendedSafeFlatten(
+      target('account/1', 'bot/1'),
+      'bot/1',
+      'execute-token-1',
+      { limit_price: 511.28, quote_observed_at_ms: 1_753_794_000_000 },
+    );
+    const request = http.expectOne(
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/custody/bots/bot%2F1/recovery-actions/execute',
+    );
+    expect(request.request.body).toMatchObject({
+      action_id: 'execute_safe_flatten',
+      concurrency_token: 'execute-token-1',
+      extended_limit: { limit_price: 511.28, quote_observed_at_ms: 1_753_794_000_000 },
+      command_context: expect.objectContaining({ capability: 'custody_command' }),
+    });
+    request.flush({
+      action_id: 'execute_safe_flatten', outcome: 'success', applied: true,
+      receipt_id: 'order-1', recorded_at_ms: 3, command: null, reconciliation: null, orders: [],
+    });
+
+    await expect(sent).resolves.toMatchObject({ receipt_id: 'order-1', applied: true });
+  });
+
   it('prepares and confirms one exact strategy/account Paper-access pairing', async () => {
     const prepared = service.preparePaperAccess(
       resourceTarget('alpaca paper', CLERK, {

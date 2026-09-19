@@ -7,6 +7,8 @@ import type { components } from '../../../../api/broker.types';
 import type {
   HistoricalExecutionRecoveryPlan,
   HistoricalExecutionRecoveryReceipt,
+  SqliteExtendedLimitConfirmation,
+  SqliteRecoveryResult,
 } from '../../../../api/alpaca.types';
 import {
   ResourceTarget,
@@ -371,6 +373,30 @@ export class BrokerV2PanelService {
       this.http.post<HistoricalExecutionRecoveryReceipt>(
         operationUrl('custody_historical_recovery_confirm', { ...target, sid }),
         this.commandBody(target, 'custody_command', { plan, confirmation_token: plan.confirmation_token }),
+      ),
+    );
+  }
+
+  /**
+   * Send an extended-hours safe flatten at the operator's confirmed limit
+   * (#2007). Goes through the bot-scoped custody route, not the generic panel
+   * action: outside the regular session the panel presents the unpriced
+   * flatten disabled, and only a priced one can be sent.
+   */
+  executeExtendedSafeFlatten(
+    target: ResourceTarget,
+    sid: string,
+    concurrencyToken: string,
+    extendedLimit: SqliteExtendedLimitConfirmation,
+  ): Promise<SqliteRecoveryResult> {
+    return firstValueFrom(
+      this.http.post<SqliteRecoveryResult>(
+        operationUrl('custody_bot_recovery_execute', { ...target, sid }),
+        this.commandBody(target, 'custody_command', {
+          action_id: 'execute_safe_flatten',
+          concurrency_token: concurrencyToken,
+          extended_limit: extendedLimit,
+        }),
       ),
     );
   }

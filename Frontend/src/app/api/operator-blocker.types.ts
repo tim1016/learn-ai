@@ -180,6 +180,15 @@ export const ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR = 'account-desk-clerk-recovery';
 export const BOT_COCKPIT_RECONCILE_ANCHOR = 'bot-reconciliation-action';
 
 /**
+ * The `confirm_in_form` anchor the bot cockpit recognizes to run Prepare
+ * safe flatten — where an extended-hours flatten is priced from the live bid
+ * and ask (#2007). Mirrors `BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR` in
+ * `app/services/broker_v2_panel/sqlite_panel_adapter.py`, which attaches this
+ * move to the unpriced Execute safe flatten outside the regular session.
+ */
+export const BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR = 'bot-safe-flatten-prepare';
+
+/**
  * Backend-authored move list for one blocker, honoring the ADR 0027
  * disposition rules. `wait` never carries a move (the cure is elsewhere,
  * by design); every other disposition renders its primary move followed

@@ -1,0 +1,85 @@
+@let quote = pricing();
+<section class="grid gap-3" aria-label="Extended-hours flatten limit order">
+  <header class="flex flex-wrap items-center justify-between gap-2">
+    <h4 class="m-0 eyebrow-heading">Extended-hours limit order</h4>
+    <p-tag severity="warn" [value]="phaseLabel()" />
+  </header>
+  <p class="m-0 text-sm">
+    Outside regular hours a flatten is a limit order: it fills only at your price or better.
+  </p>
+
+  <dl class="m-0 grid grid-cols-[repeat(auto-fit,minmax(8rem,1fr))] gap-3">
+    <div class="min-w-0">
+      <dt class="text-xs text-[var(--text-secondary)]">Bid</dt>
+      <dd class="m-0 mt-1 tabular-nums">
+        {{ quote.bid | currency: 'USD' : 'symbol' : '1.2-4' }}
+        @if (quote.bid_size !== null) { <span class="text-[var(--text-secondary)]">× {{ quote.bid_size }}</span> }
+      </dd>
+    </div>
+    <div class="min-w-0">
+      <dt class="text-xs text-[var(--text-secondary)]">Ask</dt>
+      <dd class="m-0 mt-1 tabular-nums">
+        {{ quote.ask | currency: 'USD' : 'symbol' : '1.2-4' }}
+        @if (quote.ask_size !== null) { <span class="text-[var(--text-secondary)]">× {{ quote.ask_size }}</span> }
+      </dd>
+    </div>
+    <div class="min-w-0">
+      <dt class="text-xs text-[var(--text-secondary)]">Spread</dt>
+      <dd class="m-0 mt-1 tabular-nums">
+        {{ spread() | currency: 'USD' : 'symbol' : '1.2-4' }}
+        @if (spreadBps(); as bps) { <span class="text-[var(--text-secondary)]">({{ bps | number: '1.1-1' }} bps)</span> }
+      </dd>
+    </div>
+    <div class="min-w-0">
+      <dt class="text-xs text-[var(--text-secondary)]">IBKR quote</dt>
+      <dd class="m-0 mt-1">
+        {{ quoteAgeSeconds() }} s old ·
+        <app-timestamp-display [value]="quote.quote_observed_at_ms" mode="local" />
+      </dd>
+    </div>
+    <div class="min-w-0">
+      <dt class="text-xs text-[var(--text-secondary)]">Suggested limit</dt>
+      <dd class="m-0 mt-1 tabular-nums">
+        {{ quote.suggested_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}
+        <span class="text-[var(--text-secondary)]">({{ anchorLabel() }} {{ quote.exit_allowance_bps }} bps)</span>
+      </dd>
+    </div>
+  </dl>
+
+  @if (quoteStale()) {
+    <p-message severity="warn" class="w-full">
+      This quote is more than {{ quote.quote_max_age_ms / 1000 }} seconds old. Refresh it before sending.
+    </p-message>
+  }
+
+  <div class="flex flex-wrap items-end gap-2">
+    <label class="grid gap-1" for="extended-flatten-limit">
+      <span class="text-xs font-semibold">Limit price (USD)</span>
+      <input #limitInput pInputText id="extended-flatten-limit" type="text" inputmode="decimal"
+        autocomplete="off" [value]="limitText()" [attr.aria-invalid]="limitPrice() === null"
+        (input)="onLimitInput(limitInput.value)" />
+    </label>
+    <button pButton type="button" severity="secondary" (click)="useSuggested()">Use suggested</button>
+    <button pButton type="button" severity="secondary" [disabled]="pending()" (click)="refresh.emit()">Refresh quote</button>
+  </div>
+  @if (limitPrice() === null) {
+    <p class="m-0 text-xs text-[var(--bear)]" role="alert">Enter a positive limit price.</p>
+  } @else if (fillNote(); as note) {
+    <p class="m-0 text-xs text-[var(--text-secondary)]">{{ note }}</p>
+  }
+
+  @if (!confirming()) {
+    <button pButton type="button" [disabled]="!canSend()" (click)="review()">Review limit order</button>
+  } @else {
+    <div class="grid gap-2 rounded-[var(--radius)] border border-[var(--border)] p-3" role="group" aria-label="Confirm the limit order">
+      <p class="m-0 font-semibold">
+        {{ sideLabel() }} {{ quantity() }} {{ quote.symbol }} at limit
+        {{ limitPrice() | currency: 'USD' : 'symbol' : '1.2-4' }}, extended hours, good for today.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <button pButton type="button" severity="danger" [disabled]="!canSend()" (click)="confirmSend()">Send limit order</button>
+        <button pButton type="button" severity="secondary" (click)="cancel()">Cancel</button>
+      </div>
+    </div>
+  }
+</section>

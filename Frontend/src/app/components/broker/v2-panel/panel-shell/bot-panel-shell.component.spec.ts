@@ -8,6 +8,7 @@ import { of } from 'rxjs';
 import type {
   HistoricalExecutionRecoveryPlan,
   SqliteRecoveryAction,
+  SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
@@ -348,6 +349,29 @@ function safeFlattenSnapshot(): BotPanelLiveSnapshot {
   });
 }
 
+/** The unpriced Execute safe flatten, as the adapter presents it in PRE/POST (#2007). */
+const EXECUTE_SAFE_FLATTEN_ACTION = {
+  action_id: 'execute_safe_flatten',
+  revision: 17,
+  concurrency_token: 'execute-token-17',
+  enabled: false,
+  label: 'Execute safe flatten',
+  explanation: 'Submit the prepared reduction as recovery EXIT custody.',
+  blockers: [],
+  confirmation: null,
+} satisfies PanelAction;
+
+function extendedFlattenSnapshot(): BotPanelLiveSnapshot {
+  const snapshot = safeFlattenSnapshot();
+  return {
+    ...snapshot,
+    panel: {
+      ...snapshot.panel,
+      actions: [PREPARE_SAFE_FLATTEN_ACTION, EXECUTE_SAFE_FLATTEN_ACTION],
+    },
+  };
+}
+
 function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
   return liveSnapshot({
     ...PANEL,
@@ -507,6 +531,16 @@ const mockService = {
     concurrency_token: 'start-token',
     message: 'Bot start requested.',
   }),
+  executeExtendedSafeFlatten: vi.fn().mockResolvedValue({
+    action_id: 'execute_safe_flatten',
+    outcome: 'success',
+    applied: true,
+    receipt_id: 'order-ref-flatten-1',
+    recorded_at_ms: 1_753_800_000_200,
+    command: null,
+    reconciliation: null,
+    orders: [],
+  }),
   prepareHistoricalExecutionRecovery: vi.fn().mockResolvedValue(HISTORICAL_RECOVERY_PLAN),
   confirmHistoricalExecutionRecovery: vi.fn().mockResolvedValue({
     uncertainty_id: HISTORICAL_RECOVERY_PLAN.uncertainty_id,
@@ -519,7 +553,10 @@ const mockService = {
 };
 
 const brokersMock = {
-  checkSqliteRecoveryAction: vi.fn().mockResolvedValue(SAFE_FLATTEN_CAPABILITY),
+  checkSqliteSafeFlatten: vi.fn().mockResolvedValue({
+    capability: SAFE_FLATTEN_CAPABILITY,
+    reduction_pricing: { kind: 'regular_session' },
+  } satisfies SqliteRecoveryActionCheck),
 };
 
 const marketDataMock = {
@@ -738,7 +775,10 @@ describe('BotPanelShellComponent', () => {
     });
     expect(within(planRegion).getByText('Qqq')).toBeTruthy();
     expect(within(planRegion).getByText('2.5')).toBeTruthy();
-    expect(brokersMock.checkSqliteRecoveryAction).toHaveBeenCalledWith(
+    expect(within(planRegion).getByText(/Inside the regular session this flatten is a market order/))
+      .toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+    expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledWith(
       'clrk_spec',
       'DUM284968',
       { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
@@ -883,9 +923,9 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('discards a safe-flatten response after route identity changes', async () => {
-    const pendingCapability = deferred<SqliteRecoveryAction>();
+    const pendingCapability = deferred<SqliteRecoveryActionCheck>();
     mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
-    brokersMock.checkSqliteRecoveryAction.mockReturnValueOnce(
+    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(
       pendingCapability.promise,
     );
     const { fixture } = await render(BotPanelShellComponent, {
@@ -910,13 +950,103 @@ describe('BotPanelShellComponent', () => {
 
     fixture.componentRef.setInput('sid', 'sid-002');
     fixture.detectChanges();
-    pendingCapability.resolve(SAFE_FLATTEN_CAPABILITY);
+    pendingCapability.resolve({ capability: SAFE_FLATTEN_CAPABILITY, reduction_pricing: null });
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.queryByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeNull();
+  });
+
+  describe('an extended-hours safe flatten (#2007)', () => {
+    async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: mockService },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      await switchLens(fixture, 'operator');
+      fireEvent.click(screen.getByRole('button', { name: /Ready Prepare safe flatten/i }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    it('shows the live IBKR quote and sends the confirmed limit through the custody route', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'extended_limit',
+          phase: 'PRE',
+          symbol: 'QQQ',
+          side: 'sell',
+          bid: 480.1,
+          ask: 480.2,
+          bid_size: 300,
+          ask_size: 200,
+          quote_observed_at_ms: observedAtMs,
+          quote_max_age_ms: 10_000,
+          exit_allowance_bps: 20,
+          suggested_limit_price: 479.13,
+        },
+      } satisfies SqliteRecoveryActionCheck);
+      const fixture = await prepareFlatten();
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      expect(within(ticket).getByText('Pre-market')).toBeTruthy();
+      expect(within(ticket).getByText(/\$480\.10/)).toBeTruthy();
+      expect(within(ticket).getByText(/\$480\.20/)).toBeTruthy();
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      fixture.detectChanges();
+      expect(within(ticket).getByText(/Sell 2\.5 QQQ at limit \$479\.13/)).toBeTruthy();
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(mockService.executeExtendedSafeFlatten).toHaveBeenCalledWith(
+        expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'DUM284968' }),
+        'sid-001',
+        'execute-token-17',
+        { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
+      );
+      expect(mockService.runBotAction).not.toHaveBeenCalled();
+      expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
+        .toBeNull();
+    });
+
+    it('names when the next session opens instead of offering a ticket', async () => {
+      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: {
+          kind: 'refused',
+          reason_code: 'NO_SESSION_OPEN',
+          explanation: 'No trading session is open now, so no reduction can be sent.',
+          next_step: 'Flatten again once the next session opens.',
+          available_at_ms: 1_753_862_400_000,
+        },
+      } satisfies SqliteRecoveryActionCheck);
+      await prepareFlatten();
+
+      const plan = await screen.findByRole('region', { name: 'Prepared safe-flatten reduction plan' });
+      expect(within(plan).getByText(/No trading session is open now/)).toBeTruthy();
+      expect(within(plan).getByText(
+        formatTimestampDisplay(1_753_862_400_000, { mode: 'et' }),
+      )).toBeTruthy();
+      expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+    });
   });
 
   it('renders the bot banner once, not re-mounted inside a lens, registers one lens-toggle host, and keeps run evidence out of Trader', async () => {

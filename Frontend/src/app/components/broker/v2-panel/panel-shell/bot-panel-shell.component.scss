@@ -48,6 +48,7 @@
 }
 
 .panel-feedback { padding: 0 var(--space-4); }
+.flatten-quote-error { margin: var(--space-2) 0 0; color: var(--bear); font-size: var(--fs-xs); }
 
 @media (max-width: 800px) {
   .panel-feedback { padding-inline: var(--space-3); }

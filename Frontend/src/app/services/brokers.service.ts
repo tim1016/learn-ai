@@ -371,6 +371,21 @@ export class BrokersService {
     action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'>,
     strategyInstanceId: string | null = null,
   ): Promise<SqliteRecoveryAction> {
+    return (await this.checkSqliteSafeFlatten(clerkId, accountId, action, strategyInstanceId))
+      .capability;
+  }
+
+  /**
+   * The same re-check, answered in full: a single-leg safe-flatten plan also
+   * carries `reduction_pricing` — how it would go out now, with the live IBKR
+   * bid and ask outside the regular session (#2007).
+   */
+  checkSqliteSafeFlatten(
+    clerkId: string,
+    accountId: string,
+    action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'>,
+    strategyInstanceId: string | null = null,
+  ): Promise<SqliteRecoveryActionCheck> {
     // A diagnostic over durable state: read-idempotent, no envelope.
     const url = strategyInstanceId === null
       ? operationUrl('custody_recovery_check', { broker: 'alpaca', clerkId, accountId })
@@ -380,7 +395,7 @@ export class BrokersService {
         accountId,
         sid: strategyInstanceId,
       });
-    const response = await firstValueFrom(
+    return firstValueFrom(
       this.http.post<SqliteRecoveryActionCheck>(
         url,
         {
@@ -389,7 +404,6 @@ export class BrokersService {
         },
       ),
     );
-    return response.capability;
   }
 
   executeSqliteRecoveryAction(
