@@ -280,15 +280,43 @@ def _run_fake_market_data() -> int:
     return 0
 
 
-def _qualification_local_call(path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
-    """Call the already-running clerk ASGI process through its loopback socket."""
+def _qualification_probe_headers(method: str) -> dict[str, str]:
+    """The headers every qualification hook call from inside a clerk carries.
+
+    Every call carries the per-run probe secret. A mutation also carries the
+    coordinator's proven-forward proof (its service token plus the
+    broker/clerk pin): a clerk_agent's
+    ``FleetIdentityMiddleware(refuse_unpinned_mutations=True)`` (#2075)
+    refuses any other POST with 400 ``broker_and_clerk_required`` before the
+    handler or its lane-capacity pool runs, so ``/hold/command`` models a real
+    Stop reaching the lane only when it arrives as that forward (issue #2206).
+    """
     secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
     if not secret:
         raise QualificationError("Qualification client has no per-run probe secret.")
+    headers = {"X-Fleet-Qualification-Secret": secret}
+    if method.upper() == "GET":
+        return headers
+    coordinator_token = os.environ.get("FLEET_COORDINATOR_SERVICE_TOKEN", "")
+    clerk_id = os.environ.get("FLEET_CLERK_ID", "")
+    if not coordinator_token or not clerk_id:
+        raise QualificationError(
+            "This container has no coordinator token or clerk id to prove a forward with."
+        )
+    return {
+        **headers,
+        "X-Fleet-Coordinator-Token": coordinator_token,
+        "X-Fleet-Broker": "alpaca",
+        "X-Fleet-Clerk-Id": clerk_id,
+    }
+
+
+def _qualification_local_call(path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
+    """Call the already-running clerk ASGI process through its loopback socket."""
     return _request_json(
         f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
         method=method,
-        headers={"X-Fleet-Qualification-Secret": secret},
+        headers=_qualification_probe_headers(method),
         timeout_s=4.0,
     )
 
@@ -304,13 +332,10 @@ def _qualification_declared_read(path: str) -> tuple[int, dict[str, Any]]:
 
 def _qualification_local_hold(path: str, *, method: str = "GET") -> int:
     """Consume a held response whose body may be SSE rather than JSON."""
-    secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
-    if not secret:
-        raise QualificationError("Qualification client has no per-run probe secret.")
     request = urllib.request.Request(
         f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
         method=method,
-        headers={"X-Fleet-Qualification-Secret": secret},
+        headers=_qualification_probe_headers(method),
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(request, timeout=4.0) as response:
@@ -527,26 +552,22 @@ def _exec_probe(
     path: str,
     *,
     method: str = "GET",
-    json_body: dict[str, Any] | None = None,
-    with_qualification_secret: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     target = path if path.startswith("http://") or path.startswith("https://") else f"http://localhost:8000{path}"
-    args = [
-        "exec",
-        "-T",
-        service,
-        "python",
-        "/app/scripts/run_broker_fleet_compose_qualification.py",
-        "--call-url",
-        target,
-        "--call-method",
-        method,
-    ]
-    if json_body is not None:
-        args.extend(["--call-body", json.dumps(json_body)])
-    if with_qualification_secret:
-        args.append("--call-with-qualification-secret")
-    result = compose.run(project, args)
+    result = compose.run(
+        project,
+        [
+            "exec",
+            "-T",
+            service,
+            "python",
+            "/app/scripts/run_broker_fleet_compose_qualification.py",
+            "--call-url",
+            target,
+            "--call-method",
+            method,
+        ],
+    )
     payload = json.loads(result.stdout)
     if not isinstance(payload, dict) or not isinstance(payload.get("status"), int):
         raise QualificationError(f"{service} returned malformed probe evidence.")
@@ -1206,12 +1227,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--health-url")
     parser.add_argument("--call-url")
     parser.add_argument("--call-method", choices=("GET", "POST"), default="GET")
-    parser.add_argument("--call-body", help="A JSON object sent as the request body.")
-    parser.add_argument(
-        "--call-with-qualification-secret",
-        action="store_true",
-        help="Attach X-Fleet-Qualification-Secret from FLEET_QUALIFICATION_PROBE_SECRET.",
-    )
     parser.add_argument("--assert-no-custody-root", type=Path)
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--timeout-s", type=float, default=90.0)
@@ -1239,34 +1254,7 @@ def main(argv: list[str] | None = None) -> int:
         status, _body = _request_json(args.health_url)
         return 0 if status == HTTPStatus.OK else 1
     if args.call_url:
-        headers: dict[str, str] = {}
-        if args.call_with_qualification_secret:
-            secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
-            if not secret:
-                raise QualificationError("This container has no qualification probe secret.")
-            headers["X-Fleet-Qualification-Secret"] = secret
-            # Issue #2206 fix: app/main.py fences every clerk-agent POST
-            # behind FleetIdentityMiddleware(refuse_unpinned_mutations=True)
-            # (#2075) -- the qualification secret alone does not satisfy
-            # lane_forward_is_authorized, so a bare POST here was refused
-            # 400 broker_and_clerk_required before the qualification
-            # router's own handler ever ran. Attach the same proof a real
-            # coordinator dispatch always carries (its service token plus
-            # the broker/clerk pin) so this probe faithfully models a real
-            # Stop reaching the lane as a proven forward.
-            coordinator_token = os.environ.get("FLEET_COORDINATOR_SERVICE_TOKEN", "")
-            clerk_id = os.environ.get("FLEET_CLERK_ID", "")
-            if not coordinator_token or not clerk_id:
-                raise QualificationError(
-                    "This container has no coordinator token or clerk id to prove a forward with."
-                )
-            headers["X-Fleet-Coordinator-Token"] = coordinator_token
-            headers["X-Fleet-Broker"] = "alpaca"
-            headers["X-Fleet-Clerk-Id"] = clerk_id
-        json_body = json.loads(args.call_body) if args.call_body else None
-        status, body = _request_json(
-            args.call_url, method=args.call_method, headers=headers, json_body=json_body
-        )
+        status, body = _request_json(args.call_url, method=args.call_method)
         sys.stdout.write(json.dumps({"status": status, "body": body}, sort_keys=True) + "\n")
         return 0
     if args.assert_no_custody_root:

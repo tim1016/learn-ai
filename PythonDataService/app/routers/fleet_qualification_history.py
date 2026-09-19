@@ -15,13 +15,15 @@ reach, not merely an inert one.
 
 from __future__ import annotations
 
-import hmac
 import os
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, ConfigDict
 
-from app.routers.fleet_qualification import is_qualification_coordinator_lane
+from app.routers.fleet_qualification import (
+    is_qualification_coordinator_lane,
+    require_qualification_secret,
+)
 from app.services.broker_v2_panel.qualification_recorded_history import (
     RecordedHistoryMode,
     recorded_history_mode,
@@ -57,15 +59,11 @@ def qualification_history_router(*, role: str, namespace: str, secret: str) -> A
         return None
     router = APIRouter(prefix=_PREFIX, include_in_schema=False)
 
-    def require_secret(value: str | None) -> None:
-        if value is None or not hmac.compare_digest(value, secret):
-            raise HTTPException(status_code=404, detail="Not found")
-
     @router.get("/mode", response_model=RecordedHistoryModeResponse)
     async def read_mode(
         x_fleet_qualification_secret: str | None = Header(default=None),
     ) -> RecordedHistoryModeResponse:
-        require_secret(x_fleet_qualification_secret)
+        require_qualification_secret(x_fleet_qualification_secret, secret)
         return RecordedHistoryModeResponse(mode=recorded_history_mode())
 
     @router.post("/mode", response_model=RecordedHistoryModeResponse)
@@ -73,7 +71,7 @@ def qualification_history_router(*, role: str, namespace: str, secret: str) -> A
         payload: RecordedHistoryModeRequest,
         x_fleet_qualification_secret: str | None = Header(default=None),
     ) -> RecordedHistoryModeResponse:
-        require_secret(x_fleet_qualification_secret)
+        require_qualification_secret(x_fleet_qualification_secret, secret)
         set_recorded_history_mode(payload.mode)
         return RecordedHistoryModeResponse(mode=recorded_history_mode())
 

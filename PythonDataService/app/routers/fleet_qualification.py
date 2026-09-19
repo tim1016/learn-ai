@@ -136,6 +136,17 @@ def is_qualification_coordinator_lane_from_environment(role: str, namespace: str
     )
 
 
+def require_qualification_secret(supplied: str | None, secret: str) -> None:
+    """404 unless ``supplied`` is the per-run probe secret, in constant time.
+
+    Compared as UTF-8 bytes: Starlette decodes header bytes as Latin-1, and
+    ``hmac.compare_digest`` raises ``TypeError`` for a non-ASCII ``str``,
+    which would answer 500 and reveal this hidden surface.
+    """
+    if supplied is None or not hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
 #: The exact value ``compose.fleet.qualification.yaml`` sets the
 #: coordinator's ``POLYGON_API_KEY`` to -- a non-working placeholder chosen
 #: precisely so qualification can never fetch a real bar (that gap is the
@@ -265,10 +276,6 @@ def qualification_router(
         return None
     router = APIRouter(prefix=_PREFIX, include_in_schema=False)
 
-    def require_secret(value: str | None) -> None:
-        if value is None or not hmac.compare_digest(value, secret):
-            raise HTTPException(status_code=404, detail="Not found")
-
     @router.get(
         "/dependency/market-data",
         response_model=QualificationMarketDependencyAvailable,
@@ -278,7 +285,7 @@ def qualification_router(
         x_fleet_qualification_secret: str | None = Header(default=None),
     ) -> QualificationMarketDependencyAvailable | JSONResponse:
         """Refresh the supported Paper status consumer before its normal read route."""
-        require_secret(x_fleet_qualification_secret)
+        require_qualification_secret(x_fleet_qualification_secret, secret)
         consumer = get_market_liveness_consumer()
         if consumer is None:
             return JSONResponse(
@@ -303,14 +310,14 @@ def qualification_router(
         x_fleet_qualification_secret: str | None = Header(default=None),
     ) -> QualificationHoldRequestResponse:
         """Hold one ordinary ASGI request long enough for deployed admission to contend."""
-        require_secret(x_fleet_qualification_secret)
+        require_qualification_secret(x_fleet_qualification_secret, secret)
         await asyncio.sleep(1)
         return QualificationHoldRequestResponse(held="request")
 
     @router.get("/hold/stream")
     async def hold_stream(x_fleet_qualification_secret: str | None = Header(default=None)) -> StreamingResponse:
         """Hold one SSE response long enough for the deployed stream pool to contend."""
-        require_secret(x_fleet_qualification_secret)
+        require_qualification_secret(x_fleet_qualification_secret, secret)
 
         async def events() -> AsyncIterator[bytes]:
             await asyncio.sleep(1)
@@ -334,7 +341,7 @@ def qualification_router(
         needed to prove a held history read (which draws from the request
         pool) cannot starve a command.
         """
-        require_secret(x_fleet_qualification_secret)
+        require_qualification_secret(x_fleet_qualification_secret, secret)
         await asyncio.sleep(1)
         return QualificationHoldCommandResponse(held="command")
 
@@ -373,4 +380,5 @@ __all__ = [
     "polygon_api_key_is_qualification_safe",
     "qualification_router",
     "qualification_router_from_environment",
+    "require_qualification_secret",
 ]

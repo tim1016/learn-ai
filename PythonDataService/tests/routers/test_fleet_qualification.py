@@ -11,6 +11,7 @@ from types import ModuleType
 from typing import cast
 
 import pytest
+from fastapi import HTTPException
 
 import app.routers.fleet_qualification as qualification
 from app.broker.alpaca.broker import AlpacaBroker
@@ -19,6 +20,7 @@ from app.routers.fleet_qualification import (
     QualificationMarketDependencyAvailable,
     QualificationMarketDependencyUnavailable,
     qualification_router,
+    require_qualification_secret,
 )
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +32,21 @@ def test_qualification_router_is_absent_without_each_strict_guard() -> None:
     assert qualification_router(role="clerk_agent", namespace="host:local", secret="s", broker_url="http://fake", market_data_url="http://market") is None
     assert qualification_router(role="clerk_agent", namespace="compose:fleetqualificationx", secret="", broker_url="http://fake", market_data_url="http://market") is None
     assert qualification_router(role="clerk_agent", namespace="compose:fleetqualificationx", secret="s", broker_url="http://fake", market_data_url="") is None
+
+
+@pytest.mark.parametrize("supplied", [None, "wrong-secret", "é"])
+def test_require_qualification_secret_answers_404_for_any_wrong_secret(supplied: str | None) -> None:
+    """A non-ASCII header (Starlette decodes header bytes as Latin-1) must get
+    the same 404 as any wrong secret; ``hmac.compare_digest`` on ``str``
+    raised ``TypeError`` for it, a 500 that reveals the hidden surface."""
+    with pytest.raises(HTTPException) as refused:
+        require_qualification_secret(supplied, "probe-secret")
+
+    assert refused.value.status_code == 404
+
+
+def test_require_qualification_secret_admits_the_exact_secret() -> None:
+    require_qualification_secret("probe-secret", "probe-secret")
 
 
 def test_qualification_router_has_no_execution_operation() -> None:
@@ -326,6 +343,7 @@ os.environ.update({
 from httpx import ASGITransport, AsyncClient
 
 import app.main as main
+from scripts import run_broker_fleet_compose_qualification as harness
 
 
 async def run():
@@ -334,14 +352,10 @@ async def run():
             "/internal/fleet-qualification/hold/command",
             headers={"X-Fleet-Qualification-Secret": "probe-secret"},
         )
+        # The exact headers the ceremony's in-container command probe sends.
         proven = await client.post(
             "/internal/fleet-qualification/hold/command",
-            headers={
-                "X-Fleet-Qualification-Secret": "probe-secret",
-                "X-Fleet-Coordinator-Token": "coord-token",
-                "X-Fleet-Broker": "alpaca",
-                "X-Fleet-Clerk-Id": "clrk_probe",
-            },
+            headers=harness._qualification_probe_headers("POST"),
         )
     return {
         "unproven_status": unproven.status_code,
@@ -362,9 +376,10 @@ def test_hold_command_requires_a_proven_coordinator_forward_through_the_real_mid
     fence refuses an unproven POST with 400 ``broker_and_clerk_required``
     regardless of the qualification secret -- it runs before the qualification
     router's own handler ever sees the request. Sending the coordinator's
-    proven-forward headers alongside the qualification secret (exactly what
-    ``run_broker_fleet_compose_qualification.py``'s
-    ``--call-with-qualification-secret`` path now attaches) is admitted.
+    proven-forward headers alongside the qualification secret -- built by
+    ``run_broker_fleet_compose_qualification._qualification_probe_headers``,
+    the same builder the ceremony's in-container command probe uses -- is
+    admitted.
     """
     result = subprocess.run(
         [sys.executable, "-c", _HOLD_COMMAND_IDENTITY_FENCE_PROBE],

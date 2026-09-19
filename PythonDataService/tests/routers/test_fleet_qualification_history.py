@@ -63,6 +63,21 @@ async def test_mode_requires_the_secret_header() -> None:
     assert post_response.status_code == 404
 
 
+async def test_mode_answers_404_for_a_non_ascii_secret_header() -> None:
+    """Starlette decodes header bytes as Latin-1, so ``b"\\xe9"`` arrives as a
+    non-ASCII ``str``; comparing that with ``hmac.compare_digest`` on ``str``
+    raised ``TypeError`` (a 500 that reveals the hidden surface) instead of
+    the same 404 every wrong secret gets."""
+    app = _build_app("s3cr3t")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/internal/fleet-qualification-history/mode",
+            headers={"X-Fleet-Qualification-Secret": b"\xe9"},
+        )
+
+    assert response.status_code == 404
+
+
 async def test_mode_defaults_to_healthy_and_can_be_set_and_read_back() -> None:
     app = _build_app("s3cr3t")
     headers = {"X-Fleet-Qualification-Secret": "s3cr3t"}

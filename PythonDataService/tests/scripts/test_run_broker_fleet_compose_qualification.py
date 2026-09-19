@@ -541,7 +541,7 @@ def test_live_probe_mutation_refusal_is_a_typed_non_success(tmp_path: Path, caps
 def test_request_json_encodes_json_body_and_sets_content_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The ``--call-body`` / mode-control path must send a real JSON POST body."""
+    """The mode-control path must send a real JSON POST body."""
     captured: dict[str, Any] = {}
 
     class FakeResponse:
@@ -583,104 +583,72 @@ def test_request_json_encodes_json_body_and_sets_content_type(
     assert captured["secret_header"] == "s3cr3t"
 
 
-def test_exec_probe_forwards_body_and_qualification_secret_flag() -> None:
-    """``_exec_probe`` must round-trip a JSON body and the secret flag as CLI args."""
-    calls: list[list[str]] = []
-
-    class ComposeStub:
-        def run(self, project: str, args: list[str]) -> subprocess.CompletedProcess[str]:
-            calls.append(args)
-            return subprocess.CompletedProcess(
-                args, 0, stdout=json.dumps({"status": 200, "body": {"held": "command"}}), stderr=""
-            )
-
-    status, body = qualification._exec_probe(
-        cast(qualification.ComposeCommand, ComposeStub()),
-        "qualification",
-        "alpaca-paper-clerk",
-        "/internal/fleet-qualification/hold/command",
-        method="POST",
-        json_body={"strategy_instance_id": "bot", "symbol": "QUALHIST"},
-        with_qualification_secret=True,
-    )
-
-    assert status == 200
-    assert body == {"held": "command"}
-    args = calls[0]
-    assert "--call-body" in args
-    assert json.loads(args[args.index("--call-body") + 1]) == {
-        "strategy_instance_id": "bot",
-        "symbol": "QUALHIST",
-    }
-    assert "--call-with-qualification-secret" in args
-    assert args[args.index("--call-url") + 1] == "http://localhost:8000/internal/fleet-qualification/hold/command"
-
-
-def test_call_with_qualification_secret_attaches_the_proven_forward_headers(
+def test_command_admission_client_sends_the_command_as_a_proven_coordinator_forward(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Issue #2206 fix (M1): a bare qualification-secret header is refused
-    400 ``broker_and_clerk_required`` by the real clerk identity fence
-    (``FleetIdentityMiddleware(refuse_unpinned_mutations=True)``, #2075) --
-    the qualification secret alone was never proof of a coordinator forward.
-    ``--call-with-qualification-secret`` must also attach the coordinator's
-    proven-forward headers (``X-Fleet-Coordinator-Token``, ``X-Fleet-Broker``,
-    ``X-Fleet-Clerk-Id``) so a POST like ``/hold/command`` reaches its
-    handler for real. Fails before the fix: an older harness sent only the
-    qualification secret and was refused (proven directly against the real
-    middleware stack in ``tests/routers/test_fleet_qualification.py::
-    test_hold_command_requires_a_proven_coordinator_forward_through_the_real_middleware_stack``).
-    """
-    captured_headers: dict[str, str] = {}
+    """Regression for the failed ceremony run 35418152735
+    (``stage: command_pool_isolation``): the in-container command probe sent
+    ``POST /hold/command`` with only the qualification secret, which a
+    clerk_agent's identity fence (``FleetIdentityMiddleware(
+    refuse_unpinned_mutations=True)``, #2075) refuses 400
+    ``broker_and_clerk_required`` before the handler runs. The fake below
+    applies that fence's rule to the real ``_qualification_local_call``;
+    ``tests/routers/test_fleet_qualification.py::
+    test_hold_command_requires_a_proven_coordinator_forward_through_the_real_middleware_stack``
+    proves the same headers pass the real middleware stack."""
+    sent: list[tuple[str, str, dict[str, str]]] = []
 
-    def fake_request_json(url: str, *, method: str = "GET", headers=None, timeout_s=3.0, json_body=None):
-        captured_headers.update(headers or {})
+    def fake_request_json(
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        timeout_s: float = 3.0,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        request_headers = dict(headers or {})
+        sent.append((url, method, request_headers))
+        if url.endswith("/hold/request"):
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"reason": "fleet_lane_capacity_exhausted"}
+        if not {"X-Fleet-Coordinator-Token", "X-Fleet-Broker", "X-Fleet-Clerk-Id"} <= request_headers.keys():
+            return HTTPStatus.BAD_REQUEST, {"reason": "broker_and_clerk_required"}
         return HTTPStatus.OK, {"held": "command"}
 
     monkeypatch.setattr(qualification, "_request_json", fake_request_json)
+    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path, *, method="GET": 200)
     monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "probe-secret")
     monkeypatch.setenv("FLEET_COORDINATOR_SERVICE_TOKEN", "coord-token")
     monkeypatch.setenv("FLEET_CLERK_ID", "clrk_probe")
 
-    result = qualification.main(
-        [
-            "--call-url",
-            "http://localhost:8000/internal/fleet-qualification/hold/command",
-            "--call-method",
+    assert qualification._run_capacity_client("command") == 0
+    assert json.loads(capsys.readouterr().out)["command_status"] == 200
+    assert [(url.rsplit("/", 2)[-2:], method, headers) for url, method, headers in sent] == [
+        (["hold", "request"], "GET", {"X-Fleet-Qualification-Secret": "probe-secret"}),
+        (
+            ["hold", "command"],
             "POST",
-            "--call-with-qualification-secret",
-        ]
-    )
-
-    assert result == 0
-    assert json.loads(capsys.readouterr().out) == {"status": 200, "body": {"held": "command"}}
-    assert captured_headers == {
-        "X-Fleet-Qualification-Secret": "probe-secret",
-        "X-Fleet-Coordinator-Token": "coord-token",
-        "X-Fleet-Broker": "alpaca",
-        "X-Fleet-Clerk-Id": "clrk_probe",
-    }
+            {
+                "X-Fleet-Qualification-Secret": "probe-secret",
+                "X-Fleet-Coordinator-Token": "coord-token",
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clrk_probe",
+            },
+        ),
+    ]
 
 
-def test_call_with_qualification_secret_requires_the_coordinator_token_and_clerk_id(
+def test_qualification_probe_headers_refuse_a_half_proven_forward(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A container with the qualification secret but no coordinator identity
-    cannot silently send a half-proven forward."""
+    cannot silently send a half-proven mutation; its reads need no forward."""
     monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "probe-secret")
     monkeypatch.delenv("FLEET_COORDINATOR_SERVICE_TOKEN", raising=False)
     monkeypatch.delenv("FLEET_CLERK_ID", raising=False)
 
+    assert qualification._qualification_probe_headers("GET") == {"X-Fleet-Qualification-Secret": "probe-secret"}
     with pytest.raises(qualification.QualificationError, match="coordinator token or clerk id"):
-        qualification.main(
-            [
-                "--call-url",
-                "http://localhost:8000/internal/fleet-qualification/hold/command",
-                "--call-method",
-                "POST",
-                "--call-with-qualification-secret",
-            ]
-        )
+        qualification._qualification_probe_headers("POST")
 
 
 def test_set_recorded_history_mode_raises_on_a_refused_mode_change(
@@ -728,12 +696,20 @@ def test_recorded_history_ceremony_drives_healthy_failure_and_recovery(
     modes: list[str] = []
     history_calls = 0
 
-    def fake_request_json(url: str, *, method: str = "GET", headers=None, timeout_s=3.0, json_body=None):
+    def fake_request_json(
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        timeout_s: float = 3.0,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         assert url.endswith("/internal/fleet-qualification-history/mode")
+        assert json_body is not None
         modes.append(json_body["mode"])
         return HTTPStatus.OK, {"mode": json_body["mode"]}
 
-    def fake_history_client_probe(compose, project):
+    def fake_history_client_probe(compose: qualification.ComposeCommand, project: str) -> dict[str, Any]:
         nonlocal history_calls
         history_calls += 1
         mode = modes[-1]
