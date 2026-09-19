@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from app.broker.fleet.errors import FleetAgentTokenRefused
 from app.config import fleet_settings, settings
 from app.data_lake.polygon_fetcher import PolygonBar
+from app.routers import internal_fleet
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.broker_v2_panel import (
     chart_projection_service,
@@ -42,8 +43,6 @@ _SERVICE_ROOT = Path(__file__).resolve().parents[3]
 
 def _build_app(tokens: dict[str, str]) -> FastAPI:
     """A minimal coordinator app mounting only the internal fleet router."""
-    from app.routers import internal_fleet
-
     app = FastAPI()
     install_fleet_control_error_handler(app)
     app.state.fleet_agent_tokens_text = json.dumps(tokens)
@@ -168,6 +167,171 @@ def test_route_is_excluded_from_the_public_schema() -> None:
     assert all(getattr(route, "include_in_schema", True) is False for route in matching)
 
 
+# ---- issue #2206: the qualification-only recorded provider selection --------
+#
+# The gate now runs once at boot (app/main.py), not per-request inside this
+# router (see internal_fleet.py's module docstring) -- so proving it closes
+# needs a real app.main import, not the bespoke _build_app() every other
+# test in this file uses. Role/namespace gating is decided once at Python
+# import time, so each posture below runs in its own fresh subprocess, same
+# reasoning as test_route_is_absent_outside_the_coordinator_role.
+
+
+def test_bare_router_app_falls_back_to_the_production_provider() -> None:
+    """``_build_app()`` never installs ``app.state.history_batch_provider``
+    -- the route's own default must still be the real, Polygon-backed
+    provider, so every other test in this file (which relies on exactly
+    that default) keeps testing the production path."""
+    assert internal_fleet.production_history_batch_provider.__name__ == (
+        "production_history_batch_provider"
+    )
+
+
+_HISTORY_BATCH_PROVIDER_SELECTION_PROBE = """
+import asyncio
+import json
+import os
+import sys
+
+os.environ["FLEET_ROLE"] = sys.argv[1]
+os.environ["FLEET_DEPLOYMENT_NAMESPACE"] = sys.argv[2]
+if sys.argv[3]:
+    os.environ["FLEET_QUALIFICATION_PROBE_SECRET"] = sys.argv[3]
+else:
+    os.environ.pop("FLEET_QUALIFICATION_PROBE_SECRET", None)
+os.environ["POLYGON_API_KEY"] = sys.argv[4]
+os.environ["ALPACA_FAULT_INJECTION_ENABLED"] = "false"
+os.environ.setdefault("FLEET_CONTROL_DIR", "history-batch-provider-selection-probe")
+
+import app.main as main
+
+# Whether the recorded provider was installed on app.state -- reported
+# without ever calling it, so this probe can check the fourth gate factor
+# (a real-shaped Polygon key) without a live network call reaching Polygon.
+result = {"recorded_provider_installed": hasattr(main.app.state, "history_batch_provider")}
+
+if sys.argv[5] == "1":
+    from httpx import ASGITransport, AsyncClient
+
+    _CLERK_ID = "clrk_history00000000000000000aa"
+    _TOKEN = "svct_" + "2" * 32
+    main.app.state.fleet_agent_tokens_text = json.dumps({_CLERK_ID: _TOKEN})
+
+    async def run():
+        async with AsyncClient(transport=ASGITransport(app=main.app), base_url="http://test") as client:
+            response = await client.post(
+                "/internal/fleet/history/batch",
+                json={
+                    "clerk_id": _CLERK_ID,
+                    "symbol": "SPY",
+                    "timeframe": "1m",
+                    "required_bar_count": 300,
+                    "as_of_ms": 1_700_000_000_000,
+                },
+                headers={"X-Fleet-Clerk-Id": _CLERK_ID, "X-Fleet-Agent-Token": _TOKEN},
+            )
+        return {"status": response.status_code, "body": response.json()}
+
+    result.update(asyncio.run(run()))
+
+sys.stdout.write(json.dumps(result))
+"""
+
+
+def _history_batch_provider_selection(
+    *, role: str, namespace: str, secret: str, polygon_api_key: str, make_request: bool = True
+) -> dict[str, object]:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _HISTORY_BATCH_PROVIDER_SELECTION_PROBE,
+            role,
+            namespace,
+            secret,
+            polygon_api_key,
+            "1" if make_request else "0",
+        ],
+        cwd=_SERVICE_ROOT,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"probe failed for role={role}:\\n{result.stderr}"
+    return json.loads(result.stdout)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "role,namespace,secret",
+    [
+        ("fleet_coordinator", "compose:learn-ai-fleet", "stray-secret-left-behind"),  # prod namespace + stray secret
+        ("fleet_coordinator", "host:local", "stray-secret-left-behind"),  # dev namespace + stray secret
+        ("fleet_coordinator", "compose:fleetqualificationabc123", ""),  # qualification namespace, no secret
+        ("combined", "compose:fleetqualificationabc123", "qualification-probe-secret"),  # combined role
+    ],
+)
+def test_dev_and_production_cannot_select_the_recorded_provider(
+    role: str, namespace: str, secret: str
+) -> None:
+    """Prove the gate closes, not merely assert it exists in a comment: with
+    any single guard missing, an empty Polygon key must still degrade to the
+    production notice, never recorded bars -- through a real ``app.main``,
+    the boot-time selection this gate now lives in."""
+    payload = _history_batch_provider_selection(
+        role=role, namespace=namespace, secret=secret, polygon_api_key=""
+    )
+
+    assert payload["recorded_provider_installed"] is False
+    assert payload["status"] == 200
+    body = payload["body"]
+    assert body["bars"] == []
+    assert [notice["code"] for notice in body["overlay_notices"]] == ["polygon_api_key_missing"]
+
+
+@pytest.mark.slow
+def test_qualification_gate_selects_the_recorded_provider_over_a_missing_polygon_key() -> None:
+    """The exact gap issue #2206 closes: qualification's placeholder Polygon
+    key can never answer real bars, but the recorded provider must -- proven
+    with the real internal route through a real ``app.main`` boot, not by
+    calling the provider function directly."""
+    payload = _history_batch_provider_selection(
+        role="fleet_coordinator",
+        namespace="compose:fleetqualificationabc123",
+        secret="qualification-probe-secret",
+        polygon_api_key="",  # the qualification placeholder's shape
+    )
+
+    assert payload["recorded_provider_installed"] is True
+    assert payload["status"] == 200
+    body = payload["body"]
+    assert body["overlay_notices"] == []
+    assert len(body["bars"]) > 0
+    assert all(bar["source"] == "polygon" for bar in body["bars"])
+
+
+@pytest.mark.slow
+def test_qualification_gate_refuses_a_lane_holding_a_real_polygon_key() -> None:
+    """The fourth gate factor (defence in depth): role, namespace and secret
+    all line up, but a real-shaped Polygon key must still keep the
+    production provider -- a lane actually holding a working credential must
+    never be made to serve synthetic bars. No request is issued here: the
+    production provider would try a real Polygon call with this key, which
+    a unit test must never do -- the fourth factor is checked at the
+    provider-selection level, not by inspecting a response body.
+    """
+    payload = _history_batch_provider_selection(
+        role="fleet_coordinator",
+        namespace="compose:fleetqualificationabc123",
+        secret="qualification-probe-secret",
+        polygon_api_key="a-real-looking-key",
+        make_request=False,
+    )
+
+    assert payload["recorded_provider_installed"] is False
+
+
 @pytest.mark.slow
 def test_route_is_absent_outside_the_coordinator_role() -> None:
     """Mounts only under the coordinator role -- keyed on ``FLEET_ROLE``,
@@ -251,6 +415,30 @@ async def test_invalid_requests_are_rejected(overrides: dict[str, object]) -> No
         )
 
     assert response.status_code == 422
+
+
+# ---- the shared span-map helper (issue #2206) --------------------------------
+
+
+@pytest.mark.parametrize(
+    "multiplier,timespan,expected_ms",
+    [
+        (1, "minute", 60_000),
+        (15, "minute", 900_000),
+        (1, "hour", 3_600_000),
+        (1, "day", chart_projection_service.MS_PER_DAY),
+    ],
+)
+def test_span_ms_for_matches_each_supported_timespan(multiplier: int, timespan: str, expected_ms: int) -> None:
+    """The one span-map definition the walk's own plan uses -- and the one
+    the qualification recorded-history generator reuses (issue #2206)
+    rather than carrying a second copy that could drift."""
+    assert history_batch_walk.span_ms_for(multiplier, timespan) == expected_ms
+
+
+def test_span_ms_for_rejects_an_unsupported_timespan() -> None:
+    with pytest.raises(ValueError, match="unsupported timespan"):
+        history_batch_walk.span_ms_for(1, "week")
 
 
 # ---- the one-hop widening walk ------------------------------------------------

@@ -73,6 +73,7 @@ FAULT_SCENARIOS = (
     "volume_marker_poison_mismount_refusal",
     "request_queue_saturation",
     "stream_saturation",
+    "command_pool_isolation",
 )
 FAULT_STATES = frozenset(("passed", "attempted", "unrun"))
 
@@ -167,9 +168,14 @@ def _request_json(
     method: str = "GET",
     timeout_s: float = 3.0,
     headers: dict[str, str] | None = None,
+    json_body: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Call one test-only HTTP endpoint without inheriting proxy settings."""
-    request = urllib.request.Request(url, method=method, headers=headers or {})
+    data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+    request_headers = dict(headers or {})
+    if data is not None:
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, method=method, headers=request_headers)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(request, timeout=timeout_s) as response:
@@ -213,10 +219,15 @@ def _json_handler(
     return Handler
 
 
+#: The fake providers' account numbers, served on ``/v2/account``.
+_PAPER_ACCOUNT_NUMBER = "PAQUALIFICATION"
+_LIVE_ACCOUNT_NUMBER = "LQUALIFICATION"
+
+
 def _run_fake_provider() -> int:
     provider = os.environ.get("FLEET_PROBE_PROVIDER", "unknown")
     port = 8011 if provider == "paper" else 8012
-    account_number = "PAQUALIFICATION" if provider == "paper" else "LQUALIFICATION"
+    account_number = _PAPER_ACCOUNT_NUMBER if provider == "paper" else _LIVE_ACCOUNT_NUMBER
     _serve_json(
         port,
         _json_handler(
@@ -269,14 +280,43 @@ def _run_fake_market_data() -> int:
     return 0
 
 
-def _qualification_local_call(path: str) -> tuple[int, dict[str, Any]]:
-    """Call the already-running clerk ASGI process through its loopback socket."""
+def _qualification_probe_headers(method: str) -> dict[str, str]:
+    """The headers every qualification hook call from inside a clerk carries.
+
+    Every call carries the per-run probe secret. A mutation also carries the
+    coordinator's proven-forward proof (its service token plus the
+    broker/clerk pin): a clerk_agent's
+    ``FleetIdentityMiddleware(refuse_unpinned_mutations=True)`` (#2075)
+    refuses any other POST with 400 ``broker_and_clerk_required`` before the
+    handler or its lane-capacity pool runs, so ``/hold/command`` models a real
+    Stop reaching the lane only when it arrives as that forward (issue #2206).
+    """
     secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
     if not secret:
         raise QualificationError("Qualification client has no per-run probe secret.")
+    headers = {"X-Fleet-Qualification-Secret": secret}
+    if method.upper() == "GET":
+        return headers
+    coordinator_token = os.environ.get("FLEET_COORDINATOR_SERVICE_TOKEN", "")
+    clerk_id = os.environ.get("FLEET_CLERK_ID", "")
+    if not coordinator_token or not clerk_id:
+        raise QualificationError(
+            "This container has no coordinator token or clerk id to prove a forward with."
+        )
+    return {
+        **headers,
+        "X-Fleet-Coordinator-Token": coordinator_token,
+        "X-Fleet-Broker": "alpaca",
+        "X-Fleet-Clerk-Id": clerk_id,
+    }
+
+
+def _qualification_local_call(path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
+    """Call the already-running clerk ASGI process through its loopback socket."""
     return _request_json(
         f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
-        headers={"X-Fleet-Qualification-Secret": secret},
+        method=method,
+        headers=_qualification_probe_headers(method),
         timeout_s=4.0,
     )
 
@@ -290,14 +330,12 @@ def _qualification_declared_read(path: str) -> tuple[int, dict[str, Any]]:
     return _request_json(f"http://127.0.0.1:8000{path}", headers=headers, timeout_s=4.0)
 
 
-def _qualification_local_hold(path: str) -> int:
+def _qualification_local_hold(path: str, *, method: str = "GET") -> int:
     """Consume a held response whose body may be SSE rather than JSON."""
-    secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
-    if not secret:
-        raise QualificationError("Qualification client has no per-run probe secret.")
     request = urllib.request.Request(
         f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
-        headers={"X-Fleet-Qualification-Secret": secret},
+        method=method,
+        headers=_qualification_probe_headers(method),
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(request, timeout=4.0) as response:
@@ -321,13 +359,76 @@ def _run_dependency_client(kind: str) -> int:
     return 0
 
 
+#: The recorded-history ceremony's fixed request identity (issue #2206). The
+#: recorded provider is deterministic given ``(symbol, bar_start_ms)``, so
+#: any symbol/timeframe/count works; fixed values just keep the request the
+#: same shape every ceremony run.
+_RECORDED_HISTORY_SYMBOL = "QUALHIST"
+_RECORDED_HISTORY_TIMEFRAME = "1d"
+_RECORDED_HISTORY_BAR_COUNT = 5
+
+
+def _run_history_client() -> int:
+    """Fetch one real Clerk -> coordinator history batch, in-process (issue #2206).
+
+    Uses the exact production seam a live Clerk uses for chart history:
+    ``build_history_batch_provider`` (``app.services.broker_v2_panel.history_batch_client``)
+    selects ``RemoteHistoryBatchClient`` from this process's own real
+    ``FLEET_ROLE=clerk_agent`` fleet settings -- its real
+    ``FLEET_COORDINATOR_URL``, ``FLEET_AGENT_SERVICE_TOKEN`` and
+    ``FLEET_CLERK_ID`` -- so this probe exercises the real inner timeout and
+    the real strict ``HistoryBatchResponse`` validation, not a
+    reimplementation of either. ``as_of_ms`` is the real current wall clock
+    (the recorded provider is a calendar-aligned generator, not a fixture
+    pinned to a literal historical instant -- see that module's own
+    docstring), so every ceremony run asks a genuinely moving question.
+    """
+    import asyncio
+
+    from app.schemas.fleet_history_batch import HistoryBatchQuery
+    from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
+
+    async def _fetch() -> dict[str, Any]:
+        provider = build_history_batch_provider()
+        query = HistoryBatchQuery(
+            symbol=_RECORDED_HISTORY_SYMBOL,
+            timeframe=_RECORDED_HISTORY_TIMEFRAME,
+            required_bar_count=_RECORDED_HISTORY_BAR_COUNT,
+            as_of_ms=int(time.time() * 1000),
+        )
+        response = await provider(query)
+        return response.model_dump(mode="json")
+
+    sys.stdout.write(json.dumps(asyncio.run(_fetch()), sort_keys=True) + "\n")
+    return 0
+
+
+#: ``/hold/request`` and ``/hold/stream`` are ``GET`` (the request/stream
+#: pools); ``/hold/command`` (issue #2206) must be ``POST`` on a path other
+#: than the internal history-batch route so the deployed
+#: ``FleetLaneRuntimeMiddleware`` classifies it into the command pool
+#: (``_requires_command_capacity``) instead.
+_HOLD_METHODS: dict[str, str] = {"request": "GET", "stream": "GET", "command": "POST"}
+
+
 def _run_capacity_client(kind: str) -> int:
-    """Contend against the deployed Paper ASGI middleware, never a fresh instance."""
+    """Contend against the deployed Paper ASGI middleware, never a fresh instance.
+
+    ``kind="request"``/``"stream"`` prove self-pool saturation: hold one, a
+    second of the same kind gets the middleware's typed 503. ``kind="command"``
+    instead proves command-pool *isolation* (issue #2206): a held read
+    consumes the Clerk's one request-pool slot, so a command (drawn from its
+    own pool) must still be admitted and complete -- see
+    :func:`_run_command_admission_client`.
+    """
+    if kind == "command":
+        return _run_command_admission_client()
     path = f"/hold/{kind}"
+    method = _HOLD_METHODS[kind]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        first = executor.submit(_qualification_local_hold, path)
+        first = executor.submit(_qualification_local_hold, path, method=method)
         time.sleep(0.15)
-        second = _qualification_local_call(path)
+        second = _qualification_local_call(path, method=method)
         first_status = first.result(timeout=4.0)
     if first_status != HTTPStatus.OK:
         raise QualificationError(f"Running Paper {kind} hold did not enter the service.")
@@ -335,6 +436,49 @@ def _run_capacity_client(kind: str) -> int:
     if status != HTTPStatus.SERVICE_UNAVAILABLE or body.get("reason") != "fleet_lane_capacity_exhausted":
         raise QualificationError(f"Running Paper {kind} capacity did not return its typed 503.")
     sys.stdout.write(json.dumps({"kind": kind, "refusal_status": status, "reason": body["reason"]}, sort_keys=True) + "\n")
+    return 0
+
+
+def _run_command_admission_client() -> int:
+    """Prove issue #2206's command-pool isolation, deterministically.
+
+    Holds one ``/hold/request`` (Paper's single read slot, queue depth 0).
+    While that hold is provably in flight -- evidenced by a second read
+    receiving the middleware's typed capacity refusal, not by a fixed sleep
+    -- issues ``/hold/command`` and requires it to be admitted and complete:
+    the command pool (issue #2204 gate F1's split from the request pool)
+    must never be starved by an exhausted read pool.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        held_read = executor.submit(_qualification_local_hold, "/hold/request", method="GET")
+        time.sleep(0.15)
+        second_read_status, second_read_body = _qualification_local_call("/hold/request", method="GET")
+        if (
+            second_read_status != HTTPStatus.SERVICE_UNAVAILABLE
+            or second_read_body.get("reason") != "fleet_lane_capacity_exhausted"
+        ):
+            raise QualificationError(
+                "A second read was not refused with the typed capacity 503 while the first "
+                "read was held -- the command-admission proof needs the read hold to be "
+                "provably in flight before it means anything."
+            )
+        command_status, command_body = _qualification_local_call("/hold/command", method="POST")
+        held_read_status = held_read.result(timeout=4.0)
+    if held_read_status != HTTPStatus.OK:
+        raise QualificationError("The held read did not itself complete.")
+    if command_status != HTTPStatus.OK or command_body.get("held") != "command":
+        raise QualificationError("A command was not admitted while a read slot was held.")
+    sys.stdout.write(
+        json.dumps(
+            {
+                "kind": "command",
+                "second_read_refusal_status": second_read_status,
+                "command_status": command_status,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
     return 0
 
 
@@ -401,7 +545,14 @@ def _assert_coordinator_mount_isolation(inspect: dict[str, Any], lane_sources: s
             raise QualificationError("Coordinator exposes a lane source or custody destination.")
 
 
-def _exec_probe(compose: ComposeCommand, project: str, service: str, path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
+def _exec_probe(
+    compose: ComposeCommand,
+    project: str,
+    service: str,
+    path: str,
+    *,
+    method: str = "GET",
+) -> tuple[int, dict[str, Any]]:
     target = path if path.startswith("http://") or path.startswith("https://") else f"http://localhost:8000{path}"
     result = compose.run(
         project,
@@ -543,12 +694,21 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
             "FLEET_COORDINATOR_SERVICE_TOKENS_JSON": json.dumps(
                 {entry["clerk_id"]: entry["coordinator_service_token"] for entry in lanes.values()}, separators=(",", ":")
             ),
+            # Issue #2206: the coordinator's own recorded-history seam is
+            # gated by this same per-run secret, mirroring how each lane
+            # below already carries it for the clerk-side qualification hooks.
+            "FLEET_QUALIFICATION_PROBE_SECRET": probe_secret,
         },
     )
     runtime_environment = _qualification_runtime_environment(
         coordinator_env=coordinator_env,
         deployment_namespace=deployment_namespace,
     )
+    # Carried on the returned ``ComposeCommand`` purely so
+    # ``run_host_qualification`` can read it back for its own direct
+    # (non-``compose exec``) calls to the coordinator's qualification-only
+    # surface -- no compose file references this variable.
+    runtime_environment["FLEET_QUALIFICATION_PROBE_SECRET"] = probe_secret
     for lane, entry in lanes.items():
         lane_env = temporary_dir / f"{lane}.env"
         _write_env(
@@ -619,7 +779,12 @@ def _assert_all_faults_passed(faults: dict[str, dict[str, Any]]) -> None:
 
 
 def _capacity_probe(compose: ComposeCommand, project: str, kind: str) -> dict[str, Any]:
-    """Run contention through the deployed, already-running Paper ASGI service."""
+    """Run contention through the deployed, already-running Paper ASGI service.
+
+    ``kind="command"`` (issue #2206) proves isolation, not saturation: the
+    command must be *admitted* while a read is held, the opposite shape of
+    ``"request"``/``"stream"``'s typed-503 assertion below.
+    """
     result = compose.run(
         project,
         [
@@ -637,6 +802,10 @@ def _capacity_probe(compose: ComposeCommand, project: str, kind: str) -> dict[st
         timeout_s=20.0,
     )
     payload = _json_line(result, f"Paper {kind} capacity probe")
+    if kind == "command":
+        if payload.get("command_status") != HTTPStatus.OK:
+            raise QualificationError("Paper command-pool isolation probe did not admit the command.")
+        return payload
     if payload.get("refusal_status") != HTTPStatus.SERVICE_UNAVAILABLE:
         raise QualificationError(f"Paper {kind} capacity probe did not emit a typed 503.")
     if payload.get("reason") != "fleet_lane_capacity_exhausted":
@@ -658,6 +827,94 @@ def _dependency_probe(
     if not isinstance(status, int) or not isinstance(body, dict):
         raise QualificationError(f"{service} dependency probe returned malformed evidence.")
     return status, body
+
+
+def _set_recorded_history_mode(coordinator_url: str, qualification_secret: str, mode: str) -> None:
+    """Arm the coordinator's recorded-history provider (issue #2206)."""
+    status, body = _request_json(
+        f"{coordinator_url}/internal/fleet-qualification-history/mode",
+        method="POST",
+        headers={"X-Fleet-Qualification-Secret": qualification_secret},
+        json_body={"mode": mode},
+    )
+    if status != HTTPStatus.OK or body.get("mode") != mode:
+        raise QualificationError(f"Coordinator refused recorded-history mode {mode!r}: {status} {body!r}")
+
+
+def _history_client_probe(compose: ComposeCommand, project: str) -> dict[str, Any]:
+    """Fetch one real Clerk -> coordinator history batch from inside the
+    running Paper qualification clerk container (issue #2206). See
+    :func:`_run_history_client` for what runs on the other end of this
+    ``compose exec``.
+    """
+    result = compose.run(
+        project,
+        [
+            "exec",
+            "-T",
+            "alpaca-paper-clerk",
+            "python",
+            "-m",
+            "scripts.run_broker_fleet_compose_qualification",
+            "--container-role",
+            "history-client",
+        ],
+        timeout_s=70.0,  # strictly above the inner (45s) and outer (60s) history-batch bounds
+    )
+    return _json_line(result, "Paper history-client probe")
+
+
+def _recorded_history_ceremony(
+    compose: ComposeCommand,
+    project: str,
+    *,
+    coordinator_url: str,
+    qualification_secret: str,
+) -> dict[str, Any]:
+    """Prove issue #2206's recorded-history provider end to end: Clerk ->
+    coordinator -> recorded provider.
+
+    Drives the Clerk's real history-batch provider/client
+    (``RemoteHistoryBatchClient``, ``app.services.broker_v2_panel.history_batch_client``)
+    from inside the running Paper qualification clerk container against the
+    real coordinator, through three steps: a healthy read, an
+    injected-unavailable read, and a recovered read after an explicit
+    retry. This is the owner-scoped proof (2026-09-18): it does not exercise
+    the public bot chart-history route (browser -> coordinator -> Clerk ->
+    coordinator), because the qualification Paper lane binds no account or
+    profile and so has no Clerk runtime or SQLite facade to serve that route
+    from -- see ``bounded_exclusions`` in ``run_host_qualification``, and the
+    tracked follow-up, #2214.
+    """
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "healthy")
+    healthy = _history_client_probe(compose, project)
+    if not healthy.get("bars"):
+        raise QualificationError(f"Healthy recorded-history request returned no candles: {healthy!r}")
+    if healthy.get("overlay_notices"):
+        raise QualificationError(
+            f"Healthy recorded-history request unexpectedly carried notices: {healthy['overlay_notices']!r}"
+        )
+    if any(bar.get("source") != "polygon" for bar in healthy["bars"]):
+        raise QualificationError("Healthy recorded-history bars were not all source='polygon'.")
+
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "unavailable")
+    unavailable = _history_client_probe(compose, project)
+    notices = unavailable.get("overlay_notices") or []
+    if unavailable.get("bars"):
+        raise QualificationError(f"Injected-unavailable request unexpectedly returned bars: {unavailable!r}")
+    if not any(notice.get("code") == "coordinator_unavailable" for notice in notices):
+        raise QualificationError(f"Injected-unavailable request did not settle on coordinator_unavailable: {notices!r}")
+
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "healthy")
+    retried = _history_client_probe(compose, project)
+    if not retried.get("bars"):
+        raise QualificationError(f"Explicit retry after recovery returned no candles: {retried!r}")
+
+    return {
+        "healthy_bar_count": len(healthy["bars"]),
+        "injected_unavailable_notice_codes": [notice.get("code") for notice in notices],
+        "retried_bar_count": len(retried["bars"]),
+    }
 
 
 def _wait_for_paper_refusal(compose: ComposeCommand, project: str, timeout_s: float) -> dict[str, object]:
@@ -782,6 +1039,9 @@ def run_host_qualification(
             if not isinstance(live_clerk, dict):
                 raise QualificationError("Actual coordinator directory does not contain the Live qualification lane.")
             live_id = str(live_clerk["clerk_id"])
+            paper_clerk = next((entry for entry in clerks if entry.get("display_label") == "Qualification paper"), None)
+            if not isinstance(paper_clerk, dict):
+                raise QualificationError("Actual coordinator directory does not contain the Paper qualification lane.")
             mutation_status, mutation_refusal = _request_json(
                 f"{coordinator_url}/api/brokers/alpaca/clerks/{live_id}/orders",
                 method="POST",
@@ -858,6 +1118,29 @@ def run_host_qualification(
             )
             faults["stream_saturation"]["probe"] = stream_probe
 
+            evidence["stage"] = "command_pool_isolation"
+            command_probe = _capacity_probe(compose, project, "command")
+            faults["command_pool_isolation"] = _fault_result(
+                "passed",
+                "A held read consumed Paper's only request slot (proven by a second read's typed "
+                "503) and a command was still admitted and completed through its own pool.",
+                _live_identity_after_paper_fault(
+                    compose, project, timeout_s, directory_headers, live_id, coordinator_url
+                ),
+            )
+            faults["command_pool_isolation"]["probe"] = command_probe
+
+            evidence["stage"] = "recorded_history"
+            qualification_secret = str(compose.environment.get("FLEET_QUALIFICATION_PROBE_SECRET", "")) if compose.environment else ""
+            if not qualification_secret:
+                raise QualificationError("Compose environment lost its qualification probe secret before the recorded-history stage.")
+            evidence["recorded_history"] = _recorded_history_ceremony(
+                compose,
+                project,
+                coordinator_url=coordinator_url,
+                qualification_secret=qualification_secret,
+            )
+
             evidence["stage"] = "volume_marker_poison_mismount_refusal"
             compose.run(project, ["kill", "alpaca-paper-clerk"])
             compose.run(project, ["rm", "--force", "--stop", "alpaca-paper-clerk"])
@@ -885,7 +1168,7 @@ def run_host_qualification(
                 raise QualificationError("Live declared Alpaca account read failed after Paper failure.")
             coordinator_check = compose.run(project, ["exec", "-T", "fleet-coordinator", "python", "/app/scripts/run_broker_fleet_compose_qualification.py", "--assert-no-custody-root", "/app/artifacts/fleet"])
             _assert_all_faults_passed(faults)
-            evidence.update({"stage": "complete", "volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_account_read_after_paper_failure": live_account, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Qualification drives Alpaca's SDK URL-override seam and the supported Paper market-status consumer against fake endpoints; it does not bind a real account/profile or run a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E."], "result": "passed"})
+            evidence.update({"stage": "complete", "volume_sources": sources, "resources": resources, "directory_before_paper_fault": directory, "directory_after_paper_fault": live_health, "live_mutation_denial": mutation_refusal, "live_mutation_status": mutation_status, "live_account_read_after_paper_failure": live_account, "coordinator_custody_check": json.loads(coordinator_check.stdout), "paper_fault_matrix": faults, "bounded_exclusions": ["Qualification drives Alpaca's SDK URL-override seam and the supported Paper market-status consumer against fake endpoints; it does not bind a real account/profile or run a Live arming ceremony.", "The held-ASGI request and SSE probes prove middleware capacity admission, not an external provider stream protocol.", "Coordinator restart/outage qualification is Delivery E.", "The public bot chart-history route (browser -> coordinator -> Clerk -> coordinator) is not exercised: the qualification Paper lane binds no account or profile, so it has no Clerk runtime or SQLite facade to serve that route from. This stage instead proves Clerk -> coordinator -> recorded provider, run from inside the Paper qualification clerk. Tracked as a follow-up: #2214."], "result": "passed"})
             completed = True
             return evidence
         except (QualificationError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
@@ -935,8 +1218,11 @@ def _assert_no_custody_root(root: Path) -> dict[str, object]:
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--container-role", choices=("fake-provider", "fake-market-data", "capacity-client", "dependency-client"))
-    parser.add_argument("--capacity-kind", choices=("request", "stream"))
+    parser.add_argument(
+        "--container-role",
+        choices=("fake-provider", "fake-market-data", "capacity-client", "dependency-client", "history-client"),
+    )
+    parser.add_argument("--capacity-kind", choices=("request", "stream", "command"))
     parser.add_argument("--dependency-kind", choices=("broker", "market-data"))
     parser.add_argument("--health-url")
     parser.add_argument("--call-url")
@@ -961,6 +1247,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.dependency_kind is None:
                 raise QualificationError("--dependency-kind is required for dependency-client.")
             return _run_dependency_client(args.dependency_kind)
+        if args.container_role == "history-client":
+            return _run_history_client()
         return {"fake-provider": _run_fake_provider, "fake-market-data": _run_fake_market_data}[args.container_role]()
     if args.health_url:
         status, _body = _request_json(args.health_url)

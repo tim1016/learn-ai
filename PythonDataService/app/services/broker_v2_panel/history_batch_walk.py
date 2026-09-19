@@ -71,6 +71,24 @@ class _HistoryWalkPlan:
     fetch_start: date
 
 
+def span_ms_for(multiplier: int, timespan: str) -> int:
+    """The wire span, in ms, for one ``(multiplier, timespan)`` pair.
+
+    The one span-map definition: shared by this module's own walk plan
+    below and by the qualification-only recorded-history generator
+    (``app.services.broker_v2_panel.qualification_recorded_history``, issue
+    #2206), which reuses this exact function rather than carrying a second
+    copy that could drift.
+    """
+    if timespan == "minute":
+        return multiplier * 60_000
+    if timespan == "hour":
+        return multiplier * 3_600_000
+    if timespan == "day":
+        return multiplier * MS_PER_DAY
+    raise ValueError(f"unsupported timespan: {timespan!r}")
+
+
 def _plan_history_walk(
     timeframe: ChartHistoryTimeframe, as_of_ms: int, required_bar_count: int
 ) -> _HistoryWalkPlan:
@@ -82,11 +100,7 @@ def _plan_history_walk(
     the wire as ``required_bar_count``.
     """
     spec = HISTORY_TIMEFRAME_SPECS[timeframe]
-    span_ms = {
-        "minute": spec.multiplier * 60_000,
-        "hour": spec.multiplier * 3_600_000,
-        "day": spec.multiplier * MS_PER_DAY,
-    }[spec.timespan]
+    span_ms = span_ms_for(spec.multiplier, spec.timespan)
     fetch_start = session_start_for_bar_count(
         as_of_ms,
         target_bars=required_bar_count,
@@ -271,4 +285,5 @@ __all__ = [
     "HistoryBarSource",
     "build_coordinator_history_batch",
     "fetch_complete_history_batch",
+    "span_ms_for",
 ]

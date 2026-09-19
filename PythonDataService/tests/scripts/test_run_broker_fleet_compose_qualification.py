@@ -9,8 +9,10 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import urllib.request
+from http import HTTPStatus
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -157,6 +159,7 @@ def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -
         "volume_marker_poison_mismount_refusal",
         "request_queue_saturation",
         "stream_saturation",
+        "command_pool_isolation",
     }
     source = Path(qualification.__file__).read_text(encoding="utf-8")
     function = next(
@@ -329,11 +332,11 @@ def test_stream_capacity_client_does_not_parse_held_sse_as_json(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The first held SSE body is opaque; only the typed refusal is JSON."""
-    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path: 200)
+    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path, *, method="GET": 200)
     monkeypatch.setattr(
         qualification,
         "_qualification_local_call",
-        lambda path: (503, {"reason": "fleet_lane_capacity_exhausted"}),
+        lambda path, *, method="GET": (503, {"reason": "fleet_lane_capacity_exhausted"}),
     )
 
     assert qualification._run_capacity_client("stream") == 0
@@ -342,6 +345,56 @@ def test_stream_capacity_client_does_not_parse_held_sse_as_json(
         "reason": "fleet_lane_capacity_exhausted",
         "refusal_status": 503,
     }
+
+
+def test_command_admission_client_holds_a_read_and_admits_the_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #2206: ``kind="command"`` now proves command-pool *isolation*,
+    not self-pool saturation -- a held read (GET /hold/request) must not
+    starve an admitted command (POST /hold/command). The overlap is proven
+    deterministically: the second read's typed 503 is asserted before the
+    command is ever issued, not inferred from timing alone."""
+    hold_calls: list[tuple[str, str]] = []
+    call_calls: list[tuple[str, str]] = []
+
+    def fake_hold(path: str, *, method: str = "GET") -> int:
+        hold_calls.append((path, method))
+        return 200
+
+    def fake_call(path: str, *, method: str = "GET") -> tuple[int, dict[str, object]]:
+        call_calls.append((path, method))
+        if path == "/hold/request":
+            return 503, {"reason": "fleet_lane_capacity_exhausted"}
+        return 200, {"held": "command"}
+
+    monkeypatch.setattr(qualification, "_qualification_local_hold", fake_hold)
+    monkeypatch.setattr(qualification, "_qualification_local_call", fake_call)
+
+    assert qualification._run_capacity_client("command") == 0
+    assert hold_calls == [("/hold/request", "GET")]
+    assert call_calls == [("/hold/request", "GET"), ("/hold/command", "POST")]
+    assert json.loads(capsys.readouterr().out) == {
+        "kind": "command",
+        "second_read_refusal_status": 503,
+        "command_status": 200,
+    }
+
+
+def test_command_admission_client_fails_loudly_if_the_read_hold_is_not_provably_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the second read is not refused, the overlap was never proven --
+    the command admission below would be meaningless, so this must not
+    silently continue."""
+    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path, *, method="GET": 200)
+    monkeypatch.setattr(
+        qualification, "_qualification_local_call", lambda path, *, method="GET": (200, {"held": "request"})
+    )
+
+    with pytest.raises(qualification.QualificationError, match="provably in flight"):
+        qualification._run_capacity_client("command")
+
 
 def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
     """The shipped Backend/Frontend resolve the coordinator, never combined mode."""
@@ -480,3 +533,252 @@ def test_live_probe_mutation_refusal_is_a_typed_non_success(tmp_path: Path, caps
 
     assert result == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+# ---- issue #2206: recorded-history ceremony plumbing ------------------------
+
+
+def test_request_json_encodes_json_body_and_sets_content_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mode-control path must send a real JSON POST body."""
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        status = HTTPStatus.OK
+
+        def read(self) -> bytes:
+            return b'{"mode": "unavailable"}'
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    class FakeOpener:
+        def open(self, request: urllib.request.Request, timeout: float) -> FakeResponse:
+            captured["method"] = request.get_method()
+            captured["data"] = request.data
+            captured["content_type"] = request.get_header("Content-type")
+            captured["secret_header"] = request.get_header("X-fleet-qualification-secret")
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        qualification.urllib.request, "build_opener", lambda *_args, **_kwargs: FakeOpener()
+    )
+
+    status, body = qualification._request_json(
+        "http://coordinator/internal/fleet-qualification-history/mode",
+        method="POST",
+        headers={"X-Fleet-Qualification-Secret": "s3cr3t"},
+        json_body={"mode": "unavailable"},
+    )
+
+    assert status == HTTPStatus.OK
+    assert body == {"mode": "unavailable"}
+    assert captured["method"] == "POST"
+    assert json.loads(captured["data"]) == {"mode": "unavailable"}
+    assert captured["content_type"] == "application/json"
+    assert captured["secret_header"] == "s3cr3t"
+
+
+def test_command_admission_client_sends_the_command_as_a_proven_coordinator_forward(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression for the failed ceremony run 35418152735
+    (``stage: command_pool_isolation``): the in-container command probe sent
+    ``POST /hold/command`` with only the qualification secret, which a
+    clerk_agent's identity fence (``FleetIdentityMiddleware(
+    refuse_unpinned_mutations=True)``, #2075) refuses 400
+    ``broker_and_clerk_required`` before the handler runs. The fake below
+    applies that fence's rule to the real ``_qualification_local_call``;
+    ``tests/routers/test_fleet_qualification.py::
+    test_hold_command_requires_a_proven_coordinator_forward_through_the_real_middleware_stack``
+    proves the same headers pass the real middleware stack."""
+    sent: list[tuple[str, str, dict[str, str]]] = []
+
+    def fake_request_json(
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        timeout_s: float = 3.0,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        request_headers = dict(headers or {})
+        sent.append((url, method, request_headers))
+        if url.endswith("/hold/request"):
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"reason": "fleet_lane_capacity_exhausted"}
+        if not {"X-Fleet-Coordinator-Token", "X-Fleet-Broker", "X-Fleet-Clerk-Id"} <= request_headers.keys():
+            return HTTPStatus.BAD_REQUEST, {"reason": "broker_and_clerk_required"}
+        return HTTPStatus.OK, {"held": "command"}
+
+    monkeypatch.setattr(qualification, "_request_json", fake_request_json)
+    monkeypatch.setattr(qualification, "_qualification_local_hold", lambda path, *, method="GET": 200)
+    monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "probe-secret")
+    monkeypatch.setenv("FLEET_COORDINATOR_SERVICE_TOKEN", "coord-token")
+    monkeypatch.setenv("FLEET_CLERK_ID", "clrk_probe")
+
+    assert qualification._run_capacity_client("command") == 0
+    assert json.loads(capsys.readouterr().out)["command_status"] == 200
+    assert [(url.rsplit("/", 2)[-2:], method, headers) for url, method, headers in sent] == [
+        (["hold", "request"], "GET", {"X-Fleet-Qualification-Secret": "probe-secret"}),
+        (
+            ["hold", "command"],
+            "POST",
+            {
+                "X-Fleet-Qualification-Secret": "probe-secret",
+                "X-Fleet-Coordinator-Token": "coord-token",
+                "X-Fleet-Broker": "alpaca",
+                "X-Fleet-Clerk-Id": "clrk_probe",
+            },
+        ),
+    ]
+
+
+def test_qualification_probe_headers_refuse_a_half_proven_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A container with the qualification secret but no coordinator identity
+    cannot silently send a half-proven mutation; its reads need no forward."""
+    monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "probe-secret")
+    monkeypatch.delenv("FLEET_COORDINATOR_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("FLEET_CLERK_ID", raising=False)
+
+    assert qualification._qualification_probe_headers("GET") == {"X-Fleet-Qualification-Secret": "probe-secret"}
+    with pytest.raises(qualification.QualificationError, match="coordinator token or clerk id"):
+        qualification._qualification_probe_headers("POST")
+
+
+def test_set_recorded_history_mode_raises_on_a_refused_mode_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        qualification, "_request_json", lambda *_args, **_kwargs: (503, {"reason": "not found"})
+    )
+
+    with pytest.raises(qualification.QualificationError, match="refused recorded-history mode"):
+        qualification._set_recorded_history_mode("http://coordinator", "secret", "unavailable")
+
+
+def test_history_client_probe_runs_the_history_client_role_inside_the_paper_container() -> None:
+    """Must ``compose exec`` the Paper container with the real, importable
+    ``history-client`` role -- not the public chart route or a bespoke path."""
+    calls: list[list[str]] = []
+
+    class ComposeStub:
+        def run(self, project: str, args: list[str], *, timeout_s: float) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            assert timeout_s == 70.0
+            return subprocess.CompletedProcess(
+                args, 0, stdout=json.dumps({"bars": [], "overlay_notices": []}), stderr=""
+            )
+
+    body = qualification._history_client_probe(cast(qualification.ComposeCommand, ComposeStub()), "qualification")
+
+    assert body == {"bars": [], "overlay_notices": []}
+    args = calls[0]
+    assert args[:6] == [
+        "exec", "-T", "alpaca-paper-clerk", "python", "-m", "scripts.run_broker_fleet_compose_qualification",
+    ]
+    assert args[6:] == ["--container-role", "history-client"]
+
+
+def test_recorded_history_ceremony_drives_healthy_failure_and_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #2206 acceptance criteria 1-3, exercised against a fully faked
+    coordinator/exec layer so the sequencing and assertions are pinned
+    without any real container. Owner-scoped design (2026-09-18): drives
+    the in-container history client, never the public chart route or a
+    strategy-instance seed."""
+    modes: list[str] = []
+    history_calls = 0
+
+    def fake_request_json(
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        timeout_s: float = 3.0,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        assert url.endswith("/internal/fleet-qualification-history/mode")
+        assert json_body is not None
+        modes.append(json_body["mode"])
+        return HTTPStatus.OK, {"mode": json_body["mode"]}
+
+    def fake_history_client_probe(compose: qualification.ComposeCommand, project: str) -> dict[str, Any]:
+        nonlocal history_calls
+        history_calls += 1
+        mode = modes[-1]
+        if mode == "unavailable":
+            return {
+                "bars": [],
+                "overlay_notices": [{"code": "coordinator_unavailable", "message": "x", "source": "polygon"}],
+            }
+        return {
+            "bars": [{"start_ms": 1, "end_ms": 2, "source": "polygon"}],
+            "overlay_notices": [],
+        }
+
+    monkeypatch.setattr(qualification, "_request_json", fake_request_json)
+    monkeypatch.setattr(qualification, "_history_client_probe", fake_history_client_probe)
+
+    result = qualification._recorded_history_ceremony(
+        cast(qualification.ComposeCommand, object()),
+        "qualification",
+        coordinator_url="http://coordinator",
+        qualification_secret="probe-secret",
+    )
+
+    # healthy, unavailable, healthy (recovery).
+    assert modes == ["healthy", "unavailable", "healthy"]
+    assert history_calls == 3
+    assert result["healthy_bar_count"] == 1
+    assert result["retried_bar_count"] == 1
+    assert result["injected_unavailable_notice_codes"] == ["coordinator_unavailable"]
+
+
+def test_recorded_history_ceremony_fails_loudly_when_the_healthy_read_returns_no_bars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(qualification, "_request_json", lambda *_a, **_k: (HTTPStatus.OK, {"mode": "healthy"}))
+    monkeypatch.setattr(
+        qualification, "_history_client_probe", lambda compose, project: {"bars": [], "overlay_notices": []}
+    )
+
+    with pytest.raises(qualification.QualificationError, match="returned no candles"):
+        qualification._recorded_history_ceremony(
+            cast(qualification.ComposeCommand, object()),
+            "qualification",
+            coordinator_url="http://coordinator",
+            qualification_secret="probe-secret",
+        )
+
+
+def test_host_ceremony_shares_the_qualification_probe_secret_with_the_coordinator() -> None:
+    """Issue #2206: the coordinator's own recorded-history gate needs the same
+    per-run probe secret every lane env file already carries. Checked as text
+    within ``_host_ceremony``'s own source, mirroring this file's other
+    source-level checks (real Compose/Docker is unavailable in this suite).
+    """
+    source = Path(qualification.__file__).read_text(encoding="utf-8")
+    start = source.index("def _host_ceremony(")
+    end = source.index("\ndef _wait_for_http(")
+    ceremony_source = source[start:end]
+
+    assert '"FLEET_QUALIFICATION_PROBE_SECRET": probe_secret,' in ceremony_source
+    assert 'runtime_environment["FLEET_QUALIFICATION_PROBE_SECRET"] = probe_secret' in ceremony_source
+
+
+def test_run_host_qualification_calls_the_recorded_history_ceremony_before_the_paper_poison_fault() -> None:
+    """The recorded-history stage must run while Paper is still healthy -- the
+    poison fault deliberately leaves Paper down for the rest of the ceremony.
+    """
+    source = Path(qualification.__file__).read_text(encoding="utf-8")
+    recorded_history_index = source.index("_recorded_history_ceremony(\n", source.index("def run_host_qualification"))
+    poison_index = source.index('evidence["stage"] = "volume_marker_poison_mismount_refusal"')
+
+    assert recorded_history_index < poison_index

@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -92,7 +92,13 @@ from app.routers import (
 from app.routers import (
     data_lake as data_lake_router,
 )
-from app.routers.fleet_qualification import qualification_router_from_environment
+from app.routers.fleet_qualification import (
+    is_qualification_coordinator_lane_from_environment,
+    polygon_api_key_is_qualification_safe,
+    qualification_router_from_environment,
+)
+from app.schemas.broker_v2_panel import ChartHistoryTimeframe
+from app.schemas.fleet_history_batch import HistoryBatchResponse
 from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
@@ -1291,6 +1297,62 @@ if _FLEET_COORDINATOR_SURFACE:
     from app.routers import internal_fleet as internal_fleet_router
 
     app.include_router(internal_fleet_router.router)
+
+    # Issue #2206: select the coordinator's history-batch provider once, at
+    # boot -- never per-request inside app/routers/internal_fleet.py, which
+    # must not import this seam or read its environment at all. The full
+    # four-factor Compose qualification gate (this process's role, the
+    # ceremony's random namespace, its minted probe secret, and a
+    # ``POLYGON_API_KEY`` that cannot serve a real vendor bar -- defence in
+    # depth: a lane actually holding a working key must never be made to
+    # serve synthetic bars even if the other three factors line up) installs
+    # the recorded provider on ``app.state``; every other coordinator
+    # process leaves it unset, and the route's own default
+    # (``production_history_batch_provider``) applies.
+    if is_qualification_coordinator_lane_from_environment(
+        _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+    ) and polygon_api_key_is_qualification_safe(settings.POLYGON_API_KEY):
+        from app.services.broker_v2_panel.qualification_recorded_history import (
+            RecordedHistoryInjectedUnavailable,
+            build_qualification_recorded_history_batch,
+        )
+
+        async def _qualification_history_batch_provider(
+            *,
+            symbol: str,
+            timeframe: ChartHistoryTimeframe,
+            required_bar_count: int,
+            as_of_ms: int,
+        ) -> HistoryBatchResponse:
+            """Translate the recorded provider's injected fault into the
+            same 503 the qualification-aware route used to raise directly --
+            this is the one place that knowledge now lives.
+            """
+            try:
+                return await build_qualification_recorded_history_batch(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    required_bar_count=required_bar_count,
+                    as_of_ms=as_of_ms,
+                )
+            except RecordedHistoryInjectedUnavailable as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        app.state.history_batch_provider = _qualification_history_batch_provider
+
+    # Compose qualification is an opt-in coordinator-only surface (issue
+    # #2206), sibling to the clerk-only one above: absent from normal and
+    # dev/production coordinator processes, present only under the same
+    # random ceremony namespace and per-run probe secret.
+    from app.routers.fleet_qualification_history import (
+        qualification_history_router_from_environment,
+    )
+
+    _fleet_qualification_history_router = qualification_history_router_from_environment(
+        _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+    )
+    if _fleet_qualification_history_router is not None:
+        app.include_router(_fleet_qualification_history_router)
 
     # The public clerk-scoped routing surface (fleet delivery B): one route
     # per catalog operation, forwarding through the lane router with the

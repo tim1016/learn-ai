@@ -21,13 +21,23 @@ path's ``clerk_id``), refusing a token that is valid for one clerk but
 presented alongside another clerk's identity. ``RemotePresence`` has sent
 this header on every one of its calls since commit 318c92e2, so the check
 applies uniformly rather than through a per-route opt-in (issue #2204).
+
+Issue #2206: ``history_batch`` answers through ``request.app.state.history_batch_provider``
+rather than deciding a vendor/provider itself. ``app/main.py`` selects that
+provider once, at boot -- the real Polygon-backed walk by default, or, only
+under the Compose qualification gate, the qualification-only recorded
+provider -- so this module never imports the qualification seam or reads its
+environment at request time. A test that mounts this router directly without
+installing ``app.state.history_batch_provider`` (as many of this file's own
+unit tests do) gets :func:`production_history_batch_provider`, the same
+default ``app/main.py`` installs for every non-qualifying process.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Header, Request, Response
 from fastapi.responses import JSONResponse
@@ -42,10 +52,48 @@ from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
 from app.config import settings
+from app.schemas.broker_v2_panel import ChartHistoryTimeframe
 from app.schemas.fleet_history_batch import HistoryBatchRequest, HistoryBatchResponse
 from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
 
 logger = logging.getLogger(__name__)
+
+
+class HistoryBatchProvider(Protocol):
+    """The coordinator's complete-batch answer for one history request.
+
+    Exactly one call, no swappable positional args (mirrors
+    ``HistoryBatchQuery``'s own "no swappable positional ints" discipline,
+    issue #2204 gate F2) -- either the production provider below or the
+    qualification-only recorded one
+    (``app.services.broker_v2_panel.qualification_recorded_history.build_qualification_recorded_history_batch``),
+    chosen once at boot by ``app/main.py``.
+    """
+
+    async def __call__(
+        self,
+        *,
+        symbol: str,
+        timeframe: ChartHistoryTimeframe,
+        required_bar_count: int,
+        as_of_ms: int,
+    ) -> HistoryBatchResponse: ...
+
+
+async def production_history_batch_provider(
+    *, symbol: str, timeframe: ChartHistoryTimeframe, required_bar_count: int, as_of_ms: int
+) -> HistoryBatchResponse:
+    """The real, Polygon-backed provider -- every role except a qualifying
+    coordinator (``app/main.py`` never overrides ``app.state.history_batch_provider``
+    for any other process), and the default a bare test app falls back to.
+    """
+    return await build_coordinator_history_batch(
+        symbol=symbol,
+        timeframe=timeframe,
+        required_bar_count=required_bar_count,
+        as_of_ms=as_of_ms,
+        polygon_api_key=settings.POLYGON_API_KEY,
+    )
 
 router = APIRouter(prefix="/internal/fleet", tags=["internal-fleet"], include_in_schema=False)
 
@@ -312,25 +360,36 @@ async def history_batch(
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
     x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> HistoryBatchResponse:
-    """Serve one complete backward-walked Polygon history batch (issue #2204).
+    """Serve one complete backward-walked history batch (issue #2204).
 
-    This process's own ``POLYGON_API_KEY`` is the usable one -- only a
-    ``FLEET_ROLE=fleet_coordinator``/``combined`` process ever mounts this
-    router (``_FLEET_COORDINATOR_SURFACE``, ``app.main``). A Polygon fetch
-    failure degrades into a canonical ``polygon_*`` notice with no bars
-    (issue #2203) rather than a non-200 status: the Clerk always gets a
-    completed batch back on success, whether healthy or vendor-degraded.
+    Only a ``FLEET_ROLE=fleet_coordinator``/``combined`` process ever mounts
+    this router (``_FLEET_COORDINATOR_SURFACE``, ``app.main``). The actual
+    provider -- the real Polygon-backed walk, or, only under the Compose
+    qualification gate, the qualification-only recorded provider (issue
+    #2206) -- was chosen once at boot and lives at
+    ``request.app.state.history_batch_provider``; this route never decides
+    that itself. A Polygon fetch failure degrades into a canonical
+    ``polygon_*`` notice with no bars (issue #2203) rather than a non-200
+    status, so the Clerk always gets a completed batch back on success,
+    whether healthy or vendor-degraded. The provider itself is responsible
+    for translating any qualification-only injected fault into an
+    appropriate HTTP response (a 503, the same "unexpected coordinator
+    response" the real ``RemoteHistoryBatchClient`` already converts into
+    the stable ``coordinator_unavailable`` notice, FR-010) -- this route
+    does not know, or need to know, that such a fault vocabulary exists.
     """
     _authorized_agent(
         request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
     )
-    return await build_coordinator_history_batch(
+    provider: HistoryBatchProvider = getattr(
+        request.app.state, "history_batch_provider", production_history_batch_provider
+    )
+    return await provider(
         symbol=payload.symbol,
         timeframe=payload.timeframe,
         required_bar_count=payload.required_bar_count,
         as_of_ms=payload.as_of_ms,
-        polygon_api_key=settings.POLYGON_API_KEY,
     )
 
 
-__all__ = ["router"]
+__all__ = ["HistoryBatchProvider", "production_history_batch_provider", "router"]

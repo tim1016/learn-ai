@@ -1,0 +1,57 @@
+{
+  "bars": [
+    {
+      "close": "99.32",
+      "end_ms": 1699477200000,
+      "high": "99.42",
+      "low": "99.26",
+      "open": "99.4",
+      "source": "polygon",
+      "start_ms": 1699419600000,
+      "volume": 6043
+    },
+    {
+      "close": "99.16",
+      "end_ms": 1699563600000,
+      "high": "99.38",
+      "low": "99.06",
+      "open": "99.32",
+      "source": "polygon",
+      "start_ms": 1699506000000,
+      "volume": 2045
+    },
+    {
+      "close": "99.23",
+      "end_ms": 1699650000000,
+      "high": "99.29",
+      "low": "99.08",
+      "open": "99.16",
+      "source": "polygon",
+      "start_ms": 1699592400000,
+      "volume": 6660
+    },
+    {
+      "close": "99.26",
+      "end_ms": 1699909200000,
+      "high": "99.29",
+      "low": "99.17",
+      "open": "99.2",
+      "source": "polygon",
+      "start_ms": 1699851600000,
+      "volume": 6719
+    },
+    {
+      "close": "99.49",
+      "end_ms": 1699995600000,
+      "high": "99.52",
+      "low": "99.18",
+      "open": "99.26",
+      "source": "polygon",
+      "start_ms": 1699938000000,
+      "volume": 7923
+    }
+  ],
+  "effective_as_of_ms": 1700000000000,
+  "overlay_notices": [],
+  "source": "polygon"
+}
