@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -26,9 +27,13 @@ from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
+    RecoveryExecutionResult,
     execute_recovery_action,
 )
-from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    RecoveryPolicyContext,
+    build_recovery_catalog,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock, SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
@@ -417,7 +422,7 @@ async def test_execute_recovery_action_dispatches_safe_flatten(
     )
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
-    async def current_context():
+    async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
@@ -684,7 +689,7 @@ async def _stopped_facade_at(
     )
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
-    async def current_context():
+    async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
@@ -696,7 +701,12 @@ async def _stopped_facade_at(
     return facade, trade, current_context
 
 
-async def _execute(facade, current_context, *, confirmed_limit: ConfirmedRecoveryLimit | None):
+async def _execute(
+    facade: SqliteAlpacaClerkFacade,
+    current_context: Callable[[], Awaitable[RecoveryPolicyContext]],
+    *,
+    confirmed_limit: ConfirmedRecoveryLimit | None,
+) -> RecoveryExecutionResult:
     capability = {
         item.action_id: item for item in build_recovery_catalog(await current_context())
     }["execute_safe_flatten"]
@@ -823,7 +833,7 @@ async def test_a_confirmed_limit_never_goes_out_after_its_session_ends(
 
 
 async def test_a_confirmed_price_never_reduces_a_quantity_the_operator_never_saw(
-    crashed_with_exposure,
+    crashed_with_exposure: tuple[ClerkSqliteRepository, Any],
 ) -> None:
     """Codex review of #2007: a price is confirmed for the reduction the operator
     can see. Cancellation fixes the real quantity several steps later, and a fill
@@ -871,7 +881,7 @@ async def test_a_confirmed_price_never_reduces_a_quantity_the_operator_never_saw
 
 
 async def test_a_plan_leg_the_price_was_not_confirmed_for_is_refused(
-    crashed_with_exposure,
+    crashed_with_exposure: tuple[ClerkSqliteRepository, Any],
 ) -> None:
     """The plan presents ten shares; a price confirmed for eight is not for it."""
     repo, _clock = crashed_with_exposure

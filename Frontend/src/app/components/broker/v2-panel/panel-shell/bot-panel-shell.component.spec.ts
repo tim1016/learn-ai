@@ -1169,6 +1169,15 @@ describe('BotPanelShellComponent', () => {
       // Prepare, the refused refresh, then the retry — each with whatever
       // token the panel presented at the time.
       expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(3);
+      const tokens = brokersMock.checkSqliteSafeFlatten.mock.calls.map(
+        (call: unknown[]) => (call[2] as { concurrency_token: string }).concurrency_token,
+      );
+      // Each call carries the token the panel presented at the time. The
+      // retry's *value* cannot be asserted here: this harness's live store
+      // does not push the second snapshot into the signal the shell reads, so
+      // the rotation itself is covered by the refresh path, not by this spec.
+      expect(tokens[1]).toBe('plan-token-17');
+      expect(tokens[2]).toBeDefined();
       expect(mockService.getLiveSnapshot.mock.calls.length).toBeGreaterThan(1);
       expect(screen.queryByText(/Quote refresh failed/)).toBeNull();
       expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();

@@ -512,10 +512,29 @@ def _flatten_session_blocker(phase: TradingSessionPhase | None) -> OperatorBlock
     plan, which sends it through the custody route; with no session open,
     nothing is sent at all. The Clerk refuses both at execution regardless --
     this only keeps the button from offering a click that cannot succeed.
-    ``None`` phase means no authority answered; the executor still decides.
+    A ``None`` phase means no authority answered. That is not an RTH
+    fallback: the one session in which this button can succeed is the only
+    one it may assume, so an unanswered session blocks it too (CodeRabbit
+    review 2026-09-19).
     """
-    if phase is None or phase == "RTH":
+    if phase == "RTH":
         return None
+    if phase is None:
+        return OperatorBlocker.for_host(
+            condition_id="FLATTEN_SESSION_UNKNOWN",
+            scope="bot",
+            host="bot_cockpit",
+            anchor=SURFACE_ANCHOR,
+            audience="both",
+            disposition="fix_here",
+            headline="The trading session is unknown, so an unpriced flatten cannot be sent.",
+            detail=(
+                "Prepare safe flatten reads the session and the live IBKR bid and ask, and "
+                "says what can be sent now."
+            ),
+            applies_to="run",
+            primary_move=_PREPARE_PRICED_FLATTEN_MOVE,
+        )
     priced_here = phase in TRADEABLE_EXTENDED_PHASES
     return OperatorBlocker.for_host(
         condition_id=(

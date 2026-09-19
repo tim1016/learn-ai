@@ -482,7 +482,7 @@ class RegularSessionFlattenPricing(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["regular_session"] = "regular_session"
+    kind: Literal["regular_session"]
 
 
 class ProposedLimitEvaluationResponse(BaseModel):
@@ -517,7 +517,7 @@ class ExtendedLimitFlattenPricing(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["extended_limit"] = "extended_limit"
+    kind: Literal["extended_limit"]
     phase: Literal["PRE", "POST"]
     symbol: str
     side: Literal["buy", "sell"]
@@ -547,7 +547,7 @@ class RefusedFlattenPricing(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["refused"] = "refused"
+    kind: Literal["refused"]
     reason_code: str
     explanation: str
     next_step: str
@@ -573,6 +573,7 @@ def safe_flatten_pricing_response(
     """
     if isinstance(pricing, LegRefusal):
         return RefusedFlattenPricing(
+            kind="refused",
             reason_code=pricing.reason_code,
             explanation=pricing.explanation,
             next_step=pricing.next_step,
@@ -591,6 +592,7 @@ def safe_flatten_pricing_response(
             )
         )
         return ExtendedLimitFlattenPricing(
+            kind="extended_limit",
             phase=pricing.phase,
             symbol=quote.symbol,
             side=pricing.side.value,
@@ -620,7 +622,7 @@ def safe_flatten_pricing_response(
                 )
             ),
         )
-    return RegularSessionFlattenPricing()
+    return RegularSessionFlattenPricing(kind="regular_session")
 
 
 class RecoveryActionCheckResponse(BaseModel):

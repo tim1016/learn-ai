@@ -15648,7 +15648,6 @@
           },
           "kind": {
             "const": "extended_limit",
-            "default": "extended_limit",
             "title": "Kind"
           },
           "phase": {
@@ -15713,6 +15712,7 @@
           }
         },
         "required": [
+          "kind",
           "phase",
           "symbol",
           "side",
@@ -31017,7 +31017,6 @@
           },
           "kind": {
             "const": "refused",
-            "default": "refused",
             "title": "Kind"
           },
           "next_step": {
@@ -31030,6 +31029,7 @@
           }
         },
         "required": [
+          "kind",
           "reason_code",
           "explanation",
           "next_step"
@@ -31276,10 +31276,12 @@
         "properties": {
           "kind": {
             "const": "regular_session",
-            "default": "regular_session",
             "title": "Kind"
           }
         },
+        "required": [
+          "kind"
+        ],
         "title": "RegularSessionFlattenPricing",
         "type": "object"
       },

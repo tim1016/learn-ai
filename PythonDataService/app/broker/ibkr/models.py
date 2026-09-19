@@ -83,7 +83,7 @@ def _coerce_quote(value: float | None) -> float | None:
     return out
 
 
-def _coerce_size(value) -> int | None:
+def _coerce_size(value: float | int | None) -> int | None:
     """Coerce an IBKR bid/ask size to ``int`` or ``None``.
 
     IBKR uses NaN and a negative sentinel (``-1``) for "no size available" on

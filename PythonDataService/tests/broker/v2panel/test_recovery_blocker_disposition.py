@@ -114,12 +114,22 @@ def test_with_no_session_open_the_flatten_button_waits_with_no_move() -> None:
     assert blocker.primary_move is None
 
 
-@pytest.mark.parametrize("phase", ["RTH", None])
-def test_inside_the_regular_session_the_flatten_button_is_unchanged(phase: str | None) -> None:
-    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase=phase)
+def test_inside_the_regular_session_the_flatten_button_is_unchanged() -> None:
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase="RTH")
 
     assert action.enabled is True
     assert action.blockers == []
+
+
+def test_an_unanswered_session_blocks_the_unpriced_flatten_too() -> None:
+    """The regular session is the only one this button can succeed in, so it is
+    the only one an unanswered session may be assumed to be (CodeRabbit 2026-09-19)."""
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase=None)
+
+    assert action.enabled is False
+    (blocker,) = action.blockers
+    assert blocker.condition.id == "FLATTEN_SESSION_UNKNOWN"
+    assert blocker.disposition == "fix_here"
 
 
 def test_the_session_gates_no_other_recovery_action() -> None:
