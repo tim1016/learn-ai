@@ -6,16 +6,12 @@
     data-testid="typed-halt-confirm-backdrop"
     (click)="onCancel()"
   ></button>
-  <!-- The click handler only keeps clicks inside the dialog from reaching the
-       page behind it; it is not an action. Keys are contained by the host. -->
-  <!-- eslint-disable-next-line @angular-eslint/template/click-events-have-key-events -->
   <aside
     class="dialog"
     role="dialog"
     aria-modal="true"
     aria-labelledby="typed-halt-confirm-heading"
     data-testid="typed-halt-confirm-dialog"
-    (click)="$event.stopPropagation()"
   >
     <header>
       <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>
