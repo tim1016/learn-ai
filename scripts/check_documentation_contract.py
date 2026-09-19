@@ -63,12 +63,18 @@ SERVED_DOCUMENT_COPIES = {
     "docs/signal-engine-authority.md": "Frontend/src/assets/docs/signal-engine-methodology.md",
 }
 
-# A served document cannot use repo-relative links (the app would resolve them
-# against its own base URL), so it links into the repository on GitHub. Those
-# links name a repo path, which must still exist.
+# In the app, a repo-relative link resolves against the app's base URL and
+# leaves the page, so a served document should link into the repository on
+# GitHub instead. Those links name a repo path, which must still exist.
 REPOSITORY_BLOB_LINK = re.compile(
     r"https://github\.com/tim1016/learn-ai/(?:blob|tree)/master/([^)\s#?\"'>]+)"
 )
+
+# Inline SVG diagrams in a served document draw with the viewer's `dg-*` /
+# `md-*` classes; a class the stylesheet does not define renders unstyled.
+DIAGRAM_STYLESHEET = "Frontend/src/app/shared/markdown-viewer/markdown-viewer.component.scss"
+DIAGRAM_CLASS = re.compile(r"(?<![\w-])(?:dg|md)-[\w-]+")
+CLASS_ATTRIBUTE = re.compile(r'class="([^"]*)"')
 
 ROOT_RELATIVE_LINK_PREFIXES = (
     ".claude/",
@@ -269,6 +275,9 @@ def _validate_retired_documentation(root: Path) -> list[str]:
 
 def _validate_served_documents(root: Path) -> list[str]:
     errors: list[str] = []
+    resolved_root = root.resolve()
+    stylesheet_path = root / DIAGRAM_STYLESHEET
+    stylesheet = stylesheet_path.read_text(encoding="utf-8") if stylesheet_path.exists() else ""
     for canonical, served in SERVED_DOCUMENT_COPIES.items():
         canonical_path = root / canonical
         served_path = root / served
@@ -279,9 +288,21 @@ def _validate_served_documents(root: Path) -> list[str]:
             errors.append(f"{canonical}: served copy is missing: {served}")
         elif served_path.read_bytes() != canonical_path.read_bytes():
             errors.append(f"{served}: served copy differs from its canonical source {canonical}")
-        for target in REPOSITORY_BLOB_LINK.findall(canonical_path.read_text(encoding="utf-8")):
-            if not (root / target).exists():
+        text = canonical_path.read_text(encoding="utf-8")
+        for target in REPOSITORY_BLOB_LINK.findall(text):
+            destination = (root / target).resolve()
+            if not destination.is_relative_to(resolved_root):
+                errors.append(f"{canonical}: GitHub link escapes the repository: {target}")
+            elif not destination.exists():
                 errors.append(f"{canonical}: GitHub link names a missing repo path: {target}")
+        used_classes = {
+            name
+            for attribute in CLASS_ATTRIBUTE.findall(text)
+            for name in DIAGRAM_CLASS.findall(attribute)
+        }
+        for name in sorted(used_classes):
+            if not re.search(rf"\.{re.escape(name)}(?![\w-])", stylesheet):
+                errors.append(f"{canonical}: diagram class .{name} is not defined in {DIAGRAM_STYLESHEET}")
     return errors
 
 

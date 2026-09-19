@@ -91,19 +91,16 @@
       margin-top: 0;
     }
 
+    // The global CSS reset removes list markers; a document's lists need them.
     ul,
     ol {
       margin: 0 0 12px;
       padding-left: 20px;
+      list-style: disc;
 
       li {
         margin-bottom: 4px;
       }
-    }
-
-    // The global CSS reset removes list markers; a document's lists need them.
-    ul {
-      list-style: disc;
     }
 
     ol {

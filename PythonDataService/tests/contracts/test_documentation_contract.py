@@ -127,27 +127,45 @@ def _write_served_pair(root: Path, canonical_text: str, served_text: str) -> tup
 
 def test_served_documents_fail_when_the_served_copy_drifts(tmp_path: Path) -> None:
     checker = _checker_module()
+    _write_fixture(tmp_path)
     _, served = _write_served_pair(tmp_path, "# Manual\n", "# Manual, edited in the app copy only\n")
 
-    errors = checker._validate_served_documents(tmp_path)
+    errors = checker.validate_repository(tmp_path)
 
     assert f"{served}: served copy differs from its canonical source" in " ".join(errors)
 
 
 def test_served_documents_fail_when_a_github_link_names_a_missing_path(tmp_path: Path) -> None:
     checker = _checker_module()
+    _write_fixture(tmp_path)
     text = (
         "[ADR](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/9999-gone.md)\n"
         "[Present](https://github.com/tim1016/learn-ai/blob/master/docs/present.md#section)\n"
+        "[Outside](https://github.com/tim1016/learn-ai/blob/master/../../etc/hosts)\n"
     )
-    (tmp_path / "docs").mkdir()
     (tmp_path / "docs/present.md").write_text("# Present\n", encoding="utf-8")
     _write_served_pair(tmp_path, text, text)
 
-    errors = checker._validate_served_documents(tmp_path)
+    errors = checker.validate_repository(tmp_path)
 
-    assert any("docs/architecture/adrs/9999-gone.md" in error for error in errors)
+    assert any("missing repo path: docs/architecture/adrs/9999-gone.md" in error for error in errors)
+    assert any("escapes the repository: ../../etc/hosts" in error for error in errors)
     assert not any("docs/present.md" in error for error in errors)
+
+
+def test_served_documents_fail_when_a_diagram_class_has_no_style(tmp_path: Path) -> None:
+    checker = _checker_module()
+    _write_fixture(tmp_path)
+    stylesheet = tmp_path / checker.DIAGRAM_STYLESHEET
+    stylesheet.parent.mkdir(parents=True)
+    stylesheet.write_text(".dg-box { fill: none; }\n.dg-box.dg-live { stroke: red; }\n", encoding="utf-8")
+    text = '<svg><rect class="dg-box dg-live dg-renamed"/></svg>\n'
+    _write_served_pair(tmp_path, text, text)
+
+    errors = checker.validate_repository(tmp_path)
+
+    assert any("diagram class .dg-renamed is not defined" in error for error in errors)
+    assert not any(".dg-box " in error or ".dg-live " in error for error in errors)
 
 
 def test_the_served_ibkr_guide_carries_no_retired_order_capable_guidance() -> None:

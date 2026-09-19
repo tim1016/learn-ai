@@ -82,12 +82,37 @@ describe('MarkdownViewerComponent', () => {
     expect(scrollIntoView.mock.contexts[0]).toBe(root.querySelector('h2#the-lanes'));
   });
 
-  it('still removes scripts and event handlers', () => {
+  it('still removes scripts, event handlers, page-wide CSS and form controls', () => {
     const root = renderMarkdown(
-      '<svg><script>window.pwned = true</script></svg>\n\n<img src="x.png" onerror="window.pwned = true">\n',
+      [
+        '<svg><script>window.pwned = true</script><style>body { display: none }</style></svg>',
+        '',
+        '<img src="x.png" onerror="window.pwned = true">',
+        '',
+        '<style>body { display: none }</style>',
+        '',
+        '<form action="https://example.com"><input type="password"><button>Go</button></form>',
+        '',
+      ].join('\n'),
     );
 
     expect(root.querySelector('script')).toBeNull();
     expect(root.querySelector('img')?.hasAttribute('onerror')).toBe(false);
+    expect(root.querySelector('style, form, input, button')).toBeNull();
+  });
+
+  it('refuses a document from outside the served docs folder', () => {
+    TestBed.configureTestingModule({
+      imports: [MarkdownViewerComponent],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const fixture = TestBed.createComponent(MarkdownViewerComponent);
+    fixture.componentRef.setInput('src', 'https://example.com/doc.md');
+    fixture.detectChanges();
+
+    TestBed.inject(HttpTestingController).verify();
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      'only documents under /assets/docs/ are rendered',
+    );
   });
 });

@@ -19,6 +19,11 @@ import katex from 'katex';
 
 import { markdownSlug } from '../markdown/markdown-slug';
 
+// The rendered HTML is marked trusted (see `renderMarkdownWithMath`), so the
+// viewer renders only the repo-authored documents the app itself serves.
+const SERVED_DOCS_ROOT = '/assets/docs/';
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+
 /**
  * Renders a markdown file from a URL with:
  *   - GitHub-style heading anchors (`1.` → `#1-...`),
@@ -29,7 +34,8 @@ import { markdownSlug } from '../markdown/markdown-slug';
  *     document.
  *
  * Inputs:
- *   - `src`         absolute or app-relative URL of the .md file
+ *   - `src`         path of a .md file served under `/assets/docs/`; any
+ *                   other source is refused
  *   - `scrollTo`    optional anchor slug (without the leading `#`). The
  *                   viewer scrolls to it after render, and re-scrolls if
  *                   the input changes. Emits nothing.
@@ -85,6 +91,10 @@ export class MarkdownViewerComponent {
   }
 
   private fetchAndRender(url: string): void {
+    if (!url.startsWith(SERVED_DOCS_ROOT) || url.includes('..')) {
+      this.error.set(`refusing ${url}: only documents under ${SERVED_DOCS_ROOT} are rendered`);
+      return;
+    }
     this.loading.set(true);
     this.error.set(null);
 
@@ -154,6 +164,8 @@ export class MarkdownViewerComponent {
     const clean = DOMPurify.sanitize(html, {
       USE_PROFILES: { html: true, mathMl: true, svg: true },
       ADD_ATTR: ['id', 'class', 'style', 'aria-hidden', 'role'],
+      // A document never needs page-wide CSS or form controls.
+      FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea'],
     });
     // DOMPurify is this component's sanitiser of record. Angular's own
     // `[innerHTML]` pass has a narrower allowlist and would silently strip
@@ -167,12 +179,14 @@ export class MarkdownViewerComponent {
    * rendered document instead. The URL is left alone because the viewer also
    * runs inside a drawer, where the host page's URL is not the document's.
    */
-  followInPageLink(event: MouseEvent): void {
+  protected followInPageLink(event: MouseEvent): void {
     const link = event.target instanceof Element ? event.target.closest('a') : null;
-    const href = link?.getAttribute('href');
+    // SVG exported from drawing tools may still use the older `xlink:href`.
+    const href = link?.getAttribute('href') ?? link?.getAttributeNS(XLINK_NAMESPACE, 'href');
     if (!href?.startsWith('#') || href.length === 1) return;
     event.preventDefault();
-    this.scrollToAnchor(decodeURIComponent(href.slice(1)));
+    // Heading ids are slugs (`markdownSlug`), so the fragment needs no decoding.
+    this.scrollToAnchor(href.slice(1));
   }
 
   /** Post-render hook that injects a slug `id` attribute on every heading.
