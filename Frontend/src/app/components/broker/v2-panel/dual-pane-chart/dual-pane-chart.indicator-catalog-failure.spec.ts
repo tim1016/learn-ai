@@ -19,10 +19,10 @@
  * the Expand button's label updating.
  */
 import { TestBed } from '@angular/core/testing';
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { signal } from '@angular/core';
-import { throwError } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DUAL_PANE_CHART_FACTORY, DualPaneChartComponent } from './dual-pane-chart.component';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
@@ -80,6 +80,7 @@ beforeEach(() => {
             }],
           }]),
           loading: signal(false),
+          failed: signal(false),
         },
       },
       {
@@ -114,5 +115,46 @@ describe('DualPaneChartComponent — indicator-catalog failure isolation (#2202 
     // no EMA entry is offered since the (failed) supported-set is empty.
     expect(screen.getByRole('complementary', { name: 'Indicator picker rail' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /trend/i })).toBeNull();
+  });
+});
+
+/** #2222: the supported-set error above does not cover the shared catalog
+ * (`IndicatorCatalogService`, `/api/dataset/available`). With only that
+ * catalog failing, the picker used to say "No indicators available" and
+ * nothing said the load had failed. */
+describe('DualPaneChartComponent — shared indicator catalog failure (#2222)', () => {
+  it('says the indicators could not be loaded when only the shared catalog fails', async () => {
+    const user = userEvent.setup();
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
+      providers: [
+        {
+          provide: IndicatorCatalogService,
+          useValue: {
+            load: vi.fn().mockResolvedValue(undefined),
+            categories: signal([]),
+            loading: signal(false),
+            failed: signal(true),
+          },
+        },
+        {
+          provide: BotChartIndicatorService,
+          useValue: {
+            calculate: vi.fn(),
+            supportedIndicators: vi.fn().mockReturnValue(of({ names: ['ema'] })),
+          },
+        },
+      ],
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    expect(within(rail).getByRole('alert').textContent).toContain('Indicators could not be loaded.');
+    expect(within(rail).queryByText('No indicators available')).toBeNull();
+    // The supported set loaded, so its own error stays silent.
+    expect(rail.textContent).not.toContain('The chart indicator catalog could not be loaded.');
   });
 });

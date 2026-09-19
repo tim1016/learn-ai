@@ -153,6 +153,28 @@ describe("TradingChartComponent", () => {
     expect(root.querySelector(".trading-chart__rail")).not.toBeNull();
   });
 
+  it("tells the rail a failed indicator catalog load, and its picker says so", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("indicatorCatalogLoadFailed", true);
+    fixture.componentRef.setInput("expanded", true);
+    fixture.detectChanges();
+    const rail = (fixture.nativeElement as HTMLElement).querySelector(".trading-chart__rail");
+
+    expect(rail?.querySelector("[role='alert']")?.textContent).toContain("Indicators could not be loaded.");
+    expect(rail?.textContent).not.toContain("No indicators available");
+  });
+
+  it("raises no catalog failure in the rail by default", async () => {
+    const fixture = await createComponent();
+    fixture.componentRef.setInput("expanded", true);
+    fixture.detectChanges();
+    const rail = (fixture.nativeElement as HTMLElement).querySelector(".trading-chart__rail");
+
+    expect(rail).not.toBeNull();
+    expect(rail?.querySelector("[role='alert']")).toBeNull();
+    expect(rail?.textContent).toContain("No indicators available");
+  });
+
   it("never sizes the canvas taller than the box it measured, so the wrap cannot gain a scrollbar", async () => {
     // Three panes over weights 470:205:185 at a 556px box rounded to 304+133+120
     // = 557: one pixel taller than the box the panes were measured from. The

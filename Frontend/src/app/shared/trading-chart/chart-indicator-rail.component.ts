@@ -33,6 +33,7 @@ export class ChartIndicatorRailComponent {
   readonly activeKeys = input<readonly string[]>([]);
   readonly categories = input<readonly IndicatorCategory[]>([]);
   readonly catalogLoading = input(false);
+  readonly catalogLoadFailed = input(false);
   readonly calculationLoading = input(false);
   readonly error = input<string | null>(null);
   readonly allowAdditionalInstances = input(true);

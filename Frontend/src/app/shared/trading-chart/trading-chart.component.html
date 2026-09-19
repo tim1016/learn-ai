@@ -57,6 +57,7 @@
         [activeIndicators]="activeIndicators()"
         [categories]="indicatorCategories()"
         [catalogLoading]="indicatorCatalogLoading()"
+        [catalogLoadFailed]="indicatorCatalogLoadFailed()"
         (indicatorAdded)="onIndicatorAdded($event)"
         (indicatorRemoved)="indicatorRemoved.emit($event)"
       />

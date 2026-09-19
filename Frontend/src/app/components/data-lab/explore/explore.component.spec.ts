@@ -423,4 +423,37 @@ describe('ExploreComponent', () => {
     expect(http.match(`${environment.pythonServiceUrl}/api/chart/data`)).toHaveLength(0);
     http.verify();
   });
+
+  it('says so in the Indicators drawer when the catalog fails to load', async () => {
+    const { http, fixture } = await renderExplore();
+    http
+      .expectOne(`${environment.pythonServiceUrl}/api/dataset/available`)
+      .flush('boom', { status: 500, statusText: 'Internal Server Error' });
+    await fixture.whenStable();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Indicators' }));
+    const drawer = screen.getByRole('region', { name: 'Indicators' });
+
+    await waitFor(() =>
+      expect(drawer.querySelector('[role="alert"]')?.textContent).toContain(
+        'Indicators could not be loaded.',
+      ),
+    );
+    expect(drawer.textContent).not.toContain('No indicators available');
+    http.verify();
+  });
+
+  it('shows no catalog failure in the Indicators drawer when the catalog loads', async () => {
+    const { http } = await renderExplore();
+    flushCatalog(http);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Indicators' }));
+    const drawer = screen.getByRole('region', { name: 'Indicators' });
+
+    // flushCatalog() serves an empty catalog, so the picker's neutral state shows.
+    expect(drawer.textContent).toContain('No indicators available');
+    expect(drawer.querySelector('[role="alert"]')).toBeNull();
+    expect(drawer.textContent).not.toContain('Indicators could not be loaded.');
+    http.verify();
+  });
 });

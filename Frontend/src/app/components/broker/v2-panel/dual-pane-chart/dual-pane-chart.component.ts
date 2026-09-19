@@ -308,6 +308,9 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly indicatorCatalogLoading = computed(() =>
     this.indicatorCatalog.loading() || this.supportedIndicatorResource.isLoading(),
   );
+  /** The shared catalog (`/api/dataset/available`) failed. The supported-set
+   * failure is reported separately through `indicatorError`. */
+  protected readonly indicatorCatalogLoadFailed = this.indicatorCatalog.failed;
 
   /** The delayed pane is unavailable (#2211) either because the request was
    * rejected (`historyFailed`) or because it settled successfully with zero

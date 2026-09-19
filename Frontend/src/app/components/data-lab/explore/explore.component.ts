@@ -395,6 +395,7 @@ export class ExploreComponent {
   // ── Indicators drawer + chips ─────────────────────────────
   readonly catalogCategories = this.catalog.categories;
   readonly catalogLoading = this.catalog.loading;
+  readonly catalogLoadFailed = this.catalog.failed;
 
   readonly activeIndicatorCount = computed(() => this.store.indicators().length);
 

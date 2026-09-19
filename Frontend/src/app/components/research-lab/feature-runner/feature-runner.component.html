@@ -48,6 +48,7 @@
         [categories]="catalogCategories()"
         [activeKeys]="pickerActiveKeys()"
         [loading]="catalogLoading()"
+        [loadFailed]="catalogLoadFailed()"
         (add)="onPickerSelect($event)"
         (addInstance)="onPickerSelect($event)" />
 

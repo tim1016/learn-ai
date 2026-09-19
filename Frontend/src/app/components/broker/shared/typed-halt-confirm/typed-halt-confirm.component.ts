@@ -22,7 +22,15 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [AssetIdentityComponent],
   host: {
+    // Focus outside the dialog: Escape still cancels.
     '(document:keydown.escape)': 'onEscape()',
+    // Clicks and keystrokes from the backdrop or the dialog stop at this
+    // host, so the page behind it, including an enclosing menu that also
+    // closes on Escape (the bot banner's overflow menu), never acts on them.
+    // That hides Escape from the document listener too, so it cancels here.
+    '(click)': '$event.stopPropagation()',
+    '(keydown)': '$event.stopPropagation()',
+    '(keydown.escape)': 'onEscape()',
   },
   templateUrl: './typed-halt-confirm.component.html',
   styleUrl: './typed-halt-confirm.component.scss',

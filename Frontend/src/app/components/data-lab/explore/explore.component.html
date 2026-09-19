@@ -30,6 +30,7 @@
   [categories]="catalogCategories()"
   [activeKeys]="store.indicators().map((i) => i.canonicalKey)"
   [loading]="catalogLoading()"
+  [loadFailed]="catalogLoadFailed()"
   [chips]="chipEntries()"
   [activeCount]="activeIndicatorCount()"
   [chipsExpanded]="chipsExpanded()"

@@ -37,7 +37,7 @@
 } @else {
   <!-- Presets -->
   @if (presets().length) {
-    <div class="ip-presets" role="list" aria-label="Indicator presets">
+    <div class="ip-presets" role="group" aria-label="Indicator presets">
       @for (p of presets(); track p.name) {
         <button class="ip-preset" type="button"
                 [title]="p.name + ' — ' + p.subtitle"
@@ -87,12 +87,19 @@
 
   <!-- Categories / rows -->
   <div class="ip-cats" id="ip-rows">
-    <!-- An empty catalog is not a filter outcome, so this stays neutral.
-         Explaining a failed catalog load is the host's job. -->
+    <!-- An empty catalog is not a filter outcome, so it never blames the
+         filters. The host says whether the catalog load failed; the copy is
+         fixed so a raw fetch error never reaches the page. -->
     @if (totalCatalog() === 0) {
-      <div class="ip-empty">
-        <strong>No indicators available</strong>
-      </div>
+      @if (loadFailed()) {
+        <div class="ip-empty" role="alert">
+          <strong>Indicators could not be loaded.</strong>
+        </div>
+      } @else {
+        <div class="ip-empty">
+          <strong>No indicators available</strong>
+        </div>
+      }
     } @else if (totalVisible() === 0) {
       <div class="ip-empty">
         <strong>No indicators match these filters</strong>
