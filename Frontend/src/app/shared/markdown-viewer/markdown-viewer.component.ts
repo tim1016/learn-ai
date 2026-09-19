@@ -10,6 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of } from 'rxjs';
 import { Marked } from 'marked';
@@ -18,15 +19,23 @@ import katex from 'katex';
 
 import { markdownSlug } from '../markdown/markdown-slug';
 
+// The rendered HTML is marked trusted (see `renderMarkdownWithMath`), so the
+// viewer renders only the repo-authored documents the app itself serves.
+const SERVED_DOCS_ROOT = '/assets/docs/';
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+
 /**
  * Renders a markdown file from a URL with:
  *   - GitHub-style heading anchors (`1.` → `#1-...`),
  *   - LaTeX math via KaTeX (`$$...$$` blocks + `$...$` inline),
  *   - DOMPurify sanitisation (math HTML is trusted and re-inserted after
- *     sanitisation so KaTeX markup survives).
+ *     sanitisation so KaTeX markup survives),
+ *   - same-document links (`#section`) that scroll within the rendered
+ *     document.
  *
  * Inputs:
- *   - `src`         absolute or app-relative URL of the .md file
+ *   - `src`         path of a .md file served under `/assets/docs/`; any
+ *                   other source is refused
  *   - `scrollTo`    optional anchor slug (without the leading `#`). The
  *                   viewer scrolls to it after render, and re-scrolls if
  *                   the input changes. Emits nothing.
@@ -45,6 +54,7 @@ import { markdownSlug } from '../markdown/markdown-slug';
     <div #content class="md-content" [innerHTML]="rendered()"></div>
   `,
   styleUrl: './markdown-viewer.component.scss',
+  host: { '(click)': 'followInPageLink($event)' },
 })
 export class MarkdownViewerComponent {
   src = input.required<string>();
@@ -52,9 +62,10 @@ export class MarkdownViewerComponent {
 
   private http = inject(HttpClient);
   private destroyRef = inject(DestroyRef);
+  private sanitizer = inject(DomSanitizer);
   private contentEl = viewChild<ElementRef<HTMLDivElement>>('content');
 
-  rendered = signal<string>('');
+  rendered = signal<SafeHtml>('');
   loading = signal<boolean>(false);
   error = signal<string | null>(null);
 
@@ -80,6 +91,10 @@ export class MarkdownViewerComponent {
   }
 
   private fetchAndRender(url: string): void {
+    if (!url.startsWith(SERVED_DOCS_ROOT) || url.includes('..')) {
+      this.error.set(`refusing ${url}: only documents under ${SERVED_DOCS_ROOT} are rendered`);
+      return;
+    }
     this.loading.set(true);
     this.error.set(null);
 
@@ -108,7 +123,7 @@ export class MarkdownViewerComponent {
    * Render markdown with math. LaTeX blocks are extracted first (so marked
    * doesn't mangle them), rendered by KaTeX, then re-inserted post-sanitise.
    */
-  private renderMarkdownWithMath(src: string): string {
+  private renderMarkdownWithMath(src: string): SafeHtml {
     const blocks: string[] = [];
     const inlines: string[] = [];
 
@@ -146,10 +161,32 @@ export class MarkdownViewerComponent {
 
     // Sanitise the assembled HTML but allow KaTeX + marked output. We allow
     // all standard tags; DOMPurify by default allows a safe set.
-    return DOMPurify.sanitize(html, {
+    const clean = DOMPurify.sanitize(html, {
       USE_PROFILES: { html: true, mathMl: true, svg: true },
       ADD_ATTR: ['id', 'class', 'style', 'aria-hidden', 'role'],
+      // A document never needs page-wide CSS or form controls.
+      FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea'],
     });
+    // DOMPurify is this component's sanitiser of record. Angular's own
+    // `[innerHTML]` pass has a narrower allowlist and would silently strip
+    // the SVG diagrams and inline styles (KaTeX layout) kept above.
+    return this.sanitizer.bypassSecurityTrustHtml(clean);
+  }
+
+  /**
+   * A same-document link (`#section`) resolves against `<base href="/">`, so
+   * the browser would leave the page for `/#section`. Scroll within the
+   * rendered document instead. The URL is left alone because the viewer also
+   * runs inside a drawer, where the host page's URL is not the document's.
+   */
+  protected followInPageLink(event: MouseEvent): void {
+    const link = event.target instanceof Element ? event.target.closest('a') : null;
+    // SVG exported from drawing tools may still use the older `xlink:href`.
+    const href = link?.getAttribute('href') ?? link?.getAttributeNS(XLINK_NAMESPACE, 'href');
+    if (!href?.startsWith('#') || href.length === 1) return;
+    event.preventDefault();
+    // Heading ids are slugs (`markdownSlug`), so the fragment needs no decoding.
+    this.scrollToAnchor(href.slice(1));
   }
 
   /** Post-render hook that injects a slug `id` attribute on every heading.

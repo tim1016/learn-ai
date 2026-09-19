@@ -1,5 +1,5 @@
 import { inject } from "@angular/core";
-import { Router, Routes, type RedirectFunction } from "@angular/router";
+import { Router, Routes, type RedirectFunction, type Route } from "@angular/router";
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
@@ -7,6 +7,26 @@ const loadBrokerLaneUnavailable = () =>
   import('./fleet/broker-lane-unavailable.component').then(
     (module) => module.BrokerLaneUnavailableComponent,
   );
+
+// A served document copies a canonical repo document; the copies listed in
+// `scripts/check_documentation_contract.py` fail CI when the two differ.
+const loadMarkdownDocPage = () =>
+  import('./components/docs/markdown-doc-page.component').then(
+    (module) => module.MarkdownDocPageComponent,
+  );
+
+// The page's inputs arrive as route data, so a missing key would bind
+// `undefined` and render a blank page; typing the data makes it a compile error.
+interface MarkdownDocRouteData {
+  readonly heading: string;
+  readonly src: `/assets/docs/${string}.md`;
+}
+
+const markdownDocRoute = (path: string, data: MarkdownDocRouteData): Route => ({
+  path,
+  loadComponent: loadMarkdownDocPage,
+  data,
+});
 
 // Shared by every legacy persisted-run URL (strategy-lab/runs/:id and the
 // older engine/runs/:id bookmark). Both must redirect straight to this same
@@ -250,27 +270,27 @@ export const routes: Routes = [
         (m) => m.researchLabRoutes
       ),
   },
-  {
-    path: "docs/indicator-reliability-methodology",
-    loadComponent: () =>
-      import("./components/docs/methodology-page.component").then(
-        (m) => m.MethodologyPageComponent
-      ),
-  },
-  {
-    path: "docs/signal-engine-methodology",
-    loadComponent: () =>
-      import("./components/docs/signal-engine-methodology-page.component").then(
-        (m) => m.SignalEngineMethodologyPageComponent
-      ),
-  },
-  {
-    path: "docs/ibkr-setup-guide",
-    loadComponent: () =>
-      import("./components/docs/ibkr-setup-guide-page.component").then(
-        (m) => m.IbkrSetupGuidePageComponent
-      ),
-  },
+  // Served copy of docs/architecture-manual.md.
+  markdownDocRoute("docs/architecture-manual", {
+    heading: "Architecture Manual",
+    src: "/assets/docs/architecture-manual.md",
+  }),
+  // Served copy of docs/indicator-reliability-methodology.md.
+  markdownDocRoute("docs/indicator-reliability-methodology", {
+    heading: "Indicator Reliability — Methodology",
+    src: "/assets/docs/indicator-reliability-methodology.md",
+  }),
+  // Served copy of docs/signal-engine-authority.md.
+  markdownDocRoute("docs/signal-engine-methodology", {
+    heading: "Signal Engine — Methodology",
+    src: "/assets/docs/signal-engine-methodology.md",
+  }),
+  // Operator-facing copy of docs/runbooks/ibkr-setup-guide.md. The two have
+  // drifted apart, so this pair is not yet in the parity list.
+  markdownDocRoute("docs/ibkr-setup-guide", {
+    heading: "IBKR Setup Guide",
+    src: "/assets/docs/ibkr-setup-guide.md",
+  }),
   {
     path: "legal/notices",
     loadComponent: () =>

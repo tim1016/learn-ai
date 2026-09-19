@@ -91,14 +91,20 @@
       margin-top: 0;
     }
 
+    // The global CSS reset removes list markers; a document's lists need them.
     ul,
     ol {
       margin: 0 0 12px;
       padding-left: 20px;
+      list-style: disc;
 
       li {
         margin-bottom: 4px;
       }
+    }
+
+    ol {
+      list-style: decimal;
     }
 
     code {
@@ -196,6 +202,159 @@
     .katex {
       color: var(--text-primary);
       font-size: 1em;
+    }
+
+    // Inline SVG diagrams. A document wraps each one in
+    // `<figure class="md-diagram">` and draws with the `dg-*` classes below,
+    // so diagrams take the app's palette instead of hard-coded colours.
+    figure.md-diagram {
+      margin: 16px 0 20px;
+      padding: 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+
+      svg {
+        display: block;
+        width: 100%;
+        min-width: 640px;
+        height: auto;
+        font-family: inherit;
+      }
+
+      figcaption {
+        margin-top: 10px;
+        font-size: 0.8rem;
+        color: var(--text-subtle);
+      }
+    }
+
+    .dg-box {
+      fill: var(--bg-elevated);
+      stroke: var(--border-strong);
+      stroke-width: 1.5;
+    }
+
+    .dg-box.dg-coord {
+      fill: var(--accent-faint);
+      stroke: var(--accent);
+    }
+
+    .dg-box.dg-live {
+      fill: var(--warn-soft);
+      stroke: var(--warn);
+    }
+
+    .dg-box.dg-paper {
+      fill: var(--info-soft);
+      stroke: var(--info);
+    }
+
+    .dg-box.dg-store {
+      fill: var(--bg-sunken);
+      stroke: var(--chart-series-violet);
+    }
+
+    .dg-box.dg-good {
+      fill: var(--bull-soft);
+      stroke: var(--bull);
+    }
+
+    .dg-box.dg-weak {
+      fill: var(--bear-soft);
+      stroke: var(--bear);
+    }
+
+    .dg-box.dg-outside {
+      fill: transparent;
+      stroke: var(--text-subtle);
+      stroke-dasharray: 5 4;
+    }
+
+    .dg-zone {
+      fill: none;
+      stroke: var(--border-strong);
+      stroke-width: 1;
+      stroke-dasharray: 3 4;
+    }
+
+    .dg-h {
+      fill: var(--text-primary);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .dg-t {
+      fill: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .dg-s {
+      fill: var(--text-subtle);
+      font-size: 11px;
+    }
+
+    .dg-label {
+      fill: var(--text-subtle);
+      font-size: 11px;
+      paint-order: stroke;
+      stroke: var(--bg-surface);
+      stroke-width: 4px;
+    }
+
+    .dg-flow {
+      fill: none;
+      stroke: var(--text-subtle);
+      stroke-width: 1.5;
+    }
+
+    .dg-flow.dg-data {
+      stroke: var(--info);
+    }
+
+    .dg-flow.dg-command {
+      stroke: var(--accent);
+    }
+
+    .dg-flow.dg-money {
+      stroke: var(--warn);
+    }
+
+    .dg-flow.dg-blocked {
+      stroke: var(--bear);
+      stroke-dasharray: 4 4;
+    }
+
+    // How strongly a seam's contract is enforced.
+    .dg-flow.dg-checked {
+      stroke: var(--bull);
+      stroke-width: 2;
+    }
+
+    .dg-flow.dg-tested {
+      stroke: var(--warn);
+      stroke-width: 2;
+    }
+
+    .dg-flow.dg-convention {
+      stroke: var(--text-subtle);
+      stroke-width: 2;
+      stroke-dasharray: 6 4;
+    }
+
+    .dg-arrowhead {
+      fill: context-stroke;
+    }
+
+    svg a {
+      cursor: pointer;
+
+      &:hover .dg-box,
+      &:focus-visible .dg-box {
+        stroke: var(--accent);
+        stroke-width: 2.5;
+      }
     }
 
     strong,

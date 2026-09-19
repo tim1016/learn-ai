@@ -52,6 +52,30 @@ FORBIDDEN_CURRENT_GUIDANCE = (
     "launch_eight_bot_paper_run.py",
 )
 
+# The app serves these documents from `Frontend/src/assets/docs/`. Each served
+# file is a byte-for-byte copy of its canonical repo document, so an edit to one
+# side without the other fails here instead of drifting silently.
+SERVED_DOCUMENT_COPIES = {
+    "docs/architecture-manual.md": "Frontend/src/assets/docs/architecture-manual.md",
+    "docs/indicator-reliability-methodology.md": (
+        "Frontend/src/assets/docs/indicator-reliability-methodology.md"
+    ),
+    "docs/signal-engine-authority.md": "Frontend/src/assets/docs/signal-engine-methodology.md",
+}
+
+# In the app, a repo-relative link resolves against the app's base URL and
+# leaves the page, so a served document should link into the repository on
+# GitHub instead. Those links name a repo path, which must still exist.
+REPOSITORY_BLOB_LINK = re.compile(
+    r"https://github\.com/tim1016/learn-ai/(?:blob|tree)/master/([^)\s#?\"'>]+)"
+)
+
+# Inline SVG diagrams in a served document draw with the viewer's `dg-*` /
+# `md-*` classes; a class the stylesheet does not define renders unstyled.
+DIAGRAM_STYLESHEET = "Frontend/src/app/shared/markdown-viewer/markdown-viewer.component.scss"
+DIAGRAM_CLASS = re.compile(r"(?<![\w-])(?:dg|md)-[\w-]+")
+CLASS_ATTRIBUTE = re.compile(r'class="([^"]*)"')
+
 ROOT_RELATIVE_LINK_PREFIXES = (
     ".claude/",
     "Backend/",
@@ -249,6 +273,39 @@ def _validate_retired_documentation(root: Path) -> list[str]:
     return errors
 
 
+def _validate_served_documents(root: Path) -> list[str]:
+    errors: list[str] = []
+    resolved_root = root.resolve()
+    stylesheet_path = root / DIAGRAM_STYLESHEET
+    stylesheet = stylesheet_path.read_text(encoding="utf-8") if stylesheet_path.exists() else ""
+    for canonical, served in SERVED_DOCUMENT_COPIES.items():
+        canonical_path = root / canonical
+        served_path = root / served
+        if not canonical_path.exists():
+            errors.append(f"served document has no canonical source: {canonical}")
+            continue
+        if not served_path.exists():
+            errors.append(f"{canonical}: served copy is missing: {served}")
+        elif served_path.read_bytes() != canonical_path.read_bytes():
+            errors.append(f"{served}: served copy differs from its canonical source {canonical}")
+        text = canonical_path.read_text(encoding="utf-8")
+        for target in REPOSITORY_BLOB_LINK.findall(text):
+            destination = (root / target).resolve()
+            if not destination.is_relative_to(resolved_root):
+                errors.append(f"{canonical}: GitHub link escapes the repository: {target}")
+            elif not destination.exists():
+                errors.append(f"{canonical}: GitHub link names a missing repo path: {target}")
+        used_classes = {
+            name
+            for attribute in CLASS_ATTRIBUTE.findall(text)
+            for name in DIAGRAM_CLASS.findall(attribute)
+        }
+        for name in sorted(used_classes):
+            if not re.search(rf"\.{re.escape(name)}(?![\w-])", stylesheet):
+                errors.append(f"{canonical}: diagram class .{name} is not defined in {DIAGRAM_STYLESHEET}")
+    return errors
+
+
 def validate_repository(root: Path) -> list[str]:
     """Return every deterministic documentation-contract violation."""
 
@@ -259,6 +316,7 @@ def validate_repository(root: Path) -> list[str]:
         *_validate_adr_index(root),
         *_validate_manifest_versions(root),
         *_validate_retired_documentation(root),
+        *_validate_served_documents(root),
     ]
 
 
