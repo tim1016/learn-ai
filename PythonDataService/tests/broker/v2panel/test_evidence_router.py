@@ -213,9 +213,9 @@ async def test_sqlite_evidence_filters_selected_effect_operation(app_and_tmp) ->
 
 
 async def _read_account_number_evidence(
-    app: FastAPI, tmp_path: Path, route_account: str
-) -> httpx.Response:
-    """Read evidence from an authority custodying Alpaca's uppercase account number."""
+    app: FastAPI, tmp_path: Path, *route_accounts: str
+) -> list[httpx.Response]:
+    """Read evidence, once per route spelling, from an authority custodying Alpaca's account number."""
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort(_ACCOUNT_NUMBER))  # type: ignore[arg-type]
     repo = _activate_sqlite(tmp_path, _ACCOUNT_NUMBER)
@@ -223,9 +223,12 @@ async def _read_account_number_evidence(
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            return await client.get(
-                f"/api/brokers/alpaca/accounts/{route_account}/bots/{SID}/evidence"
-            )
+            return [
+                await client.get(
+                    f"/api/brokers/alpaca/accounts/{route_account}/bots/{SID}/evidence"
+                )
+                for route_account in route_accounts
+            ]
     finally:
         repo.close()
 
@@ -240,7 +243,7 @@ async def test_evidence_reads_the_account_number_authority_on_the_canonical_rout
     """
     app, tmp_path = app_and_tmp
 
-    response = await _read_account_number_evidence(app, tmp_path, _CANONICAL_ROUTE_ACCOUNT)
+    (response,) = await _read_account_number_evidence(app, tmp_path, _CANONICAL_ROUTE_ACCOUNT)
 
     assert response.status_code == 200, response.text
     assert response.json()["account_id"] == _CANONICAL_ROUTE_ACCOUNT
@@ -251,10 +254,33 @@ async def test_evidence_reads_the_account_number_authority_on_the_canonical_rout
 
 
 @pytest.mark.asyncio
+async def test_evidence_audit_keeps_one_log_per_account_across_route_spellings(
+    app_and_tmp,
+) -> None:
+    """Both spellings append to one per-account log; each entry keeps its own route spelling."""
+    app, tmp_path = app_and_tmp
+
+    responses = await _read_account_number_evidence(
+        app, tmp_path, _ACCOUNT_NUMBER, _CANONICAL_ROUTE_ACCOUNT
+    )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    account_dirs = [path.name for path in (tmp_path / "accounts").iterdir()]
+    assert _CANONICAL_ROUTE_ACCOUNT in account_dirs
+    assert _ACCOUNT_NUMBER not in account_dirs
+    audit_log = tmp_path / "accounts" / _CANONICAL_ROUTE_ACCOUNT / "evidence_audit.jsonl"
+    recorded = [
+        json.loads(line)["account_id"]
+        for line in audit_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert recorded == [_ACCOUNT_NUMBER, _CANONICAL_ROUTE_ACCOUNT]
+
+
+@pytest.mark.asyncio
 async def test_evidence_refuses_a_foreign_route_account_with_a_typed_404(app_and_tmp) -> None:
     app, tmp_path = app_and_tmp
 
-    response = await _read_account_number_evidence(app, tmp_path, "pa9other0000")
+    (response,) = await _read_account_number_evidence(app, tmp_path, "pa9other0000")
 
     assert response.status_code == 404, response.text
     assert response.json()["detail"]["message"] == (

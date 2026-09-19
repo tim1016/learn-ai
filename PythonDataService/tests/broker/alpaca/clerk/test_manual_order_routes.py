@@ -268,6 +268,40 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
     assert port.asset_list_calls == 0
 
 
+async def _get_manual_capability(app: FastAPI, route_account: str) -> httpx.Response:
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.get(
+            f"/api/brokers/alpaca/accounts/{route_account}/manual-orders/capability",
+            headers=_headers(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_manual_capability_accepts_the_canonical_route_account(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    """The fleet forwards the lowercase account; custody keeps Alpaca's spelling (#2220)."""
+    app, _repo, _port, _health = api
+
+    response = await _get_manual_capability(app, ACCOUNT_ID.lower())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_capability_still_refuses_a_foreign_route_account(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, _repo, port, _health = api
+
+    response = await _get_manual_capability(app, "pa-other-route")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["reason"] == "sqlite_account_not_selected"
+    assert port.account_calls == 0
+
+
 @pytest.mark.asyncio
 async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
     api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],

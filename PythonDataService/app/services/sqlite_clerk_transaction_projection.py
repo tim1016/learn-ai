@@ -7,7 +7,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    is_shadow_account_id,
+)
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -281,7 +284,10 @@ def _active_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
         if (
             failure is not None
             and failure.activation_detected
-            and failure.account_id == account_id
+            and failure.account_id is not None
+            and account_route_matches_custody(
+                account_id, failure.account_id, shadow=is_shadow_account_id(failure.account_id),
+            )
         ):
             raise ClerkTransactionProjectionUnavailable(
                 "The selected SQLite Clerk authority is unavailable after startup failure."

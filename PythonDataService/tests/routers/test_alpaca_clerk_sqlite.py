@@ -419,6 +419,54 @@ async def test_failed_activated_authority_exposes_typed_account_recovery_state()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custody_account_id",
+    [ACCOUNT_NUMBER, f"shadow:{ACCOUNT_NUMBER}"],
+    ids=["real_paper", "shadow"],
+)
+async def test_failed_authority_snapshot_matches_the_route_account_canonically(
+    custody_account_id: str,
+) -> None:
+    """The failed authority's projection answers the canonical route (#2220).
+
+    A foreign account gets no failed projection; it falls through to the
+    route family's typed 503 for an unavailable authority.
+    """
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="unavailable",
+            startup_failure=ClerkStartupFailure(
+                reason_code="SQLITE_CLERK_STARTUP_FAILED",
+                account_id=custody_account_id,
+                scope="ACCOUNT_CLERK",
+                impact="Broker-mutating Alpaca Clerk capability is not installed.",
+                recovery="The activated database failed integrity verification.",
+                observed_at_ms=1_700_000_000_000,
+                activation_detected=True,
+            ),
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with _client(app) as client:
+            own = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{CANONICAL_ROUTE_ACCOUNT}/snapshot"
+            )
+            foreign = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{FOREIGN_ROUTE_ACCOUNT}/snapshot"
+            )
+    finally:
+        set_active_clerk_runtime(None)
+
+    assert own.status_code == 200, own.text
+    assert own.json()["authority_health"] == "failed"
+    assert own.json()["account_id"] == custody_account_id
+    assert foreign.status_code == 503, foreign.text
+    assert foreign.json()["detail"]["reason"] == "sqlite_clerk_startup_failed"
+
+
+@pytest.mark.asyncio
 async def test_start_then_get_returns_the_command_resource(api: FastAPI) -> None:
     async with _client(api) as client:
         start = await client.post(

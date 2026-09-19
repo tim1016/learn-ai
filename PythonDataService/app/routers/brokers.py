@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
+from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -249,7 +250,9 @@ async def _run[T](broker: str, call: Callable[[BrokerReadPort], Awaitable[T]]) -
 def _require_sqlite_manual_facade(account_id: str) -> SqliteAlpacaClerkFacade:
     """Resolve the only authority permitted to mutate a manual ticket."""
     facade = _require_sqlite_facade("alpaca")
-    if facade.account_id != account_id:
+    # ``shadow=False``: whether manual orders run under Shadow is a separate
+    # product decision (#2220); only the account-number case is matched here.
+    if not account_route_matches_custody(account_id, facade.account_id, shadow=False):
         raise HTTPException(
             status_code=404,
             detail={

@@ -21,7 +21,10 @@ import threading
 from pathlib import Path
 from typing import Final
 
-from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    canonical_alpaca_account_id,
+)
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
@@ -227,7 +230,11 @@ def _audit_log_path(account_id: str) -> Path:
     # Deployment bootstrap, read credential-free: appending an audit entry
     # must not depend on a credential pair being present (ADR 0060 D7).
     root = resolve_clerk_dir()
-    safe_account = "".join(c for c in account_id if c.isalnum() or c in "-_.")
+    # One log per account whatever the route's spelling; each entry still
+    # records the spelling the operator read through.
+    safe_account = "".join(
+        c for c in canonical_alpaca_account_id(account_id) if c.isalnum() or c in "-_."
+    )
     return root / "accounts" / safe_account / "evidence_audit.jsonl"
 
 
