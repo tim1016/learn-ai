@@ -219,6 +219,12 @@ export class BotTriageDetailComponent {
       this.panelService.getLiveChart(params.target, params.sid, params.resolution),
   });
 
+  /**
+   * The bridge cares only whether this pane has a current view, not which
+   * immutable panel snapshot produced it. Keeping that distinction boolean
+   * prevents every poll response from tearing down and recreating the host.
+   */
+  private readonly hasView = computed(() => this.view() !== null);
   private lensUnregister: (() => void) | null = null;
 
   constructor() {
@@ -270,7 +276,7 @@ export class BotTriageDetailComponent {
     // bot to show (not the placeholder or error states).
     effect(() => {
       this.lensUnregister?.();
-      this.lensUnregister = this.view() !== null
+      this.lensUnregister = this.hasView()
         ? this.lensBridge.register({
           lens: this.lens,
           select: (lens) => this.selectLens(lens),
