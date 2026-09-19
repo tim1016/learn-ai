@@ -21,6 +21,11 @@ path's ``clerk_id``), refusing a token that is valid for one clerk but
 presented alongside another clerk's identity. ``RemotePresence`` has sent
 this header on every one of its calls since commit 318c92e2, so the check
 applies uniformly rather than through a per-route opt-in (issue #2204).
+
+Issue #2206: ``history_batch`` additionally selects, only under the Compose
+qualification gate, a recorded provider in place of the real Polygon walk --
+see that route's own docstring and
+``app.services.broker_v2_panel.qualification_recorded_history``.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ import json
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -41,9 +46,14 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
-from app.config import settings
+from app.config import fleet_settings, settings
+from app.routers.fleet_qualification import is_qualification_coordinator_lane_from_environment
 from app.schemas.fleet_history_batch import HistoryBatchRequest, HistoryBatchResponse
 from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
+from app.services.broker_v2_panel.qualification_recorded_history import (
+    RecordedHistoryInjectedUnavailable,
+    build_qualification_recorded_history_batch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,10 +330,35 @@ async def history_batch(
     failure degrades into a canonical ``polygon_*`` notice with no bars
     (issue #2203) rather than a non-200 status: the Clerk always gets a
     completed batch back on success, whether healthy or vendor-degraded.
+
+    Issue #2206: under the Compose qualification gate only (this process's
+    role, the ceremony's random namespace, and its minted probe secret --
+    ``is_qualification_coordinator_lane_from_environment``), this is the
+    complete-batch seam where the qualification-only recorded provider is
+    selected instead -- the placeholder Polygon key qualification boots with
+    can never prove a real vendor success. The recorded provider's own
+    injected-unavailable mode raises
+    :class:`RecordedHistoryInjectedUnavailable`, translated here into a 503:
+    an "unexpected coordinator response" the real
+    ``RemoteHistoryBatchClient`` already converts into the stable
+    ``coordinator_unavailable`` notice (FR-010), so no second failure
+    vocabulary is needed for a qualification-only fault.
     """
     _authorized_agent(
         request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
     )
+    if is_qualification_coordinator_lane_from_environment(
+        fleet_settings.ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+    ):
+        try:
+            return await build_qualification_recorded_history_batch(
+                symbol=payload.symbol,
+                timeframe=payload.timeframe,
+                required_bar_count=payload.required_bar_count,
+                as_of_ms=payload.as_of_ms,
+            )
+        except RecordedHistoryInjectedUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
     return await build_coordinator_history_batch(
         symbol=payload.symbol,
         timeframe=payload.timeframe,

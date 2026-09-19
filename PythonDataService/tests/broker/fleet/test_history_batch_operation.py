@@ -168,6 +168,111 @@ def test_route_is_excluded_from_the_public_schema() -> None:
     assert all(getattr(route, "include_in_schema", True) is False for route in matching)
 
 
+# ---- issue #2206: the qualification-only recorded provider selection --------
+
+
+@pytest.fixture(autouse=True)
+def _reset_recorded_history_mode() -> None:
+    from app.services.broker_v2_panel.qualification_recorded_history import (
+        reset_recorded_history_mode_for_testing,
+    )
+
+    reset_recorded_history_mode_for_testing()
+    yield
+    reset_recorded_history_mode_for_testing()
+
+
+def _arm_qualification_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fleet_settings, "ROLE", "fleet_coordinator")
+    monkeypatch.setattr(fleet_settings, "DEPLOYMENT_NAMESPACE", "compose:fleetqualificationabc123")
+    monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "qualification-probe-secret")
+
+
+async def test_qualification_gate_selects_the_recorded_provider_over_a_missing_polygon_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact gap issue #2206 closes: qualification's placeholder Polygon
+    key can never answer real bars, but the recorded provider must -- proven
+    with the real internal route, not by calling the provider function
+    directly."""
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "")  # the qualification placeholder's shape
+    _arm_qualification_gate(monkeypatch)
+    app = _build_app({_CLERK_ID: _TOKEN})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            _PATH,
+            json=_payload(),
+            headers={"X-Fleet-Clerk-Id": _CLERK_ID, "X-Fleet-Agent-Token": _TOKEN},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overlay_notices"] == []
+    assert len(body["bars"]) > 0
+    assert all(bar["source"] == "polygon" for bar in body["bars"])
+
+
+async def test_qualification_gate_unavailable_mode_becomes_a_non_200_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.broker_v2_panel.qualification_recorded_history import (
+        set_recorded_history_mode,
+    )
+
+    _arm_qualification_gate(monkeypatch)
+    set_recorded_history_mode("unavailable")
+    app = _build_app({_CLERK_ID: _TOKEN})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            _PATH,
+            json=_payload(),
+            headers={"X-Fleet-Clerk-Id": _CLERK_ID, "X-Fleet-Agent-Token": _TOKEN},
+        )
+
+    # A non-200 from the internal route is exactly what
+    # RemoteHistoryBatchClient.fetch_batch already converts into the stable
+    # coordinator_unavailable notice (FR-010) -- no second failure vocabulary.
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "role,namespace,secret",
+    [
+        ("fleet_coordinator", "host:local", "qualification-probe-secret"),  # wrong namespace
+        ("combined", "compose:fleetqualificationabc123", "qualification-probe-secret"),  # wrong role
+        ("fleet_coordinator", "compose:fleetqualificationabc123", ""),  # no secret
+    ],
+)
+async def test_dev_and_production_cannot_select_the_recorded_provider(
+    monkeypatch: pytest.MonkeyPatch, role: str, namespace: str, secret: str
+) -> None:
+    """Prove the gate closes, not merely assert it exists in a comment: with
+    any single guard missing, an empty Polygon key must still degrade to the
+    production notice, never recorded bars."""
+    monkeypatch.setattr(settings, "POLYGON_API_KEY", "")
+    monkeypatch.setattr(fleet_settings, "ROLE", role)
+    monkeypatch.setattr(fleet_settings, "DEPLOYMENT_NAMESPACE", namespace)
+    if secret:
+        monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", secret)
+    else:
+        monkeypatch.delenv("FLEET_QUALIFICATION_PROBE_SECRET", raising=False)
+    app = _build_app({_CLERK_ID: _TOKEN})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            _PATH,
+            json=_payload(),
+            headers={"X-Fleet-Clerk-Id": _CLERK_ID, "X-Fleet-Agent-Token": _TOKEN},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bars"] == []
+    assert [notice["code"] for notice in body["overlay_notices"]] == ["polygon_api_key_missing"]
+
+
 @pytest.mark.slow
 def test_route_is_absent_outside_the_coordinator_role() -> None:
     """Mounts only under the coordinator role -- keyed on ``FLEET_ROLE``,

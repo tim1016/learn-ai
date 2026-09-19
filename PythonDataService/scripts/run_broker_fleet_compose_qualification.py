@@ -167,9 +167,14 @@ def _request_json(
     method: str = "GET",
     timeout_s: float = 3.0,
     headers: dict[str, str] | None = None,
+    json_body: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Call one test-only HTTP endpoint without inheriting proxy settings."""
-    request = urllib.request.Request(url, method=method, headers=headers or {})
+    data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+    request_headers = dict(headers or {})
+    if data is not None:
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, method=method, headers=request_headers)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(request, timeout=timeout_s) as response:
@@ -213,10 +218,17 @@ def _json_handler(
     return Handler
 
 
+#: The fake providers' account numbers (referenced by the recorded-history
+#: ceremony steps too, so the Paper account_id used to drive the public
+#: chart-history route can never drift from what the fake provider answers).
+_PAPER_ACCOUNT_NUMBER = "PAQUALIFICATION"
+_LIVE_ACCOUNT_NUMBER = "LQUALIFICATION"
+
+
 def _run_fake_provider() -> int:
     provider = os.environ.get("FLEET_PROBE_PROVIDER", "unknown")
     port = 8011 if provider == "paper" else 8012
-    account_number = "PAQUALIFICATION" if provider == "paper" else "LQUALIFICATION"
+    account_number = _PAPER_ACCOUNT_NUMBER if provider == "paper" else _LIVE_ACCOUNT_NUMBER
     _serve_json(
         port,
         _json_handler(
@@ -269,13 +281,14 @@ def _run_fake_market_data() -> int:
     return 0
 
 
-def _qualification_local_call(path: str) -> tuple[int, dict[str, Any]]:
+def _qualification_local_call(path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
     """Call the already-running clerk ASGI process through its loopback socket."""
     secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
     if not secret:
         raise QualificationError("Qualification client has no per-run probe secret.")
     return _request_json(
         f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
+        method=method,
         headers={"X-Fleet-Qualification-Secret": secret},
         timeout_s=4.0,
     )
@@ -290,13 +303,14 @@ def _qualification_declared_read(path: str) -> tuple[int, dict[str, Any]]:
     return _request_json(f"http://127.0.0.1:8000{path}", headers=headers, timeout_s=4.0)
 
 
-def _qualification_local_hold(path: str) -> int:
+def _qualification_local_hold(path: str, *, method: str = "GET") -> int:
     """Consume a held response whose body may be SSE rather than JSON."""
     secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
     if not secret:
         raise QualificationError("Qualification client has no per-run probe secret.")
     request = urllib.request.Request(
         f"http://127.0.0.1:8000/internal/fleet-qualification{path}",
+        method=method,
         headers={"X-Fleet-Qualification-Secret": secret},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -321,13 +335,22 @@ def _run_dependency_client(kind: str) -> int:
     return 0
 
 
+#: ``/hold/request`` and ``/hold/stream`` are ``GET`` (the request/stream
+#: pools); ``/hold/command`` (issue #2206) must be ``POST`` on a path other
+#: than the internal history-batch route so the deployed
+#: ``FleetLaneRuntimeMiddleware`` classifies it into the command pool
+#: (``_requires_command_capacity``) instead.
+_HOLD_METHODS: dict[str, str] = {"request": "GET", "stream": "GET", "command": "POST"}
+
+
 def _run_capacity_client(kind: str) -> int:
     """Contend against the deployed Paper ASGI middleware, never a fresh instance."""
     path = f"/hold/{kind}"
+    method = _HOLD_METHODS[kind]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        first = executor.submit(_qualification_local_hold, path)
+        first = executor.submit(_qualification_local_hold, path, method=method)
         time.sleep(0.15)
-        second = _qualification_local_call(path)
+        second = _qualification_local_call(path, method=method)
         first_status = first.result(timeout=4.0)
     if first_status != HTTPStatus.OK:
         raise QualificationError(f"Running Paper {kind} hold did not enter the service.")
@@ -401,22 +424,33 @@ def _assert_coordinator_mount_isolation(inspect: dict[str, Any], lane_sources: s
             raise QualificationError("Coordinator exposes a lane source or custody destination.")
 
 
-def _exec_probe(compose: ComposeCommand, project: str, service: str, path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
+def _exec_probe(
+    compose: ComposeCommand,
+    project: str,
+    service: str,
+    path: str,
+    *,
+    method: str = "GET",
+    json_body: dict[str, Any] | None = None,
+    with_qualification_secret: bool = False,
+) -> tuple[int, dict[str, Any]]:
     target = path if path.startswith("http://") or path.startswith("https://") else f"http://localhost:8000{path}"
-    result = compose.run(
-        project,
-        [
-            "exec",
-            "-T",
-            service,
-            "python",
-            "/app/scripts/run_broker_fleet_compose_qualification.py",
-            "--call-url",
-            target,
-            "--call-method",
-            method,
-        ],
-    )
+    args = [
+        "exec",
+        "-T",
+        service,
+        "python",
+        "/app/scripts/run_broker_fleet_compose_qualification.py",
+        "--call-url",
+        target,
+        "--call-method",
+        method,
+    ]
+    if json_body is not None:
+        args.extend(["--call-body", json.dumps(json_body)])
+    if with_qualification_secret:
+        args.append("--call-with-qualification-secret")
+    result = compose.run(project, args)
     payload = json.loads(result.stdout)
     if not isinstance(payload, dict) or not isinstance(payload.get("status"), int):
         raise QualificationError(f"{service} returned malformed probe evidence.")
@@ -543,12 +577,21 @@ def _host_ceremony(compose: ComposeCommand, project: str, temporary_dir: Path) -
             "FLEET_COORDINATOR_SERVICE_TOKENS_JSON": json.dumps(
                 {entry["clerk_id"]: entry["coordinator_service_token"] for entry in lanes.values()}, separators=(",", ":")
             ),
+            # Issue #2206: the coordinator's own recorded-history seam is
+            # gated by this same per-run secret, mirroring how each lane
+            # below already carries it for the clerk-side qualification hooks.
+            "FLEET_QUALIFICATION_PROBE_SECRET": probe_secret,
         },
     )
     runtime_environment = _qualification_runtime_environment(
         coordinator_env=coordinator_env,
         deployment_namespace=deployment_namespace,
     )
+    # Carried on the returned ``ComposeCommand`` purely so
+    # ``run_host_qualification`` can read it back for its own direct
+    # (non-``compose exec``) calls to the coordinator's qualification-only
+    # surface -- no compose file references this variable.
+    runtime_environment["FLEET_QUALIFICATION_PROBE_SECRET"] = probe_secret
     for lane, entry in lanes.items():
         lane_env = temporary_dir / f"{lane}.env"
         _write_env(
@@ -658,6 +701,136 @@ def _dependency_probe(
     if not isinstance(status, int) or not isinstance(body, dict):
         raise QualificationError(f"{service} dependency probe returned malformed evidence.")
     return status, body
+
+
+#: Issue #2206's recorded-history ceremony identities. An arbitrary but fixed
+#: strategy-instance id and symbol -- the recorded provider is deterministic
+#: given ``(symbol, bar_start_ms)``, so any symbol works; a fixed one keeps
+#: the seed idempotent-in-spirit across a single ceremony run.
+_RECORDED_HISTORY_SID = "qualification-recorded-history-bot"
+_RECORDED_HISTORY_SYMBOL = "QUALHIST"
+_RECORDED_HISTORY_TIMEFRAME = "1d"
+
+
+def _history_chart_url(coordinator_url: str, *, clerk_id: str, account_id: str, sid: str, timeframe: str) -> str:
+    """The coordinator's public catalog route for one bot's chart history.
+
+    ``/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/history``
+    -- the exact ``bot_chart_history`` ``ProviderOperation`` path template
+    (``app.broker.alpaca.clerk.fleet_adapter``) prefixed by
+    ``broker_clerks.py``'s ``_CLERK_SCOPE``. Calling this (not the internal
+    ``/internal/fleet/history/batch`` route) is what makes the ceremony a
+    genuine browser -> coordinator -> Clerk -> coordinator round trip
+    (issue #2206 acceptance criterion 1): the coordinator forwards to the
+    Clerk, whose own history assembly calls back into the coordinator's
+    internal history-batch operation to get bars.
+    """
+    return (
+        f"{coordinator_url}/api/brokers/alpaca/clerks/{clerk_id}/accounts/{account_id}"
+        f"/bots/{sid}/chart/history?timeframe={timeframe}"
+    )
+
+
+def _set_recorded_history_mode(coordinator_url: str, qualification_secret: str, mode: str) -> None:
+    """Arm the coordinator's recorded-history provider (issue #2206)."""
+    status, body = _request_json(
+        f"{coordinator_url}/internal/fleet-qualification-history/mode",
+        method="POST",
+        headers={"X-Fleet-Qualification-Secret": qualification_secret},
+        json_body={"mode": mode},
+    )
+    if status != HTTPStatus.OK or body.get("mode") != mode:
+        raise QualificationError(f"Coordinator refused recorded-history mode {mode!r}: {status} {body!r}")
+
+
+def _recorded_history_ceremony(
+    compose: ComposeCommand,
+    project: str,
+    *,
+    coordinator_url: str,
+    control_headers: dict[str, str],
+    qualification_secret: str,
+    paper_clerk_id: str,
+    timeout_s: float,
+) -> dict[str, Any]:
+    """Prove issue #2206's recorded-history provider end to end.
+
+    Drives the Clerk's real public chart-history route (never the internal
+    operation directly) through five steps: seed one minimal strategy
+    instance, a healthy read, an injected-unavailable read, a recovered
+    read after an explicit retry, and a slow read held in flight long
+    enough to prove a concurrent command is still admitted through its own
+    pool (issue #2204's split) rather than starved behind the occupied
+    request pool.
+    """
+    seed_status, seed_body = _exec_probe(
+        compose,
+        project,
+        "alpaca-paper-clerk",
+        "/internal/fleet-qualification/seed-bot",
+        method="POST",
+        json_body={"strategy_instance_id": _RECORDED_HISTORY_SID, "symbol": _RECORDED_HISTORY_SYMBOL},
+        with_qualification_secret=True,
+    )
+    if seed_status != HTTPStatus.OK or seed_body.get("seeded") != "strategy_instance":
+        raise QualificationError(f"Paper did not seed its qualification chart-history bot: {seed_status} {seed_body!r}")
+
+    url = _history_chart_url(
+        coordinator_url,
+        clerk_id=paper_clerk_id,
+        account_id=_PAPER_ACCOUNT_NUMBER,
+        sid=_RECORDED_HISTORY_SID,
+        timeframe=_RECORDED_HISTORY_TIMEFRAME,
+    )
+
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "healthy")
+    healthy_status, healthy_body = _request_json(url, headers=control_headers, timeout_s=timeout_s)
+    if healthy_status != HTTPStatus.OK or not healthy_body.get("bars"):
+        raise QualificationError(f"Healthy recorded-history request returned no candles: {healthy_status} {healthy_body!r}")
+    if any(bar.get("source") != "polygon" for bar in healthy_body["bars"]):
+        raise QualificationError("Healthy recorded-history bars were not all source='polygon'.")
+
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "unavailable")
+    failed_status, failed_body = _request_json(url, headers=control_headers, timeout_s=timeout_s)
+    notices = failed_body.get("overlay_notices") or []
+    if failed_status != HTTPStatus.OK or failed_body.get("bars"):
+        raise QualificationError(f"Injected-unavailable request unexpectedly returned bars: {failed_status} {failed_body!r}")
+    if not any(notice.get("code") == "coordinator_unavailable" for notice in notices):
+        raise QualificationError(f"Injected-unavailable request did not settle on coordinator_unavailable: {notices!r}")
+
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "healthy")
+    recovered_status, recovered_body = _request_json(url, headers=control_headers, timeout_s=timeout_s)
+    if recovered_status != HTTPStatus.OK or not recovered_body.get("bars"):
+        raise QualificationError(f"Explicit retry after recovery returned no candles: {recovered_status} {recovered_body!r}")
+
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "slow")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        slow_call = executor.submit(_request_json, url, headers=control_headers, timeout_s=timeout_s)
+        time.sleep(0.3)
+        command_status, command_body = _exec_probe(
+            compose,
+            project,
+            "alpaca-paper-clerk",
+            "/internal/fleet-qualification/hold/command",
+            method="POST",
+            with_qualification_secret=True,
+        )
+        slow_status, slow_body = slow_call.result(timeout=timeout_s)
+    _set_recorded_history_mode(coordinator_url, qualification_secret, "healthy")
+    if command_status != HTTPStatus.OK or command_body.get("held") != "command":
+        raise QualificationError(
+            f"A command was not admitted while a history read was held in flight: {command_status} {command_body!r}"
+        )
+    if slow_status != HTTPStatus.OK or not slow_body.get("bars"):
+        raise QualificationError(f"The held slow history read did not itself complete: {slow_status} {slow_body!r}")
+
+    return {
+        "healthy_bar_count": len(healthy_body["bars"]),
+        "injected_unavailable_notice_codes": [notice.get("code") for notice in notices],
+        "recovered_bar_count": len(recovered_body["bars"]),
+        "command_admitted_while_history_read_in_flight": True,
+        "held_history_read_bar_count": len(slow_body["bars"]),
+    }
 
 
 def _wait_for_paper_refusal(compose: ComposeCommand, project: str, timeout_s: float) -> dict[str, object]:
@@ -782,6 +955,10 @@ def run_host_qualification(
             if not isinstance(live_clerk, dict):
                 raise QualificationError("Actual coordinator directory does not contain the Live qualification lane.")
             live_id = str(live_clerk["clerk_id"])
+            paper_clerk = next((entry for entry in clerks if entry.get("display_label") == "Qualification paper"), None)
+            if not isinstance(paper_clerk, dict):
+                raise QualificationError("Actual coordinator directory does not contain the Paper qualification lane.")
+            paper_id = str(paper_clerk["clerk_id"])
             mutation_status, mutation_refusal = _request_json(
                 f"{coordinator_url}/api/brokers/alpaca/clerks/{live_id}/orders",
                 method="POST",
@@ -857,6 +1034,20 @@ def run_host_qualification(
                 ),
             )
             faults["stream_saturation"]["probe"] = stream_probe
+
+            evidence["stage"] = "recorded_history"
+            qualification_secret = str(compose.environment.get("FLEET_QUALIFICATION_PROBE_SECRET", "")) if compose.environment else ""
+            if not qualification_secret:
+                raise QualificationError("Compose environment lost its qualification probe secret before the recorded-history stage.")
+            evidence["recorded_history"] = _recorded_history_ceremony(
+                compose,
+                project,
+                coordinator_url=coordinator_url,
+                control_headers=directory_headers,
+                qualification_secret=qualification_secret,
+                paper_clerk_id=paper_id,
+                timeout_s=timeout_s,
+            )
 
             evidence["stage"] = "volume_marker_poison_mismount_refusal"
             compose.run(project, ["kill", "alpaca-paper-clerk"])
@@ -936,11 +1127,17 @@ def _assert_no_custody_root(root: Path) -> dict[str, object]:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container-role", choices=("fake-provider", "fake-market-data", "capacity-client", "dependency-client"))
-    parser.add_argument("--capacity-kind", choices=("request", "stream"))
+    parser.add_argument("--capacity-kind", choices=("request", "stream", "command"))
     parser.add_argument("--dependency-kind", choices=("broker", "market-data"))
     parser.add_argument("--health-url")
     parser.add_argument("--call-url")
     parser.add_argument("--call-method", choices=("GET", "POST"), default="GET")
+    parser.add_argument("--call-body", help="A JSON object sent as the request body.")
+    parser.add_argument(
+        "--call-with-qualification-secret",
+        action="store_true",
+        help="Attach X-Fleet-Qualification-Secret from FLEET_QUALIFICATION_PROBE_SECRET.",
+    )
     parser.add_argument("--assert-no-custody-root", type=Path)
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--timeout-s", type=float, default=90.0)
@@ -966,7 +1163,16 @@ def main(argv: list[str] | None = None) -> int:
         status, _body = _request_json(args.health_url)
         return 0 if status == HTTPStatus.OK else 1
     if args.call_url:
-        status, body = _request_json(args.call_url, method=args.call_method)
+        headers: dict[str, str] = {}
+        if args.call_with_qualification_secret:
+            secret = os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", "")
+            if not secret:
+                raise QualificationError("This container has no qualification probe secret.")
+            headers["X-Fleet-Qualification-Secret"] = secret
+        json_body = json.loads(args.call_body) if args.call_body else None
+        status, body = _request_json(
+            args.call_url, method=args.call_method, headers=headers, json_body=json_body
+        )
         sys.stdout.write(json.dumps({"status": status, "body": body}, sort_keys=True) + "\n")
         return 0
     if args.assert_no_custody_root:

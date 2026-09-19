@@ -1292,6 +1292,20 @@ if _FLEET_COORDINATOR_SURFACE:
 
     app.include_router(internal_fleet_router.router)
 
+    # Compose qualification is an opt-in coordinator-only surface (issue
+    # #2206), sibling to the clerk-only one above: absent from normal and
+    # dev/production coordinator processes, present only under the same
+    # random ceremony namespace and per-run probe secret.
+    from app.routers.fleet_qualification_history import (
+        qualification_history_router_from_environment,
+    )
+
+    _fleet_qualification_history_router = qualification_history_router_from_environment(
+        _FLEET_ROLE, fleet_settings.DEPLOYMENT_NAMESPACE
+    )
+    if _fleet_qualification_history_router is not None:
+        app.include_router(_fleet_qualification_history_router)
+
     # The public clerk-scoped routing surface (fleet delivery B): one route
     # per catalog operation, forwarding through the lane router with the
     # §10.3 envelope and §10.4 refusal families. A clerk agent mounts none

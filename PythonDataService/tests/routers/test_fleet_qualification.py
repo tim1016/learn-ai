@@ -26,8 +26,13 @@ def test_qualification_router_is_absent_without_each_strict_guard() -> None:
     assert qualification_router(role="clerk_agent", namespace="compose:fleetqualificationx", secret="s", broker_url="http://fake", market_data_url="") is None
 
 
-def test_qualification_router_has_no_mutation_or_provider_registration_route() -> None:
-    """The opt-in surface is read-only observation and held ASGI work only."""
+def test_qualification_router_has_no_execution_operation() -> None:
+    """The opt-in surface is observation, held ASGI work, and a narrow
+    fixture seed only -- never an order, fill, or position (issue #2206
+    widens this from the original "read-only, no POST" invariant to add
+    the command-pool probe and the recorded-history bot seed, both still
+    behind this router's own secret gate and neither an execution op).
+    """
     router = qualification_router(
         role="clerk_agent",
         namespace="compose:fleetqualificationx",
@@ -41,8 +46,64 @@ def test_qualification_router_has_no_mutation_or_provider_registration_route() -
         "/internal/fleet-qualification/dependency/market-data",
         "/internal/fleet-qualification/hold/request",
         "/internal/fleet-qualification/hold/stream",
+        "/internal/fleet-qualification/hold/command",
+        "/internal/fleet-qualification/seed-bot",
     }
-    assert all("POST" not in route.methods for route in router.routes)
+
+
+def test_qualification_hold_command_route_is_a_post() -> None:
+    """Issue #2206: must be POST so the deployed middleware's method-based
+    split (``_requires_command_capacity``) classifies it into the command
+    pool rather than the request pool."""
+    router = qualification_router(
+        role="clerk_agent",
+        namespace="compose:fleetqualificationx",
+        secret="qualification-secret",
+        broker_url="http://fake",
+        market_data_url="http://market",
+    )
+    assert router is not None
+    routes = {route.path: route for route in router.routes}
+    assert routes["/internal/fleet-qualification/hold/command"].methods == {"POST"}
+    assert routes["/internal/fleet-qualification/seed-bot"].methods == {"POST"}
+    assert routes["/internal/fleet-qualification/hold/request"].methods == {"GET"}
+
+
+def test_is_qualification_coordinator_lane_requires_every_guard() -> None:
+    """Mirrors ``_is_qualification_lane``'s guard shape for the coordinator role."""
+    from app.routers.fleet_qualification import is_qualification_coordinator_lane
+
+    assert is_qualification_coordinator_lane(
+        role="fleet_coordinator", namespace="compose:fleetqualificationx", secret="s"
+    ) is True
+    assert is_qualification_coordinator_lane(
+        role="combined", namespace="compose:fleetqualificationx", secret="s"
+    ) is False
+    assert is_qualification_coordinator_lane(
+        role="clerk_agent", namespace="compose:fleetqualificationx", secret="s"
+    ) is False
+    assert is_qualification_coordinator_lane(
+        role="fleet_coordinator", namespace="host:local", secret="s"
+    ) is False
+    assert is_qualification_coordinator_lane(
+        role="fleet_coordinator", namespace="compose:fleetqualificationx", secret=""
+    ) is False
+
+
+def test_is_qualification_coordinator_lane_from_environment_reads_the_probe_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.routers.fleet_qualification import is_qualification_coordinator_lane_from_environment
+
+    monkeypatch.delenv("FLEET_QUALIFICATION_PROBE_SECRET", raising=False)
+    assert is_qualification_coordinator_lane_from_environment(
+        "fleet_coordinator", "compose:fleetqualificationx"
+    ) is False
+
+    monkeypatch.setenv("FLEET_QUALIFICATION_PROBE_SECRET", "minted-secret")
+    assert is_qualification_coordinator_lane_from_environment(
+        "fleet_coordinator", "compose:fleetqualificationx"
+    ) is True
 
 
 def test_qualification_probe_routes_declare_strict_success_and_failure_models() -> None:
@@ -65,6 +126,101 @@ def test_qualification_probe_routes_declare_strict_success_and_failure_models() 
     assert QualificationMarketDependencyAvailable.model_json_schema()["additionalProperties"] is False
     assert QualificationMarketDependencyUnavailable.model_json_schema()["additionalProperties"] is False
     assert QualificationHoldRequestResponse.model_json_schema()["additionalProperties"] is False
+
+
+async def test_seed_bot_requires_the_secret_header() -> None:
+    """Issue #2206: the seed-bot hook is behind the same per-run secret as
+    every other qualification hook, even though it now writes SQLite."""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    router = qualification_router(
+        role="clerk_agent",
+        namespace="compose:fleetqualificationx",
+        secret="s3cr3t",
+        broker_url="http://fake",
+        market_data_url="http://market",
+    )
+    assert router is not None
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/internal/fleet-qualification/seed-bot",
+            json={"strategy_instance_id": "bot", "symbol": "SPY"},
+        )
+
+    assert response.status_code == 404
+
+
+async def test_seed_bot_registers_a_strategy_instance_against_the_active_facade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    calls: dict[str, object] = {}
+
+    class FakeRepository:
+        def register_strategy_instance(self, **kwargs: object) -> None:
+            calls.update(kwargs)
+
+    class FakeFacade:
+        repository = FakeRepository()
+
+    monkeypatch.setattr(qualification, "active_sqlite_facade", lambda broker: FakeFacade())
+    router = qualification_router(
+        role="clerk_agent",
+        namespace="compose:fleetqualificationx",
+        secret="s3cr3t",
+        broker_url="http://fake",
+        market_data_url="http://market",
+    )
+    assert router is not None
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/internal/fleet-qualification/seed-bot",
+            json={"strategy_instance_id": "qualification-bot", "symbol": "QUALHIST"},
+            headers={"X-Fleet-Qualification-Secret": "s3cr3t"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"seeded": "strategy_instance"}
+    assert calls["strategy_instance_id"] == "qualification-bot"
+    assert calls["symbol"] == "QUALHIST"
+
+
+async def test_seed_bot_returns_503_without_an_active_sqlite_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    monkeypatch.setattr(qualification, "active_sqlite_facade", lambda broker: None)
+    router = qualification_router(
+        role="clerk_agent",
+        namespace="compose:fleetqualificationx",
+        secret="s3cr3t",
+        broker_url="http://fake",
+        market_data_url="http://market",
+    )
+    assert router is not None
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/internal/fleet-qualification/seed-bot",
+            json={"strategy_instance_id": "qualification-bot", "symbol": "QUALHIST"},
+            headers={"X-Fleet-Qualification-Secret": "s3cr3t"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "qualification_sqlite_authority_unavailable"
 
 
 def test_install_qualification_bindings_default_off_leaves_registry_and_consumer_untouched(

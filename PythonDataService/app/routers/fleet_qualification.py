@@ -4,6 +4,24 @@ The hooks and their SDK/feed injection exist only for an enrolled clerk in the
 random namespace minted by the host qualification ceremony. They expose no
 execution operation, and every hook request carries that ceremony's in-memory
 secret.
+
+Issue #2206 widens this file's scope in one narrow direction: a command-pool
+contention probe (``/hold/command``, a ``POST`` so the deployed
+``FleetLaneRuntimeMiddleware`` classifies it into the command pool rather
+than the request pool) and a one-shot strategy-instance seed
+(``/seed-bot``) so the recorded-history ceremony can drive the Clerk's real
+public chart-history route without deploying an engine strategy. Neither is
+an execution operation (no order, fill, or position is ever created) and
+both stay behind the exact same per-run secret every other hook here already
+requires.
+
+This module also owns the sibling gate for the coordinator-side seam issue
+#2206 adds: :func:`is_qualification_coordinator_lane` and its
+environment-sourced wrapper key the coordinator's own recorded-history
+provider selection (``app.routers.internal_fleet.history_batch``) and its
+mode-control router (``app.routers.fleet_qualification_history``) off the
+same random namespace prefix this file already defines, so there is exactly
+one "is this the Compose qualification ceremony" constant in the codebase.
 """
 
 from __future__ import annotations
@@ -31,6 +49,7 @@ from app.broker.contract.registry import get_broker_registry
 from app.config import settings as service_settings
 from app.schemas.market_liveness import MarketStatusSnapshot
 from app.services.market_liveness import get_market_liveness_store
+from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.utils.timestamps import now_ms_utc
 
 _PREFIX = "/internal/fleet-qualification"
@@ -62,6 +81,41 @@ class QualificationHoldRequestResponse(BaseModel):
     held: Literal["request"]
 
 
+class QualificationHoldCommandResponse(BaseModel):
+    """Typed acknowledgement for the command-pool contention probe (issue #2206)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    held: Literal["command"]
+
+
+class QualificationSeedBotRequest(BaseModel):
+    """One minimal strategy-instance registration for the recorded-history
+    ceremony (issue #2206) -- no engine deployment or validated settings.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str
+    symbol: str
+
+
+class QualificationSeedBotResponse(BaseModel):
+    """Typed acknowledgement that the strategy instance now exists."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seeded: Literal["strategy_instance"]
+
+
+class QualificationSeedBotUnavailable(BaseModel):
+    """Typed absence of an active SQLite authority to seed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: Literal["qualification_sqlite_authority_unavailable"]
+
+
 def _is_qualification_lane(
     *,
     role: str,
@@ -77,6 +131,29 @@ def _is_qualification_lane(
         and bool(secret)
         and bool(broker_url)
         and bool(market_data_url)
+    )
+
+
+def is_qualification_coordinator_lane(*, role: str, namespace: str, secret: str) -> bool:
+    """Keep the coordinator-side recorded-history seam (issue #2206) behind the
+    same random Compose ceremony gate as the clerk-side hooks above: this
+    process's own role, the ceremony's per-run namespace, and its minted
+    probe secret (``FLEET_QUALIFICATION_PROBE_SECRET``, written to the
+    coordinator's env file by the same host ceremony that writes it to each
+    lane's). No broker/market-data URL applies here -- that pair is specific
+    to the clerk-side Alpaca read/status injection above and has nothing to
+    do with the coordinator's own recorded-history provider selection
+    (``app.routers.internal_fleet.history_batch``).
+    """
+    return role == "fleet_coordinator" and namespace.startswith(_NAMESPACE_PREFIX) and bool(secret)
+
+
+def is_qualification_coordinator_lane_from_environment(role: str, namespace: str) -> bool:
+    """Environment-sourced coordinator gate check (issue #2206)."""
+    return is_qualification_coordinator_lane(
+        role=role,
+        namespace=namespace,
+        secret=os.environ.get("FLEET_QUALIFICATION_PROBE_SECRET", ""),
     )
 
 
@@ -241,6 +318,63 @@ def qualification_router(
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
+    @router.post("/hold/command", response_model=QualificationHoldCommandResponse)
+    async def hold_command(
+        x_fleet_qualification_secret: str | None = Header(default=None),
+    ) -> QualificationHoldCommandResponse:
+        """Hold one ordinary ASGI command-pool request long enough for deployed
+        admission to contend (issue #2206).
+
+        Unlike ``/hold/request`` (a ``GET``, which draws from the request
+        pool), this is a ``POST`` on a path other than the internal
+        history-batch operation, so the deployed
+        ``FleetLaneRuntimeMiddleware`` classifies it into the *command* pool
+        (``app.broker.fleet.lane_runtime._requires_command_capacity``) --
+        the probe kind the #2204 qualification harness noted as missing,
+        needed to prove a held history read (which draws from the request
+        pool) cannot starve a command.
+        """
+        require_secret(x_fleet_qualification_secret)
+        await asyncio.sleep(1)
+        return QualificationHoldCommandResponse(held="command")
+
+    @router.post(
+        "/seed-bot",
+        response_model=QualificationSeedBotResponse,
+        responses={503: {"model": QualificationSeedBotUnavailable}},
+    )
+    async def seed_bot(
+        payload: QualificationSeedBotRequest,
+        x_fleet_qualification_secret: str | None = Header(default=None),
+    ) -> QualificationSeedBotResponse | JSONResponse:
+        """Register one minimal strategy instance for the recorded-history
+        ceremony (issue #2206).
+
+        ``ClerkSqliteRepository.register_strategy_instance`` is an
+        insert-once registration the repository's own docstring already
+        names as "the repository's narrow fixture and qualification seam" --
+        no engine deployment, validated settings, or signal-program seal is
+        needed to prove a chart-history read end to end. Not an execution
+        operation: it creates only the immutable identity/symbol pair a
+        chart-history read needs, never an order, fill, or position.
+        """
+        require_secret(x_fleet_qualification_secret)
+        facade = active_sqlite_facade("alpaca")
+        if facade is None:
+            return JSONResponse(
+                status_code=503,
+                content=QualificationSeedBotUnavailable(
+                    reason="qualification_sqlite_authority_unavailable"
+                ).model_dump(),
+            )
+        await asyncio.to_thread(
+            facade.repository.register_strategy_instance,
+            strategy_instance_id=payload.strategy_instance_id,
+            symbol=payload.symbol,
+            config_hash="qualification-recorded-history",
+        )
+        return QualificationSeedBotResponse(seeded="strategy_instance")
+
     return router
 
 
@@ -270,6 +404,8 @@ def install_qualification_bindings_from_environment(role: str, namespace: str) -
 __all__ = [
     "install_qualification_bindings",
     "install_qualification_bindings_from_environment",
+    "is_qualification_coordinator_lane",
+    "is_qualification_coordinator_lane_from_environment",
     "qualification_router",
     "qualification_router_from_environment",
 ]
