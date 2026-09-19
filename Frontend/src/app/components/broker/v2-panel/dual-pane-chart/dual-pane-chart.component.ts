@@ -34,6 +34,7 @@ import type {
   ChartFillMarker,
   ChartHistoryTimeframe,
   ChartLiveResolution,
+  ChartOverlayNoticeView,
   ChartSource,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
@@ -245,6 +246,12 @@ export class DualPaneChartComponent implements AfterViewInit {
   /** Settled Polygon-history failure (#2202 FR-005): renders the delayed
    * pane's unavailable state instead of an indefinite spinner. */
   readonly historyFailed = input(false);
+  /** A zero-bar history response carrying a notice outside the closed
+   * "genuinely empty" set (#2211): also renders the unavailable state, with
+   * this backend-authored message instead of the generic rejected-request
+   * copy. `null` means this particular cause does not apply — a rejected
+   * request (`historyFailed`) can still make the pane unavailable. */
+  readonly historyUnavailableNotice = input<ChartOverlayNoticeView | null>(null);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly histBars = input<readonly ChartBar[]>([]);
   readonly histIndicatorBars = input<readonly ChartBar[]>([]);
@@ -300,6 +307,15 @@ export class DualPaneChartComponent implements AfterViewInit {
   });
   protected readonly indicatorCatalogLoading = computed(() =>
     this.indicatorCatalog.loading() || this.supportedIndicatorResource.isLoading(),
+  );
+
+  /** The delayed pane is unavailable (#2211) either because the request was
+   * rejected (`historyFailed`) or because it settled successfully with zero
+   * bars and a notice outside the closed "genuinely empty" set
+   * (`historyUnavailableNotice`). Either cause renders the same unavailable
+   * state; only the message differs. */
+  protected readonly historyUnavailable = computed(
+    () => this.historyFailed() || this.historyUnavailableNotice() !== null,
   );
 
   protected readonly liveSource = computed<ChartSource | null>(() => {

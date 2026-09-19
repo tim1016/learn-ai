@@ -226,6 +226,30 @@ function makeRun(): BotRunView {
   };
 }
 
+/** A settled, *successful* zero-bar history response (#2211) — the shape
+ * `build_history_chart` returns for a present-but-empty `POLYGON_API_KEY` or
+ * any other Polygon fetch failure: no bars, plus zero or more canonical
+ * notices on `overlay_notices`, never a rejected promise. */
+function zeroBarHistoryResponse(
+  overlayNotices: readonly { code: string; message: string; source: 'polygon' }[],
+) {
+  return {
+    strategy_instance_id: 'sid-001',
+    symbol: 'QQQ',
+    timeframe: '1m' as const,
+    from_ms: 1_753_800_000_000,
+    to_ms: 1_753_823_400_000,
+    bars: [],
+    indicator_bars: [],
+    indicator_bar_budget: 0,
+    indicator_bar_budget_satisfied: true,
+    fill_markers: [],
+    truncated: false,
+    overlay_notices: overlayNotices,
+    as_of_ms: 1_753_800_000_000,
+  };
+}
+
 const marketDataMock = {
   getStockSnapshot: vi.fn().mockReturnValue(of({ success: true, snapshot: null, error: null })),
 };
@@ -438,5 +462,111 @@ describe('BotPanelShellComponent — Polygon history failure isolation (#2202)',
     await fixture.whenStable();
 
     expect(historyChart).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** #2211: since #2207, a Clerk with an empty Polygon key returns a
+ * *successful* history response — zero bars plus a `polygon_api_key_missing`
+ * notice on `overlay_notices` — rather than a rejected request. Before this
+ * fix, `histChartFailed` stayed false for that response (it only watches
+ * `histChart.error()`), so the pane fell through to "No candles in this
+ * window" instead of the #2208 unavailable state: an operator was told the
+ * market printed nothing when the data source was actually down, with no
+ * Retry offered.
+ *
+ * Classification is fail-loud (`../lib/chart-history-notice.ts`): only
+ * `polygon_overlay_empty` is treated as genuinely empty. Any other code on a
+ * zero-bar response — including one this list has never seen, exercised
+ * below with `coordinator_unavailable` (arriving separately in #2204) — is
+ * unavailable.
+ */
+describe('BotPanelShellComponent — zero-bar history notice classification (#2211)', () => {
+  it('renders the unavailable state with the notice message and a working Retry for polygon_api_key_missing', async () => {
+    const user = userEvent.setup();
+    const historyChart = vi.fn().mockResolvedValue(
+      zeroBarHistoryResponse([{
+        code: 'polygon_api_key_missing',
+        message: 'Polygon history is unavailable because POLYGON_API_KEY is not configured.',
+        source: 'polygon',
+      }]),
+    );
+    const { fixture } = await renderTraderPanel(historyChart);
+
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Polygon history unavailable')).toBeTruthy();
+    expect(
+      screen.getByText('Polygon history is unavailable because POLYGON_API_KEY is not configured.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('No candles in this window')).toBeNull();
+    expect(historyChart).toHaveBeenCalledTimes(1);
+
+    historyChart.mockResolvedValueOnce({
+      ...zeroBarHistoryResponse([]),
+      bars: [
+        { start_ms: 1_753_800_000_000, end_ms: 1_753_800_060_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10, source: 'polygon' as const },
+      ],
+    });
+    await user.click(screen.getByRole('button', { name: 'Retry history' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(historyChart).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Polygon history unavailable')).toBeNull();
+    expect(screen.getByText('1 candle')).toBeTruthy();
+  });
+
+  it('renders the unavailable state for a zero-bar response carrying an unrecognised notice code (coordinator_unavailable, #2204)', async () => {
+    const user = userEvent.setup();
+    const historyChart = vi.fn().mockResolvedValue(
+      zeroBarHistoryResponse([{
+        code: 'coordinator_unavailable',
+        message: 'The fleet coordinator did not respond in time. Retry shortly.',
+        source: 'polygon',
+      }]),
+    );
+    const { fixture } = await renderTraderPanel(historyChart);
+
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Polygon history unavailable')).toBeTruthy();
+    expect(screen.getByText('The fleet coordinator did not respond in time. Retry shortly.')).toBeTruthy();
+    expect(screen.queryByText('No candles in this window')).toBeNull();
+  });
+
+  it('still renders "No candles in this window" for a zero-bar response with no notices', async () => {
+    const user = userEvent.setup();
+    const historyChart = vi.fn().mockResolvedValue(zeroBarHistoryResponse([]));
+    const { fixture } = await renderTraderPanel(historyChart);
+
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('No candles in this window')).toBeTruthy();
+    expect(screen.queryByText('Polygon history unavailable')).toBeNull();
+  });
+
+  it('treats polygon_overlay_empty as genuinely empty, not unavailable — the one code in the closed empty set', async () => {
+    const user = userEvent.setup();
+    const historyChart = vi.fn().mockResolvedValue(
+      zeroBarHistoryResponse([{
+        code: 'polygon_overlay_empty',
+        message: 'Polygon returned no unadjusted minute bars for missing scheduled candles.',
+        source: 'polygon',
+      }]),
+    );
+    const { fixture } = await renderTraderPanel(historyChart);
+
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('No candles in this window')).toBeTruthy();
+    expect(screen.queryByText('Polygon history unavailable')).toBeNull();
   });
 });

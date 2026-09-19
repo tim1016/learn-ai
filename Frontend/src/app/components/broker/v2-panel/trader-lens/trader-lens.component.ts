@@ -15,6 +15,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
+import { historyUnavailableNotice } from '../lib/chart-history-notice';
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TraderMetricsComponent } from './trader-metrics.component';
 import { RecentDecisionsListComponent } from './recent-decisions-list/recent-decisions-list.component';
@@ -100,6 +101,13 @@ export class TraderLensComponent {
   );
   protected readonly histFillMarkers = computed(
     () => this.histChart()?.fill_markers ?? [],
+  );
+  /** Settled *successful* zero-bar response that is unavailable rather than
+   * genuinely empty (#2211 FR-002): the backend-authored notice to render,
+   * or `null` when history has bars, has no notices, or every notice is in
+   * the closed "genuinely empty" set (`../lib/chart-history-notice.ts`). */
+  protected readonly histChartUnavailableNotice = computed(() =>
+    historyUnavailableNotice(this.histChart()),
   );
 
   /** Today's trading date in ms UTC for the trades-today header. */
