@@ -6,6 +6,9 @@
     data-testid="typed-halt-confirm-backdrop"
     (click)="onCancel()"
   ></button>
+  <!-- Keystrokes stop at the dialog so an enclosing menu that also closes on
+       Escape does not act on them. That also hides them from the document
+       Escape listener, so Escape cancels from here while focus is inside. -->
   <aside
     class="dialog"
     role="dialog"
@@ -14,6 +17,7 @@
     data-testid="typed-halt-confirm-dialog"
     (click)="$event.stopPropagation()"
     (keydown)="$event.stopPropagation()"
+    (keydown.escape)="onEscape()"
   >
     <header>
       <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>

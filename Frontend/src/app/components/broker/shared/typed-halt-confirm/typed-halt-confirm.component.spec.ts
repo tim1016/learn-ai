@@ -1,5 +1,6 @@
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { TypedHaltConfirmComponent } from './typed-halt-confirm.component';
@@ -119,6 +120,79 @@ describe('TypedHaltConfirmComponent', () => {
       h.el.querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
         ?.disabled,
     ).toBe(true);
+  });
+
+  describe('Escape', () => {
+    function focused<T extends HTMLElement>(h: Harness, testId: string): T {
+      const element = h.el.querySelector<T>(`[data-testid="${testId}"]`);
+      if (element === null) throw new Error(`${testId} not rendered`);
+      element.focus();
+      expect(document.activeElement).toBe(element);
+      return element;
+    }
+
+    it('cancels once when pressed in the typed-confirm input', async () => {
+      const h = render({ open: true });
+      focused(h, 'typed-halt-confirm-input');
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(h.cancelled).toBe(1);
+      expect(h.confirmed).toBe(0);
+    });
+
+    it('cancels when pressed on a dialog button, even the confirm button', async () => {
+      const h = render({ open: true, requiredToken: '' });
+      focused(h, 'typed-halt-confirm-submit');
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(h.cancelled).toBe(1);
+      expect(h.confirmed).toBe(0);
+    });
+
+    it('stays inside the dialog, so an enclosing menu that closes on Escape does not also act', async () => {
+      const h = render({ open: true });
+      const ancestorSaw: string[] = [];
+      const ancestor = (event: KeyboardEvent): void => {
+        ancestorSaw.push(event.key);
+      };
+      h.el.addEventListener('keydown', ancestor);
+      try {
+        focused(h, 'typed-halt-confirm-input');
+
+        await userEvent.keyboard('{Escape}');
+
+        expect(h.cancelled).toBe(1);
+        expect(ancestorSaw).toEqual([]);
+      } finally {
+        h.el.removeEventListener('keydown', ancestor);
+      }
+    });
+
+    it('does nothing and is not swallowed while the dialog is closed', () => {
+      const h = render({ open: false });
+      const escape = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+
+      document.body.dispatchEvent(escape);
+
+      expect(h.cancelled).toBe(0);
+      expect(escape.defaultPrevented).toBe(false);
+    });
+
+    it('still cancels from the document when focus is outside the dialog', () => {
+      const h = render({ open: true });
+
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      );
+
+      expect(h.cancelled).toBe(1);
+    });
   });
 
   describe('plain confirm mode (no required token)', () => {
