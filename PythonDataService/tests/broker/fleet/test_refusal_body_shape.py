@@ -450,7 +450,11 @@ async def test_exhausted_lane_capacity_refuses_in_the_contract_shape(tmp_path: P
     )
 
     config = LaneRuntimeConfig(
-        max_inflight_requests=1, max_inflight_streams=1, request_queue_limit=0, request_queue_timeout_ms=0
+        max_inflight_requests=1,
+        max_inflight_streams=1,
+        max_inflight_commands=1,
+        request_queue_limit=0,
+        request_queue_timeout_ms=0,
     )
     evidence = CompatibilityReadEvidence(tmp_path, clock=lambda: 1)
 

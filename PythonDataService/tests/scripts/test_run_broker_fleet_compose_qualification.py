@@ -60,6 +60,7 @@ def test_compose_topology_has_lane_budgets_and_live_mutation_stays_disabled() ->
     for variable in (
         "FLEET_MAX_INFLIGHT_REQUESTS",
         "FLEET_MAX_INFLIGHT_STREAMS",
+        "FLEET_MAX_INFLIGHT_COMMANDS",
         "FLEET_REQUEST_QUEUE_LIMIT",
         "FLEET_REQUEST_QUEUE_TIMEOUT_MS",
     ):

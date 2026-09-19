@@ -89,11 +89,22 @@ class FleetSettings(BaseSettings):
     HEARTBEAT_INTERVAL_S: float = 10.0
     # A fleet clerk agent is explicitly sized by the deployment.  Zero keeps
     # the middleware disabled for the legacy/combined posture; a clerk-agent
-    # process must supply positive values for both pools at startup.
+    # process must supply positive values for the request and stream pools
+    # at startup.
     MAX_INFLIGHT_REQUESTS: int = 0
     MAX_INFLIGHT_STREAMS: int = 0
-    # Requests may wait for a request or stream slot only within this bounded
-    # queue and deadline. A zero queue limit refuses immediately.
+    # The command pool (issue #2204 gate F1): mutating requests (Stop,
+    # cancel, flatten, ...) draw from here instead of the request pool, so a
+    # slow read (bot chart history's coordinator-owned Polygon walk) can
+    # never hold the slot a command needs. Unlike the two pools above, this
+    # defaults to a usable positive value rather than zero: every
+    # already-deployed clerk-agent config that has not been updated with
+    # FLEET_MAX_INFLIGHT_COMMANDS must keep booting unmodified. A deployment
+    # that wants a different command-pool size overrides it explicitly, same
+    # as the other two.
+    MAX_INFLIGHT_COMMANDS: int = 4
+    # Requests may wait for a request, stream or command slot only within
+    # this bounded queue and deadline. A zero queue limit refuses immediately.
     REQUEST_QUEUE_LIMIT: int = 0
     REQUEST_QUEUE_TIMEOUT_MS: int = 0
     # The compose service name of THIS worker process, declared by the

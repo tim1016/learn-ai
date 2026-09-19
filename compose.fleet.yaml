@@ -39,6 +39,11 @@ x-fleet-agent: &fleet-agent
     POLYGON_API_KEY: ""
     FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-16}
     FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-4}
+    # The command pool (issue #2204 gate F1): mutating requests (Stop,
+    # cancel, flatten, ...) never share the read pool above, so a slow read
+    # (bot chart history's coordinator-owned Polygon walk) can never hold
+    # the slot a command needs.
+    FLEET_MAX_INFLIGHT_COMMANDS: ${FLEET_MAX_INFLIGHT_COMMANDS:-4}
     FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-64}
     FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
     TRUSTED_HOSTS: localhost,127.0.0.1,alpaca-paper-clerk,alpaca-live-clerk,fleet-coordinator
@@ -82,6 +87,7 @@ services:
       FLEET_DEPLOYMENT_NAMESPACE: ${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai-fleet}
       FLEET_MAX_INFLIGHT_REQUESTS: ${FLEET_MAX_INFLIGHT_REQUESTS:-32}
       FLEET_MAX_INFLIGHT_STREAMS: ${FLEET_MAX_INFLIGHT_STREAMS:-8}
+      FLEET_MAX_INFLIGHT_COMMANDS: ${FLEET_MAX_INFLIGHT_COMMANDS:-8}
       FLEET_REQUEST_QUEUE_LIMIT: ${FLEET_REQUEST_QUEUE_LIMIT:-128}
       FLEET_REQUEST_QUEUE_TIMEOUT_MS: ${FLEET_REQUEST_QUEUE_TIMEOUT_MS:-5000}
       TRUSTED_HOSTS: localhost,127.0.0.1,fleet-coordinator,backend
