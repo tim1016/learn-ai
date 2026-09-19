@@ -14,6 +14,10 @@ from typing import NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.broker.alpaca.clerk.account_authority import (
+    account_route_matches_custody,
+    is_shadow_account_id,
+)
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
@@ -31,6 +35,7 @@ from app.services.bot_runner import (
     UnknownBotError,
     get_bot_task_registry,
 )
+from app.services.sqlite_clerk_compat import lane_account_id_for_seal
 
 logger = logging.getLogger(__name__)
 
@@ -71,15 +76,40 @@ def _raise_runner_error(error: BotRunnerError) -> NoReturn:
     )
 
 
+def _require_lane_account(broker: str, sealed_account_id: str) -> str:
+    lane_account_id = lane_account_id_for_seal(broker, sealed_account_id)
+    if lane_account_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No primary Alpaca Clerk authority is active, so the account a "
+                "Dry Run bot belongs to cannot be confirmed."
+            ),
+        )
+    return lane_account_id
+
+
 def _require_account_binding(
     registry: BotTaskRegistry,
     broker: str,
     account_id: str,
     strategy_instance_id: str,
 ) -> None:
-    """Reject a scoped read when the durable bot binding names another account."""
+    """Reject a scoped read when the durable bot binding names another account.
+
+    The route names the fleet's canonical external account; the seal keeps
+    custody's spelling, ``shadow:``-prefixed when a Shadow authority sealed it.
+    A Dry Run seal names its isolated ``sim:`` authority, so it is matched
+    against the lane's primary authority instead -- the account the roster
+    lists it under -- and is unavailable (503) while none is active.
+    A legacy binding with no seal names no account.
+    """
     binding = registry.binding_for_control(broker, strategy_instance_id)
-    if binding.sealed_account_id != account_id:
+    sealed = binding.sealed_account_id
+    lane_account_id = None if sealed is None else _require_lane_account(broker, sealed)
+    if lane_account_id is None or not account_route_matches_custody(
+        account_id, lane_account_id, shadow=is_shadow_account_id(lane_account_id),
+    ):
         raise UnknownBotError(
             f"No bot '{strategy_instance_id}' is bound to account '{account_id}'.",
             detail="Use the account recorded by the bot's sealed binding.",

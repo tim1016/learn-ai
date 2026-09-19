@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from app.broker.alpaca.clerk.account_authority import (
     authority_kind_in_world,
     custody_account_id_for,
+    is_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
@@ -123,6 +124,22 @@ def custody_account_id_for_route(broker: str, resolved: str) -> str:
     if broker != "alpaca":
         return resolved
     return custody_account_id_for(_labelled_custody_world(), resolved)
+
+
+def lane_account_id_for_seal(broker: str, sealed_account_id: str) -> str | None:
+    """The custody account the account roster lists a sealed bot under.
+
+    A real or ``shadow:`` seal names its own custody account. A Dry Run seal
+    names the bot's isolated ``sim:<strategy_instance_id>`` authority, which no
+    public route names: the roster (``panel_data_source.get_catalog``) lists
+    it under this lane's primary authority, so it resolves to that
+    authority's account. ``None`` when no primary SQLite authority is active,
+    the state the roster answers as unavailable.
+    """
+    if not is_synthetic_account_id(sealed_account_id):
+        return sealed_account_id
+    facade = active_sqlite_facade(broker)
+    return None if facade is None else facade.account_id
 
 
 def sqlite_projection(
