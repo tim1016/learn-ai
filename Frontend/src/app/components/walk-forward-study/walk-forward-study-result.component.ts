@@ -8,6 +8,7 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { RecordControlsComponent } from '../../shared/research-record/record-controls.component';
 import { RecordPoller } from '../../shared/research-record/record-poller';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { ValidationScopeNoteComponent } from '../../shared/validation-scope/validation-scope-note.component';
 import { GridSearchResultComponent } from '../grid-search/grid-search-result.component';
 import { isTerminal } from '../grid-search/grid-search.types';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
@@ -28,7 +29,7 @@ export interface OpenSweep {
  */
 @Component({
   selector: 'app-walk-forward-study-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-result.component.html',
   styleUrl: './walk-forward-study-result.component.scss',

@@ -9,6 +9,7 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { RecordControlsComponent } from '../../shared/research-record/record-controls.component';
 import { RecordPoller } from '../../shared/research-record/record-poller';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { ValidationScopeNoteComponent } from '../../shared/validation-scope/validation-scope-note.component';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { GridSearchService } from './grid-search.service';
 import {
@@ -39,7 +40,7 @@ const COLUMN_LABELS: Readonly<Record<CellSortColumn, string>> = {
  */
 @Component({
   selector: 'app-grid-search-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RecordControlsComponent, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, KeyValuePipe, PercentPipe, RecordControlsComponent, RouterLink, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-result.component.html',
   styleUrl: './grid-search-result.component.scss',

@@ -4,6 +4,7 @@ import {
 } from '@angular/core';
 import type { LeanStatistics } from '../engine-results/engine-results.component';
 import { MetricHelpModalComponent } from '../../strategy-lab/metric-help-modal/metric-help-modal.component';
+import { ValidationScopeNoteComponent } from '../../../shared/validation-scope/validation-scope-note.component';
 
 interface StatItem {
   label: string;
@@ -22,7 +23,7 @@ interface StatSection {
 
 @Component({
   selector: 'app-lean-statistics',
-  imports: [MetricHelpModalComponent],
+  imports: [MetricHelpModalComponent, ValidationScopeNoteComponent],
   templateUrl: './lean-statistics.component.html',
   styleUrl: './lean-statistics.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
