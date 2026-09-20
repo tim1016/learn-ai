@@ -14,7 +14,13 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
+from app.jobs.progress import (
+    CancellationCheck,
+    JobCancelled,
+    ProgressEmitter,
+    acquire_lease,
+    release_lease,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +51,9 @@ def run_in_thread(
     """Spawn a daemon thread that runs ``work(emitter, cancel_check)``.
 
     Wraps the work in the canonical lifecycle:
+      * acquires the job's liveness lease on the request path (#1938) — a
+        202 implies a held job; the lease is renewed by the worker's own
+        emits and cancellation checks and deleted in the ``finally`` below
       * emits ``job.started`` before the work runs
       * emits ``job.completed`` with the returned value on success
       * emits ``job.cancelled`` if :class:`JobCancelled` was raised
@@ -56,6 +65,7 @@ def run_in_thread(
 
     emitter = ProgressEmitter(job_id)
     cancel = CancellationCheck(job_id, check_every_n=cancel_check_every_n)
+    acquire_lease(job_id)
 
     def _runner() -> None:
         try:
@@ -74,6 +84,8 @@ def run_in_thread(
             # would leave the stream open until TTL.
             logger.exception("job %s failed", job_id)
             emitter.failed(code=type(exc).__name__, message=str(exc))
+        finally:
+            release_lease(job_id)
 
     name = thread_name or f"job-{job_id[:8]}"
     thread = threading.Thread(target=_runner, name=name, daemon=True)

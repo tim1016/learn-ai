@@ -4,8 +4,9 @@ Runs against the ephemeral database only (same attestation as the Grid
 Search suites). The semantics under test are the ones the .NET service and
 GraphQL query established — tombstone no-op, fingerprint sharing with
 memberships, deleted-owner visibility, overlap-vs-entry windows,
-representative selection — plus the one new rule: a redelivered cell
-returns the existing run instead of creating a second one.
+representative selection — plus the newer rules: a redelivered cell returns
+the existing run instead of creating a second one, and every launch write is
+attempt-fenced (#1938).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.research.persistence import fence
 from app.research.recency import repository as repo
 from app.research.recency.runner import RecencyRunSnapshot, RecencyTradeSnapshot
 from app.research.recency.stats import select_window_heroes
@@ -35,14 +37,20 @@ def _snapshot(launch_id: str, *, symbol: str, params_hash: str = "h1", trades: l
 
 
 async def _launch(conn, unique: str, expected: int = 4) -> str:
+    """The durable launch, created and claimed the way the real worker does: attempt 1 under its own id."""
     launch_id = f"launch-{unique}-{uuid.uuid4().hex[:6]}"
     assert await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=expected) is True
+    assert await repo.claim_launch(conn, launch_id=launch_id, job_id=launch_id) == 1
     return launch_id
+
+
+async def _persist(conn, snapshot: RecencyRunSnapshot, *, attempt: int = 1) -> repo.PersistOutcome:
+    return await repo.persist_snapshot(conn, snapshot, attempt=attempt)
 
 
 async def test_a_launch_is_created_once_and_a_retried_dispatch_does_not_reset_it(conn, unique: str) -> None:
     launch_id = await _launch(conn, unique)
-    await repo.persist_snapshot(conn, _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)]))
+    await _persist(conn, _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)]))
 
     assert await repo.create_launch(conn, launch_id=launch_id, config_json="{}", expected_runs=4) is False  # the retry
 
@@ -69,7 +77,7 @@ async def test_a_snapshot_for_a_tombstoned_launch_is_a_no_op(conn, unique: str) 
     launch_id = await _launch(conn, unique)
     await repo.set_launch_deleted(conn, launch_id, deleted=True)
 
-    outcome = await repo.persist_snapshot(conn, _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)]))
+    outcome = await _persist(conn, _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)]))
 
     assert outcome == repo.PersistOutcome(recency_run_id=None, skipped=True)
     assert await conn.fetchval('SELECT COUNT(*) FROM "RecencyRuns" WHERE "RecencyLaunchId" = $1', launch_id) == 0
@@ -77,20 +85,20 @@ async def test_a_snapshot_for_a_tombstoned_launch_is_a_no_op(conn, unique: str) 
 
 async def test_a_snapshot_for_an_unknown_launch_is_refused(conn, unique: str) -> None:
     with pytest.raises(repo.LaunchNotFoundError):
-        await repo.persist_snapshot(conn, _snapshot(f"never-{unique}", symbol=unique, trades=[]))
+        await _persist(conn, _snapshot(f"never-{unique}", symbol=unique, trades=[]))
 
 
 async def test_a_redelivered_cell_returns_the_existing_run_and_counts_once(conn, unique: str) -> None:
     launch_id = await _launch(conn, unique)
     snapshot = _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)])
 
-    first = await repo.persist_snapshot(conn, snapshot)
-    second = await repo.persist_snapshot(conn, snapshot)
+    first = await _persist(conn, snapshot)
+    second = await _persist(conn, snapshot)
 
     assert first.redelivered is False and second == repo.PersistOutcome(recency_run_id=first.recency_run_id, redelivered=True)
     assert await conn.fetchval('SELECT "SucceededRuns" FROM "RecencyLaunches" WHERE "Id" = $1', launch_id) == 1
     # A different cell in the same launch is a new execution.
-    third = await repo.persist_snapshot(conn, replace(snapshot, params_hash="h2", trades=[_trade(f"{unique}-b", entry_ms=100, exit_ms=200)]))
+    third = await _persist(conn, replace(snapshot, params_hash="h2", trades=[_trade(f"{unique}-b", entry_ms=100, exit_ms=200)]))
     assert third.redelivered is False and third.recency_run_id != first.recency_run_id
 
 
@@ -98,8 +106,8 @@ async def test_a_shared_fingerprint_is_stored_once_with_a_membership_per_run(con
     launch_a, launch_b = await _launch(conn, unique), await _launch(conn, unique)
     shared = _trade(f"{unique}-shared", entry_ms=100, exit_ms=200)
 
-    a = await repo.persist_snapshot(conn, _snapshot(launch_a, symbol=unique, trades=[shared]))
-    b = await repo.persist_snapshot(conn, _snapshot(launch_b, symbol=unique, trades=[shared, _trade(f"{unique}-only-b", entry_ms=300, exit_ms=400)]))
+    a = await _persist(conn, _snapshot(launch_a, symbol=unique, trades=[shared]))
+    b = await _persist(conn, _snapshot(launch_b, symbol=unique, trades=[shared, _trade(f"{unique}-only-b", entry_ms=300, exit_ms=400)]))
 
     assert await conn.fetchval('SELECT COUNT(*) FROM "RecencyTrades" WHERE "Fingerprint" = $1', shared.fingerprint) == 1
     memberships = await conn.fetch(
@@ -112,8 +120,8 @@ async def test_a_shared_fingerprint_is_stored_once_with_a_membership_per_run(con
 async def test_deleting_the_owning_run_keeps_a_trade_another_live_run_vouches_for(conn, unique: str) -> None:
     launch_a, launch_b = await _launch(conn, unique), await _launch(conn, unique)
     shared = _trade(f"{unique}-shared", entry_ms=100, exit_ms=200)
-    a = await repo.persist_snapshot(conn, _snapshot(launch_a, symbol=unique, trades=[shared]))
-    b = await repo.persist_snapshot(conn, _snapshot(launch_b, symbol=unique, trades=[shared]))
+    a = await _persist(conn, _snapshot(launch_a, symbol=unique, trades=[shared]))
+    b = await _persist(conn, _snapshot(launch_b, symbol=unique, trades=[shared]))
     assert a.recency_run_id is not None and b.recency_run_id is not None
 
     await repo.set_run_deleted(conn, a.recency_run_id, deleted=True)  # the original owner
@@ -133,8 +141,8 @@ async def test_deleting_the_owning_run_keeps_a_trade_another_live_run_vouches_fo
 async def test_the_representative_is_the_newest_live_run_matching_the_filters(conn, unique: str) -> None:
     launch = await _launch(conn, unique)
     shared = _trade(f"{unique}-shared", entry_ms=100, exit_ms=200)
-    older = await repo.persist_snapshot(conn, _snapshot(launch, symbol=unique, params_hash="old", trades=[shared], strategy="sma_crossover"))
-    newer = await repo.persist_snapshot(conn, _snapshot(launch, symbol=unique, params_hash="new", trades=[shared], strategy="rsi_mean_reversion"))
+    older = await _persist(conn, _snapshot(launch, symbol=unique, params_hash="old", trades=[shared], strategy="sma_crossover"))
+    newer = await _persist(conn, _snapshot(launch, symbol=unique, params_hash="new", trades=[shared], strategy="rsi_mean_reversion"))
     await conn.execute('UPDATE "RecencyRuns" SET "CreatedAtMs" = "CreatedAtMs" + 1000 WHERE "Id" = $1', newer.recency_run_id)
 
     unfiltered = await repo.list_trades(conn, from_ms=0, to_ms=1_000, symbols=[unique])
@@ -150,8 +158,8 @@ async def test_the_chart_reads_overlap_but_the_hero_reads_entry_inside_the_windo
     # Entered before the window, exited inside it: drawn by the chart, ignored by the hero.
     straddling = _trade(f"{unique}-straddle", entry_ms=50, exit_ms=150, pnl=100.0)
     inside = _trade(f"{unique}-inside", entry_ms=120, exit_ms=130, pnl=5.0)
-    loud = await repo.persist_snapshot(conn, _snapshot(launch, symbol=unique, params_hash="loud", trades=[straddling]))
-    quiet = await repo.persist_snapshot(conn, _snapshot(launch, symbol=unique, params_hash="quiet", trades=[inside]))
+    loud = await _persist(conn, _snapshot(launch, symbol=unique, params_hash="loud", trades=[straddling]))
+    quiet = await _persist(conn, _snapshot(launch, symbol=unique, params_hash="quiet", trades=[inside]))
 
     drawn = await repo.list_trades(conn, from_ms=100, to_ms=200, symbols=[unique])
     assert {view.fingerprint for view in drawn} == {straddling.fingerprint, inside.fingerprint}
@@ -165,16 +173,56 @@ async def test_the_chart_reads_overlap_but_the_hero_reads_entry_inside_the_windo
 
 async def test_terminal_status_rules_match_the_launch_service(conn, unique: str) -> None:
     launch = await _launch(conn, unique, expected=2)
-    await repo.persist_snapshot(conn, _snapshot(launch, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=1, exit_ms=2)]))
+    await _persist(conn, _snapshot(launch, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=1, exit_ms=2)]))
 
     with pytest.raises(repo.LaunchAccountingError):
-        await repo.set_terminal_status(conn, launch, status="COMPLETED", succeeded_runs=1, failed_runs=0)  # 1 of 2 accounted for
+        await repo.set_terminal_status(conn, launch, status="COMPLETED", attempt=1, succeeded_runs=1, failed_runs=0)  # 1 of 2 accounted for
     with pytest.raises(repo.LaunchAccountingError):
-        await repo.set_terminal_status(conn, launch, status="FAILED", succeeded_runs=2, failed_runs=1)  # more than expected
-    assert await repo.set_terminal_status(conn, launch, status="CANCELLED") is True  # abort: no counts needed
+        await repo.set_terminal_status(conn, launch, status="FAILED", attempt=1, succeeded_runs=2, failed_runs=1)  # more than expected
+    assert await repo.set_terminal_status(conn, launch, status="CANCELLED", attempt=1) is True  # abort: no counts needed
     row = await conn.fetchrow('SELECT "Status", "SucceededRuns", "CompletedAtMs" FROM "RecencyLaunches" WHERE "Id" = $1', launch)
     assert row["Status"] == "CANCELLED" and row["SucceededRuns"] == 1 and row["CompletedAtMs"] is not None
-    assert await repo.set_terminal_status(conn, f"missing-{unique}", status="FAILED") is False
+    with pytest.raises(fence.StaleAttemptError):  # a vanished record is a stale writer under the fence
+        await repo.set_terminal_status(conn, f"missing-{unique}", status="FAILED", attempt=1)
+
+
+async def test_claims_take_successive_generations_and_a_completed_launch_is_immutable(conn, unique: str) -> None:
+    launch = await _launch(conn, unique, expected=1)  # attempt 1, claimed in _launch
+    assert await repo.claim_launch(conn, launch_id=launch, job_id="resume-job") == 2
+
+    assert await repo.set_terminal_status(conn, launch, status="COMPLETED", attempt=2, succeeded_runs=1, failed_runs=0) is True
+
+    with pytest.raises(fence.RecordNotClaimableError):
+        await repo.claim_launch(conn, launch_id=launch, job_id="late-worker")
+    row = await conn.fetchrow('SELECT "Attempt", "JobId" FROM "RecencyLaunches" WHERE "Id" = $1', launch)
+    assert (row["Attempt"], row["JobId"]) == (2, "resume-job")
+
+
+async def test_a_write_under_a_stale_attempt_is_refused(conn, unique: str) -> None:
+    launch = await _launch(conn, unique)  # attempt 1
+    snapshot = _snapshot(launch, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=1, exit_ms=2)])
+    await repo.claim_launch(conn, launch_id=launch, job_id="resume-job")  # attempt 2 supersedes it
+
+    with pytest.raises(fence.StaleAttemptError):
+        await _persist(conn, snapshot, attempt=1)
+    with pytest.raises(fence.StaleAttemptError):
+        await repo.set_terminal_status(conn, launch, status="FAILED", attempt=1)
+    assert await conn.fetchval('SELECT COUNT(*) FROM "RecencyRuns" WHERE "RecencyLaunchId" = $1', launch) == 0
+
+    assert (await _persist(conn, snapshot, attempt=2)).redelivered is False  # the current attempt writes
+
+
+async def test_recorded_identities_match_the_persistence_dedupe_even_when_soft_deleted(conn, unique: str) -> None:
+    launch = await _launch(conn, unique)
+    outcome = await _persist(conn, _snapshot(launch, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=1, exit_ms=2)]))
+    assert outcome.recency_run_id is not None
+    await repo.set_run_deleted(conn, outcome.recency_run_id, deleted=True)
+
+    identities = await repo.recorded_identities(conn, launch)
+
+    # persist_snapshot dedupes by identity regardless of the run's tombstone,
+    # so a resume skips exactly the cells whose persistence would be a no-op.
+    assert identities == {(unique, "sma_crossover", "h1")}
 
 
 async def test_soft_delete_and_restore_report_whether_the_row_existed(conn, unique: str) -> None:

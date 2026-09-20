@@ -2,9 +2,10 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { firstValueFrom } from 'rxjs';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../environments/environment';
+import { JobsService } from './jobs.service';
 import { RecencyChartService } from './recency-chart.service';
 
 const BASE = `${environment.pythonServiceUrl}/api/research/recency`;
@@ -12,9 +13,13 @@ const BASE = `${environment.pythonServiceUrl}/api/research/recency`;
 describe('RecencyChartService', () => {
   let service: RecencyChartService;
   let http: HttpTestingController;
+  const startJob = vi.fn(async () => 'job-2');
 
   beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    startJob.mockClear();
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting(), { provide: JobsService, useValue: { startJob } }],
+    });
     service = TestBed.inject(RecencyChartService);
     http = TestBed.inject(HttpTestingController);
   });
@@ -106,5 +111,60 @@ describe('RecencyChartService', () => {
     const missing = service.softDeleteRun(99);
     http.expectOne(`${BASE}/runs/99/soft-delete`).flush({ detail: { code: 'RECENCY_RUN_NOT_FOUND', message: 'RecencyRun 99 not found' } }, { status: 404, statusText: 'Not Found' });
     await expect(missing).rejects.toBeTruthy();
+  });
+
+  it('maps the launches DTO onto the resume model (#1938)', async () => {
+    const pending = firstValueFrom(service.launches());
+    http.expectOne((r) => r.url === `${BASE}/launches` && r.params.get('limit') === '20').flush([
+      {
+        launch_id: 'launch-1',
+        status: 'interrupted',
+        attempt: 2,
+        expected_runs: 4,
+        succeeded_runs: 2,
+        failed_runs: 1,
+        created_at_ms: 1000,
+        completed_at_ms: null,
+        resumable: true,
+        resume_refusal: null,
+        request: { symbols: ['SPY'], window_start_ms: 0 },
+      },
+    ]);
+
+    await expect(pending).resolves.toEqual([
+      {
+        launchId: 'launch-1',
+        status: 'interrupted',
+        attempt: 2,
+        expectedRuns: 4,
+        succeededRuns: 2,
+        failedRuns: 1,
+        createdAtMs: 1000,
+        completedAtMs: null,
+        resumable: true,
+        resumeRefusal: null,
+        request: { symbols: ['SPY'], window_start_ms: 0 },
+      },
+    ]);
+  });
+
+  it('resumes by resending the stored request with the resume launch id added', async () => {
+    await expect(
+      service.resume({
+        launchId: 'launch-1',
+        status: 'interrupted',
+        attempt: 1,
+        expectedRuns: 4,
+        succeededRuns: 2,
+        failedRuns: 0,
+        createdAtMs: 1000,
+        completedAtMs: null,
+        resumable: true,
+        resumeRefusal: null,
+        request: { symbols: ['SPY'], window_start_ms: 0 },
+      }),
+    ).resolves.toBe('job-2');
+
+    expect(startJob).toHaveBeenCalledWith('recency_chart', { symbols: ['SPY'], window_start_ms: 0, resume_launch_id: 'launch-1' });
   });
 });

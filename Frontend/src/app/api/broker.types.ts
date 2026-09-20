@@ -4994,7 +4994,10 @@ export interface paths {
          *     the launch row exists before the worker starts (D20); a redelivered
          *     ``job_id`` is acknowledged without a second worker while the first still
          *     holds the job, and refused (409) once that job is closed or if the
-         *     configuration differs.
+         *     configuration differs. A resume (#1938) instead names an existing launch:
+         *     the new job id is bound to the durable record by the worker's claim, the
+         *     recorded cells are skipped, and the spec fields are ignored — the stored
+         *     configuration governs.
          *     Everything after the HTTP boundary is ``app.research.recency.service``.
          */
         post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
@@ -6043,6 +6046,26 @@ export interface paths {
          * @description The highest net-PnL combination per symbol/strategy among trades that entered inside the window.
          */
         get: operations["recency_heroes_api_research_recency_hero_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/launches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Recency Launches
+         * @description The most recent launches, newest first, with their resume gate (#1938).
+         */
+        get: operations["list_recency_launches_api_research_recency_launches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -20223,9 +20246,9 @@ export interface components {
          * RecencyChartJobRequest
          * @description Body of POST /api/jobs-internal/recency-chart.
          *
-         *     Each parameter's range is either an explicit value list or an
-         *     inclusive low/high/step sweep (design spec D4) — the discriminated
-         *     ``type`` field lets one dict carry either shape per parameter.
+         *     On a resume (#1938, ``resume_launch_id`` set) the spec fields are
+         *     ignored and the stored configuration governs — a client resends the
+         *     stored request it read from the launch, as Grid Search's Finish does.
          */
         RecencyChartJobRequest: {
             /**
@@ -20245,6 +20268,8 @@ export interface components {
             fillMode?: string;
             /** Jobid */
             jobId: string;
+            /** Resumelaunchid */
+            resumeLaunchId?: string | null;
             /** Strategies */
             strategies: components["schemas"]["StrategyGridConfigRequest"][];
             /** Symbols */
@@ -20276,6 +20301,40 @@ export interface components {
         RecencyLaunchMutationResponse: {
             /** Launch Id */
             launch_id: string;
+        };
+        /**
+         * RecencyLaunchResponse
+         * @description One launch as the launches list serves it (#1938).
+         *
+         *     ``status`` is presented (a stored ``RUNNING`` launch whose job is not
+         *     live reads back as ``interrupted``); ``resumable`` is the negation of
+         *     the resume gate, with ``resume_refusal`` carrying the why otherwise.
+         *     ``request`` is the stored configuration — a client resends it verbatim
+         *     with ``resume_launch_id`` added, as Grid Search's Finish does.
+         */
+        RecencyLaunchResponse: {
+            /** Attempt */
+            attempt: number;
+            /** Completed At Ms */
+            completed_at_ms: number | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Expected Runs */
+            expected_runs: number;
+            /** Failed Runs */
+            failed_runs: number;
+            /** Launch Id */
+            launch_id: string;
+            /** Request */
+            request: Record<string, never>;
+            /** Resumable */
+            resumable: boolean;
+            /** Resume Refusal */
+            resume_refusal: string | null;
+            /** Status */
+            status: string;
+            /** Succeeded Runs */
+            succeeded_runs: number;
         };
         /** RecencyRunMutationResponse */
         RecencyRunMutationResponse: {
@@ -35467,7 +35526,16 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
-            /** @description A redelivered job_id whose configuration differs or whose job is no longer running. */
+            /** @description A resume named a launch that does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetailResponse"];
+                };
+            };
+            /** @description A redelivered job_id whose configuration differs or whose job is no longer running, or a resume of a launch that may not be resumed. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -36998,6 +37066,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecencyHeroResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recency_launches_api_research_recency_launches_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyLaunchResponse"][];
                 };
             };
             /** @description Validation Error */

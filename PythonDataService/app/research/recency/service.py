@@ -17,6 +17,7 @@ from typing import Any
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.research.persistence.db import run_sync, with_connection
 from app.research.recency import repository as repo
+from app.research.recency.models import LaunchView
 from app.research.recency.runner import RecencyLaunchConfig, RecencyRunSnapshot, run_recency
 from app.research.recency.stats import ms_to_et_date_string
 from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
@@ -140,17 +141,57 @@ def _execute_backtest(
     )
 
 
-def _persist(snapshot: RecencyRunSnapshot) -> None:
+def _persist(snapshot: RecencyRunSnapshot, *, attempt: int) -> None:
     # Direct write on the shared writer loop; a tombstoned launch or a redelivered cell is a successful no-op.
-    run_sync(with_connection(repo.persist_snapshot, snapshot))
+    run_sync(with_connection(repo.persist_snapshot, snapshot, attempt=attempt))
 
 
-def record_terminal_status(launch_id: str, status: str, *, succeeded_runs: int | None = None, failed_runs: int | None = None) -> None:
+def _claim_launch(launch_id: str, job_id: str) -> int:
+    """Claim the launch's next attempt generation for this worker (ADR 0055 §4, #1938).
+
+    A fresh launch claims attempt 1 under its own id; a resume claims the
+    next generation under the new job id, binding the new transport record to
+    the old durable launch. From here on every write of this worker is
+    refused if a newer attempt exists — the fence a resumed launch needs so
+    a hung predecessor cannot write over it.
+    """
+    return run_sync(with_connection(repo.claim_launch, launch_id=launch_id, job_id=job_id))
+
+
+def _recorded_cells(launch_id: str) -> frozenset[tuple[str, str, str]]:
+    return frozenset(run_sync(with_connection(repo.recorded_identities, launch_id=launch_id)))
+
+
+async def load_launch(launch_id: str) -> LaunchView | None:
+    """The launch record as the resume gate and the launches list read it."""
+    return await with_connection(repo.load_launch, launch_id)
+
+
+def resume_refusal(launch: LaunchView, *, live: bool | None) -> str | None:
+    """Why a Resume may not run against this launch, or ``None`` when it may (#1938).
+
+    The fenced records' refusal also checks the execution receipt's tree
+    state, code identity and data snapshot; the launch record predates
+    receipts (ADR 0057), and a resumed run is kept consistent by cell
+    identity instead — recorded cells are never re-run, so their evidence
+    stands exactly as recorded. An unknown liveness answer refuses
+    conservatively, as everywhere a live record is asked.
+    """
+    if launch.deleted_at_ms is not None:
+        return "the launch is deleted; restore it before resuming"
+    if launch.status == "COMPLETED":
+        return "the Recency launch is complete"
+    if launch.status == "RUNNING" and live is not False:
+        return "the Recency launch is still running"
+    return None
+
+
+def record_terminal_status(launch_id: str, status: str, *, attempt: int, succeeded_runs: int | None = None, failed_runs: int | None = None) -> None:
     """Write a launch's terminal state from the worker thread, on the shared writer loop."""
-    run_sync(with_connection(repo.set_terminal_status, launch_id, status=status, succeeded_runs=succeeded_runs, failed_runs=failed_runs))
+    run_sync(with_connection(repo.set_terminal_status, launch_id, status=status, attempt=attempt, succeeded_runs=succeeded_runs, failed_runs=failed_runs))
 
 
-def record_abort_state(launch_id: str, terminal_status: str) -> None:
+def record_abort_state(launch_id: str, terminal_status: str, *, attempt: int) -> None:
     """Move an aborted launch off RUNNING without masking why it aborted.
 
     The exception that ended the launch is what the operator needs; a failure
@@ -158,7 +199,7 @@ def record_abort_state(launch_id: str, terminal_status: str) -> None:
     rather than raised — never swallowed silently.
     """
     try:
-        record_terminal_status(launch_id, terminal_status)
+        record_terminal_status(launch_id, terminal_status, attempt=attempt)
     except Exception:
         logger.exception("failed to record recency launch terminal state", extra={"launch_id": launch_id, "terminal_status": terminal_status})
 
@@ -170,7 +211,9 @@ def run_launch(
     cancel: CancellationCheck,
     execute_backtest: Callable[[RunSpec, RecencyLaunchConfig], Any] | None = None,
 ) -> dict[str, Any]:
-    """The worker body: run the grid, persist each run, record the launch's terminal state, return the summary.
+    """The worker body: claim the launch's next attempt, run the grid (skipping
+    what the durable record already holds), persist each run, record the
+    launch's terminal state, return the summary.
 
     ``execute_backtest`` defaults to the real engine call wired to *this* job's
     cancellation check, so a run still queued behind another process-wide
@@ -178,11 +221,18 @@ def run_launch(
     ``(run_spec, config)`` fake and nothing else changes.
     """
     execute = execute_backtest or partial(_execute_backtest, cancel_check=cancel.raise_if_cancelled)
+    # Claim before any write (#1938): a fresh launch takes attempt 1 under
+    # its own id, a resume the next generation under the new job id. A hung
+    # predecessor's writes are refused from here on.
+    attempt = _claim_launch(config.launch_id, emit.job_id)
+    skip = _recorded_cells(config.launch_id)
+    if skip:
+        emit.log(f"resume: {len(skip)} of {grid_size(config.strategies, config.symbols)} runs already recorded; running the rest")
     try:
         summary = run_recency(
             config,
             execute_backtest_fn=execute,
-            persist_fn=_persist,
+            persist_fn=partial(_persist, attempt=attempt),
             strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
             on_phase=emit.phase,
             on_progress=lambda done, total: emit.progress(done, total, unit="runs"),
@@ -191,22 +241,32 @@ def run_launch(
             ),
             # Raises JobCancelled so run_in_thread emits job.cancelled instead of job.completed on a DELETE.
             cancel_check=cancel.raise_if_cancelled,
+            skip_identities=skip,
         )
     except JobCancelled:
-        record_abort_state(config.launch_id, "CANCELLED")
+        record_abort_state(config.launch_id, "CANCELLED", attempt=attempt)
         raise
     except Exception:
-        record_abort_state(config.launch_id, "FAILED")
+        record_abort_state(config.launch_id, "FAILED", attempt=attempt)
         raise
     record_terminal_status(
         summary.launch_id,
         "COMPLETED" if summary.failed_runs == 0 else "FAILED",
-        succeeded_runs=summary.succeeded_runs,
+        attempt=attempt,
+        # SucceededRuns stays the count the per-run persists incremented —
+        # the durable record, never this execution's replay of it (#1938):
+        # on a resume the recorded cells were skipped, so this execution's
+        # successes alone would understate the launch and fail the
+        # COMPLETED reconciliation. FailedRuns is this execution's count,
+        # which is the launch's: failed runs leave no durable trace, so a
+        # resume re-ran every one of them.
         failed_runs=summary.failed_runs,
     )
     return {
         "launch_id": summary.launch_id,
+        "attempt": attempt,
         "expected_runs": summary.expected_runs,
         "succeeded_runs": summary.succeeded_runs,
         "failed_runs": summary.failed_runs,
+        "skipped_runs": summary.skipped_runs,
     }

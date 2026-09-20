@@ -1,0 +1,49 @@
+<section class="launches" aria-label="Recent launches">
+  <h2>Recent launches</h2>
+  @if (loadFailed()) {
+    <p class="status">Could not load the recent launches. Retrying automatically.</p>
+  } @else if (!hasLaunches()) {
+    <p class="status">No launches yet. Launch a timeline above and it will appear here.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Launched</th>
+          <th scope="col">Status</th>
+          <th scope="col">Runs</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (launch of launches(); track launch.launchId) {
+          <tr>
+            <td>{{ launch.createdAtMs | date: "short" }}</td>
+            <td>
+              <span class="status-chip" [class.is-live]="launch.status === 'running'" [class.is-interrupted]="launch.status === 'interrupted'" [class.is-failed]="launch.status === 'failed'">
+                {{ launch.status }}
+              </span>
+            </td>
+            <td>{{ runsLabel(launch) }}</td>
+            <td>
+              @if (launch.resumable) {
+                <button
+                  type="button"
+                  (click)="resume(launch)"
+                  [disabled]="isResuming(launch)"
+                  [attr.aria-label]="'Resume launch from ' + (launch.createdAtMs | date: 'short')"
+                >
+                  {{ isResuming(launch) ? "Resuming…" : "Resume" }}
+                </button>
+              } @else if (launch.resumeRefusal !== null) {
+                <span class="refusal">{{ launch.resumeRefusal }}</span>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    @if (resumeFailed()) {
+      <p class="status" role="alert">The resume could not be started. Try again.</p>
+    }
+  }
+</section>
