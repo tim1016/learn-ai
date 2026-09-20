@@ -1,7 +1,8 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, output, signal } from "@angular/core";
-import { DatePipe } from "@angular/common";
 import { firstValueFrom } from "rxjs";
 
+import { TimestampDisplayComponent } from "../../../../shared/timestamp/timestamp-display.component";
+import { formatTimestampDisplay } from "../../../../shared/timestamp/timestamp-display";
 import { RecencyChartService, type RecencyLaunch } from "../../../../services/recency-chart.service";
 
 const POLL_MS = 3000;
@@ -16,7 +17,7 @@ const POLL_MS = 3000;
  */
 @Component({
   selector: "app-recency-launches",
-  imports: [DatePipe],
+  imports: [TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-launches.component.html",
   styleUrls: ["./recency-launches.component.scss"],
@@ -25,7 +26,7 @@ export class RecencyLaunchesComponent {
   private readonly recency = inject(RecencyChartService);
   private readonly destroyRef = inject(DestroyRef);
 
-  readonly resumeCompleted = output<void>();
+  readonly resumeCompleted = output();
 
   private readonly launchesState = signal<RecencyLaunch[]>([]);
   readonly launches = this.launchesState.asReadonly();
@@ -35,7 +36,9 @@ export class RecencyLaunchesComponent {
 
   readonly hasLaunches = computed(() => this.launches().length > 0);
 
-  private readonly pollTimer = setInterval(() => void this.reload(), POLL_MS);
+  private readonly pollTimer = setInterval(() => {
+    void this.reload();
+  }, POLL_MS);
 
   constructor() {
     this.destroyRef.onDestroy(() => clearInterval(this.pollTimer));
@@ -48,6 +51,10 @@ export class RecencyLaunchesComponent {
 
   runsLabel(launch: RecencyLaunch): string {
     return launch.failedRuns > 0 ? `${launch.succeededRuns}/${launch.expectedRuns} · ${launch.failedRuns} failed` : `${launch.succeededRuns}/${launch.expectedRuns}`;
+  }
+
+  resumeAriaDate(launch: RecencyLaunch): string {
+    return formatTimestampDisplay(launch.createdAtMs, { mode: "local" });
   }
 
   async reload(): Promise<void> {

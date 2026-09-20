@@ -17,7 +17,7 @@
       <tbody>
         @for (launch of launches(); track launch.launchId) {
           <tr>
-            <td>{{ launch.createdAtMs | date: "short" }}</td>
+            <td><app-timestamp-display [value]="launch.createdAtMs" mode="local" /></td>
             <td>
               <span class="status-chip" [class.is-live]="launch.status === 'running'" [class.is-interrupted]="launch.status === 'interrupted'" [class.is-failed]="launch.status === 'failed'">
                 {{ launch.status }}
@@ -30,7 +30,7 @@
                   type="button"
                   (click)="resume(launch)"
                   [disabled]="isResuming(launch)"
-                  [attr.aria-label]="'Resume launch from ' + (launch.createdAtMs | date: 'short')"
+                  [attr.aria-label]="'Resume launch from ' + resumeAriaDate(launch)"
                 >
                   {{ isResuming(launch) ? "Resuming…" : "Resume" }}
                 </button>

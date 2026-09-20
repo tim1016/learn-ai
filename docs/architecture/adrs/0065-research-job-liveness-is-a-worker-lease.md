@@ -3,6 +3,7 @@
 **Status:** Accepted 2026-09-20
 **Provenance:** Issue #1938, filed from the #1937 review: redelivered research job ids were made safe by refusing them (409) once closed, which left a crashed run unresumable — and the "is it running?" answer those refusals and presentations depend on was a Redis status field that keeps saying `running` after the worker is gone. The four hazards of replaying a closed job were enumerated in the #1938 scope note.
 **Related:** ADR 0055 §4 (the attempt fence this extends to Recency), ADR 0057 (the Recency tables; its cutover note "relaunch under a new launch id" is superseded for interrupted launches by this Finish-style resume), ADR 0056 (the Finish shape Recency now copies), #1937 (the 409 redelivery guard this relaxes for `resume_launch_id`).
+**Vocabulary:** none owed — the worker lease and the attempt-generation claim are job-store mechanics defined here and in the module docstrings; "launch", "resume" and "interrupted" keep the meanings the Grid Search / Walk-Forward surfaces already gave them.
 
 ## Decision
 
