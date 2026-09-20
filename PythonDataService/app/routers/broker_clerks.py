@@ -228,7 +228,11 @@ async def aggregate_broker_clerks_attention(request: Request) -> Response:
         )
         if delivered.status_code >= 400:
             raise ClerkUnreachable(
-                f"The lane refused its attention read with {delivered.status_code}."
+                f"The lane refused its attention read with {delivered.status_code}.",
+                next_step=(
+                    "The next poll asks this lane again; open its workspace from "
+                    "the account desk to check it directly meanwhile."
+                ),
             )
         return dict(json.loads(delivered.body))
 
