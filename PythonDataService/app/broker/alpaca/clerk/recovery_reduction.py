@@ -250,8 +250,11 @@ class ExtendedLimitProposal:
     quote: TopOfBookQuote
     exit_allowance_bps: Decimal
     suggested_limit_price: Decimal
-    # The furthest-through-the-book price the Clerk accepts against this quote.
-    band_limit_price: Decimal
+    # The furthest-through-the-book price the Clerk accepts against this quote,
+    # or ``None`` when the configured band is effectively unbounded — a sell
+    # band past 100 % of the touch floors to zero or below, which is not a
+    # price; any positive limit is then inside the band (PR #2230 review).
+    band_limit_price: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -342,7 +345,7 @@ def price_recovery_reduction(
         suggested_limit_price=_through_the_book(
             side, quote, policy.allowances.exit_bps
         ),
-        band_limit_price=_through_the_book(
+        band_limit_price=_band_limit_price(
             side, quote, policy.allowances.exit_bps * policy.allowances.exit_band_multiple
         ),
     )
@@ -402,12 +405,12 @@ def recovery_reduction_shape(
         shape.apply(symbol=symbol, quantity=quantity)
     except ValidationError as exc:
         raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
-    band = _through_the_book(
+    band = _band_limit_price(
         side,
         current_quote,
         policy.allowances.exit_bps * policy.allowances.exit_band_multiple,
     )
-    past_band = (
+    past_band = band is not None and (
         confirmed.limit_price < band if side is OrderSide.SELL else confirmed.limit_price > band
     )
     if past_band:
@@ -580,7 +583,7 @@ def evaluate_proposed_limit(
         raise ValueError(f"quote touch must be positive; got {touch}")
     through = touch - limit_price if side is OrderSide.SELL else limit_price - touch
     touch_size = proposal.quote.bid_size if side is OrderSide.SELL else proposal.quote.ask_size
-    outside_band = (
+    outside_band = proposal.band_limit_price is not None and (
         limit_price < proposal.band_limit_price
         if side is OrderSide.SELL
         else limit_price > proposal.band_limit_price
@@ -600,6 +603,25 @@ def _signed_against_reference(side: OrderSide, reference_price: float, fill_pric
     if side is OrderSide.SELL:
         return reference_price - fill_price
     return fill_price - reference_price
+
+
+def _band_limit_price(
+    side: OrderSide, quote: TopOfBookQuote, band_bps: Decimal
+) -> Decimal | None:
+    """The band edge, or ``None`` when the configured band is unbounded.
+
+    A sell band of 10 000+ bps floors the touch to zero or below, which is not
+    a price — an otherwise accepted configuration must not make a flatten
+    unpriceable, so the band is treated as having no lower bound and any
+    positive limit passes (PR #2230 review). Only the sell side can floor;
+    a cover band only grows upward.
+    """
+    try:
+        return _through_the_book(side, quote, band_bps)
+    except ProgramLegRefused as exc:
+        if exc.reason_code != RECOVERY_QUOTE_UNPRICEABLE.reason_code:
+            raise
+        return None
 
 
 def _through_the_book(side: OrderSide, quote: TopOfBookQuote, allowance_bps: Decimal) -> Decimal:

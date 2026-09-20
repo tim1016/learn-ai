@@ -2104,3 +2104,69 @@ async def test_accept_recovery_exit_forbid_active_run_fails_closed_under_live_ru
         entry_order_ref=entry_ref,
     )
     assert accepted.created is True
+
+
+async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_fold(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """PR #2230 review, the resubmission fold's identity guard: an uncertain
+    submission may have reached Alpaca. When a recorded execution slice exists
+    under a null broker identity, absence is *not* proven — the entry must not
+    be released for a fresh EXIT that would mint a different client id while
+    the original might still execute."""
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-uncertainid1",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    outage = _FakeTrade(
+        lookup_results=[recovered, recovered],
+        submit_error=BrokerUnavailable("broker is down"),
+    )
+    submitted = await resolve_accepted_exit(repo, accepted=accepted, trade=outage)
+    assert submitted.reducing_order_ref is not None
+
+    # A partial execution slice lands for the reducing order under a null
+    # broker id: the fill check in ``order_never_reached_broker`` now
+    # contradicts absence, and the position is not flat, so nothing terminal
+    # can be concluded either way.
+    reducing_seen = _broker_order(
+        submitted.reducing_order_ref, side="sell", status="accepted",
+        filled_quantity=4, filled_avg_price=100.0,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=submitted.reducing_order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=100, quantity=4, execution_id="reducing-exec-1",
+        ),
+        event_key="execution:reducing-exec-1",
+        order=reducing_seen,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
+    after_close = _FakeTrade(lookup_results=[None])
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close)
+
+    assert after_close.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    # Retained, not released: the identity question outranks the session clock.
+    assert effect is not None and effect.state not in ("succeeded", "failed", "rejected")
+    assert repo.active_exit_for_order(entry_ref) is not None

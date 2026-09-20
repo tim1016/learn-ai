@@ -531,7 +531,10 @@ class ExtendedLimitFlattenPricing(BaseModel):
     suggested_limit_price: float
     # The furthest-through-the-book price the Clerk accepts: twice the exit
     # allowance past the bid (sell) or ask (cover), owner decision 2026-09-19.
-    band_limit_price: float
+    # None when the configured band is effectively unbounded (a sell band
+    # past 100 % floors to zero, which is not a price); any positive limit
+    # is then inside the band (PR #2230 review).
+    band_limit_price: float | None = None
     # The live spread in dollars and as bps of the mid, and whether that is
     # wide enough to flag.
     spread: float
@@ -604,7 +607,9 @@ def safe_flatten_pricing_response(
             quote_max_age_ms=RECOVERY_QUOTE_MAX_AGE_MS,
             exit_allowance_bps=float(pricing.exit_allowance_bps),
             suggested_limit_price=float(pricing.suggested_limit_price),
-            band_limit_price=float(pricing.band_limit_price),
+            band_limit_price=None
+            if pricing.band_limit_price is None
+            else float(pricing.band_limit_price),
             spread=quote.ask - quote.bid,
             spread_bps=spread_bps,
             wide_spread=spread_bps > RECOVERY_SPREAD_WARNING_BPS,

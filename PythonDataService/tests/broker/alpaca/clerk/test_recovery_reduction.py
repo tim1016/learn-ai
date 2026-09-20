@@ -662,3 +662,47 @@ def test_a_wider_deploy_band_multiple_accepts_a_price_the_default_refuses() -> N
     assert isinstance(wide_proposal, ExtendedLimitProposal)
     assert wide_proposal.band_limit_price < narrow_proposal.band_limit_price
     assert wide_proposal.suggested_limit_price == narrow_proposal.suggested_limit_price
+
+
+def test_a_sell_band_past_one_hundred_percent_is_unbounded_not_unpriceable() -> None:
+    """PR #2230 review: an accepted configuration (20 % exit allowance, 10×
+    band) must not make a sell flatten unpriceable — the band floors to zero,
+    which is not a price, so it is treated as having no lower bound."""
+    from decimal import Decimal as _Decimal
+
+    extreme = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(
+            entry_bps=_Decimal("10"),
+            exit_bps=_Decimal("2000"),
+            exit_band_multiple=_Decimal("10"),
+        ),
+    )
+    now_ms = _at(17)
+    quote = _quote(observed_at_ms=now_ms)
+    pricing = price_recovery_reduction(
+        side=OrderSide.SELL, now_ms=now_ms, policy=extreme, quote=quote
+    )
+    assert isinstance(pricing, ExtendedLimitProposal)
+    assert pricing.suggested_limit_price == _Decimal("80.00")
+    assert pricing.band_limit_price is None  # 200 % of the touch is not a price
+
+    # Any positive limit is inside an unbounded band, and the evaluation
+    # agrees.
+    deep = _Decimal("5.00")
+    assert (
+        recovery_reduction_shape(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=extreme,
+            confirmed=ConfirmedRecoveryLimit(
+                limit_price=deep, quote_observed_at_ms=now_ms
+            ),
+            current_quote=quote,
+        )
+        is not None
+    )
+    evaluation = evaluate_proposed_limit(proposal=pricing, limit_price=deep, quantity=10)
+    assert evaluation.outside_band is False

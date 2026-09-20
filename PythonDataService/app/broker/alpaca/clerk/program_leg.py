@@ -178,22 +178,65 @@ def _resolved_settings(*, concern: str) -> AlpacaSettings | None:
         return None
 
 
+def _parsed_deploy_knob(
+    raw: str | None, *, name: str, low: Decimal, high: Decimal, default: Decimal
+) -> Decimal:
+    """Parse one deploy-time recovery knob leniently (PR #2230 review).
+
+    The knob is fail-open deployment configuration: unparseable, non-finite,
+    or out-of-[low, high] values log at error and answer the declared default
+    — never an exception, because the same string failing ``AlpacaSettings``
+    construction would disable the whole authority for a recovery-knob typo.
+    """
+    if raw is None:
+        return default
+    try:
+        value = Decimal(raw.strip())
+    except ArithmeticError:
+        logger.error(
+            "%s is not a number; the declared default %s applies",
+            name,
+            default,
+            extra={"action": "deploy_recovery_knob_unparseable", "setting": name, "raw": raw},
+        )
+        return default
+    if not value.is_finite() or not low <= value <= high:
+        logger.error(
+            "%s is outside [%s, %s]; the declared default %s applies",
+            name,
+            low,
+            high,
+            default,
+            extra={"action": "deploy_recovery_knob_out_of_range", "setting": name, "raw": raw},
+        )
+        return default
+    return value
+
+
 def _exit_band_multiple_from(settings: AlpacaSettings | None) -> Decimal:
     """The band multiple one settings read answers, or the declared default."""
     from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_BAND_MULTIPLE
 
-    if settings is None or settings.live_xh_exit_band_multiple is None:
-        return DEFAULT_EXIT_BAND_MULTIPLE
-    return Decimal(str(settings.live_xh_exit_band_multiple))
+    return _parsed_deploy_knob(
+        None if settings is None else settings.live_xh_exit_band_multiple,
+        name="ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE",
+        low=Decimal(1),
+        high=Decimal(10),
+        default=DEFAULT_EXIT_BAND_MULTIPLE,
+    )
 
 
 def _exit_spread_cap_from(settings: AlpacaSettings | None) -> Decimal:
     """The spread cap one settings read answers, or the declared default."""
     from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_SPREAD_CAP_BPS
 
-    if settings is None or settings.live_xh_exit_spread_cap_bps is None:
-        return DEFAULT_EXIT_SPREAD_CAP_BPS
-    return Decimal(str(settings.live_xh_exit_spread_cap_bps))
+    return _parsed_deploy_knob(
+        None if settings is None else settings.live_xh_exit_spread_cap_bps,
+        name="ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS",
+        low=Decimal(1),
+        high=Decimal(1000),
+        default=DEFAULT_EXIT_SPREAD_CAP_BPS,
+    )
 
 
 def with_deploy_recovery_pricing(

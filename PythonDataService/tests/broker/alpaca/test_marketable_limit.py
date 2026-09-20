@@ -178,8 +178,8 @@ def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> N
             live_xh_exit_bps=20.0,
             # Deploy-time values set here must NOT change the converted pair:
             # stamping is the canonical seam's job, not the converter's.
-            live_xh_exit_band_multiple=4.0,
-            live_xh_exit_spread_cap_bps=200.0,
+            live_xh_exit_band_multiple="4.0",
+            live_xh_exit_spread_cap_bps="200.0",
         )
     )
     for allowances in (envelope, settings):
@@ -192,8 +192,8 @@ def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> N
         program_leg._resolved_settings = lambda *, concern: AlpacaSettings(
             api_key_id="k",
             api_secret_key="s",
-            live_xh_exit_band_multiple=4.0,
-            live_xh_exit_spread_cap_bps=200.0,
+            live_xh_exit_band_multiple="4.0",
+            live_xh_exit_spread_cap_bps="200.0",
         )
         stamped = program_leg.with_deploy_recovery_pricing(envelope)
     finally:
@@ -214,3 +214,19 @@ def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> N
 
     assert RECOVERY_SPREAD_WARNING_BPS == int(DEFAULT_EXIT_SPREAD_CAP_BPS) == 50
     assert RECOVERY_BAND_ALLOWANCE_MULTIPLE == DEFAULT_EXIT_BAND_MULTIPLE
+
+
+def test_invalid_deploy_knob_values_degrade_loudly_to_the_declared_defaults() -> None:
+    """PR #2230 review: a malformed or out-of-range recovery-knob value must
+    never fail ``AlpacaSettings`` construction (which would disable the whole
+    authority) — it answers the declared default, loudly, at the read."""
+    from app.broker.alpaca.clerk import program_leg
+
+    settings = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        live_xh_exit_band_multiple="50",  # out of [1, 10]
+        live_xh_exit_spread_cap_bps="not-a-number",
+    )
+    assert program_leg._exit_band_multiple_from(settings) == Decimal(2)
+    assert program_leg._exit_spread_cap_from(settings) == Decimal("50")

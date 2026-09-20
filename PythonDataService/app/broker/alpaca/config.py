@@ -114,20 +114,21 @@ class AlpacaSettings(BaseSettings):
     live_xh_exit_bps: float | None = Field(default=None, ge=0, lt=10_000, allow_inf_nan=False)
     # Deploy-time band multiple (#2229): how many exit allowances a recovery
     # flatten's confirmed limit may reach through the live touch. Not part of
-    # the sealed envelope — bounded [1, 10] so a typo cannot unbound the band,
-    # and unset keeps the declared default of 2×
-    # (``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``).
-    live_xh_exit_band_multiple: float | None = Field(
-        default=None, ge=1, le=10, allow_inf_nan=False
-    )
+    # the sealed envelope. A *raw string* on purpose (PR #2230 review): bounds
+    # and parse are enforced at the read
+    # (``program_leg._parsed_deploy_knob``), so a malformed or out-of-range
+    # value degrades loudly to the declared default instead of failing this
+    # model's construction — a recovery-knob typo must never disable the whole
+    # Alpaca authority. Valid values: [1, 10]; unset keeps the declared
+    # default of 2× (``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``).
+    live_xh_exit_band_multiple: str | None = None
     # Deploy-time spread cap (#2229): the widest bid-ask spread, in bps of the
     # mid, an automatic recovery re-drive will price a limit against; wider
     # books defer to the operator. Automatic path only — the operator's ticket
-    # shows the wide spread and can override. Bounded [1, 1000]: 1000 bps is
-    # effectively no gate, so the escape hatch exists without a special "off".
-    live_xh_exit_spread_cap_bps: float | None = Field(
-        default=None, ge=1, le=1000, allow_inf_nan=False
-    )
+    # shows the wide spread and can override. Same raw-string isolation as the
+    # band multiple. Valid values: [1, 1000] — 1000 bps is effectively no
+    # gate, so the escape hatch exists without a special "off".
+    live_xh_exit_spread_cap_bps: str | None = None
 
     @model_validator(mode="after")
     def _enforce_mode_agreement(self) -> AlpacaSettings:

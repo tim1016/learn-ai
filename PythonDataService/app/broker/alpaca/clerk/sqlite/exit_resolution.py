@@ -828,6 +828,26 @@ async def _refresh_or_resume_reducing_order(
             why="No exact reducing-order evidence yet; retaining custody.",
         )
         return
+    # A reducing order whose submission was uncertain is only ever resumed —
+    # or released by the wait fold below it — on conclusive identity evidence
+    # (PR #2230 review): the request may have reached Alpaca, and a release
+    # without proof would let a fresh EXIT mint a *different* client id while
+    # the original might still execute, over-reducing the account.
+    # ``order_never_reached_broker`` is the one predicate that reads an absent
+    # lookup as an answer: no broker identity, no acknowledgement, no recorded
+    # fill, and the R4 grace closed. Anything less retains custody as an
+    # unknown, exactly as before the fold existed.
+    if not order_never_reached_broker(repo, reducing):
+        fold_uncertain(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=reducing.order_ref,
+            why=(
+                "The reducing order's broker identity is not conclusively "
+                "absent; retaining custody rather than resuming or releasing it."
+            ),
+        )
+        return
     await _submit_reducing_order(
         repo,
         effect_operation_id=effect_operation_id,
