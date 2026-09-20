@@ -33,19 +33,20 @@
       Platform figures come from the Python engine — the production engine for
       backtests, sweeps and studies. The vendored LEAN reference is used to
       validate that engine, never to run alongside it. LEAN-native values,
-      where a panel shows them, are the reference's own calculations,
-      reproduced independently in Python for comparison.
+      where a panel shows them, are the LEAN reference's own figures, carried
+      through field-for-field without recomputation.
     </p>
     <p>
       <strong>Validation is summary-level, by design.</strong> The engine is
       checked against LEAN on summary statistics, the closed-trade ledger and
       global run characteristics (trade count, fees, final equity). Those
       comparisons are pinned by golden fixtures and parity verdicts on
-      Strategy Lab run evidence. Individual minute bars are never validated
-      one by one — a two-year minute run holds roughly 200,000 of them, and a
-      bar-by-bar comparison would re-prove the same math per bar against a
-      reference chart that samples the equity path far more coarsely than the
-      engine's minute resolution.
+      Strategy Lab run evidence. Ordinary runs and sweeps are not graded
+      bar-by-bar — a two-year minute run holds roughly 200,000 bars. Where
+      bar-level proof matters most it exists as its own dedicated gate: the
+      LEAN cross-engine reconciliation compares every consumed minute's
+      timestamp and prices row-for-row against LEAN for its pinned strategy
+      set.
     </p>
     <p>
       <strong>Minute detail still exists where a figure is defined on it.</strong>

@@ -42,7 +42,9 @@ describe("ValidationScopeNoteComponent", () => {
     expect(document.body.textContent).toContain("What LEAN validation covers");
     expect(document.body.textContent).toContain("Validation is summary-level, by design.");
     expect(document.body.textContent).toContain("closed-trade ledger");
-    expect(document.body.textContent).toContain("Individual minute bars are never validated");
+    expect(document.body.textContent).toContain("Ordinary runs and sweeps are not graded bar-by-bar");
+    expect(document.body.textContent).toContain("cross-engine reconciliation");
+    expect(document.body.textContent).toContain("carried through field-for-field without recomputation");
     expect(document.body.textContent).toContain("expected, not a defect");
   });
 

@@ -28,7 +28,7 @@ export class ValidationScopeNoteComponent {
   protected readonly visible = signal(false);
 
   protected readonly tooltip =
-    'LEAN validation covers summary statistics, trades and run totals — not every bar. Click for what that means for these figures.';
+    'LEAN validation grades summaries, trades and run totals; bar-by-bar parity exists only as its own dedicated gate. Click for what that means for these figures.';
 
   open(): void {
     this.visible.set(true);
