@@ -100,14 +100,34 @@ def test_snapshot_pins_lake_catalog_access_for_every_clerk_lane() -> None:
     """#2163: a lane-served read (bot panel, strategy-validation golden
     dossiers) resolves lake evidence over asyncpg in the lane process itself,
     so a clerk without ``POSTGRES_URL`` 500s on every lake-backed read --
-    which the coordinator then masked as a lane-identity 409 (#2164). The
-    dev-posture lanes share ``app-network`` with ``db`` and take the same
-    templated URL ``compose.yaml`` hands the combined role. The production
+    which the coordinator then masked as a lane-identity 409 (#2164).
+
+    #2166: the key must arrive via ``env_file`` only, naming the read-only
+    ``fleet_lake_catalog`` role. The overlay's own environment anchor must
+    not declare it at all -- ``environment:`` outranks ``env_file:``
+    key-for-key, so even a ${}-templated superuser URL there would silently
+    defeat the lane env files and hand a lane that also carries Alpaca
+    execution credentials the password the backend itself uses. The
+    snapshot render resolves env_file against the committed examples, so
+    the key's presence there is the env_file path working. The production
     ``compose.fleet.yaml`` posture is out of scope here: its clerks sit on
-    ``fleet-private`` alone, so lake access there is a routing decision, not
-    a missing variable."""
+    ``fleet-private`` alone, so lake access there is a routing decision,
+    not a missing variable."""
+    overlay = yaml.load(
+        (ROOT / "compose.fleet.dev.yaml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+    )
+    assert "POSTGRES_URL" not in overlay["x-alpaca-clerk-agent"]["environment"], (
+        "the clerk anchor declares POSTGRES_URL inline: `environment:` outranks "
+        "env_file key-for-key, so the lane env files' least-privilege "
+        "fleet_lake_catalog URL (#2166) would be silently defeated"
+    )
     detail = _snapshot()["service_detail"]
     for lane in ("alpaca-live-clerk", "alpaca-paper-clerk"):
         assert "POSTGRES_URL" in detail[lane]["environment_keys"], (
-            f"{lane} has no POSTGRES_URL: every lake-backed lane read 500s (#2163)"
+            f"{lane} resolves no POSTGRES_URL from its env_file: every "
+            "lake-backed lane read 500s (#2163)"
+        )
+        assert detail[lane]["env_file"], (
+            f"{lane} declares no env_file: POSTGRES_URL must reach the lane "
+            "that way (#2166)"
         )

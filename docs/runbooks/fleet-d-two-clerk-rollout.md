@@ -34,6 +34,8 @@ The coordinator file has the installation control secret and coordinator-side pe
 
 Each lane file sets `FLEET_CLERK_ID`, `FLEET_WORKER_KEY`, `FLEET_AGENT_SERVICE_TOKEN`, `FLEET_COORDINATOR_SERVICE_TOKEN`, the lane's Alpaca credentials, and `IBKR_CLIENT_ID`. The reviewed Compose topology supplies `FLEET_ROLE=clerk_agent`, `FLEET_COORDINATOR_URL=http://fleet-coordinator:8000`, the lane endpoint reference, deployment namespace, and positive values for `FLEET_MAX_INFLIGHT_REQUESTS`, `FLEET_MAX_INFLIGHT_STREAMS`, `FLEET_REQUEST_QUEUE_LIMIT`, and `FLEET_REQUEST_QUEUE_TIMEOUT_MS`.
 
+When this posture's lanes gain lake-catalog access, their `POSTGRES_URL` must never inherit the combined role's superuser login: provision the read-only `fleet_lake_catalog` role instead (`deploy/fleet/sql/provision-fleet-lake-catalog-role.sql`, #2166 — the dev-posture runbook `fleet-dev-two-lane-posture.md` documents the ceremony). The production wiring remains a pending decision precisely so it does not arrive by default.
+
 Those four capacity controls are per lane. A `503 fleet_lane_capacity_exhausted` is a qualification observation, never a reason to raise limits during an incident.
 
 ## 1. Provision distinct coordinator, Paper, and Live identities

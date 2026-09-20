@@ -165,3 +165,25 @@ def test_lane_examples_declare_the_four_identity_and_transport_keys() -> None:
     }
     for name in ("live.env.example", "paper.env.example"):
         assert identity_keys <= _example_keys(name), name
+
+
+def test_lane_examples_declare_the_lake_catalog_url() -> None:
+    """#2166: POSTGRES_URL reaches the lanes via env_file only (the compose
+    overlay carries no inline value for it), so the examples must document
+    the key or a fresh clone cannot populate it — and the documented value
+    must name the read-only fleet_lake_catalog role, never the superuser
+    login compose.yaml hands the combined role."""
+    for name in ("live.env.example", "paper.env.example"):
+        keys = _example_keys(name)
+        assert "POSTGRES_URL" in keys, name
+        url = next(
+            line.split("=", 1)[1].strip()
+            for line in (ROOT / "deploy/fleet/env" / name).read_text(encoding="utf-8").splitlines()
+            if line.startswith("POSTGRES_URL=")
+        )
+        assert url.startswith("postgres://fleet_lake_catalog:"), (
+            f"{name}: the example lane URL must use the fleet_lake_catalog role"
+        )
+        assert "postgres:postgres@" not in url and ":postgres:@" not in url, (
+            f"{name}: the example lane URL must not be a superuser login"
+        )
