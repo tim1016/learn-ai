@@ -107,12 +107,14 @@ def test_snapshot_pins_lake_catalog_access_for_every_clerk_lane() -> None:
     not declare it at all -- ``environment:`` outranks ``env_file:``
     key-for-key, so even a ${}-templated superuser URL there would silently
     defeat the lane env files and hand a lane that also carries Alpaca
-    execution credentials the password the backend itself uses. The
-    snapshot render resolves env_file against the committed examples, so
-    the key's presence there is the env_file path working. The production
-    ``compose.fleet.yaml`` posture is out of scope here: its clerks sit on
-    ``fleet-private`` alone, so lake access there is a routing decision,
-    not a missing variable."""
+    execution credentials the password the backend itself uses. The env
+    example files deliberately carry the documented line COMMENTED (the
+    production rollout copies them verbatim and its clerks cannot reach
+    ``db``), so the merged snapshot render resolves no value for the key --
+    the presence pin lives in the env-completeness contract instead. The
+    production ``compose.fleet.yaml`` posture is out of scope here: its
+    clerks sit on ``fleet-private`` alone, so lake access there is a
+    routing decision, not a missing variable."""
     overlay = yaml.load(
         (ROOT / "compose.fleet.dev.yaml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader
     )
@@ -123,9 +125,9 @@ def test_snapshot_pins_lake_catalog_access_for_every_clerk_lane() -> None:
     )
     detail = _snapshot()["service_detail"]
     for lane in ("alpaca-live-clerk", "alpaca-paper-clerk"):
-        assert "POSTGRES_URL" in detail[lane]["environment_keys"], (
-            f"{lane} resolves no POSTGRES_URL from its env_file: every "
-            "lake-backed lane read 500s (#2163)"
+        assert "POSTGRES_URL" not in detail[lane]["environment_keys"], (
+            f"{lane} resolves a POSTGRES_URL the commented examples do not "
+            "carry: an inline declaration has re-entered the topology (#2166)"
         )
         assert detail[lane]["env_file"], (
             f"{lane} declares no env_file: POSTGRES_URL must reach the lane "

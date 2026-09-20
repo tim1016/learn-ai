@@ -20,24 +20,20 @@ SQL_PATH = ROOT / "deploy" / "fleet" / "sql" / "provision-fleet-lake-catalog-rol
 
 LANE_TABLES = frozenset(
     {
-        "DataLakeArtifacts",
         "research_schema_migrations",
         "research_validation_golden_runs",
         "research_golden_validation_reviews",
         "research_parity_verdicts",
         "research_backtest_runs",
-        "research_backtest_run_trades",
-        "RecencyLaunches",
-        "RecencyRuns",
-        "RecencyTrades",
-        "RecencyTradeMemberships",
     }
 )
 
-# The account/order domain the .NET backend owns. A lane read never touches
-# these, and any grant reaching them is the exact widening #2166 exists to
-# remove — so their names must not appear in the SQL at all.
-DOTNET_DOMAIN_TABLES = frozenset(
+# The account/order domain the .NET backend owns, plus the lake/research
+# tables no lane-served read resolves (the artifact catalog, backtest
+# trades, and the Recency family — all coordinator-served surfaces). A lane
+# read never touches the former and must not reach the latter: their names
+# in any grant are the exact widening #2166 exists to remove.
+NEVER_GRANTED_TABLES = frozenset(
     {
         "Accounts",
         "Orders",
@@ -52,6 +48,12 @@ DOTNET_DOMAIN_TABLES = frozenset(
         "clerk_transaction_events",
         "clerk_transaction_feed_status",
         "clerk_transaction_projection_cursors",
+        "DataLakeArtifacts",
+        "research_backtest_run_trades",
+        "RecencyLaunches",
+        "RecencyRuns",
+        "RecencyTrades",
+        "RecencyTradeMemberships",
     }
 )
 
@@ -125,10 +127,13 @@ def test_every_grant_is_read_only() -> None:
 
 def test_table_grants_name_exactly_the_lane_served_tables() -> None:
     """The SELECT surface is an enumerated, exact set — the tables the
-    lane-served reads actually resolve (bot panel artifact catalog, golden
-    dossier runs/reviews/verdicts, backtest and Recency evidence, and the
-    migration ledger ensure_schema() reads first). Adding a table is a
-    deliberate edit to both sides of this pin, never a silent widening."""
+    lane-served deploy path actually resolves (golden dossier runs,
+    reviews, parity verdicts, and the backtest-run source those dossiers
+    key into, plus the migration ledger ensure_schema() reads first).
+    Nothing wider: the artifact catalog, backtest trades, and the Recency
+    family are coordinator-served surfaces no lane read touches. Adding or
+    removing a table is a deliberate edit to both sides of this pin, never
+    a silent widening."""
     granted: set[str] = set()
     for match in re.finditer(
         r"GRANT\s+SELECT\s+ON\s+TABLE\s+(.+?)\s+TO\s+fleet_lake_catalog",
@@ -142,8 +147,36 @@ def test_table_grants_name_exactly_the_lane_served_tables() -> None:
     )
 
 
-def test_no_grant_reaches_the_dotnet_domain_tables() -> None:
-    for table in DOTNET_DOMAIN_TABLES:
+def test_no_grant_reaches_tables_outside_the_lane_surface() -> None:
+    for table in NEVER_GRANTED_TABLES:
         assert table not in _code(), (
             f"{table} must never appear in the lane role's provisioning SQL"
         )
+
+
+def test_reprovisioning_converges_instead_of_accumulating() -> None:
+    """Re-running the script after the allowlist narrows (or after an
+    operator's temporary widening elsewhere) must actually remove the
+    stale privilege: every table privilege is revoked before the allowlist
+    is applied, so the role's effective surface is always exactly the list
+    above rather than the union of everything it was ever granted."""
+    code = _code()
+    revoke = code.find("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM fleet_lake_catalog")
+    grant = code.find("GRANT SELECT ON TABLE")
+    assert revoke != -1, "no converging REVOKE of existing table privileges"
+    assert grant != -1
+    assert revoke < grant, "the REVOKE must precede the allowlist GRANTs"
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM fleet_lake_catalog"
+        in code
+    )
+
+
+def test_the_inherited_temporary_table_write_path_is_closed() -> None:
+    """PostgreSQL grants TEMPORARY on every database to PUBLIC, and a role
+    cannot selectively refuse an inherited PUBLIC privilege — so the
+    script must close the wildcard at the PUBLIC boundary or the lane role
+    can still create and fill temp tables despite its flags and narrow
+    grants (a write path and a disk-exhaustion vector under the
+    clerk-compromise scenario this role exists to contain)."""
+    assert "REVOKE TEMPORARY ON DATABASE postgres FROM PUBLIC" in _code()
