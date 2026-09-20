@@ -1031,3 +1031,37 @@ class ChartHistoryResponse(BaseModel):
     truncated: bool
     overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
     as_of_ms: int
+
+# ── §Lane attention (one lane's bell items, #2228) ───────────────────────────
+
+
+class LaneAttentionItem(BaseModel):
+    """One condition currently needing the operator on this lane (#2228).
+
+    ``condition_id`` is the uncertainty id — stable across polls, so the bell
+    dedupes by it and an item disappears exactly when the underlying episode
+    resolves. The narrow v1 set: active uncertainties only, which includes
+    ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    condition_id: str
+    reason_code: str
+    kind: str = "uncertainty"
+    severity: str
+    strategy_instance_id: str | None = None
+    # From the episode's cause facts where the condition names one (an
+    # EXIT_NOT_FLAT knows its symbol); None for account-scoped conditions.
+    symbol: str | None = None
+    headline: str
+
+
+class LaneAttentionRead(BaseModel):
+    """One lane's attention set, answered by the lane's own clerk (#2228)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str | None
+    items: list[LaneAttentionItem]
+

@@ -29,12 +29,13 @@ The load-bearing invariants, each with a test:
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import ipaddress
 import logging
 import re
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -1836,6 +1837,60 @@ class FleetControlService:
                 }
             results.append(outcome)
         return {"observed_at_ms": now, "lanes": results}
+
+    async def aggregate_lane_reads_async(
+        self,
+        lane_reads: Sequence[
+            tuple[str, str, Callable[[], Awaitable[Mapping[str, object]]]]
+        ],
+        *,
+        lane_timeout_s: float = 5.0,
+    ) -> dict[str, object]:
+        """Provenance-preserving partial aggregation over async lane readers.
+
+        The async twin of :meth:`aggregate_lane_reads`, for reads that leave
+        the process — a lane-scoped read through the lane router, never a
+        local descriptor projection. The per-lane contract is unchanged
+        (PRD FR-083/084): one lane's exception is that lane's explicit
+        ``ok: False`` entry, never an omission, a substitution, or a failure
+        for every other lane. A lane that exceeds ``lane_timeout_s`` is the
+        same explicit failure — surfaced as ``LaneReadTimeout`` so a slow
+        lane is never mistaken for a quiet one — and lanes are awaited
+        concurrently, so one slow lane cannot delay the others' answers
+        (FR-093's transport half). The coordinator still combines no values:
+        each lane's mapping returns untouched.
+        """
+        now = self._clock()
+
+        async def run_one(
+            broker: str, clerk_id: str, reader: Callable[[], Awaitable[Mapping[str, object]]]
+        ) -> dict[str, object]:
+            try:
+                payload = dict(await asyncio.wait_for(reader(), timeout=lane_timeout_s))
+            except TimeoutError:
+                return {
+                    "broker": broker,
+                    "clerk_id": clerk_id,
+                    "ok": False,
+                    "error_reason": "LaneReadTimeout",
+                    "error_message": (
+                        f"The lane read exceeded {lane_timeout_s:g}s and was abandoned."
+                    ),
+                }
+            except Exception as exc:
+                return {
+                    "broker": broker,
+                    "clerk_id": clerk_id,
+                    "ok": False,
+                    "error_reason": getattr(exc, "reason", type(exc).__name__),
+                    "error_message": str(exc),
+                }
+            return {"broker": broker, "clerk_id": clerk_id, "ok": True, "value": payload}
+
+        results = await asyncio.gather(
+            *(run_one(broker, clerk_id, reader) for broker, clerk_id, reader in lane_reads)
+        )
+        return {"observed_at_ms": now, "lanes": list(results)}
 
     def aggregate_directory_reads(
         self, *, include_retired: bool = False

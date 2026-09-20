@@ -524,3 +524,91 @@ async def test_http_directory_carries_the_alpaca_account_nickname_in_the_provide
         assert entry["provider_summary"]["account_nickname"] == "Strategy lab"
     finally:
         service.close()
+
+
+# ── async partial aggregation: lane-scoped reads that leave the process ─────
+
+
+async def test_async_partial_aggregation_isolates_one_lanes_exception(
+    fleet_service,
+) -> None:
+    """FR-083/084 for async readers: one lane raising is its own ``ok: False``
+    entry, never an omission or a global failure (#2228)."""
+
+    async def healthy() -> dict[str, object]:
+        return {"items": ["a"]}
+
+    async def broken() -> dict[str, object]:
+        raise RuntimeError("agent unreachable")
+
+    result = await fleet_service.aggregate_lane_reads_async(
+        [
+            ("fake_alpha", "alpha-1", healthy),
+            ("fake_beta", "beta-1", broken),
+        ]
+    )
+
+    (alpha, beta) = result["lanes"]
+    assert (alpha["broker"], alpha["clerk_id"], alpha["ok"]) == ("fake_alpha", "alpha-1", True)
+    assert alpha["value"] == {"items": ["a"]}
+    assert beta["ok"] is False
+    assert beta["error_reason"] == "RuntimeError"
+    assert "agent unreachable" in beta["error_message"]
+
+
+async def test_async_partial_aggregation_surfaces_a_timed_out_lane_explicitly(
+    fleet_service,
+) -> None:
+    """A slow lane is an explicit ``LaneReadTimeout`` failure of its own —
+    never a quiet lane, and never a delay for its siblings (FR-093)."""
+    import asyncio
+
+    started = asyncio.get_event_loop().time()
+
+    async def slow() -> dict[str, object]:
+        await asyncio.sleep(10)
+        return {"never": True}
+
+    async def quick() -> dict[str, object]:
+        return {"items": []}
+
+    result = await fleet_service.aggregate_lane_reads_async(
+        [("fake_alpha", "alpha-1", slow), ("fake_beta", "beta-1", quick)],
+        lane_timeout_s=0.05,
+    )
+
+    elapsed = asyncio.get_event_loop().time() - started
+    (alpha, beta) = result["lanes"]
+    assert alpha["ok"] is False
+    assert alpha["error_reason"] == "LaneReadTimeout"
+    assert beta["ok"] is True
+    assert elapsed < 5  # the timeout bounded the whole aggregate, not just one lane
+
+
+async def test_async_partial_aggregation_awaits_lanes_concurrently(
+    fleet_service,
+) -> None:
+    """Two half-second reads complete in about half a second, not one: the
+    aggregate never serializes lane reads behind each other."""
+    import asyncio
+
+    async def half_second() -> dict[str, object]:
+        await asyncio.sleep(0.5)
+        return {"items": []}
+
+    started = asyncio.get_event_loop().time()
+    result = await fleet_service.aggregate_lane_reads_async(
+        [("fake_alpha", "alpha-1", half_second), ("fake_beta", "beta-1", half_second)]
+    )
+    elapsed = asyncio.get_event_loop().time() - started
+
+    assert all(lane["ok"] for lane in result["lanes"])
+    assert elapsed < 0.9
+
+
+async def test_async_partial_aggregation_answers_empty_lanes_explicitly(
+    fleet_service,
+) -> None:
+    result = await fleet_service.aggregate_lane_reads_async([])
+    assert result["lanes"] == []
+    assert isinstance(result["observed_at_ms"], int)

@@ -891,6 +891,22 @@ def active_uncertainty(
     return dict(row) if row is not None else None
 
 
+def active_uncertainties(conn: sqlite3.Connection) -> list[dict]:
+    """Every unresolved uncertainty on the account, oldest observation first.
+
+    The lane's attention set (#2228): one row per raised condition, keyed by
+    ``uncertainty_id`` — the stable identity a bell dedupes and deep-links
+    from. Deliberately not admission-shaped: the bell lists everything
+    needing the operator, not one subject's gating facts.
+    """
+    rows = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE resolved_at_ms IS NULL "
+        "ORDER BY observed_at_ms ASC, uncertainty_id ASC"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def active_uncertainties_for_admission(
     conn: sqlite3.Connection,
     *,
