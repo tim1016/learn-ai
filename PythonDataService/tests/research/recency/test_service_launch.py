@@ -11,6 +11,7 @@ database (same attestation as the repository suites); Redis is the fake.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 
 import pytest
@@ -23,7 +24,16 @@ from app.research.recency.runner import RecencyLaunchConfig, RecencyRunSnapshot
 from app.research.sweep.grid import StrategyGridConfig, ValueListRange, expand_grid
 from tests.jobs.conftest import _FakeRedis
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [
+    pytest.mark.asyncio,
+    # The service path connects through the catalog pool; without the
+    # ephemeral attestation it must skip, exactly like the repository suites —
+    # never reach for a database it was not promised (the CI budget).
+    pytest.mark.skipif(
+        not os.getenv("POSTGRES_URL") or os.getenv("POSTGRES_URL_IS_EPHEMERAL", "").lower() not in ("1", "true"),
+        reason="live-DB service tests need an ephemeral POSTGRES_URL",
+    ),
+]
 
 
 def _config(launch_id: str) -> RecencyLaunchConfig:
