@@ -1,49 +1,15 @@
+@use '../../../../styles/explainer-dialog' as *;
+
 :host {
   display: contents;
 }
 
 :host ::ng-deep .fold-explainer-dialog {
-  width: min(38rem, calc(100vw - var(--space-8)));
-  border: 1px solid var(--border-light);
-  background: var(--bg-surface);
-  color: var(--text-primary);
-
-  .p-dialog-header,
-  .p-dialog-content {
-    background: var(--bg-surface);
-    color: var(--text-primary);
-  }
-
-  .p-dialog-header {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .p-dialog-close-button {
-    color: var(--text-secondary);
-
-    &:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-  }
+  @include explainer-dialog(38rem);
 }
 
 .fold-explainer__header {
-  display: grid;
-  gap: var(--space-1);
-
-  span {
-    color: var(--text-subtle);
-    font-family: var(--font-mono);
-    font-size: var(--fs-xxs);
-    font-weight: var(--fw-semi);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
-  }
-
-  strong {
-    font-size: var(--fs-xl);
-  }
+  @include explainer-dialog-header;
 }
 
 .fold-explainer {

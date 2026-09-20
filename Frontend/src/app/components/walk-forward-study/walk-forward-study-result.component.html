@@ -52,6 +52,8 @@
       Each fold's test-window result is <strong>out of sample</strong> for the settings chosen in that fold's training window. The other test cells were never chosen and are shown as exploratory only.
     </p>
 
+    <app-validation-scope-note />
+
     <div class="actions">
       @if (d.failure_reason) { <p class="refusal">{{ d.failure_reason }}</p> }
       <span class="spacer"></span>

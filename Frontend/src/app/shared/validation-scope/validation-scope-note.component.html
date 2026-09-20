@@ -1,0 +1,65 @@
+<button
+  type="button"
+  class="scope-trigger"
+  [pTooltip]="tooltip"
+  tooltipPosition="top"
+  aria-haspopup="dialog"
+  [attr.aria-expanded]="visible()"
+  (click)="open()"
+>
+  <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+  <span>LEAN validation scope</span>
+</button>
+
+<p-dialog
+  [visible]="visible()"
+  (visibleChange)="onVisibleChange($event)"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [closable]="true"
+  closeAriaLabel="Close the LEAN validation scope explainer"
+  styleClass="validation-scope-dialog"
+>
+  <ng-template #header let-ariaLabelledBy="ariaLabelledBy">
+    <div class="scope-header" [id]="ariaLabelledBy">
+      <span>and what it deliberately does not</span>
+      <strong>What LEAN validation covers</strong>
+    </div>
+  </ng-template>
+
+  <section class="scope-body" aria-label="LEAN validation scope">
+    <p>
+      Platform figures come from the Python engine — the production engine for
+      backtests, sweeps and studies. The vendored LEAN reference is used to
+      validate that engine, never to run alongside it. LEAN-native values,
+      where a panel shows them, are the LEAN reference's own figures, carried
+      through field-for-field without recomputation.
+    </p>
+    <p>
+      <strong>Validation is summary-level, by design.</strong> The engine is
+      checked against LEAN on summary statistics, the closed-trade ledger and
+      global run characteristics (trade count, fees, final equity). Those
+      comparisons are pinned by golden fixtures and parity verdicts on
+      Strategy Lab run evidence. Ordinary runs and sweeps are not graded
+      bar-by-bar — a two-year minute run holds roughly 200,000 bars. Where
+      bar-level proof matters most it exists as its own dedicated gate: the
+      LEAN cross-engine reconciliation compares every consumed minute's
+      timestamp and prices row-for-row against LEAN for its pinned strategy
+      set.
+    </p>
+    <p>
+      <strong>Minute detail still exists where a figure is defined on it.</strong>
+      Max drawdown is the sharpest example: an intraday dip that recovers by
+      the close is real drawdown here. The Python engine computes it from the
+      minute equity path; the LEAN comparison stays at summary level. A
+      platform drawdown deeper than a LEAN dashboard's is expected, not a
+      defect.
+    </p>
+    <p class="scope-body__footnote">
+      Sweep surfaces — Grid Search, Walk-Forward Study and the Recency Chart —
+      run the Python engine only. LEAN parity verdicts live on Strategy Lab
+      run evidence.
+    </p>
+  </section>
+</p-dialog>
