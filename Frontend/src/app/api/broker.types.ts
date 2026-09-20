@@ -13812,7 +13812,7 @@ export interface components {
             /** Ask Size */
             ask_size: number | null;
             /** Band Limit Price */
-            band_limit_price: number;
+            band_limit_price?: number | null;
             /** Bid */
             bid: number;
             /** Bid Size */

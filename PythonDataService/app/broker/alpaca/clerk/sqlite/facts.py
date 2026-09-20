@@ -209,6 +209,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "reducing_side": None,
     "reducing_valid_until_ms": None,
     "reducing_confirmed_quantity": None,
+    "reducing_priced_by": None,
     "reference_bid": None,
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
@@ -272,6 +273,11 @@ class ExitAcceptedFacts:
     # (#2007). Cancellation resolves the real quantity several steps later; if
     # it no longer matches, their confirmation does not cover it.
     reducing_confirmed_quantity: float | None = None
+    # Who priced a recovery limit: ``"clerk"`` when the watchdog's re-drive
+    # priced it itself (#2229), absent for an operator-confirmed one. The
+    # quantity-guard and expiry copy must not tell a trader to confirm a price
+    # nobody confirmed — a Clerk-priced leg re-prices on the next pass.
+    reducing_priced_by: str | None = None
     # The live IBKR quote the Clerk priced an operator's confirmed limit
     # against — the reference its realized slippage is measured from (#2007).
     reference_bid: float | None = None
@@ -285,6 +291,7 @@ class ExitAcceptedFacts:
         valid_until_ms: int | None = None,
         reference_quote: TopOfBookQuote | None = None,
         confirmed_quantity: float | None = None,
+        priced_by: str | None = None,
     ) -> ExitAcceptedFacts:
         """Record the reducing shape, unless it is the default.
 
@@ -312,6 +319,10 @@ class ExitAcceptedFacts:
             extended_hours=shape.extended_hours,
             reducing_valid_until_ms=valid_until_ms,
             reducing_confirmed_quantity=confirmed_quantity,
+            # Only a Clerk-priced limit says so; the operator is the absent
+            # default, exactly as a regular shape is, so canonical JSON of
+            # every prior acceptance is untouched.
+            reducing_priced_by=None if priced_by in (None, "operator") else priced_by,
             reference_bid=None if reference_quote is None else reference_quote.bid,
             reference_ask=None if reference_quote is None else reference_quote.ask,
             reference_quote_observed_at_ms=(

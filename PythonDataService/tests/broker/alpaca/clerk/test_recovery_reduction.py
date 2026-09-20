@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ExtendedLimitProposal,
     RegularSessionReduction,
     evaluate_proposed_limit,
+    price_automatic_recovery_reduction,
     price_recovery_reduction,
     quote_spread_bps,
     realized_slippage_bps,
@@ -466,3 +467,242 @@ def test_a_cover_is_measured_against_the_ask() -> None:
     assert evaluation.through_book_bps == pytest.approx(29.985, abs=1e-3, rel=0)
     assert evaluation.worst_case_cost == pytest.approx(3.0, abs=1e-9, rel=0)
     assert (evaluation.outside_band, evaluation.thin_book) == (False, False)
+
+
+# --- automatic pricing: the watchdog's extended-hours re-drive (#2229) -------
+
+
+def test_an_automatic_after_hours_sell_prices_the_bid_less_the_allowance() -> None:
+    """The Clerk prices the re-drive itself: exactly one sealed exit allowance
+    through the live touch, durable with its reference quote and session end."""
+    now_ms = _at(17, 5)
+    quote = _quote(observed_at_ms=now_ms)
+    shape = price_automatic_recovery_reduction(
+        side=OrderSide.SELL,
+        symbol="SPY",
+        quantity=10,
+        now_ms=now_ms,
+        policy=_POLICY,
+        quote=quote,
+    )
+    assert shape.shape.order_type is OrderType.LIMIT
+    assert shape.shape.time_in_force is TimeInForce.DAY
+    assert shape.shape.extended_hours is True
+    assert shape.shape.side is OrderSide.SELL
+    # floor_tick(100.00 × (1 − 20bps)) = floor_tick(99.80).
+    assert shape.shape.limit_price == 99.8
+    assert shape.valid_until_ms == _at(20)
+    assert shape.reference_quote == quote
+    assert shape.quantity == 10
+    assert shape.priced_by == "clerk"
+
+
+def test_an_automatic_pre_market_cover_prices_the_ask_plus_the_allowance() -> None:
+    now_ms = _at(7, 30)
+    shape = price_automatic_recovery_reduction(
+        side=OrderSide.BUY,
+        symbol="SPY",
+        quantity=-10,
+        now_ms=now_ms,
+        policy=_POLICY,
+        quote=_quote(observed_at_ms=now_ms),
+    )
+    # ceil_tick(100.05 × (1 + 20bps)) = ceil_tick(100.2501) = 100.26.
+    assert shape.shape.limit_price == 100.26
+    assert shape.shape.side is OrderSide.BUY
+    assert shape.valid_until_ms == _at(9, 30)
+    assert shape.quantity == 10
+
+
+def test_an_automatic_price_answers_none_inside_the_regular_session() -> None:
+    """Inside 09:30–16:00 the re-drive is the market DAY leg a shapeless
+    recovery EXIT already builds — ``None`` is that same fact, so the two
+    session notions cannot disagree into a bogus refusal."""
+    assert (
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(10),
+            policy=_POLICY,
+            quote=_quote(observed_at_ms=_at(10)),
+        )
+        is None
+    )
+
+
+def test_an_automatic_price_refuses_without_a_live_quote() -> None:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(17),
+            policy=_POLICY,
+            quote=None,
+        )
+    assert _refusal(excinfo) == "RECOVERY_QUOTE_UNAVAILABLE"
+
+
+def test_an_automatic_price_refuses_when_the_spread_is_past_the_cap() -> None:
+    """#2229: a broken book is not priced against. The gate is automatic-path
+    only — the operator's ticket shows the wide spread and can override."""
+    now_ms = _at(17)
+    # 100.00 / 100.60 ask: (0.60 / 100.30) × 10⁴ ≈ 59.8 bps, past the default 50.
+    wide = _quote(bid=100.00, ask=100.60, observed_at_ms=now_ms)
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=_POLICY,
+            quote=wide,
+        )
+    assert _refusal(excinfo) == "RECOVERY_SPREAD_TOO_WIDE"
+    # The same book is priceable when the cap is widened past it.
+    wide_cap = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(
+            entry_bps=Decimal("10"),
+            exit_bps=Decimal("20"),
+            exit_spread_cap_bps=Decimal("100"),
+        ),
+    )
+    assert (
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=wide_cap,
+            quote=wide,
+        )
+        is not None
+    )
+
+
+def test_an_automatic_price_refuses_without_allowances() -> None:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(17),
+            policy=ProgramLegPolicy(window=_WINDOW, allowances=None),
+            quote=_quote(observed_at_ms=_at(17)),
+        )
+    assert _refusal(excinfo) == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+
+
+def test_an_automatic_price_refuses_when_no_session_is_open() -> None:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(21),
+            policy=_POLICY,
+            quote=_quote(observed_at_ms=_at(21)),
+        )
+    assert _refusal(excinfo) == "NO_SESSION_OPEN"
+    # 21:00 Wednesday: the next session is Thursday's pre-market.
+    assert excinfo.value.refusal.available_at_ms == _at(4, day=date(2026, 9, 3))
+
+
+def test_a_wider_deploy_band_multiple_accepts_a_price_the_default_refuses() -> None:
+    """#2229: ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE widens the band a confirmed
+    limit must stay inside; the suggested price and the allowance are
+    untouched by it."""
+    now_ms = _at(17)
+    quote = _quote(observed_at_ms=now_ms)
+    wide = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(
+            entry_bps=Decimal("10"), exit_bps=Decimal("20"), exit_band_multiple=Decimal(4)
+        ),
+    )
+    # 60 bps through a 100.00 bid: past the default 2×20 bps band...
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        recovery_reduction_shape(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=_POLICY,
+            confirmed=ConfirmedRecoveryLimit(
+                limit_price=Decimal("99.40"), quote_observed_at_ms=now_ms
+            ),
+            current_quote=quote,
+        )
+    assert _refusal(excinfo) == "RECOVERY_LIMIT_OUTSIDE_BAND"
+    # ...and inside the 4× one.
+    assert (
+        recovery_reduction_shape(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=wide,
+            confirmed=ConfirmedRecoveryLimit(
+                limit_price=Decimal("99.40"), quote_observed_at_ms=now_ms
+            ),
+            current_quote=quote,
+        )
+        is not None
+    )
+    # The proposal's band widens with it; the suggestion does not.
+    narrow_proposal = price_recovery_reduction(
+        side=OrderSide.SELL, now_ms=now_ms, policy=_POLICY, quote=quote
+    )
+    wide_proposal = price_recovery_reduction(
+        side=OrderSide.SELL, now_ms=now_ms, policy=wide, quote=quote
+    )
+    assert isinstance(narrow_proposal, ExtendedLimitProposal)
+    assert isinstance(wide_proposal, ExtendedLimitProposal)
+    assert wide_proposal.band_limit_price < narrow_proposal.band_limit_price
+    assert wide_proposal.suggested_limit_price == narrow_proposal.suggested_limit_price
+
+
+def test_a_sell_band_past_one_hundred_percent_is_unbounded_not_unpriceable() -> None:
+    """PR #2230 review: an accepted configuration (20 % exit allowance, 10×
+    band) must not make a sell flatten unpriceable — the band floors to zero,
+    which is not a price, so it is treated as having no lower bound."""
+    from decimal import Decimal as _Decimal
+
+    extreme = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(
+            entry_bps=_Decimal("10"),
+            exit_bps=_Decimal("2000"),
+            exit_band_multiple=_Decimal("10"),
+        ),
+    )
+    now_ms = _at(17)
+    quote = _quote(observed_at_ms=now_ms)
+    pricing = price_recovery_reduction(
+        side=OrderSide.SELL, now_ms=now_ms, policy=extreme, quote=quote
+    )
+    assert isinstance(pricing, ExtendedLimitProposal)
+    assert pricing.suggested_limit_price == _Decimal("80.00")
+    assert pricing.band_limit_price is None  # 200 % of the touch is not a price
+
+    # Any positive limit is inside an unbounded band, and the evaluation
+    # agrees.
+    deep = _Decimal("5.00")
+    assert (
+        recovery_reduction_shape(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=extreme,
+            confirmed=ConfirmedRecoveryLimit(
+                limit_price=deep, quote_observed_at_ms=now_ms
+            ),
+            current_quote=quote,
+        )
+        is not None
+    )
+    evaluation = evaluate_proposed_limit(proposal=pricing, limit_price=deep, quantity=10)
+    assert evaluation.outside_band is False

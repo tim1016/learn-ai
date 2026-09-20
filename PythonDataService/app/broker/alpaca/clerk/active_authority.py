@@ -409,6 +409,14 @@ async def select_synthetic_clerk_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=facade.publish_sweep_reconciliation,
+            # Deliberately no extended-hours re-drive pricing inputs here
+            # (PR #2230 review): a ``sim:`` authority can declare a window —
+            # ``synthetic_broker`` copies the environment's — and a process
+            # with a configured live binding also has a live IBKR top-of-book
+            # store, but a synthetic broker fills against retained source
+            # bars, never the live market. Pricing a synthetic recovery from
+            # live quotes would couple it to a market it does not execute in;
+            # the degraded default defers instead.
             # ADR 0050: no on_lease_revived here, deliberately. Lease
             # *revival* applies to this synthetic heartbeat like any other,
             # but the post-revival recovery pass is real-paper-scoped (the

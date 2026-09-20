@@ -21,7 +21,8 @@ Formula (the suggested limit, and the band a confirmed limit must stay inside):
     suggested buy:  ceil_tick(  ask × (1 + exit_bps / 10⁴) )
     band sell:      limit ≥ floor_tick( bid × (1 − k · exit_bps / 10⁴) )
     band buy:       limit ≤ ceil_tick(  ask × (1 + k · exit_bps / 10⁴) )
-    where k = RECOVERY_BAND_ALLOWANCE_MULTIPLE and bid/ask are the Clerk's
+    where k is the deploy-time band multiple — ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE,
+    default RECOVERY_BAND_ALLOWANCE_MULTIPLE — and bid/ask are the Clerk's
     live quote at send.
 Formula (realized slippage of a fill, positive = worse than the reference):
     sell: (reference_bid − fill_price) / reference_bid × 10⁴ bps
@@ -58,7 +59,11 @@ from app.broker.alpaca.clerk.program_leg import (
     ProgramLegPolicy,
     ProgramLegRefused,
 )
-from app.broker.alpaca.marketable_limit import marketable_limit_price
+from app.broker.alpaca.marketable_limit import (
+    DEFAULT_EXIT_BAND_MULTIPLE,
+    DEFAULT_EXIT_SPREAD_CAP_BPS,
+    marketable_limit_price,
+)
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.session_authority import (
@@ -79,20 +84,28 @@ Owner decision 2026-09-19: send the confirmed price, but ask for a refresh if
 the bid/ask the operator looked at is more than about ten seconds old.
 """
 
-RECOVERY_BAND_ALLOWANCE_MULTIPLE = Decimal(2)
-"""How far through the book a confirmed limit may go, in multiples of the sealed exit allowance.
+RECOVERY_BAND_ALLOWANCE_MULTIPLE = DEFAULT_EXIT_BAND_MULTIPLE
+"""The declared default band multiple: how far through the book a confirmed
+limit may go, in multiples of the sealed exit allowance.
 
 Owner decision 2026-09-19: refuse a price more than twice the allowance past
 the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
-The owner wants this configurable at deploy time later; until then it is one
-named value, not a per-call parameter.
+Deploy-time configurable since #2229 — ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE``,
+carried on ``ExtendedHoursAllowances.exit_band_multiple`` — and this constant
+is the value every unset deployment prices the band at. An alias of
+``marketable_limit.DEFAULT_EXIT_BAND_MULTIPLE``, the dataclass default's own
+number: one concept, one value.
 """
 
-RECOVERY_SPREAD_WARNING_BPS = 50
+RECOVERY_SPREAD_WARNING_BPS = int(DEFAULT_EXIT_SPREAD_CAP_BPS)
 """A bid-ask spread wider than this, in bps of the mid, is flagged before sending.
 
 Owner decision 2026-09-19. Presentation only: the Clerk sends it to the
-operator's ticket rather than the browser holding its own number.
+operator's ticket rather than the browser holding its own number. It is also
+the automatic re-drive gate's default cap — an ``int`` alias of
+``marketable_limit.DEFAULT_EXIT_SPREAD_CAP_BPS``, the dataclass default's own
+number, so the human's warning and the Clerk's enforcement cannot drift apart
+(#2229).
 """
 
 RECOVERY_QUOTE_UNAVAILABLE = LegRefusal(
@@ -155,10 +168,25 @@ def no_session_open(opens_at_ms: int | None) -> LegRefusal:
 RECOVERY_LIMIT_OUTSIDE_BAND = LegRefusal(
     reason_code="RECOVERY_LIMIT_OUTSIDE_BAND",
     explanation=(
-        "The limit is further through the book than twice the sealed exit allowance "
-        "from the live bid (sell) or ask (cover)."
+        "The limit is further through the book than the accepted band — the "
+        "sealed exit allowance times the deploy-time band multiple "
+        "(ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE) — from the live bid (sell) or ask "
+        "(cover)."
     ),
     next_step="Check the price against the live quote and confirm again.",
+)
+
+RECOVERY_SPREAD_TOO_WIDE = LegRefusal(
+    reason_code="RECOVERY_SPREAD_TOO_WIDE",
+    explanation=(
+        "The live spread is wider than the configured cap, so an automatic "
+        "price would reach through a broken book."
+    ),
+    next_step=(
+        "Widen ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS after reviewing the logged "
+        "spreads, or send the operator's priced flatten — its ticket shows the "
+        "wide spread and can override it."
+    ),
 )
 
 RECOVERY_LIMIT_SESSION_ENDED = LegRefusal(
@@ -179,7 +207,25 @@ RECOVERY_LIMIT_QUANTITY_CHANGED = LegRefusal(
     next_step="Review the new quantity and confirm a price for it.",
 )
 
+RECOVERY_MARKET_WAIT_ENDED = LegRefusal(
+    reason_code="RECOVERY_MARKET_WAIT_ENDED",
+    explanation=(
+        "The regular session ended while this unpriced market reduction waited; it is "
+        "not queued to the next open, and the entry it held is released for a priced "
+        "reduction."
+    ),
+    next_step=(
+        "Send the operator's priced flatten in the extended session, or wait for the "
+        "automatic re-drive, which prices a limit itself."
+    ),
+)
+
 type ExtendedPhase = Literal["PRE", "POST"]
+type PricingProvenance = Literal["operator", "clerk"]
+"""Who priced a recovery limit: the operator confirmed it, or the Clerk
+computed it for an automatic re-drive (#2229). The quantity-guard and expiry
+copy select their words from this — a trader must never be told to confirm a
+price nobody confirmed."""
 type RecoveryLegVerdict = Literal["send", "wait", "expired"]
 """May a recovery EXIT's reducing leg go to the broker now?
 
@@ -204,8 +250,11 @@ class ExtendedLimitProposal:
     quote: TopOfBookQuote
     exit_allowance_bps: Decimal
     suggested_limit_price: Decimal
-    # The furthest-through-the-book price the Clerk accepts against this quote.
-    band_limit_price: Decimal
+    # The furthest-through-the-book price the Clerk accepts against this quote,
+    # or ``None`` when the configured band is effectively unbounded — a sell
+    # band past 100 % of the touch floors to zero or below, which is not a
+    # price; any positive limit is then inside the band (PR #2230 review).
+    band_limit_price: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -240,6 +289,8 @@ class ConfirmedRecoveryShape:
 
     ``valid_until_ms`` is the end of the session the price was confirmed in:
     09:30 for a pre-market confirmation, the declared close for after-hours.
+    ``priced_by`` records who set the price (#2229): ``"operator"`` for a
+    confirmed limit, ``"clerk"`` for one the automatic re-drive computed.
     """
 
     shape: LegShape
@@ -250,6 +301,7 @@ class ConfirmedRecoveryShape:
     # The reduction this price was confirmed for. Cancellation resolves the
     # real quantity later; a different one is not what the operator reviewed.
     quantity: float
+    priced_by: PricingProvenance = "operator"
 
 
 def regular_session_open(now_ms: int) -> bool:
@@ -293,8 +345,8 @@ def price_recovery_reduction(
         suggested_limit_price=_through_the_book(
             side, quote, policy.allowances.exit_bps
         ),
-        band_limit_price=_through_the_book(
-            side, quote, policy.allowances.exit_bps * RECOVERY_BAND_ALLOWANCE_MULTIPLE
+        band_limit_price=_band_limit_price(
+            side, quote, policy.allowances.exit_bps * policy.allowances.exit_band_multiple
         ),
     )
 
@@ -353,10 +405,12 @@ def recovery_reduction_shape(
         shape.apply(symbol=symbol, quantity=quantity)
     except ValidationError as exc:
         raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
-    band = _through_the_book(
-        side, current_quote, policy.allowances.exit_bps * RECOVERY_BAND_ALLOWANCE_MULTIPLE
+    band = _band_limit_price(
+        side,
+        current_quote,
+        policy.allowances.exit_bps * policy.allowances.exit_band_multiple,
     )
-    past_band = (
+    past_band = band is not None and (
         confirmed.limit_price < band if side is OrderSide.SELL else confirmed.limit_price > band
     )
     if past_band:
@@ -366,6 +420,108 @@ def recovery_reduction_shape(
         valid_until_ms=state.next_transition_ms,
         reference_quote=current_quote,
         quantity=abs(quantity),
+    )
+
+
+@dataclass(frozen=True)
+class RecoveryPricing:
+    """The seam one pass prices an automatic recovery reduction from (#2229).
+
+    One object instead of a policy and a quote source threaded as two optional
+    arguments. ``policy_source`` is a *resolver*, not a value: the facade's
+    ``program_leg_policy`` re-reads the envelope in force on every access, and
+    a holder that snapshotted it at construction would price from a seal the
+    next re-arm replaced.
+    """
+
+    policy_source: Callable[[], ProgramLegPolicy]
+    quote_source: QuoteSource
+
+
+def _no_live_quote(symbol: str, now_ms: int) -> TopOfBookQuote | None:
+    return None
+
+
+UNPRICEABLE_RECOVERY = RecoveryPricing(
+    policy_source=lambda: ProgramLegPolicy.regular_only(),
+    quote_source=_no_live_quote,
+)
+"""The degraded default: nothing can be priced, so an out-of-session re-drive
+defers rather than guessing (#2229). Explicit at every signature that accepts
+a :class:`RecoveryPricing`, instead of implied by two omitted arguments."""
+
+
+def price_automatic_recovery_reduction(
+    *,
+    side: OrderSide,
+    symbol: str,
+    quantity: float,
+    now_ms: int,
+    policy: ProgramLegPolicy,
+    quote: TopOfBookQuote | None,
+) -> ConfirmedRecoveryShape | None:
+    """Price an automatic recovery reduction from the current instant (#2229).
+
+    Owner decision 2026-09-19 (evening), superseding "automatic re-drives wait
+    for the operator outside the regular session": in an extended session the
+    stuck-EXIT watchdog's re-drive is a limit the Clerk prices itself — the
+    operator's suggested price from :func:`price_recovery_reduction`, taken as
+    confirmed — never a market order the vendor would queue to the next open.
+    The shape is durable on the EXIT's acceptance exactly as an
+    operator-confirmed one is, stamped ``priced_by="clerk"`` so later copy
+    never tells a trader to confirm a price nobody confirmed.
+
+    ``None`` is the regular session's answer: inside 09:30–16:00 the re-drive
+    is the market DAY leg a recovery EXIT with no recorded shape already
+    builds — the same fact ``confirmed_shape=None`` encodes downstream, and
+    the two session notions agree (``_tradeable_state`` refuses every phase
+    ``regular_session_open`` does not call RTH), so the arm needs no guard of
+    its own.
+
+    Raises ``ProgramLegRefused`` when no priceable reduction exists: no open
+    session, no allowance, no live quote, or an unpriceable anchor (all from
+    :func:`price_recovery_reduction`), a book whose spread is wider than the
+    deploy-time cap, or a price that quantises below what Alpaca accepts. The
+    caller defers — the episode stays raised and the entry stays free for the
+    operator's own priced flatten.
+
+    The spread cap is automatic-path-only by design: the operator's ticket
+    already shows ``wide_spread`` and can override it, which is informed
+    consent. Depth is reported (``thin_book``), never gated — thin depth
+    costs fills, a resting DAY limit dies at session end, and ``EXIT_STUCK``
+    catches the position that never reduced; a wide spread costs money.
+    """
+    state = _tradeable_state(now_ms=now_ms, policy=policy)
+    if state.phase == "RTH":
+        return None
+    proposal = price_recovery_reduction(side=side, now_ms=now_ms, policy=policy, quote=quote)
+    assert isinstance(proposal, ExtendedLimitProposal)
+    if quote_spread_bps(proposal.quote) > float(policy.allowances.exit_spread_cap_bps):
+        raise ProgramLegRefused(RECOVERY_SPREAD_TOO_WIDE)
+    shape = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=float(proposal.suggested_limit_price),
+        extended_hours=True,
+        side=side,
+    )
+    try:
+        # The contract model owns Alpaca's precision rule; building the leg the
+        # EXIT will submit is how that rule is asked, rather than restated.
+        # The quantity is absolute: a cover arrives as a negative attributed
+        # position, and the leg reduces it by its size, never by its sign.
+        shape.apply(symbol=symbol, quantity=abs(quantity))
+    except ValidationError as exc:
+        raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
+    # A tradeable extended phase always names its next transition; the
+    # None-capable branches belong to phases ``_tradeable_state`` refused.
+    assert state.next_transition_ms is not None
+    return ConfirmedRecoveryShape(
+        shape=shape,
+        valid_until_ms=state.next_transition_ms,
+        reference_quote=proposal.quote,
+        quantity=abs(quantity),
+        priced_by="clerk",
     )
 
 
@@ -427,7 +583,7 @@ def evaluate_proposed_limit(
         raise ValueError(f"quote touch must be positive; got {touch}")
     through = touch - limit_price if side is OrderSide.SELL else limit_price - touch
     touch_size = proposal.quote.bid_size if side is OrderSide.SELL else proposal.quote.ask_size
-    outside_band = (
+    outside_band = proposal.band_limit_price is not None and (
         limit_price < proposal.band_limit_price
         if side is OrderSide.SELL
         else limit_price > proposal.band_limit_price
@@ -447,6 +603,25 @@ def _signed_against_reference(side: OrderSide, reference_price: float, fill_pric
     if side is OrderSide.SELL:
         return reference_price - fill_price
     return fill_price - reference_price
+
+
+def _band_limit_price(
+    side: OrderSide, quote: TopOfBookQuote, band_bps: Decimal
+) -> Decimal | None:
+    """The band edge, or ``None`` when the configured band is unbounded.
+
+    A sell band of 10 000+ bps floors the touch to zero or below, which is not
+    a price — an otherwise accepted configuration must not make a flatten
+    unpriceable, so the band is treated as having no lower bound and any
+    positive limit passes (PR #2230 review). Only the sell side can floor;
+    a cover band only grows upward.
+    """
+    try:
+        return _through_the_book(side, quote, band_bps)
+    except ProgramLegRefused as exc:
+        if exc.reason_code != RECOVERY_QUOTE_UNPRICEABLE.reason_code:
+            raise
+        return None
 
 
 def _through_the_book(side: OrderSide, quote: TopOfBookQuote, allowance_bps: Decimal) -> Decimal:
@@ -476,18 +651,24 @@ __all__ = [
     "RECOVERY_BAND_ALLOWANCE_MULTIPLE",
     "RECOVERY_LIMIT_OUTSIDE_BAND",
     "RECOVERY_LIMIT_SESSION_ENDED",
+    "RECOVERY_MARKET_WAIT_ENDED",
     "RECOVERY_QUOTE_MAX_AGE_MS",
+    "RECOVERY_SPREAD_TOO_WIDE",
     "RECOVERY_SPREAD_WARNING_BPS",
+    "UNPRICEABLE_RECOVERY",
     "ConfirmedRecoveryLimit",
     "ConfirmedRecoveryShape",
     "ExtendedLimitProposal",
     "ExtendedPhase",
+    "PricingProvenance",
     "QuoteSource",
     "RecoveryLegVerdict",
+    "RecoveryPricing",
     "RecoveryReductionPricing",
     "RegularSessionReduction",
     "flatten_session",
     "no_session_open",
+    "price_automatic_recovery_reduction",
     "price_recovery_reduction",
     "realized_slippage_bps",
     "recovery_leg_verdict",

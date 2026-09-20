@@ -44,11 +44,13 @@ from app.broker.alpaca.clerk.program_leg import (
     ProgramLegPolicy,
     ProgramLegRefused,
     shape_program_leg,
+    with_deploy_recovery_pricing,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryLimit,
     ConfirmedRecoveryShape,
     QuoteSource,
+    RecoveryPricing,
     RecoveryReductionPricing,
     flatten_session,
     price_recovery_reduction,
@@ -335,6 +337,20 @@ class SqliteAlpacaClerkFacade:
         return self._intake
 
     @property
+    def recovery_pricing(self) -> RecoveryPricing:
+        """The seam the stuck-EXIT watchdog prices an extended-hours re-drive from.
+
+        The policy is resolved per read (the envelope in force, never a
+        boot-time snapshot) and the quote is the same live top-of-book read
+        the operator's safe flatten rides — IBKR via the market-liveness
+        store, never Alpaca market data (#2229).
+        """
+        return RecoveryPricing(
+            policy_source=lambda: self.program_leg_policy,
+            quote_source=self._quote_source,
+        )
+
+    @property
     def program_leg_policy(self) -> ProgramLegPolicy:
         """The policy this authority prices a leg from *right now*.
 
@@ -371,8 +387,13 @@ class SqliteAlpacaClerkFacade:
         values = self._live_envelope.in_force
         return replace(
             self._program_leg_policy,
-            allowances=ExtendedHoursAllowances.from_bps(
-                entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
+            # The canonical deploy-knob stamp (#2229): the band edge and the
+            # spread cap ride beside the sealed pair on every resolution path
+            # alike, so a re-arm cannot silently change them.
+            allowances=with_deploy_recovery_pricing(
+                ExtendedHoursAllowances.from_bps(
+                    entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
+                )
             ),
         )
 
@@ -1243,6 +1264,10 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger=trigger,
                 intake=self._intake,
+                # The watchdog prices extended-hours re-drive limits from
+                # the same sealed policy and live quote the operator's
+                # flatten does (#2229).
+                pricing=self.recovery_pricing,
             )
         )
 

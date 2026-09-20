@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.program_leg import LegShape, regular_session_shape
 from app.broker.alpaca.clerk.recovery_reduction import (
     RECOVERY_LIMIT_QUANTITY_CHANGED,
     RECOVERY_LIMIT_SESSION_ENDED,
+    RECOVERY_MARKET_WAIT_ENDED,
     recovery_leg_verdict,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -361,12 +362,14 @@ def _recovery_leg_may_proceed(
 ) -> bool:
     """Apply ``recovery_leg_verdict`` to a recovery EXIT's leg; ``True`` only to send it.
 
-    ``wait`` holds a market leg until a pass inside the regular session
-    (#2007): the vendor would queue it to the open, and an order nobody priced
-    must not sit at the broker. ``expired`` fails the EXIT through
-    ``EXIT_NOT_FLAT`` when exposure remains, so a confirmed limit is never
-    carried past the session it was priced in and the entry is free for the
-    operator to price again.
+    ``wait`` folds the EXIT releasably through ``EXIT_NOT_FLAT`` when exposure
+    remains (#2229, owner decision 2026-09-19 evening): the vendor would queue
+    a market leg to the open, and a waiting EXIT must not hold its entry
+    overnight — the operator's priced flatten stays available and the
+    watchdog's re-drive prices a limit itself in an extended session.
+    ``expired`` fails the EXIT through ``EXIT_NOT_FLAT`` when exposure remains,
+    so a confirmed limit is never carried past the session it was priced in
+    and the entry is free for the operator to price again.
     """
     verdict = recovery_leg_verdict(
         extended_hours=extended_hours,
@@ -382,15 +385,33 @@ def _recovery_leg_may_proceed(
         # Nothing to reduce: the ordinary flow proves the EXIT attributed-flat.
         return True
     if verdict == "wait":
-        logger.debug(
-            "a recovery reduction waits for the regular session",
+        logger.info(
+            "a waiting market recovery reduction folded releasably past the regular session",
             extra={
-                "action": "recovery_reduction_waits_for_regular_session",
+                "action": "recovery_market_wait_folded",
                 "account_id": repo.account_id,
                 "effect_operation_id": effect_operation_id,
             },
         )
+        _fold_exit_not_flat(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=remaining_qty,
+            summary_code=RECOVERY_MARKET_WAIT_ENDED.reason_code,
+            reason=RECOVERY_MARKET_WAIT_ENDED.explanation,
+            headline="An unpriced recovery reduction waited past the regular session",
+            explanation=(
+                f"The regular session ended while {remaining_qty:g} {symbol} waited "
+                "under a market reduction nothing had priced; it is not queued to "
+                "the next open."
+            ),
+            next_step=RECOVERY_MARKET_WAIT_ENDED.next_step,
+        )
         return False
+    clerk_priced = _accepted_facts(repo, effect_operation_id).reducing_priced_by == "clerk"
+    subject = "The Clerk-priced limit" if clerk_priced else "The limit confirmed"
     _fold_exit_not_flat(
         repo,
         effect_operation_id=effect_operation_id,
@@ -399,14 +420,14 @@ def _recovery_leg_may_proceed(
         attributed_qty=remaining_qty,
         summary_code=RECOVERY_LIMIT_SESSION_ENDED.reason_code,
         reason=RECOVERY_LIMIT_SESSION_ENDED.explanation,
-        headline="A confirmed flatten limit expired unsent",
+        headline="A recovery flatten limit expired unsent",
         explanation=(
-            f"The limit confirmed for {symbol} was not sent before its session ended; "
+            f"{subject} for {symbol} was not sent before its session ended; "
             f"{remaining_qty:g} {symbol} remains attributed to this strategy."
         ),
         next_step=(
             f"{RECOVERY_LIMIT_SESSION_ENDED.next_step} Automatic re-drives resume "
-            "at the regular open."
+            "at the next session open."
         ),
     )
     return False
@@ -429,9 +450,34 @@ def _confirmed_quantity_still_holds(
     different quantity fails the EXIT instead — loudly, with the entry left
     free to price again.
     """
-    confirmed = _accepted_facts(repo, effect_operation_id).reducing_confirmed_quantity
+    facts = _accepted_facts(repo, effect_operation_id)
+    confirmed = facts.reducing_confirmed_quantity
     if confirmed is None or confirmed == abs(remaining_qty):
         return True
+    if facts.reducing_priced_by == "clerk":
+        # PR #2230 review, blocker 1: nobody confirmed this price — the
+        # Clerk computed it for an automatic re-drive. The fold is the same
+        # custody fact, but the copy asks no operator for anything: the next
+        # automatic re-drive prices the new quantity afresh.
+        _fold_exit_not_flat(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=remaining_qty,
+            summary_code=RECOVERY_LIMIT_QUANTITY_CHANGED.reason_code,
+            reason=RECOVERY_LIMIT_QUANTITY_CHANGED.explanation,
+            headline="The flatten's quantity changed after the Clerk priced it",
+            explanation=(
+                f"A price the Clerk computed would have reduced {confirmed:g} {symbol}, "
+                f"but {abs(remaining_qty):g} is attributed now, so it was never sent."
+            ),
+            next_step=(
+                "No action needed: the next automatic re-drive prices the new "
+                "quantity afresh, or the operator can flatten it themselves."
+            ),
+        )
+        return False
     _fold_exit_not_flat(
         repo,
         effect_operation_id=effect_operation_id,
@@ -780,6 +826,26 @@ async def _refresh_or_resume_reducing_order(
             effect_operation_id=effect_operation_id,
             order_ref=reducing.order_ref,
             why="No exact reducing-order evidence yet; retaining custody.",
+        )
+        return
+    # A reducing order whose submission was uncertain is only ever resumed —
+    # or released by the wait fold below it — on conclusive identity evidence
+    # (PR #2230 review): the request may have reached Alpaca, and a release
+    # without proof would let a fresh EXIT mint a *different* client id while
+    # the original might still execute, over-reducing the account.
+    # ``order_never_reached_broker`` is the one predicate that reads an absent
+    # lookup as an answer: no broker identity, no acknowledgement, no recorded
+    # fill, and the R4 grace closed. Anything less retains custody as an
+    # unknown, exactly as before the fold existed.
+    if not order_never_reached_broker(repo, reducing):
+        fold_uncertain(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=reducing.order_ref,
+            why=(
+                "The reducing order's broker identity is not conclusively "
+                "absent; retaining custody rather than resuming or releasing it."
+            ),
         )
         return
     await _submit_reducing_order(
