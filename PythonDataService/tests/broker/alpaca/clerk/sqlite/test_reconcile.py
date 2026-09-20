@@ -24,6 +24,7 @@ import pytest
 
 import app.broker.alpaca.clerk.sqlite.uncertainty_policies as uncertainty_policies_module
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -2374,13 +2375,15 @@ async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
-        policy=ProgramLegPolicy(
-            window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
-            allowances=ExtendedHoursAllowances(
-                entry_bps=Decimal("10"), exit_bps=Decimal("20")
+        pricing=RecoveryPricing(
+            policy_source=lambda: ProgramLegPolicy(
+                window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
+                allowances=ExtendedHoursAllowances(
+                    entry_bps=Decimal("10"), exit_bps=Decimal("20")
+                ),
             ),
+            quote_source=lambda symbol, now_ms: quote if symbol == "SPY" else None,
         ),
-        quote_source=lambda symbol, now_ms: quote if symbol == "SPY" else None,
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]

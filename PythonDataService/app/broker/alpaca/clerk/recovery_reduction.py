@@ -158,10 +158,25 @@ def no_session_open(opens_at_ms: int | None) -> LegRefusal:
 RECOVERY_LIMIT_OUTSIDE_BAND = LegRefusal(
     reason_code="RECOVERY_LIMIT_OUTSIDE_BAND",
     explanation=(
-        "The limit is further through the book than twice the sealed exit allowance "
-        "from the live bid (sell) or ask (cover)."
+        "The limit is further through the book than the accepted band — the "
+        "sealed exit allowance times the deploy-time band multiple "
+        "(ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE) — from the live bid (sell) or ask "
+        "(cover)."
     ),
     next_step="Check the price against the live quote and confirm again.",
+)
+
+RECOVERY_SPREAD_TOO_WIDE = LegRefusal(
+    reason_code="RECOVERY_SPREAD_TOO_WIDE",
+    explanation=(
+        "The live spread is wider than the configured cap, so an automatic "
+        "price would reach through a broken book."
+    ),
+    next_step=(
+        "Widen ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS after reviewing the logged "
+        "spreads, or send the operator's priced flatten — its ticket shows the "
+        "wide spread and can override it."
+    ),
 )
 
 RECOVERY_LIMIT_SESSION_ENDED = LegRefusal(
@@ -196,6 +211,11 @@ RECOVERY_MARKET_WAIT_ENDED = LegRefusal(
 )
 
 type ExtendedPhase = Literal["PRE", "POST"]
+type PricingProvenance = Literal["operator", "clerk"]
+"""Who priced a recovery limit: the operator confirmed it, or the Clerk
+computed it for an automatic re-drive (#2229). The quantity-guard and expiry
+copy select their words from this — a trader must never be told to confirm a
+price nobody confirmed."""
 type RecoveryLegVerdict = Literal["send", "wait", "expired"]
 """May a recovery EXIT's reducing leg go to the broker now?
 
@@ -256,6 +276,8 @@ class ConfirmedRecoveryShape:
 
     ``valid_until_ms`` is the end of the session the price was confirmed in:
     09:30 for a pre-market confirmation, the declared close for after-hours.
+    ``priced_by`` records who set the price (#2229): ``"operator"`` for a
+    confirmed limit, ``"clerk"`` for one the automatic re-drive computed.
     """
 
     shape: LegShape
@@ -266,6 +288,7 @@ class ConfirmedRecoveryShape:
     # The reduction this price was confirmed for. Cancellation resolves the
     # real quantity later; a different one is not what the operator reviewed.
     quantity: float
+    priced_by: PricingProvenance = "operator"
 
 
 def regular_session_open(now_ms: int) -> bool:
@@ -387,6 +410,34 @@ def recovery_reduction_shape(
     )
 
 
+@dataclass(frozen=True)
+class RecoveryPricing:
+    """The seam one pass prices an automatic recovery reduction from (#2229).
+
+    One object instead of a policy and a quote source threaded as two optional
+    arguments. ``policy_source`` is a *resolver*, not a value: the facade's
+    ``program_leg_policy`` re-reads the envelope in force on every access, and
+    a holder that snapshotted it at construction would price from a seal the
+    next re-arm replaced.
+    """
+
+    policy_source: Callable[[], ProgramLegPolicy]
+    quote_source: QuoteSource
+
+
+def _no_live_quote(symbol: str, now_ms: int) -> TopOfBookQuote | None:
+    return None
+
+
+UNPRICEABLE_RECOVERY = RecoveryPricing(
+    policy_source=lambda: ProgramLegPolicy.regular_only(),
+    quote_source=_no_live_quote,
+)
+"""The degraded default: nothing can be priced, so an out-of-session re-drive
+defers rather than guessing (#2229). Explicit at every signature that accepts
+a :class:`RecoveryPricing`, instead of implied by two omitted arguments."""
+
+
 def price_automatic_recovery_reduction(
     *,
     side: OrderSide,
@@ -395,44 +446,49 @@ def price_automatic_recovery_reduction(
     now_ms: int,
     policy: ProgramLegPolicy,
     quote: TopOfBookQuote | None,
-) -> ConfirmedRecoveryShape:
+) -> ConfirmedRecoveryShape | None:
     """Price an automatic recovery reduction from the current instant (#2229).
 
     Owner decision 2026-09-19 (evening), superseding "automatic re-drives wait
     for the operator outside the regular session": in an extended session the
     stuck-EXIT watchdog's re-drive is a limit the Clerk prices itself — the
-    same marketable-limit formula the operator's suggested price uses, at
-    exactly one sealed exit allowance through the touch, never a market order
-    the vendor would queue to the next open. The shape is durable on the
-    EXIT's acceptance exactly as an operator-confirmed one is, so every later
-    pass of that EXIT rebuilds the same leg.
+    operator's suggested price from :func:`price_recovery_reduction`, taken as
+    confirmed — never a market order the vendor would queue to the next open.
+    The shape is durable on the EXIT's acceptance exactly as an
+    operator-confirmed one is, stamped ``priced_by="clerk"`` so later copy
+    never tells a trader to confirm a price nobody confirmed.
+
+    ``None`` is the regular session's answer: inside 09:30–16:00 the re-drive
+    is the market DAY leg a recovery EXIT with no recorded shape already
+    builds — the same fact ``confirmed_shape=None`` encodes downstream, and
+    the two session notions agree (``_tradeable_state`` refuses every phase
+    ``regular_session_open`` does not call RTH), so the arm needs no guard of
+    its own.
 
     Raises ``ProgramLegRefused`` when no priceable reduction exists: no open
-    session, no allowance, no live or fresh quote, or a price that quantises
-    below what Alpaca accepts. The caller defers — the episode stays raised
-    and the entry stays free for the operator's own priced flatten.
+    session, no allowance, no live quote, or an unpriceable anchor (all from
+    :func:`price_recovery_reduction`), a book whose spread is wider than the
+    deploy-time cap, or a price that quantises below what Alpaca accepts. The
+    caller defers — the episode stays raised and the entry stays free for the
+    operator's own priced flatten.
+
+    The spread cap is automatic-path-only by design: the operator's ticket
+    already shows ``wide_spread`` and can override it, which is informed
+    consent. Depth is reported (``thin_book``), never gated — thin depth
+    costs fills, a resting DAY limit dies at session end, and ``EXIT_STUCK``
+    catches the position that never reduced; a wide spread costs money.
     """
     state = _tradeable_state(now_ms=now_ms, policy=policy)
     if state.phase == "RTH":
-        # Inside the regular session the re-drive is the market DAY leg; a
-        # price computed here would be a different product than the one sent.
-        raise ProgramLegRefused(RECOVERY_SESSION_CHANGED)
-    if policy.allowances is None:
-        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
-    if quote is None:
-        raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
-    if now_ms - quote.observed_at_ms > RECOVERY_QUOTE_MAX_AGE_MS:
-        # The Clerk's own quote can go stale with the feed: a price restated
-        # against a dead book is as unpriceable as none.
-        raise ProgramLegRefused(RECOVERY_QUOTE_STALE)
-    if state.next_transition_ms is None:
-        raise ProgramLegRefused(no_session_open(None))
+        return None
+    proposal = price_recovery_reduction(side=side, now_ms=now_ms, policy=policy, quote=quote)
+    assert isinstance(proposal, ExtendedLimitProposal)
+    if quote_spread_bps(proposal.quote) > float(policy.allowances.exit_spread_cap_bps):
+        raise ProgramLegRefused(RECOVERY_SPREAD_TOO_WIDE)
     shape = LegShape(
         order_type=OrderType.LIMIT,
         time_in_force=TimeInForce.DAY,
-        limit_price=float(
-            _through_the_book(side, quote, policy.allowances.exit_bps)
-        ),
+        limit_price=float(proposal.suggested_limit_price),
         extended_hours=True,
         side=side,
     )
@@ -444,11 +500,15 @@ def price_automatic_recovery_reduction(
         shape.apply(symbol=symbol, quantity=abs(quantity))
     except ValidationError as exc:
         raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
+    # A tradeable extended phase always names its next transition; the
+    # None-capable branches belong to phases ``_tradeable_state`` refused.
+    assert state.next_transition_ms is not None
     return ConfirmedRecoveryShape(
         shape=shape,
         valid_until_ms=state.next_transition_ms,
-        reference_quote=quote,
+        reference_quote=proposal.quote,
         quantity=abs(quantity),
+        priced_by="clerk",
     )
 
 
@@ -561,13 +621,17 @@ __all__ = [
     "RECOVERY_LIMIT_SESSION_ENDED",
     "RECOVERY_MARKET_WAIT_ENDED",
     "RECOVERY_QUOTE_MAX_AGE_MS",
+    "RECOVERY_SPREAD_TOO_WIDE",
     "RECOVERY_SPREAD_WARNING_BPS",
+    "UNPRICEABLE_RECOVERY",
     "ConfirmedRecoveryLimit",
     "ConfirmedRecoveryShape",
     "ExtendedLimitProposal",
     "ExtendedPhase",
+    "PricingProvenance",
     "QuoteSource",
     "RecoveryLegVerdict",
+    "RecoveryPricing",
     "RecoveryReductionPricing",
     "RegularSessionReduction",
     "flatten_session",

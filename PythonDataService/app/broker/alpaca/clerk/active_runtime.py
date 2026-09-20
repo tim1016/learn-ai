@@ -348,8 +348,7 @@ async def compose_repository_runtime(
             # re-drive limit from — the facade's sealed policy (re-resolved
             # per pass so a re-arm is picked up) and its live top-of-book
             # quote (#2229).
-            policy_source=lambda: facade.program_leg_policy,
-            quote_source=facade.quote_source,
+            pricing=facade.recovery_pricing,
             # Custody first, evidence second: the symbol-validity probe runs
             # only after a succeeded pass, through the same guarded read port,
             # and records durably what the read path may then consume (#1795).

@@ -410,6 +410,8 @@ def _recovery_leg_may_proceed(
             next_step=RECOVERY_MARKET_WAIT_ENDED.next_step,
         )
         return False
+    clerk_priced = _accepted_facts(repo, effect_operation_id).reducing_priced_by == "clerk"
+    subject = "The Clerk-priced limit" if clerk_priced else "The limit confirmed"
     _fold_exit_not_flat(
         repo,
         effect_operation_id=effect_operation_id,
@@ -418,14 +420,14 @@ def _recovery_leg_may_proceed(
         attributed_qty=remaining_qty,
         summary_code=RECOVERY_LIMIT_SESSION_ENDED.reason_code,
         reason=RECOVERY_LIMIT_SESSION_ENDED.explanation,
-        headline="A confirmed flatten limit expired unsent",
+        headline="A recovery flatten limit expired unsent",
         explanation=(
-            f"The limit confirmed for {symbol} was not sent before its session ended; "
+            f"{subject} for {symbol} was not sent before its session ended; "
             f"{remaining_qty:g} {symbol} remains attributed to this strategy."
         ),
         next_step=(
             f"{RECOVERY_LIMIT_SESSION_ENDED.next_step} Automatic re-drives resume "
-            "at the regular open."
+            "at the next session open."
         ),
     )
     return False
@@ -448,9 +450,34 @@ def _confirmed_quantity_still_holds(
     different quantity fails the EXIT instead — loudly, with the entry left
     free to price again.
     """
-    confirmed = _accepted_facts(repo, effect_operation_id).reducing_confirmed_quantity
+    facts = _accepted_facts(repo, effect_operation_id)
+    confirmed = facts.reducing_confirmed_quantity
     if confirmed is None or confirmed == abs(remaining_qty):
         return True
+    if facts.reducing_priced_by == "clerk":
+        # PR #2230 review, blocker 1: nobody confirmed this price — the
+        # Clerk computed it for an automatic re-drive. The fold is the same
+        # custody fact, but the copy asks no operator for anything: the next
+        # automatic re-drive prices the new quantity afresh.
+        _fold_exit_not_flat(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=remaining_qty,
+            summary_code=RECOVERY_LIMIT_QUANTITY_CHANGED.reason_code,
+            reason=RECOVERY_LIMIT_QUANTITY_CHANGED.explanation,
+            headline="The flatten's quantity changed after the Clerk priced it",
+            explanation=(
+                f"A price the Clerk computed would have reduced {confirmed:g} {symbol}, "
+                f"but {abs(remaining_qty):g} is attributed now, so it was never sent."
+            ),
+            next_step=(
+                "No action needed: the next automatic re-drive prices the new "
+                "quantity afresh, or the operator can flatten it themselves."
+            ),
+        )
+        return False
     _fold_exit_not_flat(
         repo,
         effect_operation_id=effect_operation_id,

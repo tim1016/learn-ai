@@ -148,10 +148,14 @@ def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     assert leg.limit_price == float(price)
 
 
-def test_allowances_default_the_band_multiple_and_carry_an_override() -> None:
-    """#2229: the band multiple is deploy-time configuration — absent answers
-    the declared default 2×, and a sealed envelope never carries one."""
-    assert ExtendedHoursAllowances.from_bps(entry_bps=10, exit_bps=20).exit_band_multiple == Decimal(2)
+def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> None:
+    """#2229: the converters carry only the sealed pair — every deploy-time
+    knob is stamped by ``program_leg.with_deploy_recovery_pricing`` alone, so
+    a deploy value applies on every resolution path or none (PR #2230 review,
+    blocker 3)."""
+    from app.broker.alpaca.clerk import program_leg
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+
     envelope = ExtendedHoursAllowances.from_envelope(
         LiveEnvelopeValues(
             loss_fraction=0.5,
@@ -162,19 +166,35 @@ def test_allowances_default_the_band_multiple_and_carry_an_override() -> None:
             xh_exit_bps=20.0,
         )
     )
-    assert envelope.exit_band_multiple == Decimal(2)
-    settings = AlpacaSettings(
-        api_key_id="k",
-        api_secret_key="s",
-        live_loss_fraction=0.5,
-        live_loss_usd=100.0,
-        live_shadow_sessions=1,
-        live_arming_max_sessions=1,
-        live_xh_entry_bps=10.0,
-        live_xh_exit_bps=20.0,
-        live_xh_exit_band_multiple=4.0,
+    settings = ExtendedHoursAllowances.from_settings(
+        AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            live_loss_fraction=0.5,
+            live_loss_usd=100.0,
+            live_shadow_sessions=1,
+            live_arming_max_sessions=1,
+            live_xh_entry_bps=10.0,
+            live_xh_exit_bps=20.0,
+            # Deploy-time values set here must NOT change the converted pair:
+            # stamping is the canonical seam's job, not the converter's.
+            live_xh_exit_band_multiple=4.0,
+            live_xh_exit_spread_cap_bps=200.0,
+        )
     )
-    assert (
-        ExtendedHoursAllowances.from_settings(settings).exit_band_multiple
-        == Decimal("4.0")
-    )
+    for allowances in (envelope, settings):
+        assert allowances.exit_band_multiple == Decimal(2)
+        assert allowances.exit_spread_cap_bps == Decimal("50")
+
+    original_band = program_leg.resolved_exit_band_multiple
+    original_cap = program_leg.resolved_exit_spread_cap_bps
+    try:
+        program_leg.resolved_exit_band_multiple = lambda: Decimal("4")
+        program_leg.resolved_exit_spread_cap_bps = lambda: Decimal("200")
+        stamped = program_leg.with_deploy_recovery_pricing(envelope)
+    finally:
+        program_leg.resolved_exit_band_multiple = original_band
+        program_leg.resolved_exit_spread_cap_bps = original_cap
+    assert (stamped.entry_bps, stamped.exit_bps) == (envelope.entry_bps, envelope.exit_bps)
+    assert stamped.exit_band_multiple == Decimal("4")
+    assert stamped.exit_spread_cap_bps == Decimal("200")

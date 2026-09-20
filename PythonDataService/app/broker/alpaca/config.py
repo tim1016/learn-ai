@@ -120,6 +120,14 @@ class AlpacaSettings(BaseSettings):
     live_xh_exit_band_multiple: float | None = Field(
         default=None, ge=1, le=10, allow_inf_nan=False
     )
+    # Deploy-time spread cap (#2229): the widest bid-ask spread, in bps of the
+    # mid, an automatic recovery re-drive will price a limit against; wider
+    # books defer to the operator. Automatic path only — the operator's ticket
+    # shows the wide spread and can override. Bounded [1, 1000]: 1000 bps is
+    # effectively no gate, so the escape hatch exists without a special "off".
+    live_xh_exit_spread_cap_bps: float | None = Field(
+        default=None, ge=1, le=1000, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def _enforce_mode_agreement(self) -> AlpacaSettings:

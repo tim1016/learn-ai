@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -144,12 +144,10 @@ def resolved_exit_band_multiple() -> Decimal:
     """The deploy-time band multiple a recovery flatten's limit is bounded by (#2229).
 
     ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE`` when the resolved binding sets it,
-    else the declared default ``RECOVERY_BAND_ALLOWANCE_MULTIPLE`` (2×). The
-    multiple is deliberately not a ceremony number: it never touches a sealed
-    envelope's hash, and a refused binding or unreadable settings answer the
-    default rather than raising — a recovery flatten is never blocked for want
-    of a band edge, exactly as an EXIT is never blocked for want of a seal
-    (plan §0 D3).
+    else the declared default ``RECOVERY_BAND_ALLOWANCE_MULTIPLE`` (2×). A
+    refused binding or unreadable settings answer the default rather than
+    raising — a recovery flatten is never blocked for want of a band edge,
+    exactly as an EXIT is never blocked for want of a seal (plan §0 D3).
     """
     from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
     from app.broker.alpaca.clerk.recovery_reduction import RECOVERY_BAND_ALLOWANCE_MULTIPLE
@@ -176,6 +174,58 @@ def resolved_exit_band_multiple() -> Decimal:
     return Decimal(str(settings.live_xh_exit_band_multiple))
 
 
+def resolved_exit_spread_cap_bps() -> Decimal:
+    """The widest spread an automatic recovery re-drive will price against (#2229).
+
+    ``ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS`` when the resolved binding sets it,
+    else ``Decimal("50")`` — the same number
+    ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS`` shows a human, so one
+    concept keeps one value. Same failure posture as the band multiple: the
+    default, never an exception.
+    """
+    from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
+
+    try:
+        settings = resolved_alpaca_settings()
+    except BrokerUnbound as exc:
+        logger.info(
+            "the exit spread cap fell back to its default: no broker binding",
+            extra={"action": "exit_spread_cap_unbound", "reason": exc.reason},
+        )
+        return Decimal("50")
+    except ValidationError as exc:
+        from app.broker.alpaca.config import alpaca_configuration_error_detail
+
+        logger.info(
+            "the exit spread cap fell back to its default: settings did not load",
+            extra={"action": "exit_spread_cap_unavailable",
+                   "detail": alpaca_configuration_error_detail(exc)},
+        )
+        return Decimal("50")
+    if settings.live_xh_exit_spread_cap_bps is None:
+        return Decimal("50")
+    return Decimal(str(settings.live_xh_exit_spread_cap_bps))
+
+
+def with_deploy_recovery_pricing(
+    allowances: ExtendedHoursAllowances,
+) -> ExtendedHoursAllowances:
+    """Stamp the deploy-time recovery-flatten knobs onto the sealed pair (#2229).
+
+    The one canonical place the band multiple and the spread cap are applied.
+    Every path that resolves allowances — sealed arming record, effective
+    revision, settings — and the live facade's per-read rebuild funnels through
+    here, so a deploy-time value applies on every authority or none; before
+    this seam existed the settings path honoured the env var while the two
+    envelope paths silently pinned the default.
+    """
+    return replace(
+        allowances,
+        exit_band_multiple=resolved_exit_band_multiple(),
+        exit_spread_cap_bps=resolved_exit_spread_cap_bps(),
+    )
+
+
 def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     """The allowances an extended-session leg prices from (ADR 0060; plan §0 D3).
 
@@ -199,6 +249,11 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     -- for an EXIT as much as an ENTER. "Never blocked *for lack of a seal*"
     means falling back to the effective revision, not inventing a number: a
     number nobody chose must never bound real money (ADR 0059 D4).
+
+    Whichever source wins, :func:`with_deploy_recovery_pricing` stamps the
+    deploy-time recovery-flatten knobs on the result — they are not ceremony
+    numbers and never touch the sealed pair, but they must apply on every
+    path alike (#2229).
     """
     from app.broker.alpaca.active_binding import get_active_alpaca_binding
 
@@ -206,10 +261,13 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     if context is not None:
         sealed = _sealed_allowances(context)
         if sealed is not None:
-            return sealed
+            return with_deploy_recovery_pricing(sealed)
         if context.live_envelope is not None:
-            return ExtendedHoursAllowances.from_envelope(context.live_envelope)
-    return _settings_allowances()
+            return with_deploy_recovery_pricing(
+                ExtendedHoursAllowances.from_envelope(context.live_envelope)
+            )
+    stamped = _settings_allowances()
+    return None if stamped is None else with_deploy_recovery_pricing(stamped)
 
 
 @dataclass(frozen=True)

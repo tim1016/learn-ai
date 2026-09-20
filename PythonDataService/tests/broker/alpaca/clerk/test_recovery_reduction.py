@@ -494,6 +494,7 @@ def test_an_automatic_after_hours_sell_prices_the_bid_less_the_allowance() -> No
     assert shape.valid_until_ms == _at(20)
     assert shape.reference_quote == quote
     assert shape.quantity == 10
+    assert shape.priced_by == "clerk"
 
 
 def test_an_automatic_pre_market_cover_prices_the_ask_plus_the_allowance() -> None:
@@ -513,10 +514,11 @@ def test_an_automatic_pre_market_cover_prices_the_ask_plus_the_allowance() -> No
     assert shape.quantity == 10
 
 
-def test_an_automatic_price_is_refused_inside_the_regular_session() -> None:
-    """Inside 09:30–16:00 the re-drive is the market DAY leg; a price computed
-    here would be a different product than the one sent."""
-    with pytest.raises(ProgramLegRefused) as excinfo:
+def test_an_automatic_price_answers_none_inside_the_regular_session() -> None:
+    """Inside 09:30–16:00 the re-drive is the market DAY leg a shapeless
+    recovery EXIT already builds — ``None`` is that same fact, so the two
+    session notions cannot disagree into a bogus refusal."""
+    assert (
         price_automatic_recovery_reduction(
             side=OrderSide.SELL,
             symbol="SPY",
@@ -525,7 +527,8 @@ def test_an_automatic_price_is_refused_inside_the_regular_session() -> None:
             policy=_POLICY,
             quote=_quote(observed_at_ms=_at(10)),
         )
-    assert _refusal(excinfo) == "RECOVERY_SESSION_CHANGED"
+        is None
+    )
 
 
 def test_an_automatic_price_refuses_without_a_live_quote() -> None:
@@ -541,10 +544,12 @@ def test_an_automatic_price_refuses_without_a_live_quote() -> None:
     assert _refusal(excinfo) == "RECOVERY_QUOTE_UNAVAILABLE"
 
 
-def test_an_automatic_price_refuses_against_a_stale_quote() -> None:
-    """The Clerk's own quote can go stale with the feed; a price restated
-    against a dead book is as unpriceable as none."""
+def test_an_automatic_price_refuses_when_the_spread_is_past_the_cap() -> None:
+    """#2229: a broken book is not priced against. The gate is automatic-path
+    only — the operator's ticket shows the wide spread and can override."""
     now_ms = _at(17)
+    # 100.00 / 100.60 ask: (0.60 / 100.30) × 10⁴ ≈ 59.8 bps, past the default 50.
+    wide = _quote(bid=100.00, ask=100.60, observed_at_ms=now_ms)
     with pytest.raises(ProgramLegRefused) as excinfo:
         price_automatic_recovery_reduction(
             side=OrderSide.SELL,
@@ -552,9 +557,29 @@ def test_an_automatic_price_refuses_against_a_stale_quote() -> None:
             quantity=10,
             now_ms=now_ms,
             policy=_POLICY,
-            quote=_quote(observed_at_ms=now_ms - RECOVERY_QUOTE_MAX_AGE_MS - 1),
+            quote=wide,
         )
-    assert _refusal(excinfo) == "RECOVERY_QUOTE_STALE"
+    assert _refusal(excinfo) == "RECOVERY_SPREAD_TOO_WIDE"
+    # The same book is priceable when the cap is widened past it.
+    wide_cap = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(
+            entry_bps=Decimal("10"),
+            exit_bps=Decimal("20"),
+            exit_spread_cap_bps=Decimal("100"),
+        ),
+    )
+    assert (
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=wide_cap,
+            quote=wide,
+        )
+        is not None
+    )
 
 
 def test_an_automatic_price_refuses_without_allowances() -> None:

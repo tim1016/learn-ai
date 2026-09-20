@@ -137,6 +137,10 @@ NEVER_RETIRED_SETTINGS: Final[tuple[str, ...]] = (
     "ALPACA_SQLITE_MANUAL_TRADING_ENABLED",
     "ALPACA_FAULT_INJECTION_ENABLED",
     "ALPACA_PAPER_CARRYOVER_ENABLED",
+    # Deploy-time recovery-flatten pricing knobs (#2229) — execution-risk
+    # bounds, not ceremony numbers, and never a profile permission switch.
+    "ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE",
+    "ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS",
 )
 
 _MODEL_CONFIG = SettingsConfigDict(

@@ -43,13 +43,14 @@ from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
     ProgramLegPolicy,
     ProgramLegRefused,
-    resolved_exit_band_multiple,
     shape_program_leg,
+    with_deploy_recovery_pricing,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryLimit,
     ConfirmedRecoveryShape,
     QuoteSource,
+    RecoveryPricing,
     RecoveryReductionPricing,
     flatten_session,
     price_recovery_reduction,
@@ -336,15 +337,18 @@ class SqliteAlpacaClerkFacade:
         return self._intake
 
     @property
-    def quote_source(self) -> QuoteSource:
-        """The live top-of-book read recovery pricing prices a limit from.
+    def recovery_pricing(self) -> RecoveryPricing:
+        """The seam the stuck-EXIT watchdog prices an extended-hours re-drive from.
 
-        The same source the operator's safe-flatten quote rides (IBKR via the
-        market-liveness store, never Alpaca market data); published so the
-        reconciliation sweep can hand the stuck-EXIT watchdog what its
-        extended-hours re-drive prices against (#2229).
+        The policy is resolved per read (the envelope in force, never a
+        boot-time snapshot) and the quote is the same live top-of-book read
+        the operator's safe flatten rides — IBKR via the market-liveness
+        store, never Alpaca market data (#2229).
         """
-        return self._quote_source
+        return RecoveryPricing(
+            policy_source=lambda: self.program_leg_policy,
+            quote_source=self._quote_source,
+        )
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
@@ -383,13 +387,13 @@ class SqliteAlpacaClerkFacade:
         values = self._live_envelope.in_force
         return replace(
             self._program_leg_policy,
-            # Deploy-time, not ceremony: the band edge a recovery flatten's
-            # confirmed limit is bounded by rides beside the sealed pair
-            # (#2229), so a re-arm cannot silently change it.
-            allowances=ExtendedHoursAllowances.from_bps(
-                entry_bps=values.xh_entry_bps,
-                exit_bps=values.xh_exit_bps,
-                exit_band_multiple=resolved_exit_band_multiple(),
+            # The canonical deploy-knob stamp (#2229): the band edge and the
+            # spread cap ride beside the sealed pair on every resolution path
+            # alike, so a re-arm cannot silently change them.
+            allowances=with_deploy_recovery_pricing(
+                ExtendedHoursAllowances.from_bps(
+                    entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
+                )
             ),
         )
 
@@ -1260,11 +1264,10 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger=trigger,
                 intake=self._intake,
-                # The watchdog prices extended-hours re-drive limits from the
-                # same sealed policy and live quote the operator's flatten
-                # does (#2229).
-                policy=self.program_leg_policy,
-                quote_source=self._quote_source,
+                # The watchdog prices extended-hours re-drive limits from
+                # the same sealed policy and live quote the operator's
+                # flatten does (#2229).
+                pricing=self.recovery_pricing,
             )
         )
 

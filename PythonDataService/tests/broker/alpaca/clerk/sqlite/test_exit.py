@@ -16,6 +16,8 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.program_leg import LegShape
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
@@ -49,7 +51,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.schemas.market_liveness import TopOfBookQuote
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 
 ACCOUNT_ID = "PA-TEST"
@@ -1901,6 +1904,147 @@ async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_rele
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=at_open)
 
     assert at_open.submit_calls == []
+
+
+async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular_session(
+    repo: ClerkSqliteRepository,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2229, fold site 2: R11 side reconciliation replaces a limit priced for
+    the wrong side with a regular-session market leg, and outside 09:30–16:00
+    that leg folds releasably instead of waiting — the one wait site the
+    original tests missed (review of PR #2230, blocker 5)."""
+    import logging as _logging
+
+    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET, long 10
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    wrong_side = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=100.10,
+        extended_hours=True,
+        side=OrderSide.BUY,
+    )
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-wrongside1",
+        entry_order_ref=entry_ref,
+        confirmed_shape=ConfirmedRecoveryShape(
+            shape=wrong_side,
+            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            reference_quote=TopOfBookQuote(
+                symbol="SPY",
+                bid=100.00,
+                ask=100.05,
+                source="ibkr.market_data.status",
+                observed_at_ms=repo.clock(),
+            ),
+            quantity=10,
+        ),
+    )
+    assert accepted.effect_operation_id is not None
+    trade = _FakeTrade(
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+
+    with caplog.at_level(_logging.WARNING):
+        await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+
+    # The side reconciliation happened, and the market leg it produced folded.
+    assert any(
+        getattr(r, "action", None) == "reducing_leg_shape_side_mismatch"
+        for r in caplog.records
+    )
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_order(entry_ref) is None
+
+
+async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_folds(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2229's headline, pinned end to end: a waiting market EXIT folds, and
+    the operator's priced flatten of the same entry is then accepted and sent
+    — the two gates ``execute_safe_flatten_plan`` performs are the entry
+    filter (``active_exit_for_order`` — asserted here) and the acceptance
+    itself, both of which the waiting EXIT used to refuse (review of PR
+    #2230, blocker 6)."""
+    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    held = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-foldthenflatten",
+        entry_order_ref=entry_ref,
+    )
+    assert held.effect_operation_id is not None
+    waiting = _FakeTrade(
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+    await resolve_accepted_exit(repo, accepted=held, trade=waiting)
+    effect = repo.effect_operation(held.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_order(entry_ref) is None  # the executor's entry filter
+
+    priced = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-foldthenflat1",
+        entry_order_ref=entry_ref,
+        confirmed_shape=ConfirmedRecoveryShape(
+            shape=LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            ),
+            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            reference_quote=TopOfBookQuote(
+                symbol="SPY",
+                bid=100.00,
+                ask=100.05,
+                source="ibkr.market_data.status",
+                observed_at_ms=repo.clock(),
+            ),
+            quantity=10,
+        ),
+    )
+    assert priced.effect_operation_id is not None
+
+    trade = _FakeTrade(
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("priced-limit", side="sell", status="accepted"),
+    )
+    resolved = await resolve_accepted_exit(repo, accepted=priced, trade=trade)
+
+    assert resolved.reducing_order_ref is not None
+    ((leg, _client_order_id),) = trade.submit_calls
+    assert (leg.side, leg.order_type, leg.limit_price, leg.extended_hours) == (
+        "sell",
+        "limit",
+        99.8,
+        True,
+    )
 
 
 async def test_accept_recovery_exit_is_idempotent_per_decision_id(

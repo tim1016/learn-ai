@@ -35,8 +35,8 @@ interface FlattenFillRow {
       <h4 class="m-0 eyebrow-heading">Flatten fills</h4>
       <table class="w-full text-sm">
         <caption class="text-left text-xs text-[var(--text-secondary)]">
-          Slippage is measured from the bid (sell) or ask (cover) the Clerk priced your limit
-          against; positive is worse than it.
+          Slippage is measured from the bid (sell) or ask (cover) the limit was priced
+          against — yours or the Clerk's; positive is worse than it.
         </caption>
         <thead>
           <tr>
