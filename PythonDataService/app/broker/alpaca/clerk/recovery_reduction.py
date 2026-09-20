@@ -59,7 +59,11 @@ from app.broker.alpaca.clerk.program_leg import (
     ProgramLegPolicy,
     ProgramLegRefused,
 )
-from app.broker.alpaca.marketable_limit import marketable_limit_price
+from app.broker.alpaca.marketable_limit import (
+    DEFAULT_EXIT_BAND_MULTIPLE,
+    DEFAULT_EXIT_SPREAD_CAP_BPS,
+    marketable_limit_price,
+)
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.session_authority import (
@@ -80,7 +84,7 @@ Owner decision 2026-09-19: send the confirmed price, but ask for a refresh if
 the bid/ask the operator looked at is more than about ten seconds old.
 """
 
-RECOVERY_BAND_ALLOWANCE_MULTIPLE = Decimal(2)
+RECOVERY_BAND_ALLOWANCE_MULTIPLE = DEFAULT_EXIT_BAND_MULTIPLE
 """The declared default band multiple: how far through the book a confirmed
 limit may go, in multiples of the sealed exit allowance.
 
@@ -88,14 +92,20 @@ Owner decision 2026-09-19: refuse a price more than twice the allowance past
 the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
 Deploy-time configurable since #2229 — ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE``,
 carried on ``ExtendedHoursAllowances.exit_band_multiple`` — and this constant
-is the value every unset deployment prices the band at.
+is the value every unset deployment prices the band at. An alias of
+``marketable_limit.DEFAULT_EXIT_BAND_MULTIPLE``, the dataclass default's own
+number: one concept, one value.
 """
 
-RECOVERY_SPREAD_WARNING_BPS = 50
+RECOVERY_SPREAD_WARNING_BPS = int(DEFAULT_EXIT_SPREAD_CAP_BPS)
 """A bid-ask spread wider than this, in bps of the mid, is flagged before sending.
 
 Owner decision 2026-09-19. Presentation only: the Clerk sends it to the
-operator's ticket rather than the browser holding its own number.
+operator's ticket rather than the browser holding its own number. It is also
+the automatic re-drive gate's default cap — an ``int`` alias of
+``marketable_limit.DEFAULT_EXIT_SPREAD_CAP_BPS``, the dataclass default's own
+number, so the human's warning and the Clerk's enforcement cannot drift apart
+(#2229).
 """
 
 RECOVERY_QUOTE_UNAVAILABLE = LegRefusal(

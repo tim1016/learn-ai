@@ -33,6 +33,7 @@ from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_st
 from app.services.source_bar_ledger import RetainedSourceBar
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.config import AlpacaSettings
     from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
 
 logger = logging.getLogger(__name__)
@@ -140,70 +141,58 @@ def _settings_allowances() -> ExtendedHoursAllowances | None:
     return ExtendedHoursAllowances.from_settings(settings)
 
 
-def resolved_exit_band_multiple() -> Decimal:
-    """The deploy-time band multiple a recovery flatten's limit is bounded by (#2229).
+def _resolved_settings(*, concern: str) -> AlpacaSettings | None:
+    """One settings read for the deploy-time recovery knobs (#2229).
 
-    ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE`` when the resolved binding sets it,
-    else the declared default ``RECOVERY_BAND_ALLOWANCE_MULTIPLE`` (2×). A
-    refused binding or unreadable settings answer the default rather than
-    raising — a recovery flatten is never blocked for want of a band edge,
-    exactly as an EXIT is never blocked for want of a seal (plan §0 D3).
+    ``None`` means "no settings to read", logged once for the whole concern —
+    not once per knob, which used to emit two "fell back to default" lines for
+    one cause. A worker with no broker binding is an ordinary paper or
+    synthetic posture (info); settings that exist but will not load is a live
+    process about to price real money off declared defaults instead of the
+    configured bounds, so it is loud (error) — the fallback still answers the
+    declared default, never a guess, exactly as an EXIT is never blocked for
+    want of a seal (plan §0 D3).
     """
     from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
-    from app.broker.alpaca.clerk.recovery_reduction import RECOVERY_BAND_ALLOWANCE_MULTIPLE
 
     try:
-        settings = resolved_alpaca_settings()
+        return resolved_alpaca_settings()
     except BrokerUnbound as exc:
         logger.info(
-            "the exit band multiple fell back to its default: no broker binding",
-            extra={"action": "exit_band_multiple_unbound", "reason": exc.reason},
+            "%s fell back to its declared default: no broker binding",
+            concern,
+            extra={"action": "deploy_recovery_knobs_unbound", "reason": exc.reason},
         )
-        return RECOVERY_BAND_ALLOWANCE_MULTIPLE
+        return None
     except ValidationError as exc:
         from app.broker.alpaca.config import alpaca_configuration_error_detail
 
-        logger.info(
-            "the exit band multiple fell back to its default: settings did not load",
-            extra={"action": "exit_band_multiple_unavailable",
-                   "detail": alpaca_configuration_error_detail(exc)},
+        logger.error(
+            "%s fell back to its declared default: settings did not load",
+            concern,
+            extra={
+                "action": "deploy_recovery_knobs_unavailable",
+                "detail": alpaca_configuration_error_detail(exc),
+            },
         )
-        return RECOVERY_BAND_ALLOWANCE_MULTIPLE
-    if settings.live_xh_exit_band_multiple is None:
-        return RECOVERY_BAND_ALLOWANCE_MULTIPLE
+        return None
+
+
+def _exit_band_multiple_from(settings: AlpacaSettings | None) -> Decimal:
+    """The band multiple one settings read answers, or the declared default."""
+    from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_BAND_MULTIPLE
+
+    if settings is None or settings.live_xh_exit_band_multiple is None:
+        return DEFAULT_EXIT_BAND_MULTIPLE
     return Decimal(str(settings.live_xh_exit_band_multiple))
 
 
-def resolved_exit_spread_cap_bps() -> Decimal:
-    """The widest spread an automatic recovery re-drive will price against (#2229).
+def _exit_spread_cap_from(settings: AlpacaSettings | None) -> Decimal:
+    """The spread cap one settings read answers, or the declared default."""
+    from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_SPREAD_CAP_BPS
 
-    ``ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS`` when the resolved binding sets it,
-    else ``Decimal("50")`` — the same number
-    ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS`` shows a human, so one
-    concept keeps one value. Same failure posture as the band multiple: the
-    default, never an exception.
-    """
-    from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
-
-    try:
-        settings = resolved_alpaca_settings()
-    except BrokerUnbound as exc:
-        logger.info(
-            "the exit spread cap fell back to its default: no broker binding",
-            extra={"action": "exit_spread_cap_unbound", "reason": exc.reason},
-        )
-        return Decimal("50")
-    except ValidationError as exc:
-        from app.broker.alpaca.config import alpaca_configuration_error_detail
-
-        logger.info(
-            "the exit spread cap fell back to its default: settings did not load",
-            extra={"action": "exit_spread_cap_unavailable",
-                   "detail": alpaca_configuration_error_detail(exc)},
-        )
-        return Decimal("50")
-    if settings.live_xh_exit_spread_cap_bps is None:
-        return Decimal("50")
+    if settings is None or settings.live_xh_exit_spread_cap_bps is None:
+        return DEFAULT_EXIT_SPREAD_CAP_BPS
     return Decimal(str(settings.live_xh_exit_spread_cap_bps))
 
 
@@ -212,17 +201,19 @@ def with_deploy_recovery_pricing(
 ) -> ExtendedHoursAllowances:
     """Stamp the deploy-time recovery-flatten knobs onto the sealed pair (#2229).
 
-    The one canonical place the band multiple and the spread cap are applied.
-    Every path that resolves allowances — sealed arming record, effective
-    revision, settings — and the live facade's per-read rebuild funnels through
-    here, so a deploy-time value applies on every authority or none; before
-    this seam existed the settings path honoured the env var while the two
-    envelope paths silently pinned the default.
+    The one canonical place the band multiple and the spread cap are applied,
+    from a single settings read. Every path that resolves allowances — sealed
+    arming record, effective revision, settings — and the live facade's
+    per-read rebuild funnels through here, so a deploy-time value applies on
+    every authority or none; before this seam existed the settings path
+    honoured the env var while the two envelope paths silently pinned the
+    default.
     """
+    settings = _resolved_settings(concern="the deploy recovery-flatten knobs")
     return replace(
         allowances,
-        exit_band_multiple=resolved_exit_band_multiple(),
-        exit_spread_cap_bps=resolved_exit_spread_cap_bps(),
+        exit_band_multiple=_exit_band_multiple_from(settings),
+        exit_spread_cap_bps=_exit_spread_cap_from(settings),
     )
 
 

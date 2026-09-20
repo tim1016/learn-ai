@@ -186,15 +186,31 @@ def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> N
         assert allowances.exit_band_multiple == Decimal(2)
         assert allowances.exit_spread_cap_bps == Decimal("50")
 
-    original_band = program_leg.resolved_exit_band_multiple
-    original_cap = program_leg.resolved_exit_spread_cap_bps
+    # One settings read stamps both knobs: the seam is patched, not the knobs.
+    original = program_leg._resolved_settings
     try:
-        program_leg.resolved_exit_band_multiple = lambda: Decimal("4")
-        program_leg.resolved_exit_spread_cap_bps = lambda: Decimal("200")
+        program_leg._resolved_settings = lambda *, concern: AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            live_xh_exit_band_multiple=4.0,
+            live_xh_exit_spread_cap_bps=200.0,
+        )
         stamped = program_leg.with_deploy_recovery_pricing(envelope)
     finally:
-        program_leg.resolved_exit_band_multiple = original_band
-        program_leg.resolved_exit_spread_cap_bps = original_cap
+        program_leg._resolved_settings = original
     assert (stamped.entry_bps, stamped.exit_bps) == (envelope.entry_bps, envelope.exit_bps)
     assert stamped.exit_band_multiple == Decimal("4")
     assert stamped.exit_spread_cap_bps == Decimal("200")
+    # One concept, one value: the ticket warning and the enforcement gate
+    # share the canonical numbers, so tuning one cannot drift the other.
+    from app.broker.alpaca.clerk.recovery_reduction import (
+        RECOVERY_BAND_ALLOWANCE_MULTIPLE,
+        RECOVERY_SPREAD_WARNING_BPS,
+    )
+    from app.broker.alpaca.marketable_limit import (
+        DEFAULT_EXIT_BAND_MULTIPLE,
+        DEFAULT_EXIT_SPREAD_CAP_BPS,
+    )
+
+    assert RECOVERY_SPREAD_WARNING_BPS == int(DEFAULT_EXIT_SPREAD_CAP_BPS) == 50
+    assert RECOVERY_BAND_ALLOWANCE_MULTIPLE == DEFAULT_EXIT_BAND_MULTIPLE

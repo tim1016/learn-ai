@@ -79,6 +79,18 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
     return price
 
 
+#: The declared default band multiple (#2229): the canonical number both
+#: the allowances default and ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``
+#: alias. A module constant here because the dataclass's home is the only
+#: place both sides can read without an import cycle.
+DEFAULT_EXIT_BAND_MULTIPLE = Decimal(2)
+#: The declared default spread cap (#2229): the canonical number both the
+#: allowances default and ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS``
+#: alias — one concept, one value, so the operator's ticket warning and the
+#: Clerk's enforcement gate cannot drift apart.
+DEFAULT_EXIT_SPREAD_CAP_BPS = Decimal("50")
+
+
 @dataclass(frozen=True)
 class ExtendedHoursAllowances:
     """The operator's extended-session allowances, in basis points (ADR 0059 D4).
@@ -98,18 +110,20 @@ class ExtendedHoursAllowances:
     the widest spread an automatic re-drive will price against. Both are
     deliberately **not** part of the sealed envelope, so every arming record
     ever written keeps validating and hashing byte-identically; unset they
-    answer the declared defaults — ``Decimal(2)`` × and ``Decimal("50")`` bps —
-    which equal ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE`` and
-    ``RECOVERY_SPREAD_WARNING_BPS``. No constructor here reads them: the one
-    canonical stamp is ``program_leg.with_deploy_recovery_pricing``, so a
-    deploy-time value applies on every resolution path or none, never two of
-    three.
+    answer :data:`DEFAULT_EXIT_BAND_MULTIPLE` and
+    :data:`DEFAULT_EXIT_SPREAD_CAP_BPS` — the canonical numbers
+    ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE`` and
+    ``RECOVERY_SPREAD_WARNING_BPS`` alias, so tuning the human's warning and
+    the Clerk's enforcement cannot drift apart. No constructor here reads
+    them: the one canonical stamp is ``program_leg.with_deploy_recovery_pricing``,
+    so a deploy-time value applies on every resolution path or none, never
+    two of three.
     """
 
     entry_bps: Decimal
     exit_bps: Decimal
-    exit_band_multiple: Decimal = Decimal(2)
-    exit_spread_cap_bps: Decimal = Decimal("50")
+    exit_band_multiple: Decimal = DEFAULT_EXIT_BAND_MULTIPLE
+    exit_spread_cap_bps: Decimal = DEFAULT_EXIT_SPREAD_CAP_BPS
 
     @classmethod
     def from_bps(cls, *, entry_bps: float, exit_bps: float) -> ExtendedHoursAllowances:

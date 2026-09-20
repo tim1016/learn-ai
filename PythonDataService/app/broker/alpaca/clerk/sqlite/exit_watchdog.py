@@ -212,9 +212,23 @@ async def redrive_or_escalate_stale_exits(
                     },
                 )
                 continue
-            # Outside the regular session the answer is a shape or a refusal,
-            # never the market leg ``None`` names.
-            assert priced is not None
+            if priced is None:
+                # Unreachable while the two session notions agree — outside
+                # the regular session the answer is a shape or a refusal —
+                # but an AssertionError here would abort the whole account's
+                # reconciliation pass, not just this instance. Loud, contained,
+                # and the episode stays raised either way.
+                logger.error(
+                    "an extended-hours re-drive priced a market leg outside the "
+                    "regular session; deferring the instance for re-examination",
+                    extra={
+                        "action": "exit_redrive_priced_market_leg",
+                        "account_id": repo.account_id,
+                        "strategy_instance_id": sid,
+                        "symbol": cause.symbol,
+                    },
+                )
+                continue
             confirmed_shape = priced
             quote_spread = quote_spread_bps(quote) if quote is not None else None
         try:
