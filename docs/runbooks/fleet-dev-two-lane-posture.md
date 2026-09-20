@@ -66,6 +66,62 @@ coordinator.
 If a token is lost, `rotate-credentials --clerk-id <id> --slot agent|coordinator`
 mints a fresh one; update compose.override.yaml and restart both sides.
 
+## Lane lake-catalog credentials (read-only role, #2166)
+
+Lane-served reads (bot panel deploy scopes, strategy-validation golden
+dossiers, #2163) resolve lake evidence in the lane process, so each lane
+needs a `POSTGRES_URL` — but never the superuser login `compose.yaml` hands
+the combined role. A clerk also carries Alpaca execution credentials, so its
+database login is the blast radius of a lane compromise. The URL lives in
+the lane env files (`deploy/fleet/env/live.env`, `paper.env` — the compose
+overlay deliberately declares no inline value, since `environment:` outranks
+`env_file:` key-for-key) and names the read-only `fleet_lake_catalog` role:
+
+```bash
+# 1 — generate the password ONCE, into a variable, so the same value both
+#     provisions the role and fills the env files below. Generating it
+#     inline in the psql invocation would make the value unrecoverable —
+#     and re-running this ceremony later would silently ROTATE the
+#     password and invalidate the env files both lanes already run on. To
+#     re-provision WITHOUT rotating, reuse the password already stored in
+#     the lane env files instead of generating a new one.
+LANE_PW="$(openssl rand -hex 24)"
+
+# 2 — provision the role. Idempotent and convergent; ON_ERROR_STOP plus a
+#     single transaction mean a missing table (e.g. an unmigrated
+#     database) aborts the whole ceremony atomically instead of exiting 0
+#     with a half-provisioned role.
+podman compose -f compose.yaml -f compose.fleet.dev.yaml exec -T db \
+  psql -U postgres -v ON_ERROR_STOP=1 --single-transaction \
+  -v lane_password="$LANE_PW" \
+  -f - < deploy/fleet/sql/provision-fleet-lake-catalog-role.sql
+
+# 3 — put the same URL in BOTH lane env files (the role is shared; the
+#     example files carry this line commented — uncomment it there):
+printf '\nPOSTGRES_URL=postgres://fleet_lake_catalog:%s@db:5432/postgres\n' "$LANE_PW" >> deploy/fleet/env/paper.env
+printf '\nPOSTGRES_URL=postgres://fleet_lake_catalog:%s@db:5432/postgres\n' "$LANE_PW" >> deploy/fleet/env/live.env
+
+# 4 — recreate the lanes so env_file takes effect:
+podman compose -f compose.yaml -f compose.fleet.dev.yaml up -d alpaca-live-clerk alpaca-paper-clerk
+```
+
+Two rules keep it correct:
+
+- **Migrations are the coordinator's job.** The role reads
+  `research_schema_migrations` but cannot apply a version. On a fresh lake,
+  start the coordinator (superuser URL) and let one coordinator-side lake
+  use apply the schema before lanes serve reads; a lane hitting an
+  unmigrated database fails loudly — that is the designed refusal, not a
+  bug to fix with a wider grant.
+- **Re-run provisioning after migrations add tables.** Tables created after
+  provisioning are not readable by the role until the script grants them.
+  The script is convergent — it revokes every table privilege the role
+  holds before applying its allowlist — so re-running after the table list
+  changes (in either direction) is exactly how a narrowing or widening
+  takes effect. The list itself is pinned by contract
+  (`test_fleet_lake_catalog_role_grants.py`), so any change is always a
+  deliberate, reviewed edit.
+
 ## Ceremonies performed (host-side, one-shot containers)
 
 ```bash
