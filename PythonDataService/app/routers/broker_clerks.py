@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import re
 from collections.abc import AsyncIterator, Mapping
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
@@ -25,6 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.broker.fleet.delivery import SseEvent
 from app.broker.fleet.errors import (
     BrokerClerkCapabilityUnavailable,
+    ClerkUnreachable,
     FleetControlError,
     FleetControlPlaneNotInstalled,
 )
@@ -181,6 +184,68 @@ async def aggregate_broker_clerks_directory(request: Request) -> Response:
     ``list_broker_clerks`` above carries no local try either.
     """
     return JSONResponse(_fleet_service(request).aggregate_directory_reads())
+
+
+@router.get(
+    "/broker-clerks/aggregate/attention",
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+    summary="Per-lane operator-attention sets, one lane's failure isolated (#2228)",
+)
+async def aggregate_broker_clerks_attention(request: Request) -> Response:
+    """Every lane's attention set in one poll, sliced per lane — never merged.
+
+    Each lane's ``attention_read`` is delivered through the lane router and
+    folded by ``aggregate_lane_reads_async``'s provenance-preserving partial
+    aggregation: one lane's exception or timeout is that lane's explicit
+    ``ok: false`` entry (the bell's "unknown", never "quiet"), and the
+    coordinator combines no values. Per #2228's owner decisions there is one
+    bell per lane beside its chip; this route is the one poll every bell
+    renders its own slice of.
+    """
+    service = _fleet_service(request)
+    lane = _lane_router(request)
+    adapter = service.adapters().get("alpaca")
+    if adapter is None:
+        from app.broker.fleet.errors import BrokerNotSupported
+
+        return _refuse(BrokerNotSupported("No production adapter serves 'alpaca'."))
+    operation = next(
+        (op for op in adapter.operations() if op.operation_id == "attention_read"),
+        None,
+    )
+    if operation is None:
+        return _refuse(
+            FleetControlError("The Alpaca adapter declares no attention_read operation.")
+        )
+
+    async def read_lane(clerk_id: str) -> dict[str, object]:
+        delivered = await lane.deliver_read(
+            broker="alpaca",
+            clerk_id=clerk_id,
+            operation=operation,
+            path_params={},
+            query={},
+        )
+        if delivered.status_code >= 400:
+            raise ClerkUnreachable(
+                f"The lane refused its attention read with {delivered.status_code}."
+            )
+        return dict(json.loads(delivered.body))
+
+    # Only lanes whose provider serves attention today. Another provider
+    # joins this poll by declaring an ``attention_read`` operation — not by
+    # this route learning its name; a fake/test provider's lanes are simply
+    # not read, not failed.
+    lane_reads = [
+        (
+            "alpaca",
+            str(clerk["clerk_id"]),
+            partial(read_lane, str(clerk["clerk_id"])),
+        )
+        for clerk in service.directory()["clerks"]
+        if clerk.get("broker") == "alpaca"
+    ]
+    return JSONResponse(await service.aggregate_lane_reads_async(lane_reads))
 
 
 # ---- Audit read surface (#2104) --------------------------------------------

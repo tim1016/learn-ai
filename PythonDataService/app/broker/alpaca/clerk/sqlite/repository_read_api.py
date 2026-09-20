@@ -587,6 +587,11 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.active_hold(self._conn, scope=scope, reason_code=reason_code)
 
+    def active_uncertainties(self: ClerkSqliteRepository) -> list[dict]:
+        """Every unresolved uncertainty on the account, oldest first (#2228)."""
+        with self._write_lock:
+            return reads.active_uncertainties(self._conn)
+
     def active_uncertainty(
         self: ClerkSqliteRepository,
         *,

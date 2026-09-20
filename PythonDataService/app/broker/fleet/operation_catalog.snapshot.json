@@ -17,6 +17,11 @@
       "path_template": "/activities",
       "requires_account": false
     },
+    "attention_read": {
+      "method": "GET",
+      "path_template": "/attention",
+      "requires_account": false
+    },
     "bot_admission_plan": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots/admission",

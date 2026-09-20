@@ -415,6 +415,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/broker-clerks/aggregate/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Per-lane operator-attention sets, one lane's failure isolated (#2228)
+         * @description Every lane's attention set in one poll, sliced per lane — never merged.
+         *
+         *     Each lane's ``attention_read`` is delivered through the lane router and
+         *     folded by ``aggregate_lane_reads_async``'s provenance-preserving partial
+         *     aggregation: one lane's exception or timeout is that lane's explicit
+         *     ``ok: false`` entry (the bell's "unknown", never "quiet"), and the
+         *     coordinator combines no values. Per #2228's owner decisions there is one
+         *     bell per lane beside its chip; this route is the one poll every bell
+         *     renders its own slice of.
+         */
+        get: operations["aggregate_broker_clerks_attention_api_broker_clerks_aggregate_attention_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker-clerks/aggregate/directory": {
         parameters: {
             query?: never;
@@ -1714,6 +1742,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lane Attention
+         * @description One lane's attention set — everything currently needing the operator (#2228).
+         *
+         *     The narrow v1 set is the lane's active uncertainties (which includes
+         *     ``EXIT_NOT_FLAT`` and every exit waiting for an operator), keyed by the
+         *     stable uncertainty id so a bell can dedupe and clear exactly when the
+         *     underlying condition resolves. Never contacts the broker: the lane's own
+         *     custody ledger is the whole input, so a lane with no active authority
+         *     answers empty rather than unknown — *unknown* is the coordinator's
+         *     judgment when this read itself cannot be reached (``ok: false`` in the
+         *     aggregate).
+         */
+        get: operations["get_lane_attention_api_brokers__broker__attention_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/bots": {
         parameters: {
             query?: never;
@@ -2965,6 +3022,26 @@ export interface paths {
          * @description Fleet-routed GET /activities (account_read).
          */
         get: operations["fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Attention Read
+         * @description Fleet-routed GET /attention (custody_read).
+         */
+        get: operations["fleet_attention_read_api_brokers__broker__clerks__clerk_id__attention_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16413,6 +16490,44 @@ export interface components {
             stats: components["schemas"]["DistributionStatsModel"];
         };
         /**
+         * LaneAttentionItem
+         * @description One condition currently needing the operator on this lane (#2228).
+         *
+         *     ``condition_id`` is the uncertainty id — stable across polls, so the bell
+         *     dedupes by it and an item disappears exactly when the underlying episode
+         *     resolves. The narrow v1 set: active uncertainties only, which includes
+         *     ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
+         */
+        LaneAttentionItem: {
+            /** Condition Id */
+            condition_id: string;
+            /** Headline */
+            headline: string;
+            /**
+             * Kind
+             * @default uncertainty
+             */
+            kind?: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Severity */
+            severity: string;
+            /** Strategy Instance Id */
+            strategy_instance_id?: string | null;
+            /** Symbol */
+            symbol?: string | null;
+        };
+        /**
+         * LaneAttentionRead
+         * @description One lane's attention set, answered by the lane's own clerk (#2228).
+         */
+        LaneAttentionRead: {
+            /** Account Id */
+            account_id: string | null;
+            /** Items */
+            items: components["schemas"]["LaneAttentionItem"][];
+        };
+        /**
          * LastQuoteSnapshot
          * @description Last quote (bid/ask) for an options contract snapshot
          */
@@ -27071,6 +27186,37 @@ export interface operations {
             };
         };
     };
+    aggregate_broker_clerks_attention_api_broker_clerks_aggregate_attention_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get: {
         parameters: {
             query?: never;
@@ -29708,6 +29854,39 @@ export interface operations {
             };
         };
     };
+    get_lane_attention_api_brokers__broker__attention_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaneAttentionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_bots_api_brokers__broker__bots_get: {
         parameters: {
             query?: never;
@@ -32156,6 +32335,40 @@ export interface operations {
         };
     };
     fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_attention_read_api_brokers__broker__clerks__clerk_id__attention_get: {
         parameters: {
             query?: never;
             header?: {

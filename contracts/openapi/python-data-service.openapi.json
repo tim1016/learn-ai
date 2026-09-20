@@ -21450,6 +21450,91 @@
         "title": "KindDistributionModel",
         "type": "object"
       },
+      "LaneAttentionItem": {
+        "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is the uncertainty id \u2014 stable across polls, so the bell\ndedupes by it and an item disappears exactly when the underlying episode\nresolves. The narrow v1 set: active uncertainties only, which includes\n``EXIT_NOT_FLAT`` and every exit waiting for an operator.",
+        "properties": {
+          "condition_id": {
+            "title": "Condition Id",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "kind": {
+            "default": "uncertainty",
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "required": [
+          "condition_id",
+          "reason_code",
+          "severity",
+          "headline"
+        ],
+        "title": "LaneAttentionItem",
+        "type": "object"
+      },
+      "LaneAttentionRead": {
+        "description": "One lane's attention set, answered by the lane's own clerk (#2228).",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LaneAttentionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "items"
+        ],
+        "title": "LaneAttentionRead",
+        "type": "object"
+      },
       "LastQuoteSnapshot": {
         "description": "Last quote (bid/ask) for an options contract snapshot",
         "properties": {
@@ -45754,6 +45839,54 @@
         ]
       }
     },
+    "/api/broker-clerks/aggregate/attention": {
+      "get": {
+        "description": "Every lane's attention set in one poll, sliced per lane \u2014 never merged.\n\nEach lane's ``attention_read`` is delivered through the lane router and\nfolded by ``aggregate_lane_reads_async``'s provenance-preserving partial\naggregation: one lane's exception or timeout is that lane's explicit\n``ok: false`` entry (the bell's \"unknown\", never \"quiet\"), and the\ncoordinator combines no values. Per #2228's owner decisions there is one\nbell per lane beside its chip; this route is the one poll every bell\nrenders its own slice of.",
+        "operationId": "aggregate_broker_clerks_attention_api_broker_clerks_aggregate_attention_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Per-lane operator-attention sets, one lane's failure isolated (#2228)",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/broker-clerks/aggregate/directory": {
       "get": {
         "description": "The same per-lane data as ``GET /broker-clerks``, per-lane isolated.\n\n``directory()`` loops every registered clerk with no per-lane exception\nisolation -- one clerk's descriptor projection throwing fails the whole\nroster. This calls the same projection through ``aggregate_lane_reads``'s\nprovenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one\nlane's exception is that lane's explicit ``ok: False`` entry, never an\nomission, a substitution, or a 500 for every other lane. No local\n``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the\naudit read): ``aggregate_lane_reads`` already isolates every per-lane\nexception, so the only ``FleetControlError`` this route could ever see is\nan uninstalled fleet service, which the coordinator's global handler\nalready answers identically to ``_refuse`` -- the same reason\n``list_broker_clerks`` above carries no local try either.",
@@ -51175,6 +51308,65 @@
           }
         },
         "summary": "List Assets",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/attention": {
+      "get": {
+        "description": "One lane's attention set \u2014 everything currently needing the operator (#2228).\n\nThe narrow v1 set is the lane's active uncertainties (which includes\n``EXIT_NOT_FLAT`` and every exit waiting for an operator), keyed by the\nstable uncertainty id so a bell can dedupe and clear exactly when the\nunderlying condition resolves. Never contacts the broker: the lane's own\ncustody ledger is the whole input, so a lane with no active authority\nanswers empty rather than unknown \u2014 *unknown* is the coordinator's\njudgment when this read itself cannot be reached (``ok: false`` in the\naggregate).",
+        "operationId": "get_lane_attention_api_brokers__broker__attention_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaneAttentionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Lane Attention",
         "tags": [
           "brokers-v2"
         ]
@@ -56852,6 +57044,72 @@
           }
         },
         "summary": "Fleet Activities Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/attention": {
+      "get": {
+        "description": "Fleet-routed GET /attention (custody_read).",
+        "operationId": "fleet_attention_read_api_brokers__broker__clerks__clerk_id__attention_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Attention Read",
         "tags": [
           "broker-clerks"
         ]

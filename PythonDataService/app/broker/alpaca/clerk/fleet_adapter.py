@@ -146,6 +146,14 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path="/api/brokers/alpaca/live-verdict",
         ),
         _op(
+            "attention_read",
+            "GET",
+            "/attention",
+            capability=Capability.CUSTODY_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/brokers/alpaca/attention",
+        ),
+        _op(
             "market_status_read",
             "GET",
             "/market-status-snapshot",

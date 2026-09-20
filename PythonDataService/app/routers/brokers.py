@@ -10,6 +10,7 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 from collections.abc import Awaitable, Callable
@@ -77,6 +78,7 @@ from app.schemas.account_pnl_attribution import (
 from app.schemas.alpaca_fee_reconciliation import SessionFeeReconciliation
 from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
+from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.schemas.manual_orders import (
     ManualOrderCancellationResponse,
@@ -723,6 +725,55 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
         channel_healths=sqlite.channel_health_snapshot(),
         account=account,
     )
+
+
+@router.get("/{broker}/attention", response_model=LaneAttentionRead)
+async def get_lane_attention(broker: str) -> LaneAttentionRead:
+    """One lane's attention set — everything currently needing the operator (#2228).
+
+    The narrow v1 set is the lane's active uncertainties (which includes
+    ``EXIT_NOT_FLAT`` and every exit waiting for an operator), keyed by the
+    stable uncertainty id so a bell can dedupe and clear exactly when the
+    underlying condition resolves. Never contacts the broker: the lane's own
+    custody ledger is the whole input, so a lane with no active authority
+    answers empty rather than unknown — *unknown* is the coordinator's
+    judgment when this read itself cannot be reached (``ok: false`` in the
+    aggregate).
+    """
+    if broker != "alpaca":
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "lane_attention_unsupported_broker",
+                "message": f"No attention read for broker '{broker}'.",
+            },
+        )
+    runtime = get_active_clerk_runtime()
+    repository = None if runtime is None else runtime.sqlite_repository
+    if repository is None:
+        return LaneAttentionRead(account_id=None, items=[])
+    items: list[LaneAttentionItem] = []
+    for row in repository.active_uncertainties():
+        symbol: str | None = None
+        try:
+            cause = json.loads(row["facts_json"]).get("cause_facts") or {}
+            candidate = cause.get("symbol")
+            symbol = candidate if isinstance(candidate, str) and candidate else None
+        except (ValueError, TypeError):
+            # Unreadable cause facts never hide the condition itself; the
+            # item still rings, without a symbol.
+            symbol = None
+        items.append(
+            LaneAttentionItem(
+                condition_id=row["uncertainty_id"],
+                reason_code=row["reason_code"],
+                severity=row["severity"],
+                strategy_instance_id=row["strategy_instance_id"],
+                symbol=symbol,
+                headline=row["headline"],
+            )
+        )
+    return LaneAttentionRead(account_id=repository.account_id, items=items)
 
 
 @router.get("/{broker}/live-verdict", response_model=AlpacaLiveVerdict)
