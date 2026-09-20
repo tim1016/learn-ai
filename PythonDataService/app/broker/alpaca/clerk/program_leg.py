@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -32,6 +33,7 @@ from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_st
 from app.services.source_bar_ledger import RetainedSourceBar
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.config import AlpacaSettings
     from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
 
 logger = logging.getLogger(__name__)
@@ -139,6 +141,125 @@ def _settings_allowances() -> ExtendedHoursAllowances | None:
     return ExtendedHoursAllowances.from_settings(settings)
 
 
+def _resolved_settings(*, concern: str) -> AlpacaSettings | None:
+    """One settings read for the deploy-time recovery knobs (#2229).
+
+    ``None`` means "no settings to read", logged once for the whole concern —
+    not once per knob, which used to emit two "fell back to default" lines for
+    one cause. A worker with no broker binding is an ordinary paper or
+    synthetic posture (info); settings that exist but will not load is a live
+    process about to price real money off declared defaults instead of the
+    configured bounds, so it is loud (error) — the fallback still answers the
+    declared default, never a guess, exactly as an EXIT is never blocked for
+    want of a seal (plan §0 D3).
+    """
+    from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
+
+    try:
+        return resolved_alpaca_settings()
+    except BrokerUnbound as exc:
+        logger.info(
+            "%s fell back to its declared default: no broker binding",
+            concern,
+            extra={"action": "deploy_recovery_knobs_unbound", "reason": exc.reason},
+        )
+        return None
+    except ValidationError as exc:
+        from app.broker.alpaca.config import alpaca_configuration_error_detail
+
+        logger.error(
+            "%s fell back to its declared default: settings did not load",
+            concern,
+            extra={
+                "action": "deploy_recovery_knobs_unavailable",
+                "detail": alpaca_configuration_error_detail(exc),
+            },
+        )
+        return None
+
+
+def _parsed_deploy_knob(
+    raw: str | None, *, name: str, low: Decimal, high: Decimal, default: Decimal
+) -> Decimal:
+    """Parse one deploy-time recovery knob leniently (PR #2230 review).
+
+    The knob is fail-open deployment configuration: unparseable, non-finite,
+    or out-of-[low, high] values log at error and answer the declared default
+    — never an exception, because the same string failing ``AlpacaSettings``
+    construction would disable the whole authority for a recovery-knob typo.
+    """
+    if raw is None:
+        return default
+    try:
+        value = Decimal(raw.strip())
+    except ArithmeticError:
+        logger.error(
+            "%s is not a number; the declared default %s applies",
+            name,
+            default,
+            extra={"action": "deploy_recovery_knob_unparseable", "setting": name, "raw": raw},
+        )
+        return default
+    if not value.is_finite() or not low <= value <= high:
+        logger.error(
+            "%s is outside [%s, %s]; the declared default %s applies",
+            name,
+            low,
+            high,
+            default,
+            extra={"action": "deploy_recovery_knob_out_of_range", "setting": name, "raw": raw},
+        )
+        return default
+    return value
+
+
+def _exit_band_multiple_from(settings: AlpacaSettings | None) -> Decimal:
+    """The band multiple one settings read answers, or the declared default."""
+    from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_BAND_MULTIPLE
+
+    return _parsed_deploy_knob(
+        None if settings is None else settings.live_xh_exit_band_multiple,
+        name="ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE",
+        low=Decimal(1),
+        high=Decimal(10),
+        default=DEFAULT_EXIT_BAND_MULTIPLE,
+    )
+
+
+def _exit_spread_cap_from(settings: AlpacaSettings | None) -> Decimal:
+    """The spread cap one settings read answers, or the declared default."""
+    from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_SPREAD_CAP_BPS
+
+    return _parsed_deploy_knob(
+        None if settings is None else settings.live_xh_exit_spread_cap_bps,
+        name="ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS",
+        low=Decimal(1),
+        high=Decimal(1000),
+        default=DEFAULT_EXIT_SPREAD_CAP_BPS,
+    )
+
+
+def with_deploy_recovery_pricing(
+    allowances: ExtendedHoursAllowances,
+) -> ExtendedHoursAllowances:
+    """Stamp the deploy-time recovery-flatten knobs onto the sealed pair (#2229).
+
+    The one canonical place the band multiple and the spread cap are applied,
+    from a single settings read. Every path that resolves allowances — sealed
+    arming record, effective revision, settings — and the live facade's
+    per-read rebuild funnels through here, so a deploy-time value applies on
+    every authority or none; before this seam existed the settings path
+    honoured the env var while the two envelope paths silently pinned the
+    default.
+    """
+    settings = _resolved_settings(concern="the deploy recovery-flatten knobs")
+    return replace(
+        allowances,
+        exit_band_multiple=_exit_band_multiple_from(settings),
+        exit_spread_cap_bps=_exit_spread_cap_from(settings),
+    )
+
+
 def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     """The allowances an extended-session leg prices from (ADR 0060; plan §0 D3).
 
@@ -162,6 +283,11 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     -- for an EXIT as much as an ENTER. "Never blocked *for lack of a seal*"
     means falling back to the effective revision, not inventing a number: a
     number nobody chose must never bound real money (ADR 0059 D4).
+
+    Whichever source wins, :func:`with_deploy_recovery_pricing` stamps the
+    deploy-time recovery-flatten knobs on the result — they are not ceremony
+    numbers and never touch the sealed pair, but they must apply on every
+    path alike (#2229).
     """
     from app.broker.alpaca.active_binding import get_active_alpaca_binding
 
@@ -169,10 +295,13 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     if context is not None:
         sealed = _sealed_allowances(context)
         if sealed is not None:
-            return sealed
+            return with_deploy_recovery_pricing(sealed)
         if context.live_envelope is not None:
-            return ExtendedHoursAllowances.from_envelope(context.live_envelope)
-    return _settings_allowances()
+            return with_deploy_recovery_pricing(
+                ExtendedHoursAllowances.from_envelope(context.live_envelope)
+            )
+    stamped = _settings_allowances()
+    return None if stamped is None else with_deploy_recovery_pricing(stamped)
 
 
 @dataclass(frozen=True)

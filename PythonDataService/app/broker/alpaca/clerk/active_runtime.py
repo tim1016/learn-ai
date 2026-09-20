@@ -344,6 +344,11 @@ async def compose_repository_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=on_result,
+            # What the sweep's stuck-EXIT watchdog prices an extended-hours
+            # re-drive limit from — the facade's sealed policy (re-resolved
+            # per pass so a re-arm is picked up) and its live top-of-book
+            # quote (#2229).
+            pricing=facade.recovery_pricing,
             # Custody first, evidence second: the symbol-validity probe runs
             # only after a succeeded pass, through the same guarded read port,
             # and records durably what the read path may then consume (#1795).

@@ -16,12 +16,15 @@ import hashlib
 import logging
 import threading
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.uncertainty_policies as uncertainty_policies_module
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -35,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     acknowledge_external_order,
     observe_external_order,
 )
+from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.folds import (
     POSITION_QTY_EPSILON,
     position_quantity_is_nonzero,
@@ -68,6 +72,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     reason_age_policy,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import (
     BrokerOrder,
@@ -75,6 +81,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.schemas.market_liveness import TopOfBookQuote
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
     _clock_at,
@@ -2300,13 +2307,14 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
     assert len(trade.submit_calls) == 1  # the recovery reducing order reached the broker
 
 
-async def test_watchdog_waits_for_the_operator_outside_the_regular_session(
+async def test_watchdog_defers_outside_the_regular_session_when_nothing_can_be_priced(
     clocked_repo,
 ) -> None:
-    """#2007, owner decision 2026-09-19: outside 09:30-16:00 nothing is sent
-    automatically -- no market order the vendor would queue to the open, and no
-    re-drive attempt burned toward EXIT_STUCK while the operator is the one who
-    must act."""
+    """#2229, owner decision 2026-09-19 (evening): outside 09:30-16:00 the
+    re-drive prices a limit itself when it can. With no pricing inputs handed
+    to the pass — this call carries no policy and no quote source — nothing is
+    priceable, so nothing is sent and no re-drive attempt is burned toward
+    EXIT_STUCK while the episode stays raised for the operator."""
     repo, clock = clocked_repo
     await _held_position(repo)
     _walk_clock_to(repo, WATCHDOG_POST_T0)
@@ -2334,6 +2342,72 @@ async def test_watchdog_waits_for_the_operator_outside_the_regular_session(
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=WATCHDOG_SID,
     ) is not None
+
+
+async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
+    clocked_repo,
+) -> None:
+    """#2229, owner decision 2026-09-19 (evening): in an extended session the
+    stuck-EXIT re-drive is a limit the Clerk prices itself — one sealed exit
+    allowance through the live touch — never a market order the vendor would
+    queue to the next open."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _walk_clock_to(repo, WATCHDOG_POST_T0)  # 17:00 ET, inside POST
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    quote = TopOfBookQuote(
+        symbol="SPY",
+        bid=100.00,
+        ask=100.05,
+        source="ibkr.market_data.status",
+        observed_at_ms=repo.clock(),
+    )
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=trade,
+        pricing=RecoveryPricing(
+            policy_source=lambda: ProgramLegPolicy(
+                window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
+                allowances=ExtendedHoursAllowances(
+                    entry_bps=Decimal("10"), exit_bps=Decimal("20")
+                ),
+            ),
+            quote_source=lambda symbol, now_ms: quote if symbol == "SPY" else None,
+        ),
+    )
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+    assert len(trade.submit_calls) == 1  # the priced reducing order reached the broker
+    # The leg itself is asserted from its durable creation facts — the row a
+    # later pass or a restart would rebuild the identical leg from.
+    ((reducing,),) = [
+        [order for order in repo.orders_for_strategy(WATCHDOG_SID) if order.role == "REDUCING"]
+    ]
+    transition = repo.first_order_transition(
+        order_ref=reducing.order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
+    )
+    assert transition is not None
+    facts = ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
+    assert (facts.side, facts.quantity, facts.order_type, facts.time_in_force) == (
+        "SELL",
+        10.0,
+        "limit",
+        "day",
+    )
+    assert facts.extended_hours is True
+    # The suggested sell: floor_tick(bid × (1 − 20bps)) = floor_tick(99.80).
+    assert facts.limit_price == 99.8
 
 
 async def test_watchdog_resumes_its_first_redrive_at_the_regular_open(clocked_repo) -> None:

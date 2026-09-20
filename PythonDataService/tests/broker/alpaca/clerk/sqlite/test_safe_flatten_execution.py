@@ -873,11 +873,16 @@ async def test_a_confirmed_price_never_reduces_a_quantity_the_operator_never_saw
         transition["summary_code"] == "RECOVERY_LIMIT_QUANTITY_CHANGED"
         for transition in repo.transitions_for_order(entry.order_ref)
     )
-    assert repo.active_uncertainty(
+    episode = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT",
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=SID,
-    ) is not None
+    )
+    assert episode is not None
+    # The operator confirmed this price, so the copy addresses them (PR #2230
+    # review, blocker 1: the two provenances must not share copy).
+    assert episode["headline"] == "The flatten's quantity changed after its price was confirmed"
+
 
 
 async def test_a_plan_leg_the_price_was_not_confirmed_for_is_refused(
@@ -972,3 +977,58 @@ async def test_the_facade_prices_a_single_leg_flatten_from_the_live_quote(
     assert (pricing.phase, pricing.quote, pricing.suggested_limit_price) == (
         "PRE", quote, Decimal("99.80"),
     )
+
+
+async def test_a_clerk_priced_quantity_change_folds_without_asking_the_operator(
+    crashed_with_exposure: tuple[ClerkSqliteRepository, Any],
+) -> None:
+    """PR #2230 review, blocker 1: a watchdog-priced leg whose attributed
+    quantity changes mid-flight folds with copy that asks no operator for
+    anything — nobody confirmed the price, and the next automatic re-drive
+    prices the new quantity afresh."""
+    from dataclasses import replace as _replace
+
+    from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit
+
+    repo, _clock = crashed_with_exposure
+    trade = _LookupOutageTrade()
+    _facade, trade, _current_context = await _stopped_facade_at(
+        repo, _PRE_MARKET_MS, trade=trade
+    )
+    (entry,) = [
+        order for order in repo.entry_orders_for_strategy(SID) if order.role == "ENTRY"
+    ]
+
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-clerkpriced01",
+        entry_order_ref=entry.order_ref,
+        confirmed_shape=_replace(
+            _confirmed_limit_shape(quantity=10),
+            priced_by="clerk",
+            # The helper's validity is yesterday's session; this leg is priced
+            # in this morning's PRE, valid until the 09:30 open.
+            valid_until_ms=_PRE_MARKET_MS + 9_000_000,
+        ),
+    )
+    assert accepted.effect_operation_id is not None
+
+    # Five more shares land before cancellation resolves, so the attributed
+    # reduction is fifteen where the Clerk priced ten.
+    await _late_entry_slice(repo, entry.order_ref, quantity=5)
+    trade.lookups_fail = False
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=SID,
+    )
+    assert episode is not None
+    assert episode["headline"] == "The flatten's quantity changed after the Clerk priced it"
+    assert "No action needed" in episode["next_step"]

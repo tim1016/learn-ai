@@ -7,6 +7,10 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    RecoveryPricing,
+)
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -60,6 +64,7 @@ class ReconciliationSweep:
         on_result: ReconciliationListener | None = None,
         after_pass: AfterPassHook | None = None,
         on_lease_revived: LeaseRevivedHook | None = None,
+        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
     ) -> None:
         self._repo = repo
         self._on_result = on_result
@@ -67,6 +72,10 @@ class ReconciliationSweep:
         self._on_lease_revived = on_lease_revived
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
+        # What the stuck-EXIT watchdog prices an extended-hours re-drive limit
+        # from (#2229): one seam whose policy is resolved per pass, so a
+        # re-arm is picked up and never a boot-time snapshot.
+        self._pricing = pricing
         self._interval_s = interval_s
         self._max_backoff_s = max(max_backoff_s, interval_s)
         self._sleep = sleep
@@ -375,6 +384,7 @@ class ReconciliationSweep:
                 trade=self._trade,
                 trigger="AUTOMATIC",
                 intake=self._intake,
+                pricing=self._pricing,
             )
             if self._on_result is not None:
                 self._on_result(result)

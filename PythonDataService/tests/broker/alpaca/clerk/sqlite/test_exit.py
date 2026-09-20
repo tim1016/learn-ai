@@ -16,6 +16,8 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.program_leg import LegShape
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
@@ -41,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
     Capability,
     decide_capability,
@@ -48,7 +51,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.schemas.market_liveness import TopOfBookQuote
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 
 ACCOUNT_ID = "PA-TEST"
@@ -1789,13 +1793,15 @@ async def test_accept_recovery_exit_captures_reduction_without_active_run(
     assert submitted_leg.quantity == 10
 
 
-async def test_an_unshaped_recovery_reduction_waits_for_the_regular_session(
+async def test_a_waiting_market_recovery_reduction_folds_releasably_outside_the_regular_session(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """#2007, owner decision 2026-09-19: after-hours, a recovery EXIT with no
-    recorded shape would be a market order the vendor queues to the next open.
-    It stays accepted with no order at the broker, and reduces market DAY on
-    the first pass inside the regular session."""
+    """#2229, owner decision 2026-09-19 (evening): after-hours, a recovery EXIT
+    with no recorded shape would be a market order the vendor queues to the
+    next open — and while it waited it owned the entry, so the operator's own
+    priced flatten of that entry was refused until 09:30. The waiting leg now
+    folds the EXIT releasably: the effect fails through ``EXIT_NOT_FLAT``, the
+    entry is freed for a priced reduction, and the bot stays flagged."""
     entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
     submit_stop_run(
         repo,
@@ -1823,29 +1829,33 @@ async def test_an_unshaped_recovery_reduction_waits_for_the_regular_session(
     assert waiting.reducing_order_ref is None
     assert trade.submit_calls == []
     effect = repo.effect_operation(accepted.effect_operation_id)
-    assert effect is not None and effect.state not in ("succeeded", "failed", "rejected")
+    assert effect is not None and effect.state == "failed"
+    # The waiting EXIT no longer holds its entry hostage: the operator's
+    # priced flatten of the same entry is no longer refused for a held EXIT.
+    assert repo.active_exit_for_order(entry_ref) is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=SID,
+    ) is not None
 
+    # A terminal effect never re-drives: the next reduction is a fresh,
+    # priced EXIT (the operator's flatten or the watchdog's re-drive).
     _walk_clock_to(repo, FIXTURE_RTH_MS)
     resolved = await resolve_exit(
         repo, effect_operation_id=accepted.effect_operation_id, trade=trade
     )
-
-    assert resolved.reducing_order_ref is not None
-    ((leg, _client_order_id),) = trade.submit_calls
-    assert (leg.side, leg.quantity, leg.order_type, leg.extended_hours) == (
-        "sell",
-        10,
-        "market",
-        False,
-    )
+    assert resolved.reducing_order_ref is None
+    assert trade.submit_calls == []
 
 
-async def test_a_market_recovery_reduction_is_never_resubmitted_outside_the_regular_session(
+async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_releasably(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Backend review of #2007: created at 10:00, its submit lost to an outage;
-    the resubmission after 16:00 must wait for the next open, not queue a
-    market order the vendor holds to 09:30."""
+    """#2229: created at 10:00, its submit lost to an outage; the resubmission
+    after 16:00 folds the EXIT releasably instead of holding the entry all
+    night behind an unsent market order. No market order is ever queued to the
+    next open."""
     _walk_clock_to(repo, FIXTURE_RTH_MS)
     entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
@@ -1875,6 +1885,16 @@ async def test_a_market_recovery_reduction_is_never_resubmitted_outside_the_regu
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close)
 
     assert after_close.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    # The unsent reducing order no longer holds the entry: the operator's
+    # priced flatten is accepted in the extended session.
+    assert repo.active_exit_for_order(entry_ref) is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=SID,
+    ) is not None
 
     _walk_clock_to(repo, NEXT_OPEN_MS)
     at_open = _FakeTrade(
@@ -1883,8 +1903,148 @@ async def test_a_market_recovery_reduction_is_never_resubmitted_outside_the_regu
     )
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=at_open)
 
-    ((leg, _client_order_id),) = at_open.submit_calls
-    assert (leg.side, leg.order_type, leg.extended_hours) == ("sell", "market", False)
+    assert at_open.submit_calls == []
+
+
+async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular_session(
+    repo: ClerkSqliteRepository,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2229, fold site 2: R11 side reconciliation replaces a limit priced for
+    the wrong side with a regular-session market leg, and outside 09:30–16:00
+    that leg folds releasably instead of waiting — the one wait site the
+    original tests missed (review of PR #2230, blocker 5)."""
+    import logging as _logging
+
+    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET, long 10
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    wrong_side = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=100.10,
+        extended_hours=True,
+        side=OrderSide.BUY,
+    )
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-wrongside1",
+        entry_order_ref=entry_ref,
+        confirmed_shape=ConfirmedRecoveryShape(
+            shape=wrong_side,
+            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            reference_quote=TopOfBookQuote(
+                symbol="SPY",
+                bid=100.00,
+                ask=100.05,
+                source="ibkr.market_data.status",
+                observed_at_ms=repo.clock(),
+            ),
+            quantity=10,
+        ),
+    )
+    assert accepted.effect_operation_id is not None
+    trade = _FakeTrade(
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+
+    with caplog.at_level(_logging.WARNING):
+        await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+
+    # The side reconciliation happened, and the market leg it produced folded.
+    assert any(
+        getattr(r, "action", None) == "reducing_leg_shape_side_mismatch"
+        for r in caplog.records
+    )
+    assert trade.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_order(entry_ref) is None
+
+
+async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_folds(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2229's headline, pinned end to end: a waiting market EXIT folds, and
+    the operator's priced flatten of the same entry is then accepted and sent
+    — the two gates ``execute_safe_flatten_plan`` performs are the entry
+    filter (``active_exit_for_order`` — asserted here) and the acceptance
+    itself, both of which the waiting EXIT used to refuse (review of PR
+    #2230, blocker 6)."""
+    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    held = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-foldthenflatten",
+        entry_order_ref=entry_ref,
+    )
+    assert held.effect_operation_id is not None
+    waiting = _FakeTrade(
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+    await resolve_accepted_exit(repo, accepted=held, trade=waiting)
+    effect = repo.effect_operation(held.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_order(entry_ref) is None  # the executor's entry filter
+
+    priced = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-foldthenflat1",
+        entry_order_ref=entry_ref,
+        confirmed_shape=ConfirmedRecoveryShape(
+            shape=LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            ),
+            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            reference_quote=TopOfBookQuote(
+                symbol="SPY",
+                bid=100.00,
+                ask=100.05,
+                source="ibkr.market_data.status",
+                observed_at_ms=repo.clock(),
+            ),
+            quantity=10,
+        ),
+    )
+    assert priced.effect_operation_id is not None
+
+    trade = _FakeTrade(
+        lookup_results=[recovered] * 4,
+        submit_result=_broker_order("priced-limit", side="sell", status="accepted"),
+    )
+    resolved = await resolve_accepted_exit(repo, accepted=priced, trade=trade)
+
+    assert resolved.reducing_order_ref is not None
+    ((leg, _client_order_id),) = trade.submit_calls
+    assert (leg.side, leg.order_type, leg.limit_price, leg.extended_hours) == (
+        "sell",
+        "limit",
+        99.8,
+        True,
+    )
 
 
 async def test_accept_recovery_exit_is_idempotent_per_decision_id(
@@ -1944,3 +2104,69 @@ async def test_accept_recovery_exit_forbid_active_run_fails_closed_under_live_ru
         entry_order_ref=entry_ref,
     )
     assert accepted.created is True
+
+
+async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_fold(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """PR #2230 review, the resubmission fold's identity guard: an uncertain
+    submission may have reached Alpaca. When a recorded execution slice exists
+    under a null broker identity, absence is *not* proven — the entry must not
+    be released for a fresh EXIT that would mint a different client id while
+    the original might still execute."""
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
+    submit_stop_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+        operator_reason="test_crash_analog",
+    )
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-redrive-uncertainid1",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    outage = _FakeTrade(
+        lookup_results=[recovered, recovered],
+        submit_error=BrokerUnavailable("broker is down"),
+    )
+    submitted = await resolve_accepted_exit(repo, accepted=accepted, trade=outage)
+    assert submitted.reducing_order_ref is not None
+
+    # A partial execution slice lands for the reducing order under a null
+    # broker id: the fill check in ``order_never_reached_broker`` now
+    # contradicts absence, and the position is not flat, so nothing terminal
+    # can be concluded either way.
+    reducing_seen = _broker_order(
+        submitted.reducing_order_ref, side="sell", status="accepted",
+        filled_quantity=4, filled_avg_price=100.0,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=submitted.reducing_order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=repo.clock(),
+            price=100, quantity=4, execution_id="reducing-exec-1",
+        ),
+        event_key="execution:reducing-exec-1",
+        order=reducing_seen,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
+    after_close = _FakeTrade(lookup_results=[None])
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close)
+
+    assert after_close.submit_calls == []
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    # Retained, not released: the identity question outranks the session clock.
+    assert effect is not None and effect.state not in ("succeeded", "failed", "rejected")
+    assert repo.active_exit_for_order(entry_ref) is not None

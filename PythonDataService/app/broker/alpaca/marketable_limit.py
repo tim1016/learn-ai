@@ -79,11 +79,23 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
     return price
 
 
+#: The declared default band multiple (#2229): the canonical number both
+#: the allowances default and ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``
+#: alias. A module constant here because the dataclass's home is the only
+#: place both sides can read without an import cycle.
+DEFAULT_EXIT_BAND_MULTIPLE = Decimal(2)
+#: The declared default spread cap (#2229): the canonical number both the
+#: allowances default and ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS``
+#: alias — one concept, one value, so the operator's ticket warning and the
+#: Clerk's enforcement gate cannot drift apart.
+DEFAULT_EXIT_SPREAD_CAP_BPS = Decimal("50")
+
+
 @dataclass(frozen=True)
 class ExtendedHoursAllowances:
     """The operator's extended-session allowances, in basis points (ADR 0059 D4).
 
-    Neither value has a default in code. ``None`` from :meth:`from_settings`
+    Neither allowance has a default in code. ``None`` from :meth:`from_settings`
     means "not configured", which the leg policy and Start admission refuse
     explicitly — never zero.
 
@@ -91,10 +103,27 @@ class ExtendedHoursAllowances:
     numbers can arrive in and *which one* an extended-session leg prices from
     is a decision this type does not make: ``program_leg.resolve_extended_hours_allowances``
     owns the order. This module only converts.
+
+    ``exit_band_multiple`` and ``exit_spread_cap_bps`` are deploy-time
+    configuration, not ceremony numbers (#2229): how many exit allowances a
+    recovery flatten's confirmed limit may reach through the live touch, and
+    the widest spread an automatic re-drive will price against. Both are
+    deliberately **not** part of the sealed envelope, so every arming record
+    ever written keeps validating and hashing byte-identically; unset they
+    answer :data:`DEFAULT_EXIT_BAND_MULTIPLE` and
+    :data:`DEFAULT_EXIT_SPREAD_CAP_BPS` — the canonical numbers
+    ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE`` and
+    ``RECOVERY_SPREAD_WARNING_BPS`` alias, so tuning the human's warning and
+    the Clerk's enforcement cannot drift apart. No constructor here reads
+    them: the one canonical stamp is ``program_leg.with_deploy_recovery_pricing``,
+    so a deploy-time value applies on every resolution path or none, never
+    two of three.
     """
 
     entry_bps: Decimal
     exit_bps: Decimal
+    exit_band_multiple: Decimal = DEFAULT_EXIT_BAND_MULTIPLE
+    exit_spread_cap_bps: Decimal = DEFAULT_EXIT_SPREAD_CAP_BPS
 
     @classmethod
     def from_bps(cls, *, entry_bps: float, exit_bps: float) -> ExtendedHoursAllowances:
@@ -103,7 +132,9 @@ class ExtendedHoursAllowances:
         ``Decimal(str(x))``, never ``Decimal(x)``: the anchor must round the
         allowance the operator wrote, not the binary float nearest to it.
         Stated once here because the same two numbers reach this class from the
-        environment and from an arming record's sealed envelope.
+        environment and from an arming record's sealed envelope. Deploy-time
+        knobs are not accepted here — they are stamped by
+        ``program_leg.with_deploy_recovery_pricing`` alone.
         """
         return cls(entry_bps=Decimal(str(entry_bps)), exit_bps=Decimal(str(exit_bps)))
 
@@ -128,6 +159,11 @@ class ExtendedHoursAllowances:
         does it, so a sealed envelope and an environment-configured one at the
         same numbers produce the same anchor. This is adapter-level only —
         nothing here re-derives ``LiveEnvelopeValues.sha`` or a record's digest.
+
+        The deploy-time knobs keep their declared defaults here and in
+        ``from_settings``: a ceremony record carries only the sealed pair, and
+        stamping the deploy-time values beside them is
+        ``program_leg.with_deploy_recovery_pricing``'s one job.
         """
         return cls(
             entry_bps=Decimal(str(envelope.xh_entry_bps)),

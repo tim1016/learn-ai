@@ -146,3 +146,87 @@ def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     )
 
     assert leg.limit_price == float(price)
+
+
+def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> None:
+    """#2229: the converters carry only the sealed pair — every deploy-time
+    knob is stamped by ``program_leg.with_deploy_recovery_pricing`` alone, so
+    a deploy value applies on every resolution path or none (PR #2230 review,
+    blocker 3)."""
+    from app.broker.alpaca.clerk import program_leg
+    from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+
+    envelope = ExtendedHoursAllowances.from_envelope(
+        LiveEnvelopeValues(
+            loss_fraction=0.5,
+            loss_usd=100.0,
+            shadow_sessions=1,
+            arming_max_sessions=1,
+            xh_entry_bps=10.0,
+            xh_exit_bps=20.0,
+        )
+    )
+    settings = ExtendedHoursAllowances.from_settings(
+        AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            live_loss_fraction=0.5,
+            live_loss_usd=100.0,
+            live_shadow_sessions=1,
+            live_arming_max_sessions=1,
+            live_xh_entry_bps=10.0,
+            live_xh_exit_bps=20.0,
+            # Deploy-time values set here must NOT change the converted pair:
+            # stamping is the canonical seam's job, not the converter's.
+            live_xh_exit_band_multiple="4.0",
+            live_xh_exit_spread_cap_bps="200.0",
+        )
+    )
+    for allowances in (envelope, settings):
+        assert allowances.exit_band_multiple == Decimal(2)
+        assert allowances.exit_spread_cap_bps == Decimal("50")
+
+    # One settings read stamps both knobs: the seam is patched, not the knobs.
+    original = program_leg._resolved_settings
+    try:
+        program_leg._resolved_settings = lambda *, concern: AlpacaSettings(
+            api_key_id="k",
+            api_secret_key="s",
+            live_xh_exit_band_multiple="4.0",
+            live_xh_exit_spread_cap_bps="200.0",
+        )
+        stamped = program_leg.with_deploy_recovery_pricing(envelope)
+    finally:
+        program_leg._resolved_settings = original
+    assert (stamped.entry_bps, stamped.exit_bps) == (envelope.entry_bps, envelope.exit_bps)
+    assert stamped.exit_band_multiple == Decimal("4")
+    assert stamped.exit_spread_cap_bps == Decimal("200")
+    # One concept, one value: the ticket warning and the enforcement gate
+    # share the canonical numbers, so tuning one cannot drift the other.
+    from app.broker.alpaca.clerk.recovery_reduction import (
+        RECOVERY_BAND_ALLOWANCE_MULTIPLE,
+        RECOVERY_SPREAD_WARNING_BPS,
+    )
+    from app.broker.alpaca.marketable_limit import (
+        DEFAULT_EXIT_BAND_MULTIPLE,
+        DEFAULT_EXIT_SPREAD_CAP_BPS,
+    )
+
+    assert RECOVERY_SPREAD_WARNING_BPS == int(DEFAULT_EXIT_SPREAD_CAP_BPS) == 50
+    assert RECOVERY_BAND_ALLOWANCE_MULTIPLE == DEFAULT_EXIT_BAND_MULTIPLE
+
+
+def test_invalid_deploy_knob_values_degrade_loudly_to_the_declared_defaults() -> None:
+    """PR #2230 review: a malformed or out-of-range recovery-knob value must
+    never fail ``AlpacaSettings`` construction (which would disable the whole
+    authority) — it answers the declared default, loudly, at the read."""
+    from app.broker.alpaca.clerk import program_leg
+
+    settings = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        live_xh_exit_band_multiple="50",  # out of [1, 10]
+        live_xh_exit_spread_cap_bps="not-a-number",
+    )
+    assert program_leg._exit_band_multiple_from(settings) == Decimal(2)
+    assert program_leg._exit_spread_cap_from(settings) == Decimal("50")

@@ -46,7 +46,13 @@
     </div>
     <div class="min-w-0">
       <dt class="text-xs text-[var(--text-secondary)]">Furthest accepted</dt>
-      <dd class="m-0 mt-1 tabular-nums">{{ quote.band_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}</dd>
+      @if (quote.band_limit_price !== null) {
+        <dd class="m-0 mt-1 tabular-nums">{{ quote.band_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}</dd>
+      } @else {
+        <!-- A sell band past 100 % of the touch floors to zero, which is not
+             a price: the band is effectively unbounded (PR #2230 review). -->
+        <dd class="m-0 mt-1 tabular-nums">No lower bound</dd>
+      }
     </div>
   </dl>
 
@@ -77,7 +83,7 @@
     [style.color]="limitPrice() === null || reading?.outside_band === true ? 'var(--bear)' : null">
     @if (limitPrice() === null) {
       Enter a positive price like 512.30.
-    } @else if (reading?.outside_band === true) {
+    } @else if (reading?.outside_band === true && quote.band_limit_price !== null) {
       Past the Clerk's band — the furthest it accepts is {{ quote.band_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}.
     } @else if (reading) {
       {{ reading.through_book_bps | number: '1.1-1' }} bps {{ isSell() ? 'below' : 'above' }} the {{ bookSideLabel() }};

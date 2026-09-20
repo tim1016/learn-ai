@@ -10,6 +10,10 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 from weakref import WeakKeyDictionary
 
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    RecoveryPricing,
+)
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import redrive_or_escalate_stale_exits
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
@@ -605,8 +609,14 @@ async def reconcile_account(
     trade: BrokerTradePort,
     trigger: Trigger = "AUTOMATIC",
     intake: ReentrantAsyncLock | None = None,
+    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
 ) -> AccountReconciliationResult:
-    """Serialize snapshot-to-verdict passes for one live account authority."""
+    """Serialize snapshot-to-verdict passes for one live account authority.
+
+    ``pricing`` is what the stuck-EXIT watchdog prices its extended-hours
+    re-drive limits from (#2229); the degraded default defers rather than
+    guessing a price.
+    """
     intake = _direct_reconciliation_intake(repo, intake)
     if intake.held_by_current_task():
         raise ReconciliationLockOrderError(
@@ -621,6 +631,7 @@ async def reconcile_account(
                 trade=trade,
                 trigger=trigger,
                 intake=intake,
+                pricing=pricing,
             )
         except asyncio.CancelledError:
             await asyncio.shield(
@@ -704,6 +715,7 @@ async def _reconcile_account_serialized(
     trade: BrokerTradePort,
     trigger: Trigger,
     intake: ReentrantAsyncLock,
+    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""
     snapshot = await _read_account_snapshot(repo, read, intake=intake)
@@ -729,7 +741,9 @@ async def _reconcile_account_serialized(
         intake=intake,
     )
 
-    await redrive_or_escalate_stale_exits(repo, trade=trade, intake=intake)
+    await redrive_or_escalate_stale_exits(
+        repo, trade=trade, intake=intake, pricing=pricing
+    )
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.
     # Re-read broker truth and fold the newest open-order evidence before the

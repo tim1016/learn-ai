@@ -15624,8 +15624,15 @@
             "title": "Ask Size"
           },
           "band_limit_price": {
-            "title": "Band Limit Price",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band Limit Price"
           },
           "bid": {
             "title": "Bid",
@@ -15724,7 +15731,6 @@
           "quote_max_age_ms",
           "exit_allowance_bps",
           "suggested_limit_price",
-          "band_limit_price",
           "spread",
           "spread_bps",
           "wide_spread",
