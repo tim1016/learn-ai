@@ -1,0 +1,109 @@
+import { provideRouter } from '@angular/router';
+import { render, screen, fireEvent } from '@testing-library/angular';
+import { describe, expect, it } from 'vitest';
+
+import { testLane } from '../fleet/fleet-directory-testing';
+import type { LaneDescriptor } from '../fleet/fleet-directory.types';
+import {
+  LaneAttentionService,
+  QUIET_LANE_ATTENTION_STATE,
+  UNPOLLED_LANE_ATTENTION_STATE,
+  type LaneAttentionItem,
+  type LaneAttentionState,
+} from '../services/lane-attention.service';
+import { LaneAttentionBellComponent } from './lane-attention-bell.component';
+
+function item(overrides: Partial<LaneAttentionItem> = {}): LaneAttentionItem {
+  return {
+    condition_id: 'unc-1',
+    reason_code: 'EXIT_NOT_FLAT',
+    kind: 'uncertainty',
+    severity: 'blocking',
+    strategy_instance_id: 'ema-1',
+    symbol: 'SPY',
+    headline: 'This bot’s exit has not flattened its position',
+    ...overrides,
+  };
+}
+
+async function renderBell(
+  state: LaneAttentionState,
+  lane: LaneDescriptor = testLane(),
+) {
+  return render(LaneAttentionBellComponent, {
+    inputs: { lane },
+    providers: [
+      provideRouter([]),
+      {
+        provide: LaneAttentionService,
+        useValue: { stateFor: (clerkId: string) => (clerkId === lane.clerk_id ? state : UNPOLLED_LANE_ATTENTION_STATE) },
+      },
+    ],
+  });
+}
+
+function bellButton(): HTMLElement {
+  return screen.getByRole('button', { name: /attention/i });
+}
+
+describe('LaneAttentionBellComponent', () => {
+  it('renders nothing while the lane is quiet', async () => {
+    await renderBell(QUIET_LANE_ATTENTION_STATE);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('renders nothing before the first poll lands', async () => {
+    await renderBell(UNPOLLED_LANE_ATTENTION_STATE);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('shows the count and the severity word for blocking conditions, and lists the item with its way into the bot', async () => {
+    await renderBell({
+      unknown: false,
+      errorReason: null,
+      items: [
+        item(),
+        item({
+          condition_id: 'unc-2',
+          severity: 'warning',
+          headline: 'Order outcome remains unknown',
+        }),
+      ],
+    });
+
+    const bell = bellButton();
+    expect(bell.textContent).toContain('2');
+    expect(bell.getAttribute('aria-label')).toContain('1 blocking condition');
+
+    await fireEvent.click(bell);
+    // One of the two is blocking, so the heading names the blocking count.
+    expect(screen.getByText(/1 blocking condition on this lane/i)).toBeTruthy();
+    // The severity word is in the text — colour is never the only signal.
+    expect(screen.getAllByText('Blocking').length).toBe(1);
+    expect(screen.getAllByText('Warning').length).toBe(1);
+    expect(screen.getByText('This bot’s exit has not flattened its position')).toBeTruthy();
+    // Both items name a strategy on an account-confirmed lane, so both offer
+    // their way in — one link per condition.
+    expect(screen.getAllByRole('link', { name: 'Open bot' }).length).toBe(2);
+  });
+
+  it('renders a grey unknown — never quiet — when this lane’s read failed', async () => {
+    await renderBell({ unknown: true, errorReason: 'clerk_unreachable', items: [] });
+
+    const bell = bellButton();
+    expect(bell.getAttribute('aria-label')).toContain('unknown');
+
+    await fireEvent.click(bell);
+    expect(screen.getByText(/never the same as quiet/i)).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('closes the popover on Escape', async () => {
+    await renderBell({ unknown: false, errorReason: null, items: [item()] });
+    await fireEvent.click(bellButton());
+    expect(screen.getByRole('dialog')).toBeTruthy();
+
+    await fireEvent.keyDown(bellButton(), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});

@@ -3,8 +3,10 @@ import { Title } from '@angular/platform-browser';
 import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
+import { LaneAttentionBellComponent } from './shell/lane-attention-bell.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
+import { LaneAttentionService } from './services/lane-attention.service';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
@@ -31,6 +33,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     RouterOutlet,
     AppMenubarComponent,
     AlpacaLiveBannerComponent,
+    LaneAttentionBellComponent,
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
@@ -132,6 +135,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
           }
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
+            <app-lane-attention-bell [lane]="lane" />
           } @empty {
             <!-- Never zero badges. An unresolved roster is itself an
                  undetermined mode, and the banner says so loudly. -->
@@ -153,6 +157,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
 })
 export class AppComponent {
   private readonly alpacaLive = inject(AlpacaLiveVerdictService);
+  private readonly laneAttention = inject(LaneAttentionService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly title = inject(Title);
   private readonly router = inject(Router);
@@ -204,6 +209,10 @@ export class AppComponent {
     // Alpaca path (ADR 0059 D8): one root poll, rendered from the server
     // verdict, never composed on the client.
     this.alpacaLive.start();
+    // One aggregate poll behind every per-lane attention bell (#2228): the
+    // coordinator fans the read out to each lane server-side, and each bell
+    // renders only its own lane's slice of the fold.
+    this.laneAttention.start();
   }
 }
 
