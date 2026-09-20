@@ -357,3 +357,55 @@ def test_the_posture_choice_lives_in_config_route_alone() -> None:
         and "/api/brokers" in line
     ]
     assert outside == []
+
+
+@pytest.mark.parametrize(
+    ("published", "expected"),
+    [
+        ("127.0.0.1:8100", "127.0.0.1:8100"),
+        ("0.0.0.0:8100", "127.0.0.1:8100"),
+        ("0.0.0.0:8000", "127.0.0.1:8000"),
+    ],
+    ids=["explicit-loopback", "wildcard-production", "wildcard-dev"],
+)
+def test_published_host_address_normalizes_a_wildcard_binding(
+    published: str, expected: str
+) -> None:
+    """A `compose port` answer with a wildcard binding still answers on
+    loopback; an explicit host is used verbatim — executing the script's
+    own normalization function, not a copy of it."""
+    probe = f"{_script_function('published_host_address')}\npublished_host_address \"{published}\"\n"
+    completed = subprocess.run(
+        ["bash", "-c", probe], capture_output=True, text=True, timeout=10
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == expected
+
+
+def test_the_fleet_path_derives_the_coordinators_published_port() -> None:
+    """The production posture publishes the coordinator's in-container 8000
+    as 127.0.0.1:${FLEET_COORDINATOR_PORT:-8100} (compose.fleet.yaml), so a
+    fleet-posture run must read the published port from the deployment via
+    `compose port` rather than reuse the combined posture's
+    127.0.0.1:8000 — which targets a closed port and aborts the ceremony
+    before Apply."""
+    script = _script()
+    assert '"${compose_words[@]}" port "$coordinator_service" 8000' in script
+    assert 'data_plane_url="http://$(published_host_address "$published_port_line")"' in script
+
+
+def test_the_operator_page_url_is_clerk_scoped_on_fleet_postures() -> None:
+    """On a fleet posture the page the ceremony opens must be the clerk's
+    own Configuration page. The compatibility /brokers/alpaca/configuration
+    URL renders BrokerLaneUnavailableComponent there — the operator could
+    never stage or Apply from it. Pinned against the Angular routes the
+    URL must resolve through: the clerk route prefix plus its
+    configuration child (app.routes.ts)."""
+    script = _script()
+    assert "brokers/alpaca/clerks/$fleet_clerk_id/configuration" in script
+    assert "brokers/alpaca/clerks/\"$fleet_clerk_id\"/configuration" not in script
+    routes = (
+        REPOSITORY_ROOT / "Frontend" / "src" / "app" / "app.routes.ts"
+    ).read_text(encoding="utf-8")
+    assert "brokers/alpaca/clerks/:clerkId" in routes
+    assert "path: 'configuration'" in routes
