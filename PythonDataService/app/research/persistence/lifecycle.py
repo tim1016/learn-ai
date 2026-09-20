@@ -16,7 +16,7 @@ from typing import Any, Protocol
 import redis
 
 from app.engine.data.policy_store import resolve_data_roots
-from app.jobs.progress import _state_key, get_redis
+from app.jobs.progress import _lease_key, _state_key, get_redis
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.snapshot import DataSnapshot, verify_data_snapshot
 
@@ -33,14 +33,28 @@ class FencedRecord(Protocol):
 
 
 def job_is_live(job_id: str | None) -> bool | None:
-    """Whether the Redis job record still says queued/running. ``None`` when Redis cannot answer."""
+    """Whether a worker still holds the job (#1938): the Redis record says
+    queued/running **and** the worker's lease has not expired.
+
+    The status fields alone kept claiming ``running`` after a worker died
+    mid-process, which read as a live job that could never finish. The lease
+    (``app.jobs.progress``) is renewed only by a progressing worker, so its
+    absence is what turns a dead job into an honest ``interrupted``. An
+    expired lease under a worker that later resumes producing cannot be
+    renewed (a no-op renewal), so liveness never flips back on; only a
+    terminal event closes the record for good. ``None`` when Redis cannot
+    answer.
+    """
     if not job_id:
         return False
     try:
-        status = get_redis().hget(_state_key(job_id), "status")
+        pipe = get_redis().pipeline()
+        pipe.hget(_state_key(job_id), "status")
+        pipe.exists(_lease_key(job_id))
+        status, lease = pipe.execute()
     except redis.RedisError:
         return None
-    return status in ("queued", "running")
+    return status in ("queued", "running") and bool(lease)
 
 
 def request_cancel(job_id: str) -> None:
@@ -48,11 +62,21 @@ def request_cancel(job_id: str) -> None:
     get_redis().hset(_state_key(job_id), "cancel_requested", "1")
 
 
+def presented_status_for(status: str, *, live: bool | None) -> str:
+    """A live-status record with no live job reads back as ``interrupted``.
+
+    The one presentation rule every research record shares; ``presented_status``
+    is its row-shaped form. A record in another status vocabulary presents its
+    own lowercased word through this same function.
+    """
+    if status in ("queued", "running") and live is False:
+        return "interrupted"
+    return status
+
+
 def presented_status(row: FencedRecord, *, live: bool | None) -> str:
     """A ``running`` record with no live job reads back as ``interrupted``."""
-    if row.status in ("queued", "running") and live is False:
-        return "interrupted"
-    return row.status
+    return presented_status_for(row.status, live=live)
 
 
 def uncommitted_changes(row: FencedRecord) -> bool:

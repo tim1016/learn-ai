@@ -26,12 +26,32 @@ from decimal import Decimal
 
 import asyncpg
 
-from app.research.recency.models import MembershipView, PersistOutcome, TradeView
+from app.research.persistence import fence
+from app.research.persistence.fence import FenceColumns
+from app.research.recency.models import LaunchView, MembershipView, PersistOutcome, TradeView
 from app.research.recency.runner import RecencyRunSnapshot
 from app.research.recency.stats import HeroCandidate, HeroTrade
 from app.utils.timestamps import now_ms_utc
 
 TERMINAL_LAUNCH_STATUSES: frozenset[str] = frozenset({"COMPLETED", "CANCELLED", "FAILED"})
+
+# The launch record speaks the fence contract (ADR 0055 §4) in PascalCase
+# with no ``updated_at_ms`` column; a resumable launch is one that is not
+# complete — FAILED and CANCELLED launches may Finish, per the owner's rule
+# for this record (#1938).
+RECENCY_LAUNCH_COLUMNS = FenceColumns(
+    record_id="Id",
+    attempt="Attempt",
+    status="Status",
+    job_id="JobId",
+    updated_at_ms=None,
+    finished_at_ms="CompletedAtMs",
+    failure_reason="FailureReason",
+    incomplete="Incomplete",
+    claimable_statuses=frozenset({"RUNNING", "FAILED", "CANCELLED"}),
+    running_status="RUNNING",
+    completed_status="COMPLETED",
+)
 
 
 class LaunchNotFoundError(LookupError):
@@ -66,8 +86,8 @@ async def create_launch(conn: asyncpg.Connection, *, launch_id: str, config_json
         raise ValueError("expected_runs must be positive")
     inserted = await conn.fetchval(
         """
-        INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs")
-        VALUES ($1, $2::jsonb, $3, 0, 0, 'RUNNING', $4)
+        INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs", "JobId")
+        VALUES ($1, $2::jsonb, $3, 0, 0, 'RUNNING', $4, $1)
         ON CONFLICT ("Id") DO NOTHING
         RETURNING "Id"
         """,
@@ -89,20 +109,106 @@ async def create_launch(conn: asyncpg.Connection, *, launch_id: str, config_json
     return False
 
 
+async def claim_launch(conn: asyncpg.Connection, *, launch_id: str, job_id: str) -> int:
+    """Bind the launch to the next attempt generation and this worker's job id (ADR 0055 §4, #1938).
+
+    A fresh launch claims attempt 1 for its own id; a resume claims the next
+    generation for the new job id, which is how a new transport record
+    attaches to the old durable launch. Raises the fence's
+    ``RecordNotClaimableError`` (completed launch) / ``RecordNotFoundError``;
+    the refusal check ran earlier, so these mean the record moved under us.
+    """
+    return await fence.claim_attempt(conn, table='"RecencyLaunches"', record_id=launch_id, job_id=job_id, columns=RECENCY_LAUNCH_COLUMNS)
+
+
+async def load_launch(conn: asyncpg.Connection, launch_id: str) -> LaunchView | None:
+    """One launch as the resume gate and the list read it; ``None`` when unknown."""
+    row = await conn.fetchrow(
+        """
+        SELECT "Id", "Status", "JobId", "Attempt", "ExpectedRuns", "SucceededRuns", "FailedRuns",
+               "CreatedAtMs", "CompletedAtMs", "DeletedAtMs", "ConfigJson"::text AS "ConfigJson"
+          FROM "RecencyLaunches"
+         WHERE "Id" = $1
+        """,
+        launch_id,
+    )
+    if row is None:
+        return None
+    return _launch_view(row)
+
+
+async def list_launches(conn: asyncpg.Connection, *, limit: int = 20) -> list[LaunchView]:
+    """The most recent launches, tombstoned ones included (their evidence remains, restored or not)."""
+    rows = await conn.fetch(
+        """
+        SELECT "Id", "Status", "JobId", "Attempt", "ExpectedRuns", "SucceededRuns", "FailedRuns",
+               "CreatedAtMs", "CompletedAtMs", "DeletedAtMs", "ConfigJson"::text AS "ConfigJson"
+          FROM "RecencyLaunches"
+         ORDER BY "CreatedAtMs" DESC
+         LIMIT $1
+        """,
+        limit,
+    )
+    return [_launch_view(row) for row in rows]
+
+
+def _launch_view(row: asyncpg.Record) -> LaunchView:
+    return LaunchView(
+        launch_id=row["Id"],
+        status=row["Status"],
+        job_id=row["JobId"],
+        attempt=int(row["Attempt"]),
+        expected_runs=int(row["ExpectedRuns"]),
+        succeeded_runs=int(row["SucceededRuns"]),
+        failed_runs=int(row["FailedRuns"]),
+        created_at_ms=int(row["CreatedAtMs"]),
+        completed_at_ms=None if row["CompletedAtMs"] is None else int(row["CompletedAtMs"]),
+        deleted_at_ms=None if row["DeletedAtMs"] is None else int(row["DeletedAtMs"]),
+        config_json=row["ConfigJson"],
+    )
+
+
+async def recorded_identities(conn: asyncpg.Connection, launch_id: str) -> set[tuple[str, str, str]]:
+    """The (symbol, strategy, params) cells the launch already holds.
+
+    Deliberately the same identity predicate ``persist_snapshot`` dedupes by —
+    soft-deleted runs included — so a resume skips exactly the cells whose
+    persistence would be a no-op, and re-runs everything else.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT "Symbol", "StrategyKey", "ParamsHash"
+          FROM "RecencyRuns"
+         WHERE "RecencyLaunchId" = $1
+        """,
+        launch_id,
+    )
+    return {(row["Symbol"], row["StrategyKey"], row["ParamsHash"]) for row in rows}
+
+
 async def set_terminal_status(
     conn: asyncpg.Connection,
     launch_id: str,
     *,
     status: str,
+    attempt: int,
     succeeded_runs: int | None = None,
     failed_runs: int | None = None,
 ) -> bool:
-    """Move a launch to COMPLETED / CANCELLED / FAILED; only COMPLETED demands full accounting."""
+    """Move a launch to COMPLETED / CANCELLED / FAILED; only COMPLETED demands full accounting.
+
+    The write is attempt-fenced: a worker whose generation moved on (a resume
+    claimed the launch since) may not close it (#1938) — that refusal raises
+    :class:`fence.StaleAttemptError`.
+    """
     if status not in TERMINAL_LAUNCH_STATUSES:
         raise LaunchAccountingError("status must be COMPLETED, CANCELLED, or FAILED")
     if (succeeded_runs is not None and succeeded_runs < 0) or (failed_runs is not None and failed_runs < 0):
         raise LaunchAccountingError("run counts cannot be negative")
     async with conn.transaction():
+        await fence.lock_current_attempt(
+            conn, table='"RecencyLaunches"', record_id=launch_id, attempt=attempt, columns=RECENCY_LAUNCH_COLUMNS
+        )
         row = await conn.fetchrow(
             'SELECT "ExpectedRuns", "SucceededRuns", "FailedRuns" FROM "RecencyLaunches" WHERE "Id" = $1 FOR UPDATE', launch_id
         )
@@ -132,10 +238,11 @@ async def set_terminal_status(
 # ── Snapshot persistence ─────────────────────────────────────────────────
 
 
-async def persist_snapshot(conn: asyncpg.Connection, snapshot: RecencyRunSnapshot) -> PersistOutcome:
+async def persist_snapshot(conn: asyncpg.Connection, snapshot: RecencyRunSnapshot, *, attempt: int) -> PersistOutcome:
     """Write one run and its trades atomically, honouring the launch tombstone and cell identity.
 
-    The launch row is locked for the whole transaction, so a concurrent
+    The launch row is locked for the whole transaction (attempt-fenced since
+    #1938: a worker whose generation moved on may not write), so a concurrent
     soft-delete serializes against this insert (never a "deleted" launch
     that keeps gaining children) and two deliveries of the same cell cannot
     both pass the identity check. Trades are written in one statement with
@@ -145,6 +252,13 @@ async def persist_snapshot(conn: asyncpg.Connection, snapshot: RecencyRunSnapsho
     round trips rather than two per trade.
     """
     async with conn.transaction():
+        if await conn.fetchval('SELECT 1 FROM "RecencyLaunches" WHERE "Id" = $1', snapshot.launch_id) is None:
+            raise LaunchNotFoundError(
+                f"RecencyLaunch '{snapshot.launch_id}' does not exist; launches are persisted before dispatch (design spec D20)"
+            )
+        await fence.lock_current_attempt(
+            conn, table='"RecencyLaunches"', record_id=snapshot.launch_id, attempt=attempt, columns=RECENCY_LAUNCH_COLUMNS
+        )
         launch = await conn.fetchrow('SELECT "DeletedAtMs" FROM "RecencyLaunches" WHERE "Id" = $1 FOR UPDATE', snapshot.launch_id)
         if launch is None:
             raise LaunchNotFoundError(

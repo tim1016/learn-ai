@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
-from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange
+from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange, expand_grid
 
 
 @dataclass
@@ -386,3 +386,47 @@ class TestRunRecencyLazyGridExecution:
         )
 
         assert pulled_count_at_first_done["count"] < 5
+
+
+class TestRunRecencySkipIdentities:
+    def _identity_of_first_spec(self) -> tuple[str, str, str]:
+        spec = next(iter(expand_grid(_config().strategies, _config().symbols)))
+        return (spec.symbol, spec.strategy_key, spec.params_hash)
+
+    def test_a_recorded_cell_is_skipped_not_executed_or_persisted(self) -> None:
+        executed: list[str] = []
+        persisted = []
+
+        run_recency(
+            _config(),
+            execute_backtest_fn=lambda run_spec, config: executed.append(run_spec.symbol) or _one_trade_result(),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+            skip_identities=frozenset({self._identity_of_first_spec()}),
+        )
+
+        assert sorted(executed) == ["AAPL"]  # the recorded cell is never re-run
+        assert [snap.symbol for snap in persisted] == ["AAPL"]
+
+    def test_a_skipped_cell_counts_toward_progress_but_toward_neither_succeeded_nor_failed(self) -> None:
+        summary = run_recency(
+            _config(),
+            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
+            persist_fn=lambda snap: None,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+            skip_identities=frozenset({self._identity_of_first_spec()}),
+        )
+
+        assert (summary.expected_runs, summary.succeeded_runs, summary.failed_runs, summary.skipped_runs) == (2, 1, 0, 1)
+
+    def test_the_skip_identity_is_the_persisted_record_s_identity_triple(self) -> None:
+        """A params_hash that differs (a different combo of the same symbol/strategy) is a cell of its own."""
+        summary = run_recency(
+            _config(),
+            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
+            persist_fn=lambda snap: None,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+            skip_identities=frozenset({("SPY", "ema_crossover_2_bps", "a-hash-not-in-this-grid")}),
+        )
+
+        assert (summary.succeeded_runs, summary.skipped_runs) == (2, 0)

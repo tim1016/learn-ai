@@ -39,6 +39,18 @@ logger = logging.getLogger(__name__)
 # revisit if multi-user lands.
 JOB_TTL_SECONDS = 60 * 60 * 24
 
+# How long a worker's lease outlives its last proof of progress. Liveness
+# (#1938) is the lease, not the ``queued``/``running`` status: the worker
+# slides it forward every time it emits an event or consults cancellation,
+# so a worker that dies or hangs silently stops renewing and the job reads
+# as not live within this window, while today's status fields would keep
+# claiming ``running`` until the 24 h TTL. It must comfortably exceed the
+# longest gap between two renewals of the quietest job — one backtest cell
+# with no emit in between — so a legitimately slow cell never reads as dead.
+# Renewal rides existing calls (no heartbeat thread): a heartbeat would keep
+# proving liveness for a worker that has actually hung.
+JOB_LEASE_TTL_SECONDS = 300
+
 # Bound the events stream so a runaway emitter can't blow out memory.
 # 50k events at ~200 bytes each = ~10 MB; plenty for a long backtest.
 MAX_STREAM_LENGTH = 50_000
@@ -85,6 +97,10 @@ def get_redis() -> redis.Redis:
 
 def _state_key(job_id: str) -> str:
     return f"job:{job_id}:state"
+
+
+def _lease_key(job_id: str) -> str:
+    return f"job:{job_id}:lease"
 
 
 def _events_key(job_id: str) -> str:
@@ -152,6 +168,39 @@ def create_job(job_type: str, params: Mapping[str, Any]) -> str:
     return job_id
 
 
+def acquire_lease(job_id: str) -> None:
+    """Mark a dispatched worker as holding the job: create ``job:{id}:lease``.
+
+    Called on the request path by :func:`app.jobs.runner.run_in_thread` so a
+    202 implies a held job. Liveness (#1938) is this key's existence, never
+    the status fields: those keep saying ``running`` until a terminal event
+    or the 24 h TTL, but the lease expires ``JOB_LEASE_TTL_SECONDS`` after
+    the worker last proved progress.
+    """
+    get_redis().set(_lease_key(job_id), "1", ex=JOB_LEASE_TTL_SECONDS)
+
+
+def renew_lease(job_id: str) -> None:
+    """Slide the lease forward. A no-op once it has expired: a worker that
+    lost its lease stays not-live even if it later resumes producing — its
+    record honestly read as interrupted, and only a terminal event may close
+    it again. Redis errors are logged, never raised into the worker."""
+    try:
+        get_redis().expire(_lease_key(job_id), JOB_LEASE_TTL_SECONDS)
+    except redis.RedisError as exc:
+        logger.warning("lease renewal failed for job %s: %s", job_id, exc)
+
+
+def release_lease(job_id: str) -> None:
+    """Drop the lease when the worker leaves (terminal event or thread exit).
+    Best-effort: the status is terminal by then, so liveness is already
+    false; this only spares Redis an expired-key wait."""
+    try:
+        get_redis().delete(_lease_key(job_id))
+    except redis.RedisError as exc:
+        logger.warning("lease release failed for job %s: %s", job_id, exc)
+
+
 @dataclass
 class CancellationCheck:
     """Cooperative cancellation polling.
@@ -176,7 +225,12 @@ class CancellationCheck:
             return False
         try:
             r = get_redis()
-            val = r.hget(_state_key(self.job_id), "cancel_requested")
+            pipe = r.pipeline()
+            pipe.hget(_state_key(self.job_id), "cancel_requested")
+            # Same gated round trip doubles as the liveness heartbeat (#1938):
+            # a loop that consults cancellation is making progress.
+            pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
+            val, _ = pipe.execute()
             self._cached = val == "1"
         except redis.RedisError as exc:
             # Don't mask the real work because Redis hiccupped — log and
@@ -213,8 +267,13 @@ class ProgressEmitter:
         )
         # Stream itself doesn't carry a TTL when first created — XADD
         # against a fresh key just creates it. Set the TTL on every emit
-        # cheaply so it slides forward while the job is active.
-        self._r.expire(_events_key(self.job_id), JOB_TTL_SECONDS)
+        # cheaply so it slides forward while the job is active. The emit is
+        # also a liveness proof: renew the worker's lease on the same
+        # round trips (#1938).
+        pipe = self._r.pipeline()
+        pipe.expire(_events_key(self.job_id), JOB_TTL_SECONDS)
+        pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
+        pipe.execute()
         return entry_id
 
     def emit_event(self, event_type: str, payload: dict[str, Any]) -> str:
@@ -231,7 +290,14 @@ class ProgressEmitter:
     def _patch_state(self, **fields: str) -> None:
         if not fields:
             return
-        self._r.hset(_state_key(self.job_id), mapping=fields)
+        # Refresh the hash's 24 h TTL alongside the write (pipeline, one
+        # round trip): EXPIRE is otherwise set only at create, so a late
+        # patch after expiry would recreate a partial record with no TTL
+        # at all (#1938).
+        pipe = self._r.pipeline()
+        pipe.hset(_state_key(self.job_id), mapping=fields)
+        pipe.expire(_state_key(self.job_id), JOB_TTL_SECONDS)
+        pipe.execute()
 
     # ----- public verbs -----
 
@@ -354,6 +420,10 @@ def fail_jobs_without_a_worker() -> list[str]:
                 failed.append(job_id)
             else:
                 r.srem(_active_set_key(), job_id)
+            # The worker is gone either way: its lease must not outlive the
+            # sweep, or the closed record would still look live until the
+            # lease TTL (#1938).
+            r.delete(_lease_key(job_id))
     except redis.RedisError as exc:
         logger.warning("could not close the jobs left by the previous process: %s", exc, exc_info=True)
     if failed:

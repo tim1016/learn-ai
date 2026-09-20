@@ -41,6 +41,7 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
+from app.research.persistence import lifecycle
 from app.research.recency import service as recency_service
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
@@ -218,15 +219,14 @@ class StrategyGridConfigRequest(_CamelCaseModel):
     param_ranges: dict[str, ParamRangeRequest] = Field(default_factory=dict)
 
 
-class RecencyChartJobRequest(_CamelCaseModel):
-    """Body of POST /api/jobs-internal/recency-chart.
+class RecencyChartSpecRequest(_CamelCaseModel):
+    """One Recency launch's grid and window, as sent at launch and stored in the durable row (design spec D4).
 
     Each parameter's range is either an explicit value list or an
     inclusive low/high/step sweep (design spec D4) — the discriminated
     ``type`` field lets one dict carry either shape per parameter.
     """
 
-    job_id: str = Field(..., min_length=1)
     strategies: list[StrategyGridConfigRequest] = Field(min_length=1)
     symbols: list[str] = Field(min_length=1)
     window_start_ms: int
@@ -234,6 +234,18 @@ class RecencyChartJobRequest(_CamelCaseModel):
     data_policy: str = "polygon-adjusted-regular-minute"
     fill_mode: str = "signal_bar_close"
     commission_per_order: float = 0.0
+
+
+class RecencyChartJobRequest(RecencyChartSpecRequest):
+    """Body of POST /api/jobs-internal/recency-chart.
+
+    On a resume (#1938, ``resume_launch_id`` set) the spec fields are
+    ignored and the stored configuration governs — a client resends the
+    stored request it read from the launch, as Grid Search's Finish does.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    resume_launch_id: str | None = None
 
 
 class LeanEngineRunJobRequest(_CamelCaseModel):
@@ -536,13 +548,24 @@ def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRe
     return LowHighStepRange(low=req.low, high=req.high, step=req.step)
 
 
+def _grid_configs(req: RecencyChartSpecRequest) -> list[StrategyGridConfig]:
+    return [
+        StrategyGridConfig(strategy_key=s.strategy_key, param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()})
+        for s in req.strategies
+    ]
+
+
 @router.post(
     "/recency-chart",
     status_code=status.HTTP_202_ACCEPTED,
     responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorDetailResponse,
+            "description": "A resume named a launch that does not exist.",
+        },
         status.HTTP_409_CONFLICT: {
             "model": ErrorDetailResponse,
-            "description": "A redelivered job_id whose configuration differs or whose job is no longer running.",
+            "description": "A redelivered job_id whose configuration differs or whose job is no longer running, or a resume of a launch that may not be resumed.",
         },
         status.HTTP_503_SERVICE_UNAVAILABLE: {
             "model": ErrorDetailResponse,
@@ -557,41 +580,70 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     the launch row exists before the worker starts (D20); a redelivered
     ``job_id`` is acknowledged without a second worker while the first still
     holds the job, and refused (409) once that job is closed or if the
-    configuration differs.
+    configuration differs. A resume (#1938) instead names an existing launch:
+    the new job id is bound to the durable record by the worker's claim, the
+    recorded cells are skipped, and the spec fields are ignored — the stored
+    configuration governs.
     Everything after the HTTP boundary is ``app.research.recency.service``.
     """
-    strategies = [
-        StrategyGridConfig(strategy_key=s.strategy_key, param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()})
-        for s in req.strategies
-    ]
-    try:
-        launch = recency_service.validate_launch(
-            launch_id=req.job_id,
-            strategies=strategies,
-            symbols=req.symbols,
-            window_start_ms=req.window_start_ms,
-            window_end_ms=req.window_end_ms,
-            data_policy=req.data_policy,
-            fill_mode=req.fill_mode,
-            commission_per_order=req.commission_per_order,
-        )
-    except recency_service.RecencyLaunchRejected as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
-    except recency_service.RecencyLaunchConflict as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if not created:
-        # A redelivery: never a second thread beside the first worker, and never a replay of a closed
-        # job through its old transport record (that is a resume, tracked in #1938).
-        require_live_redelivery(req.job_id, noun="Recency launch")
-        return {"job_id": req.job_id, "status": "queued"}
+    if req.resume_launch_id is not None:
+        launch_row = await recency_service.load_launch(req.resume_launch_id)
+        if launch_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "RECENCY_LAUNCH_NOT_FOUND", "message": f"RecencyLaunch {req.resume_launch_id} not found"},
+            )
+        # Ask Redis only when the answer can change the refusal (a RUNNING launch).
+        live = lifecycle.job_is_live(launch_row.job_id) if launch_row.status == "RUNNING" else False
+        refusal = recency_service.resume_refusal(launch_row, live=live)
+        if refusal is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
+        stored = RecencyChartSpecRequest.model_validate_json(launch_row.config_json)
+        try:
+            launch = recency_service.validate_launch(
+                launch_id=launch_row.launch_id,
+                strategies=_grid_configs(stored),
+                symbols=stored.symbols,
+                window_start_ms=stored.window_start_ms,
+                window_end_ms=stored.window_end_ms,
+                data_policy=stored.data_policy,
+                fill_mode=stored.fill_mode,
+                commission_per_order=stored.commission_per_order,
+            )
+        except recency_service.RecencyLaunchRejected as exc:
+            # The stored configuration no longer validates (the grid rules
+            # tightened since the launch); it cannot run as recorded.
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": str(exc)}) from exc
+    else:
+        strategies = _grid_configs(req)
+        try:
+            launch = recency_service.validate_launch(
+                launch_id=req.job_id,
+                strategies=strategies,
+                symbols=req.symbols,
+                window_start_ms=req.window_start_ms,
+                window_end_ms=req.window_end_ms,
+                data_policy=req.data_policy,
+                fill_mode=req.fill_mode,
+                commission_per_order=req.commission_per_order,
+            )
+        except recency_service.RecencyLaunchRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            created = await recency_service.create_launch(launch, request=req.model_dump(mode="json", exclude={"job_id"}))
+        except recency_service.RecencyLaunchConflict as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if not created:
+            # A redelivery: never a second thread beside the first worker, and never a replay of a closed
+            # job through its old transport record (that is a resume, accepted via ``resume_launch_id``).
+            require_live_redelivery(req.job_id, noun="Recency launch")
+            return {"job_id": req.job_id, "launch_id": req.job_id, "status": "queued"}
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
         return recency_service.run_launch(launch.config, emit=emit, cancel=cancel)
 
     run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}", cancel_check_every_n=1)
-    return {"job_id": req.job_id, "status": "queued"}
+    return {"job_id": req.job_id, "launch_id": launch.config.launch_id, "status": "queued"}
 
 
 @router.post("/lean-engine-run", status_code=status.HTTP_202_ACCEPTED)

@@ -42,13 +42,19 @@ when evidence is missing or unhealthy.
 
 Version 8 closes the review invariant at rest: only an accepting review may
 carry an explicitly authorized program version.
+
+Version 9 gives ``RecencyLaunches`` the attempt-fence columns
+(``Attempt`` / ``JobId`` / ``Incomplete`` / ``FailureReason``) so a resumed
+launch binds a new job id to the existing durable record through the shared
+fence contract, as Grid Search and Walk-Forward Study rows always have
+(#1938).
 """
 
 from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -465,6 +471,19 @@ DDL_V8: tuple[str, ...] = (
     """,
 )
 
+# Version 9 gives "RecencyLaunches" the attempt-fence columns (ADR 0055 §4)
+# so a resumed launch claims a new attempt generation bound to a new job id
+# (#1938), exactly as research_grid_searches / research_walk_forward_studies
+# already do. Pre-existing rows read as attempt 0 with no job id, which the
+# fence treats as an interrupted launch nothing is writing.
+DDL_V9: tuple[str, ...] = (
+    'ALTER TABLE "RecencyLaunches" ADD COLUMN IF NOT EXISTS "Attempt" INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE "RecencyLaunches" ADD COLUMN IF NOT EXISTS "JobId" VARCHAR(64) NULL',
+    'ALTER TABLE "RecencyLaunches" ADD COLUMN IF NOT EXISTS "Incomplete" BOOLEAN NOT NULL DEFAULT FALSE',
+    'ALTER TABLE "RecencyLaunches" ADD COLUMN IF NOT EXISTS "FailureReason" TEXT NULL',
+    'CREATE INDEX IF NOT EXISTS "IX_RecencyLaunches_JobId" ON "RecencyLaunches" ("JobId")',
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -474,6 +493,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (6, DDL_V6),
     (7, DDL_V7),
     (8, DDL_V8),
+    (9, DDL_V9),
 )
 
 

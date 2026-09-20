@@ -6,6 +6,7 @@ import { RecencyChartService, type RecencyHero, type RecencyTrade } from "../../
 import { RecencySwimlaneComponent } from "./recency-swimlane/recency-swimlane.component";
 import type { RecencySwimlaneTrade } from "./recency-swimlane/recency-swimlane-layout";
 import { RecencyLaunchConfigComponent } from "./recency-launch-config/recency-launch-config.component";
+import { RecencyLaunchesComponent } from "./recency-launches/recency-launches.component";
 import { RecencyTradeFocusComponent } from "./recency-trade-focus/recency-trade-focus.component";
 import { computeDisplayMode, computeDisplayWindow } from "./recency-display-mode";
 import { filterToHeroAndExpanded, groupKey, type HeroKey } from "./recency-hero-fold";
@@ -29,7 +30,7 @@ const MAX_FETCH_WINDOW_MS = 1000 * 60 * 60 * 24 * 30 * 24;
  */
 @Component({
   selector: "app-recency-chart-page",
-  imports: [RecencySwimlaneComponent, RecencyLaunchConfigComponent, RecencyTradeFocusComponent],
+  imports: [RecencySwimlaneComponent, RecencyLaunchConfigComponent, RecencyLaunchesComponent, RecencyTradeFocusComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-chart-page.component.html",
   styleUrls: ["./recency-chart-page.component.scss"],

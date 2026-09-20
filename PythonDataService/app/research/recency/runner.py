@@ -109,7 +109,7 @@ class RecencyRunSnapshot:
 @dataclass(frozen=True)
 class RecencyRunOutcome:
     run_spec: RunSpec
-    status: Literal["succeeded", "failed"]
+    status: Literal["succeeded", "failed", "skipped"]
     error: str | None = None
 
 
@@ -119,6 +119,7 @@ class RecencyRunSummary:
     expected_runs: int
     succeeded_runs: int
     failed_runs: int
+    skipped_runs: int = 0
     outcomes: list[RecencyRunOutcome] = field(default_factory=list)
 
 
@@ -192,6 +193,7 @@ def run_recency(
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_run_failed: Callable[[RunSpec, str], None] = lambda run_spec, message: None,
     cancel_check: Callable[[], bool | None] = lambda: False,
+    skip_identities: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> RecencyRunSummary:
     """Execute one launch's grid one run at a time with per-run isolation.
 
@@ -207,6 +209,11 @@ def run_recency(
     alone cannot observe a cancellation that arrives while the final run is
     executing (issue #1928); ``run_each`` owns that contract for every sweep
     runner.
+
+    ``skip_identities`` carries the (symbol, strategy, params_hash) cells the
+    durable launch already holds (#1938): a resumed launch re-runs only what
+    is missing, and a skipped cell counts toward progress but toward neither
+    succeeded nor failed — its result is already recorded.
     """
     on_phase("expand")
     expected = grid_size(config.strategies, config.symbols)
@@ -214,6 +221,8 @@ def run_recency(
     outcomes: list[RecencyRunOutcome] = []
 
     def _execute_and_persist(run_spec: RunSpec) -> RecencyRunOutcome:
+        if (run_spec.symbol, run_spec.strategy_key, run_spec.params_hash) in skip_identities:
+            return RecencyRunOutcome(run_spec=run_spec, status="skipped")
         result = execute_backtest_fn(run_spec, config)
         if not result.success:
             raise RuntimeError(result.error or "backtest did not succeed")
@@ -240,11 +249,13 @@ def run_recency(
 
     succeeded = sum(1 for outcome in outcomes if outcome.status == "succeeded")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")
+    skipped = sum(1 for outcome in outcomes if outcome.status == "skipped")
     on_phase("completed")
     return RecencyRunSummary(
         launch_id=config.launch_id,
         expected_runs=expected,
         succeeded_runs=succeeded,
         failed_runs=failed,
+        skipped_runs=skipped,
         outcomes=outcomes,
     )

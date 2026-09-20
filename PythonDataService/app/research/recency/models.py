@@ -43,3 +43,26 @@ class PersistOutcome:
     skipped: bool = False
     # The launch already held this cell: the existing run is returned, nothing is written or counted.
     redelivered: bool = False
+
+
+@dataclass(frozen=True)
+class LaunchView:
+    """One launch as the resume gate and the launches list read it (#1938).
+
+    ``status`` is the stored vocabulary (``RUNNING`` / ``COMPLETED`` /
+    ``FAILED`` / ``CANCELLED``); presentation (``interrupted`` et al.) is the
+    router's job, asked from the job liveness only when it can change the
+    answer.
+    """
+
+    launch_id: str
+    status: str
+    job_id: str | None
+    attempt: int
+    expected_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    created_at_ms: int
+    completed_at_ms: int | None
+    deleted_at_ms: int | None
+    config_json: str

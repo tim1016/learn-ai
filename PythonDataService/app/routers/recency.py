@@ -2,22 +2,29 @@
 
 ``GET /trades`` serves what the chart draws (trades overlapping the window
 with a live membership), ``GET /hero`` the visible-window winners (trades
-that *entered* inside the window), and the four soft-delete / restore verbs
-replace the GraphQL mutations. Storage is the four tables adopted from EF
-(ADR 0057); the numerical selection stays in ``app.research.recency.stats``.
+that *entered* inside the window), ``GET /launches`` the recent launches
+with their presented status and resume gate (#1938), and the four
+soft-delete / restore verbs replace the GraphQL mutations. Storage is the
+four tables adopted from EF (ADR 0057); the numerical selection stays in
+``app.research.recency.stats``.
 """
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query, status
 
+from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
 from app.research.recency import repository as repo
+from app.research.recency import service as recency_service
 from app.research.recency.stats import select_window_heroes
 from app.schemas.recency import (
     RecencyHeroResponse,
     RecencyHeroResponseItem,
     RecencyLaunchMutationResponse,
+    RecencyLaunchResponse,
     RecencyRunMutationResponse,
     RecencyTradeResponse,
 )
@@ -29,6 +36,25 @@ router = APIRouter()
 def _window(from_ms: int, to_ms: int) -> None:
     if from_ms > to_ms:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="from_ms must be less than or equal to to_ms")
+
+
+def _presented_launch(launch: repo.LaunchView) -> RecencyLaunchResponse:
+    # Ask Redis only when the answer can change what the row reads back as.
+    live = lifecycle.job_is_live(launch.job_id) if launch.status == "RUNNING" else False
+    refusal = recency_service.resume_refusal(launch, live=live)
+    return RecencyLaunchResponse(
+        launch_id=launch.launch_id,
+        status=lifecycle.presented_status_for(launch.status.lower(), live=live),
+        attempt=launch.attempt,
+        expected_runs=launch.expected_runs,
+        succeeded_runs=launch.succeeded_runs,
+        failed_runs=launch.failed_runs,
+        created_at_ms=launch.created_at_ms,
+        completed_at_ms=launch.completed_at_ms,
+        resumable=refusal is None,
+        resume_refusal=refusal,
+        request=json.loads(launch.config_json),
+    )
 
 
 @router.get("/trades", response_model=list[RecencyTradeResponse])
@@ -56,6 +82,13 @@ async def recency_heroes(
     candidates = await with_connection(repo.hero_candidates, from_ms=from_ms, to_ms=to_ms, symbols=symbols, strategies=strategies)
     selections = select_window_heroes(candidates, from_ms, to_ms)
     return RecencyHeroResponse(heroes=[RecencyHeroResponseItem.from_engine_result(selection) for selection in selections])
+
+
+@router.get("/launches", response_model=list[RecencyLaunchResponse])
+async def list_recency_launches(limit: int = Query(default=20, ge=1, le=100)) -> list[RecencyLaunchResponse]:
+    """The most recent launches, newest first, with their resume gate (#1938)."""
+    launches = await with_connection(repo.list_launches, limit=limit)
+    return [_presented_launch(launch) for launch in launches]
 
 
 def _not_found(code: str, message: str) -> HTTPException:

@@ -1,0 +1,48 @@
+.launches {
+  margin-top: 0.75rem;
+
+  h2 {
+    font-size: 0.9rem;
+    margin: 0 0 0.5rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  th,
+  td {
+    text-align: left;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--border-color, #ddd);
+  }
+
+  .status-chip {
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--surface-alt, #f2f2f2);
+
+    &.is-live {
+      background: var(--info-surface, #e3f0fb);
+    }
+
+    &.is-interrupted {
+      background: var(--warning-surface, #fdf0d5);
+    }
+
+    &.is-failed {
+      background: var(--danger-surface, #fbe0e0);
+    }
+  }
+
+  .refusal {
+    color: var(--text-muted, #666);
+    font-size: 0.8rem;
+  }
+
+  .status {
+    color: var(--text-muted, #666);
+  }
+}

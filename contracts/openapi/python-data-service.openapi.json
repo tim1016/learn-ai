@@ -29943,7 +29943,7 @@
         "type": "object"
       },
       "RecencyChartJobRequest": {
-        "description": "Body of POST /api/jobs-internal/recency-chart.\n\nEach parameter's range is either an explicit value list or an\ninclusive low/high/step sweep (design spec D4) \u2014 the discriminated\n``type`` field lets one dict carry either shape per parameter.",
+        "description": "Body of POST /api/jobs-internal/recency-chart.\n\nOn a resume (#1938, ``resume_launch_id`` set) the spec fields are\nignored and the stored configuration governs \u2014 a client resends the\nstored request it read from the launch, as Grid Search's Finish does.",
         "properties": {
           "commissionPerOrder": {
             "default": 0.0,
@@ -29964,6 +29964,17 @@
             "minLength": 1,
             "title": "Jobid",
             "type": "string"
+          },
+          "resumeLaunchId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumelaunchid"
           },
           "strategies": {
             "items": {
@@ -29991,11 +30002,11 @@
           }
         },
         "required": [
-          "jobId",
           "strategies",
           "symbols",
           "windowStartMs",
-          "windowEndMs"
+          "windowEndMs",
+          "jobId"
         ],
         "title": "RecencyChartJobRequest",
         "type": "object"
@@ -30060,6 +30071,84 @@
           "launch_id"
         ],
         "title": "RecencyLaunchMutationResponse",
+        "type": "object"
+      },
+      "RecencyLaunchResponse": {
+        "description": "One launch as the launches list serves it (#1938).\n\n``status`` is presented (a stored ``RUNNING`` launch whose job is not\nlive reads back as ``interrupted``); ``resumable`` is the negation of\nthe resume gate, with ``resume_refusal`` carrying the why otherwise.\n``request`` is the stored configuration \u2014 a client resends it verbatim\nwith ``resume_launch_id`` added, as Grid Search's Finish does.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At Ms"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "expected_runs": {
+            "title": "Expected Runs",
+            "type": "integer"
+          },
+          "failed_runs": {
+            "title": "Failed Runs",
+            "type": "integer"
+          },
+          "launch_id": {
+            "title": "Launch Id",
+            "type": "string"
+          },
+          "request": {
+            "title": "Request",
+            "type": "object"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "resume_refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Refusal"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "succeeded_runs": {
+            "title": "Succeeded Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "launch_id",
+          "status",
+          "attempt",
+          "expected_runs",
+          "succeeded_runs",
+          "failed_runs",
+          "created_at_ms",
+          "completed_at_ms",
+          "resumable",
+          "resume_refusal",
+          "request"
+        ],
+        "title": "RecencyLaunchResponse",
         "type": "object"
       },
       "RecencyRunMutationResponse": {
@@ -62444,7 +62533,7 @@
     },
     "/api/jobs-internal/recency-chart": {
       "post": {
-        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker while the first still\nholds the job, and refused (409) once that job is closed or if the\nconfiguration differs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
+        "description": "Validate, make the launch durable, and run the Recency Chart sweep on a worker thread. Returns 202.\n\nA malformed or oversized grid (D11) is refused before anything is written;\nthe launch row exists before the worker starts (D20); a redelivered\n``job_id`` is acknowledged without a second worker while the first still\nholds the job, and refused (409) once that job is closed or if the\nconfiguration differs. A resume (#1938) instead names an existing launch:\nthe new job id is bound to the durable record by the worker's claim, the\nrecorded cells are skipped, and the spec fields are ignored \u2014 the stored\nconfiguration governs.\nEverything after the HTTP boundary is ``app.research.recency.service``.",
         "operationId": "start_recency_chart_job_api_jobs_internal_recency_chart_post",
         "requestBody": {
           "content": {
@@ -62468,6 +62557,16 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
+            "description": "A resume named a launch that does not exist."
+          },
           "409": {
             "content": {
               "application/json": {
@@ -62476,7 +62575,7 @@
                 }
               }
             },
-            "description": "A redelivered job_id whose configuration differs or whose job is no longer running."
+            "description": "A redelivered job_id whose configuration differs or whose job is no longer running, or a resume of a launch that may not be resumed."
           },
           "422": {
             "content": {
@@ -65004,6 +65103,56 @@
           }
         },
         "summary": "Recency Heroes",
+        "tags": [
+          "research-recency"
+        ]
+      }
+    },
+    "/api/research/recency/launches": {
+      "get": {
+        "description": "The most recent launches, newest first, with their resume gate (#1938).",
+        "operationId": "list_recency_launches_api_research_recency_launches_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RecencyLaunchResponse"
+                  },
+                  "title": "Response List Recency Launches Api Research Recency Launches Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Recency Launches",
         "tags": [
           "research-recency"
         ]

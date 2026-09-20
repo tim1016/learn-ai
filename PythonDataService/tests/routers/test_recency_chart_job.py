@@ -207,7 +207,7 @@ class TestRecordRecencyAbortState:
         monkeypatch.setattr(recency_service, "record_terminal_status", boom)
 
         with caplog.at_level(logging.ERROR, logger="app.research.recency.service"):
-            recency_service.record_abort_state("launch-1", "FAILED")
+            recency_service.record_abort_state("launch-1", "FAILED", attempt=3)
 
         assert "failed to record recency launch terminal state" in caplog.text
 
@@ -219,6 +219,6 @@ class TestRecordRecencyAbortState:
 
         monkeypatch.setattr(recency_service, "record_terminal_status", capture)
 
-        recency_service.record_abort_state("launch-2", "CANCELLED")
+        recency_service.record_abort_state("launch-2", "CANCELLED", attempt=1)
 
-        assert seen == {"launch_id": "launch-2", "status": "CANCELLED"}
+        assert seen == {"launch_id": "launch-2", "status": "CANCELLED", "attempt": 1}

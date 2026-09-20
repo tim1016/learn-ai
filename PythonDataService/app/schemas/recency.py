@@ -74,3 +74,26 @@ class RecencyRunMutationResponse(BaseModel):
 
 class RecencyLaunchMutationResponse(BaseModel):
     launch_id: str
+
+
+class RecencyLaunchResponse(BaseModel):
+    """One launch as the launches list serves it (#1938).
+
+    ``status`` is presented (a stored ``RUNNING`` launch whose job is not
+    live reads back as ``interrupted``); ``resumable`` is the negation of
+    the resume gate, with ``resume_refusal`` carrying the why otherwise.
+    ``request`` is the stored configuration — a client resends it verbatim
+    with ``resume_launch_id`` added, as Grid Search's Finish does.
+    """
+
+    launch_id: str
+    status: str
+    attempt: int
+    expected_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    created_at_ms: int
+    completed_at_ms: int | None
+    resumable: bool
+    resume_refusal: str | None
+    request: dict

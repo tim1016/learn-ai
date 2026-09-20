@@ -79,7 +79,7 @@ async function renderPage(
     imports: [RecencyChartPageComponent],
     providers: [
       provideZonelessChangeDetection(),
-      { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: softDeleteMock } },
+      { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: softDeleteMock, launches: () => of([]) } },
       { provide: HttpClient, useValue: { get: () => of([]) } },
       { provide: JobsService, useValue: { startJob: vi.fn(async () => "job-1") } },
       { provide: MessageService, useValue: messageServiceMock },
@@ -259,7 +259,7 @@ describe("RecencyChartPageComponent", () => {
       imports: [RecencyChartPageComponent],
       providers: [
         provideZonelessChangeDetection(),
-        { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: vi.fn() } },
+        { provide: RecencyChartService, useValue: { trades: tradesMock, heroes: heroesMock, softDeleteRun: vi.fn(), launches: () => of([]) } },
         { provide: HttpClient, useValue: { get: () => of(strategies) } },
         {
           provide: JobsService,

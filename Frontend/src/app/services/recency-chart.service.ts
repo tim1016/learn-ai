@@ -3,6 +3,7 @@ import { inject, Injectable } from '@angular/core';
 import { firstValueFrom, map, type Observable } from 'rxjs';
 
 import { environment } from '../../environments/environment';
+import { JobsService } from './jobs.service';
 
 /** A trade as the chart consumes it — the shape the retired GraphQL query served, kept so the swimlane is untouched. */
 export interface RecencyTrade {
@@ -45,6 +46,56 @@ export interface RecencyWindowQuery {
   toMs: number;
   symbols?: readonly string[];
   strategies?: readonly string[];
+}
+
+/**
+ * One launch as the launches list serves it (#1938). `status` is presented —
+ * a stored running launch whose worker is gone reads `interrupted`; `request`
+ * is the stored configuration, resent verbatim (plus `resume_launch_id`) on
+ * a resume.
+ */
+export interface RecencyLaunch {
+  launchId: string;
+  status: string;
+  attempt: number;
+  expectedRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  createdAtMs: number;
+  completedAtMs: number | null;
+  resumable: boolean;
+  resumeRefusal: string | null;
+  request: Record<string, unknown>;
+}
+
+interface RecencyLaunchDto {
+  launch_id: string;
+  status: string;
+  attempt: number;
+  expected_runs: number;
+  succeeded_runs: number;
+  failed_runs: number;
+  created_at_ms: number;
+  completed_at_ms: number | null;
+  resumable: boolean;
+  resume_refusal: string | null;
+  request: Record<string, unknown>;
+}
+
+function toLaunch(dto: RecencyLaunchDto): RecencyLaunch {
+  return {
+    launchId: dto.launch_id,
+    status: dto.status,
+    attempt: dto.attempt,
+    expectedRuns: dto.expected_runs,
+    succeededRuns: dto.succeeded_runs,
+    failedRuns: dto.failed_runs,
+    createdAtMs: dto.created_at_ms,
+    completedAtMs: dto.completed_at_ms,
+    resumable: dto.resumable,
+    resumeRefusal: dto.resume_refusal,
+    request: dto.request,
+  };
 }
 
 /** Wire shapes of `/api/research/recency` (snake_case, numbers as JSON numbers). */
@@ -114,6 +165,7 @@ function windowParams(query: RecencyWindowQuery): HttpParams {
 @Injectable({ providedIn: 'root' })
 export class RecencyChartService {
   private readonly http = inject(HttpClient);
+  private readonly jobs = inject(JobsService);
   private readonly base = `${environment.pythonServiceUrl}/api/research/recency`;
 
   trades(query: RecencyWindowQuery): Observable<RecencyTrade[]> {
@@ -126,6 +178,16 @@ export class RecencyChartService {
         dto.heroes.map((h) => ({ symbol: h.symbol, strategyKey: h.strategy_key, paramsHash: h.params_hash, totalPnl: h.total_pnl, recencyRunId: h.recency_run_id })),
       ),
     );
+  }
+
+  launches(limit = 20): Observable<RecencyLaunch[]> {
+    const params = new HttpParams({ fromObject: { limit: String(limit) } });
+    return this.http.get<RecencyLaunchDto[]>(`${this.base}/launches`, { params }).pipe(map((dtos) => dtos.map(toLaunch)));
+  }
+
+  /** Continues an interrupted, failed or cancelled launch under a new job; the stored configuration governs. */
+  async resume(launch: RecencyLaunch): Promise<string> {
+    return this.jobs.startJob('recency_chart', { ...launch.request, resume_launch_id: launch.launchId });
   }
 
   async softDeleteRun(recencyRunId: number): Promise<void> {
