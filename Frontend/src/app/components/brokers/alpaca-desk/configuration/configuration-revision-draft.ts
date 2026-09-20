@@ -48,7 +48,7 @@ export const ENVELOPE_LABELS: Readonly<Record<EnvelopeKey, string>> = {
   shadow_sessions: 'Shadow sessions required',
   arming_max_sessions: 'Sessions one arming covers',
   xh_entry_bps: 'Extended-hours entry offset (bps)',
-  xh_exit_bps: 'Extended-hours exit offset (bps)',
+  xh_exit_bps: 'Extended-hours exit offset (bps) — also prices automatic after-hours sell-offs',
 };
 
 /** A draft for a profile that does not exist yet, or for a revision's next edit. */

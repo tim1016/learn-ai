@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -137,6 +138,42 @@ def _settings_allowances() -> ExtendedHoursAllowances | None:
         )
         return None
     return ExtendedHoursAllowances.from_settings(settings)
+
+
+def resolved_exit_band_multiple() -> Decimal:
+    """The deploy-time band multiple a recovery flatten's limit is bounded by (#2229).
+
+    ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE`` when the resolved binding sets it,
+    else the declared default ``RECOVERY_BAND_ALLOWANCE_MULTIPLE`` (2×). The
+    multiple is deliberately not a ceremony number: it never touches a sealed
+    envelope's hash, and a refused binding or unreadable settings answer the
+    default rather than raising — a recovery flatten is never blocked for want
+    of a band edge, exactly as an EXIT is never blocked for want of a seal
+    (plan §0 D3).
+    """
+    from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
+    from app.broker.alpaca.clerk.recovery_reduction import RECOVERY_BAND_ALLOWANCE_MULTIPLE
+
+    try:
+        settings = resolved_alpaca_settings()
+    except BrokerUnbound as exc:
+        logger.info(
+            "the exit band multiple fell back to its default: no broker binding",
+            extra={"action": "exit_band_multiple_unbound", "reason": exc.reason},
+        )
+        return RECOVERY_BAND_ALLOWANCE_MULTIPLE
+    except ValidationError as exc:
+        from app.broker.alpaca.config import alpaca_configuration_error_detail
+
+        logger.info(
+            "the exit band multiple fell back to its default: settings did not load",
+            extra={"action": "exit_band_multiple_unavailable",
+                   "detail": alpaca_configuration_error_detail(exc)},
+        )
+        return RECOVERY_BAND_ALLOWANCE_MULTIPLE
+    if settings.live_xh_exit_band_multiple is None:
+        return RECOVERY_BAND_ALLOWANCE_MULTIPLE
+    return Decimal(str(settings.live_xh_exit_band_multiple))
 
 
 def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:

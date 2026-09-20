@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
     ProgramLegPolicy,
     ProgramLegRefused,
+    resolved_exit_band_multiple,
     shape_program_leg,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
@@ -382,8 +383,13 @@ class SqliteAlpacaClerkFacade:
         values = self._live_envelope.in_force
         return replace(
             self._program_leg_policy,
+            # Deploy-time, not ceremony: the band edge a recovery flatten's
+            # confirmed limit is bounded by rides beside the sealed pair
+            # (#2229), so a re-arm cannot silently change it.
             allowances=ExtendedHoursAllowances.from_bps(
-                entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
+                entry_bps=values.xh_entry_bps,
+                exit_bps=values.xh_exit_bps,
+                exit_band_multiple=resolved_exit_band_multiple(),
             ),
         )
 

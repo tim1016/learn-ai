@@ -583,3 +583,57 @@ def test_an_automatic_price_refuses_when_no_session_is_open() -> None:
     assert _refusal(excinfo) == "NO_SESSION_OPEN"
     # 21:00 Wednesday: the next session is Thursday's pre-market.
     assert excinfo.value.refusal.available_at_ms == _at(4, day=date(2026, 9, 3))
+
+
+def test_a_wider_deploy_band_multiple_accepts_a_price_the_default_refuses() -> None:
+    """#2229: ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE widens the band a confirmed
+    limit must stay inside; the suggested price and the allowance are
+    untouched by it."""
+    now_ms = _at(17)
+    quote = _quote(observed_at_ms=now_ms)
+    wide = ProgramLegPolicy(
+        window=_WINDOW,
+        allowances=ExtendedHoursAllowances(
+            entry_bps=Decimal("10"), exit_bps=Decimal("20"), exit_band_multiple=Decimal(4)
+        ),
+    )
+    # 60 bps through a 100.00 bid: past the default 2×20 bps band...
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        recovery_reduction_shape(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=_POLICY,
+            confirmed=ConfirmedRecoveryLimit(
+                limit_price=Decimal("99.40"), quote_observed_at_ms=now_ms
+            ),
+            current_quote=quote,
+        )
+    assert _refusal(excinfo) == "RECOVERY_LIMIT_OUTSIDE_BAND"
+    # ...and inside the 4× one.
+    assert (
+        recovery_reduction_shape(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=wide,
+            confirmed=ConfirmedRecoveryLimit(
+                limit_price=Decimal("99.40"), quote_observed_at_ms=now_ms
+            ),
+            current_quote=quote,
+        )
+        is not None
+    )
+    # The proposal's band widens with it; the suggestion does not.
+    narrow_proposal = price_recovery_reduction(
+        side=OrderSide.SELL, now_ms=now_ms, policy=_POLICY, quote=quote
+    )
+    wide_proposal = price_recovery_reduction(
+        side=OrderSide.SELL, now_ms=now_ms, policy=wide, quote=quote
+    )
+    assert isinstance(narrow_proposal, ExtendedLimitProposal)
+    assert isinstance(wide_proposal, ExtendedLimitProposal)
+    assert wide_proposal.band_limit_price < narrow_proposal.band_limit_price
+    assert wide_proposal.suggested_limit_price == narrow_proposal.suggested_limit_price

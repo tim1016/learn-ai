@@ -146,3 +146,35 @@ def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     )
 
     assert leg.limit_price == float(price)
+
+
+def test_allowances_default_the_band_multiple_and_carry_an_override() -> None:
+    """#2229: the band multiple is deploy-time configuration — absent answers
+    the declared default 2×, and a sealed envelope never carries one."""
+    assert ExtendedHoursAllowances.from_bps(entry_bps=10, exit_bps=20).exit_band_multiple == Decimal(2)
+    envelope = ExtendedHoursAllowances.from_envelope(
+        LiveEnvelopeValues(
+            loss_fraction=0.5,
+            loss_usd=100.0,
+            shadow_sessions=1,
+            arming_max_sessions=1,
+            xh_entry_bps=10.0,
+            xh_exit_bps=20.0,
+        )
+    )
+    assert envelope.exit_band_multiple == Decimal(2)
+    settings = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        live_loss_fraction=0.5,
+        live_loss_usd=100.0,
+        live_shadow_sessions=1,
+        live_arming_max_sessions=1,
+        live_xh_entry_bps=10.0,
+        live_xh_exit_bps=20.0,
+        live_xh_exit_band_multiple=4.0,
+    )
+    assert (
+        ExtendedHoursAllowances.from_settings(settings).exit_band_multiple
+        == Decimal("4.0")
+    )

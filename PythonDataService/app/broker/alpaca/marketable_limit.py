@@ -83,7 +83,7 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
 class ExtendedHoursAllowances:
     """The operator's extended-session allowances, in basis points (ADR 0059 D4).
 
-    Neither value has a default in code. ``None`` from :meth:`from_settings`
+    Neither allowance has a default in code. ``None`` from :meth:`from_settings`
     means "not configured", which the leg policy and Start admission refuse
     explicitly — never zero.
 
@@ -91,29 +91,51 @@ class ExtendedHoursAllowances:
     numbers can arrive in and *which one* an extended-session leg prices from
     is a decision this type does not make: ``program_leg.resolve_extended_hours_allowances``
     owns the order. This module only converts.
+
+    ``exit_band_multiple`` is deploy-time configuration, not a ceremony number
+    (#2229): how many exit allowances a recovery flatten's confirmed limit may
+    reach through the live touch. It is deliberately **not** part of the sealed
+    envelope, so every arming record ever written keeps validating and hashing
+    byte-identically; unset answers ``Decimal(2)`` — the declared default in
+    ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``.
     """
 
     entry_bps: Decimal
     exit_bps: Decimal
+    exit_band_multiple: Decimal = Decimal(2)
 
     @classmethod
-    def from_bps(cls, *, entry_bps: float, exit_bps: float) -> ExtendedHoursAllowances:
+    def from_bps(
+        cls, *, entry_bps: float, exit_bps: float, exit_band_multiple: Decimal | None = None
+    ) -> ExtendedHoursAllowances:
         """The pair as exact decimals, from whichever record holds the two numbers.
 
         ``Decimal(str(x))``, never ``Decimal(x)``: the anchor must round the
         allowance the operator wrote, not the binary float nearest to it.
         Stated once here because the same two numbers reach this class from the
-        environment and from an arming record's sealed envelope.
+        environment and from an arming record's sealed envelope. The band
+        multiple converts the same way when a caller carries a deploy-time one.
         """
-        return cls(entry_bps=Decimal(str(entry_bps)), exit_bps=Decimal(str(exit_bps)))
+        return cls(
+            entry_bps=Decimal(str(entry_bps)),
+            exit_bps=Decimal(str(exit_bps)),
+            **({} if exit_band_multiple is None else {"exit_band_multiple": exit_band_multiple}),
+        )
 
     @classmethod
     def from_settings(cls, settings: AlpacaSettings) -> ExtendedHoursAllowances | None:
         if settings.live_xh_entry_bps is None or settings.live_xh_exit_bps is None:
             return None
-        return cls.from_bps(
-            entry_bps=settings.live_xh_entry_bps,
-            exit_bps=settings.live_xh_exit_bps,
+        return cls(
+            entry_bps=Decimal(str(settings.live_xh_entry_bps)),
+            exit_bps=Decimal(str(settings.live_xh_exit_bps)),
+            **(
+                {}
+                if settings.live_xh_exit_band_multiple is None
+                else {
+                    "exit_band_multiple": Decimal(str(settings.live_xh_exit_band_multiple)),
+                }
+            ),
         )
 
     @classmethod
@@ -128,6 +150,11 @@ class ExtendedHoursAllowances:
         does it, so a sealed envelope and an environment-configured one at the
         same numbers produce the same anchor. This is adapter-level only —
         nothing here re-derives ``LiveEnvelopeValues.sha`` or a record's digest.
+
+        The band multiple keeps its declared default here: a ceremony record
+        does not carry one (#2229), and the effective multiple is resolved
+        beside it — ``program_leg.resolved_exit_band_multiple`` — wherever the
+        envelope's allowances are put in force.
         """
         return cls(
             entry_bps=Decimal(str(envelope.xh_entry_bps)),

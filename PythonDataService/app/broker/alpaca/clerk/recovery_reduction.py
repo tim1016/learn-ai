@@ -21,7 +21,8 @@ Formula (the suggested limit, and the band a confirmed limit must stay inside):
     suggested buy:  ceil_tick(  ask × (1 + exit_bps / 10⁴) )
     band sell:      limit ≥ floor_tick( bid × (1 − k · exit_bps / 10⁴) )
     band buy:       limit ≤ ceil_tick(  ask × (1 + k · exit_bps / 10⁴) )
-    where k = RECOVERY_BAND_ALLOWANCE_MULTIPLE and bid/ask are the Clerk's
+    where k is the deploy-time band multiple — ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE,
+    default RECOVERY_BAND_ALLOWANCE_MULTIPLE — and bid/ask are the Clerk's
     live quote at send.
 Formula (realized slippage of a fill, positive = worse than the reference):
     sell: (reference_bid − fill_price) / reference_bid × 10⁴ bps
@@ -80,12 +81,14 @@ the bid/ask the operator looked at is more than about ten seconds old.
 """
 
 RECOVERY_BAND_ALLOWANCE_MULTIPLE = Decimal(2)
-"""How far through the book a confirmed limit may go, in multiples of the sealed exit allowance.
+"""The declared default band multiple: how far through the book a confirmed
+limit may go, in multiples of the sealed exit allowance.
 
 Owner decision 2026-09-19: refuse a price more than twice the allowance past
 the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
-The owner wants this configurable at deploy time later; until then it is one
-named value, not a per-call parameter.
+Deploy-time configurable since #2229 — ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE``,
+carried on ``ExtendedHoursAllowances.exit_band_multiple`` — and this constant
+is the value every unset deployment prices the band at.
 """
 
 RECOVERY_SPREAD_WARNING_BPS = 50
@@ -307,7 +310,7 @@ def price_recovery_reduction(
             side, quote, policy.allowances.exit_bps
         ),
         band_limit_price=_through_the_book(
-            side, quote, policy.allowances.exit_bps * RECOVERY_BAND_ALLOWANCE_MULTIPLE
+            side, quote, policy.allowances.exit_bps * policy.allowances.exit_band_multiple
         ),
     )
 
@@ -367,7 +370,9 @@ def recovery_reduction_shape(
     except ValidationError as exc:
         raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
     band = _through_the_book(
-        side, current_quote, policy.allowances.exit_bps * RECOVERY_BAND_ALLOWANCE_MULTIPLE
+        side,
+        current_quote,
+        policy.allowances.exit_bps * policy.allowances.exit_band_multiple,
     )
     past_band = (
         confirmed.limit_price < band if side is OrderSide.SELL else confirmed.limit_price > band

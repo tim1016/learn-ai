@@ -112,6 +112,14 @@ class AlpacaSettings(BaseSettings):
     # the configuration from loading at all.
     live_xh_entry_bps: float | None = Field(default=None, ge=0, lt=10_000, allow_inf_nan=False)
     live_xh_exit_bps: float | None = Field(default=None, ge=0, lt=10_000, allow_inf_nan=False)
+    # Deploy-time band multiple (#2229): how many exit allowances a recovery
+    # flatten's confirmed limit may reach through the live touch. Not part of
+    # the sealed envelope — bounded [1, 10] so a typo cannot unbound the band,
+    # and unset keeps the declared default of 2×
+    # (``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``).
+    live_xh_exit_band_multiple: float | None = Field(
+        default=None, ge=1, le=10, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def _enforce_mode_agreement(self) -> AlpacaSettings:
