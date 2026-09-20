@@ -1,3 +1,5 @@
+@use '../../styles/explainer-dialog' as *;
+
 :host {
   display: block;
   margin-block: var(--space-2);
@@ -13,7 +15,7 @@
   font: inherit;
   font-size: var(--fs-xs);
   color: var(--text-secondary);
-  cursor: help;
+  cursor: pointer;
 
   i {
     font-size: var(--fs-xs);
@@ -32,47 +34,11 @@
 }
 
 :host ::ng-deep .validation-scope-dialog {
-  width: min(36rem, calc(100vw - var(--space-8)));
-  border: 1px solid var(--border-light);
-  background: var(--bg-surface);
-  color: var(--text-primary);
-
-  .p-dialog-header,
-  .p-dialog-content {
-    background: var(--bg-surface);
-    color: var(--text-primary);
-  }
-
-  .p-dialog-header {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .p-dialog-close-button {
-    color: var(--text-secondary);
-
-    &:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-  }
+  @include explainer-dialog(36rem);
 }
 
 .scope-header {
-  display: grid;
-  gap: var(--space-1);
-
-  span {
-    color: var(--text-subtle);
-    font-family: var(--font-mono);
-    font-size: var(--fs-xxs);
-    font-weight: var(--fw-semi);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
-  }
-
-  strong {
-    font-size: var(--fs-xl);
-  }
+  @include explainer-dialog-header;
 }
 
 .scope-body {

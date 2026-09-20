@@ -1,0 +1,51 @@
+// Shared skin for explainer dialogs — PrimeNG Dialogs that mount a #header
+// template and are reached through `:host ::ng-deep <styleClass>` in the
+// consumer, because the dialog appends its chrome to the body. Two consumers
+// today: the walk-forward fold explainer and the LEAN validation-scope note.
+//
+// The header is a plain two-line heading: a normal-case secondary line above
+// a large strong heading. It deliberately does not use the uppercase eyebrow
+// treatment — the owner retired that look for explainer headers — and the
+// retired per-component copies of the old style came through here on their
+// way out.
+@mixin explainer-dialog($width: 38rem) {
+  width: min($width, calc(100vw - var(--space-8)));
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+
+  .p-dialog-header,
+  .p-dialog-content {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
+
+  .p-dialog-header {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .p-dialog-close-button {
+    color: var(--text-secondary);
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+  }
+}
+
+// The header block rendered inside the #header template: a secondary span
+// line above a large strong heading, both sentence-case.
+@mixin explainer-dialog-header {
+  display: grid;
+  gap: var(--space-1);
+
+  span {
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+  }
+
+  strong {
+    font-size: var(--fs-xl);
+  }
+}
