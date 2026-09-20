@@ -24,14 +24,25 @@ the same desk-authored ``restart_command`` the switch guide renders and
 splicing matching ``export`` lines into the copied bytes
 (``configuration-handoff-script.component.ts``'s ``withWorkerExports``).
 
-The tests below execute the script's own header against ``worker_restart_command``'s
-canonical output for the same target — both sides run, per CLAUDE.md guiding
-philosophy #5 — rather than pinning a second, hand-maintained expectation
-that could drift from the function it mirrors.
+#2158 extended the same posture-awareness to the Configuration HTTP surface.
+A fleet lane publishes nothing on the host and carries no
+``DATA_PLANE_CONTROL_SECRET`` — only the coordinator does — so the ceremony
+reads the coordinator's compose service name from the lane's own
+``FLEET_COORDINATOR_URL`` declaration, takes the control secret from that
+coordinator, and builds every Configuration URL through one ``config_route``
+helper: the coordinator's clerk-scoped fleet catalog route (the same URL the
+Configuration page builds via ``operationUrl('configuration_selection_read',
+{broker, clerkId})``) when the lane declares a ``FLEET_CLERK_ID``, the
+combined posture's direct in-process route otherwise. The tests below pin
+that URL to the committed catalog snapshot and execute the script's own
+derivation lines — both sides run, per CLAUDE.md guiding philosophy #5 —
+rather than pinning a second, hand-maintained expectation that could drift
+from the function it mirrors.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -220,3 +231,129 @@ def test_derivation_refuses_loudly_when_worker_service_is_unset(tmp_path: Path) 
     assert completed.returncode != 0
     assert "FLEET_WORKER_SERVICE" in completed.stderr
     assert completed.stdout == ""
+
+
+# ---- #2158: the Configuration HTTP surface is posture-aware ---------------
+
+
+def _script_function(name: str) -> str:
+    """Slice one function definition out of the script verbatim, so the
+    tests execute the script's own logic instead of a re-typed copy."""
+    lines = _script().splitlines(keepends=True)
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].rstrip("\n") == "}")
+    return "".join(lines[start : end + 1])
+
+
+def _selection_url(fleet_clerk_id: str) -> str:
+    """The selection URL the script's own route builder resolves for one
+    posture: ``fleet_clerk_id=""`` is the combined posture, a ``clrk_`` id a
+    fleet one."""
+    probe = (
+        'data_plane_url="http://127.0.0.1:8000"\n'
+        f'fleet_clerk_id="{fleet_clerk_id}"\n'
+        f"{_script_function('config_route')}\n"
+        "config_route /configuration/selection\n"
+    )
+    completed = subprocess.run(
+        ["bash", "-c", probe], capture_output=True, text=True, timeout=10
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip()
+
+
+@pytest.mark.parametrize(
+    ("fleet_clerk_id", "expected_prefix"),
+    [
+        ("", "/api/brokers/alpaca"),
+        ("clrk_0123456789abcdef01234567", "/api/brokers/alpaca/clerks/clrk_0123456789abcdef01234567"),
+    ],
+    ids=["combined-direct", "fleet-clerk-scoped"],
+)
+def test_selection_url_matches_the_catalog_route_the_configuration_page_uses(
+    fleet_clerk_id: str, expected_prefix: str
+) -> None:
+    """#2158: on a fleet posture the ceremony reaches the lane's
+    Configuration surface through the coordinator's clerk-scoped catalog
+    route — the same URL ``operationUrl('configuration_selection_read',
+    {broker, clerkId})`` builds for the Configuration page (``clerkScope``
+    plus the committed catalog snapshot's ``path_template``) — never the
+    in-process clerk route the coordinator does not mount. The combined
+    posture keeps its direct route."""
+    snapshot = json.loads(
+        (
+            REPOSITORY_ROOT
+            / "Frontend"
+            / "src"
+            / "app"
+            / "fleet"
+            / "fleet-operation-catalog.snapshot.json"
+        ).read_text(encoding="utf-8")
+    )
+    template = snapshot["operations"]["configuration_selection_read"]["path_template"]
+    assert _selection_url(fleet_clerk_id) == (
+        f"http://127.0.0.1:8000{expected_prefix}{template}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("coordinator_url", "expected_service"),
+    [
+        ("http://python-service:8000", "python-service"),
+        ("http://fleet-coordinator:8000", "fleet-coordinator"),
+    ],
+    ids=["dev-two-lane", "production-fleet"],
+)
+def test_the_control_secret_is_read_from_the_lane_declared_coordinator(
+    coordinator_url: str, expected_service: str
+) -> None:
+    """#2158: a fleet lane holds no DATA_PLANE_CONTROL_SECRET; the
+    coordinator does. The script derives the coordinator's compose service
+    name from the lane's own FLEET_COORDINATOR_URL declaration — executing
+    the script's own derivation lines, not a copy — so it never guesses a
+    service name, the exact failure mode FLEET_WORKER_SERVICE's
+    required-variable refusal exists to prevent."""
+    script = _script()
+    lines = script.splitlines(keepends=True)
+    start = next(
+        i
+        for i, line in enumerate(lines)
+        if line.lstrip().startswith('coordinator_service="${coordinator_url#*://}"')
+    )
+    derivation = "".join(lines[start : start + 2])
+    probe = (
+        f'coordinator_url="{coordinator_url}"\n'
+        f"{derivation}"
+        'printf "%s" "$coordinator_service"\n'
+    )
+    completed = subprocess.run(
+        ["bash", "-c", probe], capture_output=True, text=True, timeout=10
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == expected_service
+    # The secret exec itself targets that derived name, never a hardcoded
+    # service, and every lane-env exec tolerates the combined posture's
+    # unset variables under `set -euo pipefail`.
+    assert (
+        '"${compose_words[@]}" exec -T "$coordinator_service" '
+        "printenv DATA_PLANE_CONTROL_SECRET" in script
+    )
+    for variable in ("FLEET_COORDINATOR_URL", "FLEET_CLERK_ID"):
+        assert f"printenv {variable} 2>/dev/null || true" in script
+
+
+def test_the_posture_choice_lives_in_config_route_alone() -> None:
+    """No call site outside ``config_route`` builds an /api/brokers URL by
+    hand — the posture choice (#2158) exists in exactly one place, so a
+    future edit cannot reintroduce a fleet-posture-deaf direct URL."""
+    lines = _script().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("config_route() {"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    outside = [
+        line
+        for i, line in enumerate(lines)
+        if not start <= i <= end
+        and not line.strip().startswith("#")
+        and "/api/brokers" in line
+    ]
+    assert outside == []

@@ -74,12 +74,51 @@ worker_stopped=0
 trap - EXIT
 
 data_plane_url="http://127.0.0.1:8000"
-selection_url="$data_plane_url/api/brokers/alpaca/configuration/selection"
-control_secret="$("${compose_words[@]}" exec -T "$worker_service" printenv DATA_PLANE_CONTROL_SECRET 2>/dev/null | tr -d '\r\n')"
+
+# Who serves the Configuration surface, and therefore whose control secret
+# the ceremony needs, depends on the posture (#2158):
+#
+# - Combined: the worker behind 127.0.0.1:8000 is also the clerk, answers
+#   the direct in-process route, and holds DATA_PLANE_CONTROL_SECRET
+#   itself (compose.yaml hands it to python-service).
+# - Fleet: the coordinator publishes 8000 but mounts no configuration
+#   router of its own (_ROLE_RUNS_CLERK, PythonDataService/app/main.py),
+#   the lanes publish nothing on the host, and a lane carries no control
+#   secret at all — only the coordinator does. The same surface is reached
+#   the way the Configuration page reaches it: the coordinator's
+#   clerk-scoped fleet catalog route /api/brokers/{broker}/clerks/{clerk_id}
+#   (PythonDataService/app/routers/broker_clerks.py), authenticated with
+#   that same control secret.
+#
+# The lane's own environment names its coordinator (FLEET_COORDINATOR_URL),
+# whose host is the coordinator's compose service name inside the
+# deployment's network — the same self-declaration FLEET_WORKER_SERVICE
+# uses, so no service name is ever guessed here. FLEET_COORDINATOR_URL and
+# FLEET_CLERK_ID exist only on enrolled lanes; their absence selects the
+# combined posture's worker-direct behavior. All three execs are guarded
+# because printenv of an unset variable exits nonzero, and `set -euo
+# pipefail` must not read that as a failure of the ceremony itself.
+coordinator_url="$( ( "${compose_words[@]}" exec -T "$worker_service" printenv FLEET_COORDINATOR_URL 2>/dev/null || true) | tr -d '\r\n' )"
+if [[ -n "$coordinator_url" ]]; then
+  coordinator_service="${coordinator_url#*://}"
+  coordinator_service="${coordinator_service%%[:/]*}"
+  control_secret="$( ( "${compose_words[@]}" exec -T "$coordinator_service" printenv DATA_PLANE_CONTROL_SECRET 2>/dev/null || true) | tr -d '\r\n' )"
+else
+  control_secret="$( ( "${compose_words[@]}" exec -T "$worker_service" printenv DATA_PLANE_CONTROL_SECRET 2>/dev/null || true) | tr -d '\r\n' )"
+fi
 if [[ -z "$control_secret" ]]; then
   echo "The data-plane control credential is unavailable. The worker is running; use the Configuration page manually." >&2
   exit 1
 fi
+fleet_clerk_id="$( ( "${compose_words[@]}" exec -T "$worker_service" printenv FLEET_CLERK_ID 2>/dev/null || true) | tr -d '\r\n' )"
+config_route() {
+  if [[ -n "$fleet_clerk_id" ]]; then
+    printf '%s/api/brokers/alpaca/clerks/%s%s' "$data_plane_url" "$fleet_clerk_id" "$1"
+  else
+    printf '%s/api/brokers/alpaca%s' "$data_plane_url" "$1"
+  fi
+}
+selection_url="$(config_route /configuration/selection)"
 selection_json=""
 for _ in {1..30}; do
   if selection_json="$(curl --fail --silent --show-error \
@@ -113,7 +152,7 @@ if [[ "$apply_requested" != "true" || -z "$staged_profile" || -z "$staged_revisi
 fi
 
 encoded_profile="$(printf '%s' "$staged_profile" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')"
-revision_url="$data_plane_url/api/brokers/alpaca/configuration/profiles/$encoded_profile/revisions/$staged_revision"
+revision_url="$(config_route "/configuration/profiles/$encoded_profile/revisions/$staged_revision")"
 endpoint_mode="$(curl --fail --silent --show-error \
   -H "X-Data-Plane-Control-Secret: $control_secret" "$revision_url" \
   | python3 -c 'import json, sys; print(json.load(sys.stdin).get("endpoint_mode", ""))')"
