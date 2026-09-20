@@ -179,6 +179,19 @@ RECOVERY_LIMIT_QUANTITY_CHANGED = LegRefusal(
     next_step="Review the new quantity and confirm a price for it.",
 )
 
+RECOVERY_MARKET_WAIT_ENDED = LegRefusal(
+    reason_code="RECOVERY_MARKET_WAIT_ENDED",
+    explanation=(
+        "The regular session ended while this unpriced market reduction waited; it is "
+        "not queued to the next open, and the entry it held is released for a priced "
+        "reduction."
+    ),
+    next_step=(
+        "Send the operator's priced flatten in the extended session, or wait for the "
+        "automatic re-drive, which prices a limit itself."
+    ),
+)
+
 type ExtendedPhase = Literal["PRE", "POST"]
 type RecoveryLegVerdict = Literal["send", "wait", "expired"]
 """May a recovery EXIT's reducing leg go to the broker now?
@@ -369,6 +382,71 @@ def recovery_reduction_shape(
     )
 
 
+def price_automatic_recovery_reduction(
+    *,
+    side: OrderSide,
+    symbol: str,
+    quantity: float,
+    now_ms: int,
+    policy: ProgramLegPolicy,
+    quote: TopOfBookQuote | None,
+) -> ConfirmedRecoveryShape:
+    """Price an automatic recovery reduction from the current instant (#2229).
+
+    Owner decision 2026-09-19 (evening), superseding "automatic re-drives wait
+    for the operator outside the regular session": in an extended session the
+    stuck-EXIT watchdog's re-drive is a limit the Clerk prices itself — the
+    same marketable-limit formula the operator's suggested price uses, at
+    exactly one sealed exit allowance through the touch, never a market order
+    the vendor would queue to the next open. The shape is durable on the
+    EXIT's acceptance exactly as an operator-confirmed one is, so every later
+    pass of that EXIT rebuilds the same leg.
+
+    Raises ``ProgramLegRefused`` when no priceable reduction exists: no open
+    session, no allowance, no live or fresh quote, or a price that quantises
+    below what Alpaca accepts. The caller defers — the episode stays raised
+    and the entry stays free for the operator's own priced flatten.
+    """
+    state = _tradeable_state(now_ms=now_ms, policy=policy)
+    if state.phase == "RTH":
+        # Inside the regular session the re-drive is the market DAY leg; a
+        # price computed here would be a different product than the one sent.
+        raise ProgramLegRefused(RECOVERY_SESSION_CHANGED)
+    if policy.allowances is None:
+        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
+    if quote is None:
+        raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
+    if now_ms - quote.observed_at_ms > RECOVERY_QUOTE_MAX_AGE_MS:
+        # The Clerk's own quote can go stale with the feed: a price restated
+        # against a dead book is as unpriceable as none.
+        raise ProgramLegRefused(RECOVERY_QUOTE_STALE)
+    if state.next_transition_ms is None:
+        raise ProgramLegRefused(no_session_open(None))
+    shape = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=float(
+            _through_the_book(side, quote, policy.allowances.exit_bps)
+        ),
+        extended_hours=True,
+        side=side,
+    )
+    try:
+        # The contract model owns Alpaca's precision rule; building the leg the
+        # EXIT will submit is how that rule is asked, rather than restated.
+        # The quantity is absolute: a cover arrives as a negative attributed
+        # position, and the leg reduces it by its size, never by its sign.
+        shape.apply(symbol=symbol, quantity=abs(quantity))
+    except ValidationError as exc:
+        raise ProgramLegRefused(RECOVERY_LIMIT_PRICE_INVALID) from exc
+    return ConfirmedRecoveryShape(
+        shape=shape,
+        valid_until_ms=state.next_transition_ms,
+        reference_quote=quote,
+        quantity=abs(quantity),
+    )
+
+
 def recovery_leg_verdict(
     *, extended_hours: bool, valid_until_ms: int | None, now_ms: int
 ) -> RecoveryLegVerdict:
@@ -476,6 +554,7 @@ __all__ = [
     "RECOVERY_BAND_ALLOWANCE_MULTIPLE",
     "RECOVERY_LIMIT_OUTSIDE_BAND",
     "RECOVERY_LIMIT_SESSION_ENDED",
+    "RECOVERY_MARKET_WAIT_ENDED",
     "RECOVERY_QUOTE_MAX_AGE_MS",
     "RECOVERY_SPREAD_WARNING_BPS",
     "ConfirmedRecoveryLimit",
@@ -488,6 +567,7 @@ __all__ = [
     "RegularSessionReduction",
     "flatten_session",
     "no_session_open",
+    "price_automatic_recovery_reduction",
     "price_recovery_reduction",
     "realized_slippage_bps",
     "recovery_leg_verdict",

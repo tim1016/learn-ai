@@ -7,6 +7,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import QuoteSource
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -18,6 +20,10 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 type Sleep = Callable[[float], Awaitable[None]]
+# Resolved per pass, not at construction: the facade's ``program_leg_policy``
+# re-reads the envelope in force on every access, so a sweep holding a value
+# would price an extended-hours re-drive from a seal the next re-arm replaced.
+type ProgramLegPolicySource = Callable[[], ProgramLegPolicy]
 # Notified with each completed pass's verdict. This is how the reads that
 # project custody learn what the sweep found -- the sweep, not the facade,
 # is the sole automatic reconciler (#1776 WP2).
@@ -60,6 +66,8 @@ class ReconciliationSweep:
         on_result: ReconciliationListener | None = None,
         after_pass: AfterPassHook | None = None,
         on_lease_revived: LeaseRevivedHook | None = None,
+        policy_source: ProgramLegPolicySource | None = None,
+        quote_source: QuoteSource | None = None,
     ) -> None:
         self._repo = repo
         self._on_result = on_result
@@ -67,6 +75,14 @@ class ReconciliationSweep:
         self._on_lease_revived = on_lease_revived
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
+        # What the stuck-EXIT watchdog prices an extended-hours re-drive limit
+        # from (#2229). The policy arrives as a resolver, not a value: the
+        # facade's ``program_leg_policy`` re-reads the envelope in force on
+        # every access, and a sweep that snapshotted it at construction would
+        # price from a stale seal after the next re-arm. Absent both, an
+        # out-of-session re-drive defers rather than guessing a price.
+        self._policy_source = policy_source
+        self._quote_source = quote_source
         self._interval_s = interval_s
         self._max_backoff_s = max(max_backoff_s, interval_s)
         self._sleep = sleep
@@ -375,6 +391,8 @@ class ReconciliationSweep:
                 trade=self._trade,
                 trigger="AUTOMATIC",
                 intake=self._intake,
+                policy=None if self._policy_source is None else self._policy_source(),
+                quote_source=self._quote_source,
             )
             if self._on_result is not None:
                 self._on_result(result)

@@ -409,6 +409,11 @@ async def select_synthetic_clerk_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=facade.publish_sweep_reconciliation,
+            # Same extended-hours re-drive pricing inputs as the real
+            # authority (#2229); a synthetic policy declares no window, so an
+            # out-of-session re-drive defers rather than guessing a price.
+            policy_source=lambda: facade.program_leg_policy,
+            quote_source=facade.quote_source,
             # ADR 0050: no on_lease_revived here, deliberately. Lease
             # *revival* applies to this synthetic heartbeat like any other,
             # but the post-revival recovery pass is real-paper-scoped (the

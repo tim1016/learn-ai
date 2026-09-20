@@ -335,6 +335,17 @@ class SqliteAlpacaClerkFacade:
         return self._intake
 
     @property
+    def quote_source(self) -> QuoteSource:
+        """The live top-of-book read recovery pricing prices a limit from.
+
+        The same source the operator's safe-flatten quote rides (IBKR via the
+        market-liveness store, never Alpaca market data); published so the
+        reconciliation sweep can hand the stuck-EXIT watchdog what its
+        extended-hours re-drive prices against (#2229).
+        """
+        return self._quote_source
+
+    @property
     def program_leg_policy(self) -> ProgramLegPolicy:
         """The policy this authority prices a leg from *right now*.
 
@@ -1243,6 +1254,11 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger=trigger,
                 intake=self._intake,
+                # The watchdog prices extended-hours re-drive limits from the
+                # same sealed policy and live quote the operator's flatten
+                # does (#2229).
+                policy=self.program_leg_policy,
+                quote_source=self._quote_source,
             )
         )
 

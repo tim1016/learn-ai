@@ -7,13 +7,15 @@ reach flat — without this step a stuck EXIT is re-driven never, forever
 (research directions 2026-08-24, Direction 1 RQ2). This runs as one step of
 the account reconciliation pass (``reconcile._reconcile_account_serialized``).
 
-It re-drives only inside the regular session (#2007, owner decision
-2026-09-19). A re-drive carries no deciding program, so outside 09:30-16:00
-it could only be a market order the vendor queues to the next open -- and an
-EXIT accepted to hold that order would own the entry the operator's own
-extended-hours safe flatten must target. So it waits for the operator: the
-``EXIT_NOT_FLAT`` episode stays raised and visible, no attempt is counted
-toward ``EXIT_STUCK``, and automatic re-drives resume at the regular open.
+Owner decision 2026-09-19 (evening, #2229) supersedes "re-drives only inside
+the regular session": inside 09:30–16:00 a re-drive is the market DAY leg as
+before; in the broker's declared PRE or POST window it is an extended-hours
+DAY limit the Clerk prices itself from the live quote and the sealed exit
+allowance (``recovery_reduction.price_automatic_recovery_reduction``) — never
+a market order the vendor would queue to the next open. When no priceable
+reduction exists (no session, no allowance, no live quote) the re-drive
+defers: the ``EXIT_NOT_FLAT`` episode stays raised and visible for the
+operator's own priced flatten, and the entry stays free for it.
 """
 
 from __future__ import annotations
@@ -21,7 +23,13 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from app.broker.alpaca.clerk.recovery_reduction import regular_session_open
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy, ProgramLegRefused
+from app.broker.alpaca.clerk.recovery_reduction import (
+    ConfirmedRecoveryShape,
+    QuoteSource,
+    price_automatic_recovery_reduction,
+    regular_session_open,
+)
 from app.broker.alpaca.clerk.sqlite.exit import (
     accept_recovery_exit,
     resolve_accepted_exit,
@@ -49,6 +57,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     RedriveThenEscalate,
     reason_age_policy,
 )
+from app.broker.contract.models import OrderSide
 from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
@@ -59,16 +68,23 @@ async def redrive_or_escalate_stale_exits(
     *,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
+    policy: ProgramLegPolicy | None = None,
+    quote_source: QuoteSource | None = None,
 ) -> None:
-    """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate."""
+    """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate.
+
+    ``policy`` and ``quote_source`` are what an extended-hours re-drive prices
+    from. They default to none (a regular-only policy with no quote) so a
+    caller with no declared window — a paper authority, a test — defers
+    outside the regular session exactly as before, never guessing a price.
+    """
     # The single declared age policy (ADR 0048 Decision 1) — replaces the
     # former EXIT_NOT_FLAT_REDRIVE_AFTER_MS / EXIT_NOT_FLAT_MAX_REDRIVES
     # module constants; the watchdog keeps its execution logic and loses
     # its policy.
     redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+    pricing_policy = policy if policy is not None else ProgramLegPolicy.regular_only()
     now_ms = repo.clock()
-    if not regular_session_open(now_ms):
-        return
     for instance in repo.strategy_instances():
         sid = instance["strategy_instance_id"]
         episode = repo.active_uncertainty(
@@ -159,6 +175,36 @@ async def redrive_or_escalate_stale_exits(
         ]
         if not entries:
             continue
+        confirmed_shape: ConfirmedRecoveryShape | None = None
+        if not regular_session_open(now_ms):
+            # Owner decision 2026-09-19 (evening, #2229): an extended-hours
+            # re-drive prices a limit itself instead of waiting for the open.
+            # A refusal (no session, no allowance, no live quote) defers —
+            # the episode stays raised and the entry stays free.
+            try:
+                confirmed_shape = price_automatic_recovery_reduction(
+                    side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,
+                    symbol=cause.symbol,
+                    quantity=remaining,
+                    now_ms=now_ms,
+                    policy=pricing_policy,
+                    quote=None
+                    if quote_source is None
+                    else quote_source(cause.symbol, now_ms),
+                )
+            except ProgramLegRefused as exc:
+                logger.info(
+                    "deferred an extended-hours stuck-EXIT re-drive: no reduction can be priced",
+                    extra={
+                        "action": "exit_redrive_unpriceable",
+                        "account_id": repo.account_id,
+                        "strategy_instance_id": sid,
+                        "symbol": cause.symbol,
+                        "reason_code": exc.reason_code,
+                        "available_at_ms": exc.refusal.available_at_ms,
+                    },
+                )
+                continue
         try:
             async with intake:
                 accepted = accept_recovery_exit(
@@ -167,6 +213,7 @@ async def redrive_or_escalate_stale_exits(
                     strategy_instance_id=sid,
                     decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-{redrives + 1}",
                     entry_order_ref=entries[-1].order_ref,
+                    confirmed_shape=confirmed_shape,
                 )
             await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
         except (OperationClaimError, AdmissionBlockedError, DurableConflictError):

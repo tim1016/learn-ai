@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ExtendedLimitProposal,
     RegularSessionReduction,
     evaluate_proposed_limit,
+    price_automatic_recovery_reduction,
     price_recovery_reduction,
     quote_spread_bps,
     realized_slippage_bps,
@@ -466,3 +467,119 @@ def test_a_cover_is_measured_against_the_ask() -> None:
     assert evaluation.through_book_bps == pytest.approx(29.985, abs=1e-3, rel=0)
     assert evaluation.worst_case_cost == pytest.approx(3.0, abs=1e-9, rel=0)
     assert (evaluation.outside_band, evaluation.thin_book) == (False, False)
+
+
+# --- automatic pricing: the watchdog's extended-hours re-drive (#2229) -------
+
+
+def test_an_automatic_after_hours_sell_prices_the_bid_less_the_allowance() -> None:
+    """The Clerk prices the re-drive itself: exactly one sealed exit allowance
+    through the live touch, durable with its reference quote and session end."""
+    now_ms = _at(17, 5)
+    quote = _quote(observed_at_ms=now_ms)
+    shape = price_automatic_recovery_reduction(
+        side=OrderSide.SELL,
+        symbol="SPY",
+        quantity=10,
+        now_ms=now_ms,
+        policy=_POLICY,
+        quote=quote,
+    )
+    assert shape.shape.order_type is OrderType.LIMIT
+    assert shape.shape.time_in_force is TimeInForce.DAY
+    assert shape.shape.extended_hours is True
+    assert shape.shape.side is OrderSide.SELL
+    # floor_tick(100.00 × (1 − 20bps)) = floor_tick(99.80).
+    assert shape.shape.limit_price == 99.8
+    assert shape.valid_until_ms == _at(20)
+    assert shape.reference_quote == quote
+    assert shape.quantity == 10
+
+
+def test_an_automatic_pre_market_cover_prices_the_ask_plus_the_allowance() -> None:
+    now_ms = _at(7, 30)
+    shape = price_automatic_recovery_reduction(
+        side=OrderSide.BUY,
+        symbol="SPY",
+        quantity=-10,
+        now_ms=now_ms,
+        policy=_POLICY,
+        quote=_quote(observed_at_ms=now_ms),
+    )
+    # ceil_tick(100.05 × (1 + 20bps)) = ceil_tick(100.2501) = 100.26.
+    assert shape.shape.limit_price == 100.26
+    assert shape.shape.side is OrderSide.BUY
+    assert shape.valid_until_ms == _at(9, 30)
+    assert shape.quantity == 10
+
+
+def test_an_automatic_price_is_refused_inside_the_regular_session() -> None:
+    """Inside 09:30–16:00 the re-drive is the market DAY leg; a price computed
+    here would be a different product than the one sent."""
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(10),
+            policy=_POLICY,
+            quote=_quote(observed_at_ms=_at(10)),
+        )
+    assert _refusal(excinfo) == "RECOVERY_SESSION_CHANGED"
+
+
+def test_an_automatic_price_refuses_without_a_live_quote() -> None:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(17),
+            policy=_POLICY,
+            quote=None,
+        )
+    assert _refusal(excinfo) == "RECOVERY_QUOTE_UNAVAILABLE"
+
+
+def test_an_automatic_price_refuses_against_a_stale_quote() -> None:
+    """The Clerk's own quote can go stale with the feed; a price restated
+    against a dead book is as unpriceable as none."""
+    now_ms = _at(17)
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=now_ms,
+            policy=_POLICY,
+            quote=_quote(observed_at_ms=now_ms - RECOVERY_QUOTE_MAX_AGE_MS - 1),
+        )
+    assert _refusal(excinfo) == "RECOVERY_QUOTE_STALE"
+
+
+def test_an_automatic_price_refuses_without_allowances() -> None:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(17),
+            policy=ProgramLegPolicy(window=_WINDOW, allowances=None),
+            quote=_quote(observed_at_ms=_at(17)),
+        )
+    assert _refusal(excinfo) == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+
+
+def test_an_automatic_price_refuses_when_no_session_is_open() -> None:
+    with pytest.raises(ProgramLegRefused) as excinfo:
+        price_automatic_recovery_reduction(
+            side=OrderSide.SELL,
+            symbol="SPY",
+            quantity=10,
+            now_ms=_at(21),
+            policy=_POLICY,
+            quote=_quote(observed_at_ms=_at(21)),
+        )
+    assert _refusal(excinfo) == "NO_SESSION_OPEN"
+    # 21:00 Wednesday: the next session is Thursday's pre-market.
+    assert excinfo.value.refusal.available_at_ms == _at(4, day=date(2026, 9, 3))

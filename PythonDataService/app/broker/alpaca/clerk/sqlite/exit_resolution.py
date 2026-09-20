@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.program_leg import LegShape, regular_session_shape
 from app.broker.alpaca.clerk.recovery_reduction import (
     RECOVERY_LIMIT_QUANTITY_CHANGED,
     RECOVERY_LIMIT_SESSION_ENDED,
+    RECOVERY_MARKET_WAIT_ENDED,
     recovery_leg_verdict,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -361,12 +362,14 @@ def _recovery_leg_may_proceed(
 ) -> bool:
     """Apply ``recovery_leg_verdict`` to a recovery EXIT's leg; ``True`` only to send it.
 
-    ``wait`` holds a market leg until a pass inside the regular session
-    (#2007): the vendor would queue it to the open, and an order nobody priced
-    must not sit at the broker. ``expired`` fails the EXIT through
-    ``EXIT_NOT_FLAT`` when exposure remains, so a confirmed limit is never
-    carried past the session it was priced in and the entry is free for the
-    operator to price again.
+    ``wait`` folds the EXIT releasably through ``EXIT_NOT_FLAT`` when exposure
+    remains (#2229, owner decision 2026-09-19 evening): the vendor would queue
+    a market leg to the open, and a waiting EXIT must not hold its entry
+    overnight — the operator's priced flatten stays available and the
+    watchdog's re-drive prices a limit itself in an extended session.
+    ``expired`` fails the EXIT through ``EXIT_NOT_FLAT`` when exposure remains,
+    so a confirmed limit is never carried past the session it was priced in
+    and the entry is free for the operator to price again.
     """
     verdict = recovery_leg_verdict(
         extended_hours=extended_hours,
@@ -382,13 +385,29 @@ def _recovery_leg_may_proceed(
         # Nothing to reduce: the ordinary flow proves the EXIT attributed-flat.
         return True
     if verdict == "wait":
-        logger.debug(
-            "a recovery reduction waits for the regular session",
+        logger.info(
+            "a waiting market recovery reduction folded releasably past the regular session",
             extra={
-                "action": "recovery_reduction_waits_for_regular_session",
+                "action": "recovery_market_wait_folded",
                 "account_id": repo.account_id,
                 "effect_operation_id": effect_operation_id,
             },
+        )
+        _fold_exit_not_flat(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=remaining_qty,
+            summary_code=RECOVERY_MARKET_WAIT_ENDED.reason_code,
+            reason=RECOVERY_MARKET_WAIT_ENDED.explanation,
+            headline="An unpriced recovery reduction waited past the regular session",
+            explanation=(
+                f"The regular session ended while {remaining_qty:g} {symbol} waited "
+                "under a market reduction nothing had priced; it is not queued to "
+                "the next open."
+            ),
+            next_step=RECOVERY_MARKET_WAIT_ENDED.next_step,
         )
         return False
     _fold_exit_not_flat(
