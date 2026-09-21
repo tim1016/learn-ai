@@ -1,0 +1,166 @@
+"""Measure one Grid Search cell's resident-memory footprint (#1941).
+
+The in-flight figure a sweep runs at moves only with a new measurement
+(issue #1941); this script is that measurement. One process per mode —
+allocator effects do not cancel out across modes in a single process:
+
+    .venv/bin/python scripts/measure_sweep_cell_footprint.py --mode summary
+    .venv/bin/python scripts/measure_sweep_cell_footprint.py --mode full
+
+Seeds a synthetic SPY minute lake (two years of regular sessions, ~194k
+bars) under a temporary write root, then runs ONE cell —
+``ema_crossover_signal``, minute bars, through the same
+``execute_engine_backtest`` entry point a sweep drives — and reports
+resident memory at three points: after imports and lake seed, peak during
+the cell, and retained after the response is dropped and the allocator
+asked to give back. Prices are a seeded daily random walk with intraday
+wiggle, so the EMAs cross and the run trades; the footprint depends on
+the bar count, not the price path.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import random
+import sys
+import tempfile
+import threading
+import time
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SERVICE_ROOT))
+
+import psutil  # noqa: E402
+
+from app.config import settings  # noqa: E402
+from app.data_lake.path_policy import lake_subpath  # noqa: E402
+from app.engine.data.lean_format import write_lean_day_zip  # noqa: E402
+from app.engine.data.trade_bar import TradeBar  # noqa: E402
+from app.lean_sidecar.trading_calendar import expected_sessions  # noqa: E402
+from app.routers.engine import EngineBacktestRequest, execute_engine_backtest  # noqa: E402
+
+EASTERN = ZoneInfo("America/New_York")
+SYMBOL = "SPY"
+START, END = date(2024, 9, 5), date(2026, 9, 3)
+WARMUP_SESSIONS = 5
+
+
+def _seed_lake(root: Path) -> tuple[date, date]:
+    """Two years of regular-session minute bars; returns (data_start, data_end)."""
+    lake_dir = root / lake_subpath("polygon_split_adjusted")
+    lake_dir.mkdir(parents=True)
+    rng = random.Random(1941)
+    base = Decimal("500")
+    sessions = list(expected_sessions(START, END))
+    for day in sessions:
+        base *= Decimal("1") + Decimal(str(rng.uniform(-0.01, 0.011)))
+        open_et = datetime(day.year, day.month, day.day, 9, 30, tzinfo=EASTERN)
+        bars: list[TradeBar] = []
+        for i in range(390):
+            wiggle = Decimal(str(rng.uniform(-0.4, 0.4)))
+            o = base + wiggle
+            c = o + Decimal(str(rng.uniform(-0.3, 0.3)))
+            hi = max(o, c) + Decimal("0.2")
+            lo = min(o, c) - Decimal("0.2")
+            start = open_et + timedelta(minutes=i)
+            bars.append(
+                TradeBar(
+                    symbol=SYMBOL,
+                    time=start,
+                    end_time=start + timedelta(minutes=1),
+                    open=o,
+                    high=hi,
+                    low=lo,
+                    close=c,
+                    volume=1_000 + i,
+                )
+            )
+        write_lean_day_zip(lake_dir, SYMBOL, day, bars)
+    return sessions[0], sessions[-1]
+
+
+class _PeakSampler:
+    """Sample RSS in the background while the cell runs."""
+
+    def __init__(self) -> None:
+        self._proc = psutil.Process()
+        self._peak = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            self._peak = max(self._peak, self._proc.memory_info().rss)
+            time.sleep(0.025)
+
+    def __enter__(self) -> _PeakSampler:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+
+    @property
+    def peak(self) -> int:
+        return max(self._peak, self._proc.memory_info().rss)
+
+
+def _mb(value: int) -> int:
+    return value // (1024 * 1024)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("summary", "full"), required=True)
+    args = parser.parse_args()
+
+    with tempfile.TemporaryDirectory(prefix="sweep-cell-measure-") as tmp:
+        root = Path(tmp)
+        settings.LEAN_DATA_WRITE_ROOT = str(root)
+        data_start, data_end = _seed_lake(root)
+        gc.collect()
+        baseline = psutil.Process().memory_info().rss
+        print(f"mode={args.mode} baseline after imports + lake seed: {_mb(baseline)} MB")
+
+        sessions = list(expected_sessions(data_start, data_end))
+        evaluation_start = sessions[WARMUP_SESSIONS]
+        request = EngineBacktestRequest(
+            strategy_name="ema_crossover_signal",
+            params={"symbol": SYMBOL},
+            from_date=evaluation_start.isoformat(),
+            to_date=data_end.isoformat(),
+            warmup_from_date=data_start.isoformat(),
+            save_study=False,
+            auto_fetch=False,
+            summary_only=args.mode == "summary",
+        )
+
+        started = time.monotonic()
+        with _PeakSampler() as sampler:
+            response = execute_engine_backtest(
+                request=request,
+                on_phase=lambda phase: None,
+                on_log=lambda message: None,
+            )
+        elapsed = time.monotonic() - started
+        assert response.success, response.error
+        print(
+            f"cell: bars_consumed={response.bars_consumed} trades={response.total_trades} "
+            f"equity_points={len(response.equity_curve)} wall={elapsed:.1f}s"
+        )
+        print(f"peak during cell: {_mb(sampler.peak)} MB ({_mb(sampler.peak - baseline)} MB above baseline)")
+
+        del response
+        gc.collect()
+        retained = psutil.Process().memory_info().rss
+        print(f"retained after response dropped + gc: {_mb(retained)} MB ({_mb(retained - baseline)} MB above baseline)")
+
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,11 @@
 
 Every cell executes through ``execute_engine_backtest`` — the same entry
 point Strategy Lab and the Recency Chart use — with the study save
-suppressed and reads bound to the receipted data snapshot. Kept apart from
+suppressed, reads bound to the receipted data snapshot, and the response
+held to its summary: ``summary_only`` keeps the statistics and trade list
+byte-identical while the per-bar artifacts a cell discards are never built
+(#1941 — a minute-resolution cell held ~480 MB of response copies and
+retained bars to read six numbers). Kept apart from
 ``service.py`` so the orchestration layer (which the Walk-Forward runner
 also drives) never imports the HTTP router; the router and the job entry
 inject :func:`default_execute_cell`, and tests inject a fake.
@@ -40,6 +44,7 @@ def engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> 
         resolution=spec.resolution,  # type: ignore[arg-type]
         save_study=False,
         auto_fetch=False,
+        summary_only=True,
     )
 
 
@@ -58,7 +63,7 @@ def cell_from_response(candidate: RunSpec, response: EngineBacktestResponse) -> 
         sharpe_ratio=stats.get("sharpe_ratio"),
         max_drawdown_pct=stats.get("max_drawdown_pct"),
         win_rate=stats.get("win_rate"),
-        bars_consumed=len(response.equity_curve),
+        bars_consumed=response.bars_consumed,
     )
 
 

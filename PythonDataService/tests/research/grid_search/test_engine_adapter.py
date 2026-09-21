@@ -2,9 +2,12 @@
 
 Structural parity is asserted end to end: the adapter's cell projection is
 compared against a direct ``execute_engine_backtest`` call built by hand
-from the same receipt — identical trade list with fills and fees, equity
-curve, full statistics block and consumed-bar count — and the projection
-is checked field by field against that response.
+from the same receipt — identical trade list with fills and fees, full
+statistics block and consumed-bar count — and the projection
+is checked field by field against that response. The cell runs
+``summary_only`` (its per-bar artifacts are never built, #1941), so the
+byte-identity of the statistics against a full response is itself the
+parity claim under test.
 """
 
 from __future__ import annotations
@@ -121,9 +124,19 @@ async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_ar
 
     assert cell_response.success and direct.success, (cell_response.error, direct.error)
     assert cell_response.trades == direct.trades  # fills, fees, quantities, timestamps
-    assert cell_response.equity_curve == direct.equity_curve
+    # The summary cell's statistics are the full run's statistics, byte for
+    # byte: ``summary_only`` skips building the artifacts a cell discards,
+    # never the samples the statistics consume (#1941).
     assert cell_response.statistics == direct.statistics
-    assert len(cell_response.equity_curve) == len(direct.equity_curve) == cell.bars_consumed
+    # The bar count the curve used to be counted from, carried as a counter.
+    assert cell_response.bars_consumed == len(direct.equity_curve) == cell.bars_consumed
+    assert direct.bars_consumed == len(direct.equity_curve)  # full runs keep the invariant too
+    # The summary shape: the per-bar artifacts are empty, not computed-then-dropped.
+    assert cell_response.equity_curve == []
+    assert cell_response.chart_bars == []
+    assert cell_response.insights == []
+    assert cell_response.lean_statistics is None
+    assert cell_response.validation_analytics is None
     assert cell_response.total_trades > 0
     # The projection carries the engine's own figures, not recomputed ones.
     assert cell.total_trades == direct.total_trades

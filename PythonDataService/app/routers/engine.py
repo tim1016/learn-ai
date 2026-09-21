@@ -256,6 +256,23 @@ class EngineBacktestRequest(BaseModel):
             "as Grid Search that record their own summary rows."
         ),
     )
+    # A summary run answers the question a sweep cell asks — statistics, trade
+    # list, counts — without the per-bar artifacts that question never reads:
+    # the response's equity curve, chart bars, insights, LEAN-parity
+    # statistics and validation analytics are left empty, and the engine does
+    # not retain the bars it iterated (``bars_consumed`` carries the count).
+    # At minute resolution over two years those artifacts are ~194k points a
+    # cell held only to discard (#1941). Statistics are computed from the same
+    # equity samples either way and are byte-identical to a full run.
+    summary_only: bool = Field(
+        False,
+        description=(
+            "Omit the per-bar response artifacts (equity curve, chart bars, "
+            "insights, LEAN statistics, validation analytics) and retain no "
+            "bars. Statistics and trades are identical to a full run; "
+            "bars_consumed carries the bar count the curve would have had."
+        ),
+    )
     initial_cash: float | None = Field(None, ge=0)
     # Strategy-specific parameters — validated per-strategy against the
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
@@ -514,6 +531,11 @@ class EngineBacktestResponse(BaseModel):
     trades: list[EngineTradeResponse] = []
     log_lines: list[str] = []
     equity_curve: list[dict] = Field(default_factory=list)
+    # Bars iterated over the scored window — the count a summary consumer
+    # needs without the curve: on a ``summary_only`` run the curve is empty
+    # and this is the count it would have had (#1941). Equals
+    # ``len(equity_curve)`` on a full run.
+    bars_consumed: int = 0
     # Consolidated OHLCV bars for the price chart (15-min or daily depending
     # on the strategy's consolidator). Much smaller than the full minute-bar
     # stream retained in BacktestResult.bars.
@@ -1423,7 +1445,11 @@ def _execute_engine_backtest_core(
     on_log(f"Running {request.strategy_name} on {getattr(validated_params, 'symbol', '?')} ({request.resolution})")
 
     try:
-        result = engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request))
+        result = engine.run(
+            strategy,
+            evaluation_start_ms=_evaluation_start_ms(request),
+            retain_bars=not request.summary_only,
+        )
     except Exception as exc:
         logger.exception("[ENGINE] Backtest failed for %s", request.strategy_name)
         on_log(f"Engine error: {exc}")
@@ -1598,6 +1624,12 @@ def _aggregate_backtest_response(
     response, from one completed :class:`BacktestResult` and the strategy that
     produced it.
 
+    On a ``summary_only`` request the per-bar artifacts — response equity
+    curve, chart bars, insights, LEAN statistics, validation analytics — are
+    left empty. The statistics are NOT skipped: they consume the same engine
+    equity samples a full run consumes and come out byte-identical; only the
+    copies a summary consumer never reads are not made (#1941).
+
     **It also corrects ``request.data_policy.strategy_bars`` in place**, to the
     consolidation cadence the strategy actually ran at
     (:func:`_record_actual_strategy_bars`). That is not incidental: the LEAN
@@ -1614,7 +1646,7 @@ def _aggregate_backtest_response(
         f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics"
     )
 
-    if not result.bars:
+    if result.bars_consumed == 0:
         error = "missing data: backtest evaluated zero bars for the requested window"
         on_log(error)
         return _failed_backtest_response(request, error)
@@ -1669,20 +1701,33 @@ def _aggregate_backtest_response(
         return _failed_backtest_response(request, f"trade accounting failed: {exc}")
 
     # ── LEAN-parity statistics ──
-    lean_stats_resp = _lean_parity_statistics(result=result, trades=trades)
+    # Skipped on a summary run: with no retained bars there is nothing to
+    # feed it, and its bar → dict → DataFrame conversion is the largest
+    # single allocation of a full minute-resolution aggregation (#1941).
+    lean_stats_resp = (
+        None if request.summary_only else _lean_parity_statistics(result=result, trades=trades)
+    )
 
-    equity_curve_dicts = [
-        {
-            "timestamp": s.timestamp_ms,
-            "equity": float(s.equity),
-            "cash": float(s.cash),
-            "holdings_value": float(s.holdings_value),
-        }
-        for s in result.equity_curve
-    ]
+    equity_curve_dicts = (
+        []
+        if request.summary_only
+        else [
+            {
+                "timestamp": s.timestamp_ms,
+                "equity": float(s.equity),
+                "cash": float(s.cash),
+                "holdings_value": float(s.holdings_value),
+            }
+            for s in result.equity_curve
+        ]
+    )
 
     # ── Serialize consolidated bars for charting ──
-    chart_bars_dicts = [_serialize_chart_bar(b) for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])]
+    chart_bars_dicts = (
+        []
+        if request.summary_only
+        else [_serialize_chart_bar(b) for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])]
+    )
 
     # Correct the policy's strategy_bars to the strategy's ACTUAL
     # consolidation timeframe. The legacy synthesizer writes minute/1,
@@ -1694,15 +1739,19 @@ def _aggregate_backtest_response(
     _record_actual_strategy_bars(request, strategy)
 
     # ── Serialize insights ──
-    insights_dicts = [i.to_dict() for i in result.insights]
+    insights_dicts = [] if request.summary_only else [i.to_dict() for i in result.insights]
 
-    validation_analytics = _validation_analytics(
-        result=result,
-        request=request,
-        strategy=strategy,
-        formatted_trades=formatted,
-        equity_curve=equity_curve_dicts,
-        on_log=on_log,
+    validation_analytics = (
+        None
+        if request.summary_only
+        else _validation_analytics(
+            result=result,
+            request=request,
+            strategy=strategy,
+            formatted_trades=formatted,
+            equity_curve=equity_curve_dicts,
+            on_log=on_log,
+        )
     )
 
     run_verdict = compute_run_verdict(
@@ -1734,6 +1783,7 @@ def _aggregate_backtest_response(
         trades=formatted,
         log_lines=result.log_lines,
         equity_curve=equity_curve_dicts,
+        bars_consumed=result.bars_consumed,
         chart_bars=chart_bars_dicts,
         insights=insights_dicts,
         insight_summary=result.insight_summary,

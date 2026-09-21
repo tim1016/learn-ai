@@ -161,6 +161,7 @@ async def test_a_cell_builds_the_engine_request_from_its_receipt(conn, lake: Pat
     assert request.from_date == SESSIONS[1].isoformat()
     assert request.to_date == END.isoformat()
     assert request.save_study is False and request.auto_fetch is False
+    assert request.summary_only is True  # the per-bar artifacts are never built (#1941)
     assert request.params == {"short_window": 2.0, "long_window": 5.0, "resolution_minutes": 60.0, "symbol": "SPY"}
 
 
