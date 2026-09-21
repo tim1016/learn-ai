@@ -1,4 +1,9 @@
-<section #rootEl class="group" [class.group--flat]="appearance() === 'flat'" aria-label="Instrument">
+<section
+  #rootEl
+  class="group"
+  [class.group--flat]="appearance() === 'flat'"
+  aria-label="Instrument"
+>
   <header class="group__head">
     <span class="group__eyebrow">
       <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
@@ -23,16 +28,22 @@
     >
       <i class="pi pi-search ticker-box__icon" aria-hidden="true"></i>
       @if (!open()) {
-        <span class="ticker-box__symbol mono">{{ value().symbol }}</span>
-        <span class="ticker-box__name">
-          {{ selectedTicker()?.name || '' }}
-        </span>
-        <span class="ticker-box__chip mono"
-              [pTooltip]="selectedExchangeTooltip()"
-              tooltipPosition="top"
-              tabindex="0"
-              role="img"
-              [attr.aria-label]="selectedExchangeTooltip()">{{ selectedExchange() }}</span>
+        <app-asset-identity
+          class="ticker-box__identity"
+          [symbol]="value().symbol"
+          size="sm"
+          [showTitle]="false"
+        />
+        <span class="ticker-box__name">{{ selectedTicker()?.name || "" }}</span>
+        <span
+          class="ticker-box__chip mono"
+          [pTooltip]="selectedExchangeTooltip()"
+          tooltipPosition="top"
+          tabindex="0"
+          role="img"
+          [attr.aria-label]="selectedExchangeTooltip()"
+          >{{ selectedExchange() }}</span
+        >
         <i class="pi pi-angle-down ticker-box__chev" aria-hidden="true"></i>
       } @else {
         <input
@@ -48,91 +59,22 @@
       }
 
       @if (open()) {
-        <div class="dropdown">
-          <div class="dropdown__scroll" id="ticker-range-picker-listbox" role="listbox">
-            @if (query() === "" && recentTickers().length > 0) {
-              <div class="dropdown__header" role="presentation">Recent</div>
-              @for (t of recentTickers(); track trackBySymbol($index, t)) {
-                <button
-                  type="button"
-                  class="row"
-                  [class.row--active]="t.symbol === value().symbol"
-                  role="option"
-                  [attr.aria-selected]="t.symbol === value().symbol"
-                  (click)="pickTicker(t); $event.stopPropagation()"
-                >
-                  <span class="row__symbol mono">{{ t.symbol }}</span>
-                  <span class="row__name">{{ t.name }}</span>
-                  <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                  <span class="row__held mono">{{ t.lastHeld ?? "—" }}</span>
-                </button>
-              }
-            }
-            <div class="dropdown__header" role="presentation">
-              @if (query() === "") {
-                {{ lakeBacked() ? "In the data lake" : "Instruments" }}
-              } @else {
-                {{ filteredTickers().length }} match{{
-                  filteredTickers().length === 1 ? "" : "es"
-                }}
-              }
-            </div>
-            @for (t of filteredTickers(); track trackBySymbol($index, t)) {
-              <button
-                type="button"
-                class="row"
-                [class.row--active]="t.symbol === value().symbol"
-                role="option"
-                [attr.aria-selected]="t.symbol === value().symbol"
-                (click)="pickTicker(t); $event.stopPropagation()"
-              >
-                <span class="row__symbol mono">{{ t.symbol }}</span>
-                <span class="row__name">{{ t.name }}</span>
-                <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                <span class="row__held mono">{{ t.lastHeld ?? "—" }}</span>
-              </button>
-            }
-          </div>
-
-          @if (filteredTickers().length === 0) {
-            <div class="dropdown__empty" role="status" aria-live="polite">
-              @if (catalogLoading()) {
-                Loading instruments…
-              } @else if (catalogUnavailable(); as reason) {
-                {{ reason }}
-                <button type="button" class="dropdown__retry" (click)="retryCatalog()">
-                  Retry
-                </button>
-              } @else if (!lakeBacked()) {
-                No instrument matches that.
-              } @else if (catalogEmpty()) {
-                The data lake holds no instruments yet.
-                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill one</a>
-                to make it selectable.
-              } @else {
-                The lake holds no bars for a symbol matching that.
-                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill it</a>
-                to make it selectable.
-              }
-            </div>
-          }
-        </div>
+        <app-instrument-dropdown
+          [view]="dropdownView()"
+          [gate]="gateState()"
+          (pick)="pickTicker($event)"
+          (retryLake)="retryCatalog()"
+          (retryVendor)="retryVendorCatalog()"
+          (retryGate)="retryGate()"
+          (dismiss)="closeGate()"
+        />
       }
     </div>
   </div>
-
   @if (selectedLastHeld(); as lastHeld) {
-    <div
-      class="instrument-foot mono"
-      title="First and last day the lake holds for this symbol. Days in between may still be missing."
-    >
-      <span class="instrument-foot__label">days held</span>
-      <span class="instrument-foot__span">
-        @if (selectedFirstHeld(); as firstHeld) {
-          <span class="instrument-foot__span-val">{{ firstHeld }}</span> →
-        }
-        <span class="instrument-foot__span-val">{{ lastHeld }}</span>
-      </span>
-    </div>
+    <app-instrument-held-span
+      [firstHeld]="selectedFirstHeld()"
+      [lastHeld]="lastHeld"
+    />
   }
 </section>

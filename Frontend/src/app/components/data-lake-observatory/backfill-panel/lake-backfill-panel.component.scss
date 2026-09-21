@@ -19,6 +19,18 @@
     color: var(--text-subtle);
   }
 
+  &__retry {
+    margin-left: var(--space-1);
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+
+    &:hover { text-decoration: underline; }
+  }
+
   &__actions {
     display: flex;
     align-items: center;

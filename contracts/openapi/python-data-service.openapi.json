@@ -39848,6 +39848,58 @@
         "title": "SweepEligibilityInfo",
         "type": "object"
       },
+      "SymbolCatalogEntry": {
+        "description": "One row of the shared symbol picker's catalog (GET /api/tickers/catalog).\n\nThe membership projection for pickers: a Polygon reference-tickers walk\nprojected onto the fields a picker row renders. ``asset_class`` is\n``us_equity`` for every row the catalog serves \u2014 the walk is\n``market=\"stocks\"`` \u2014 and ``status`` carries the vendor's active flag so\na picker may offer delisted symbols deliberately (the lake backfill\npanel's toggle) without this endpoint deciding membership for it.",
+        "properties": {
+          "asset_class": {
+            "const": "us_equity",
+            "title": "Asset Class"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "name",
+          "asset_class",
+          "exchange",
+          "status"
+        ],
+        "title": "SymbolCatalogEntry",
+        "type": "object"
+      },
       "SymbolCoverageSpan": {
         "properties": {
           "artifact_count": {
@@ -67514,6 +67566,32 @@
         "summary": "Analyze Options Strategy",
         "tags": [
           "strategy"
+        ]
+      }
+    },
+    "/api/tickers/catalog": {
+      "get": {
+        "description": "The complete US-stock reference catalog for the shared symbol picker.\n\nServes every listed symbol \u2014 active and inactive \u2014 in the picker-row\nprojection (ADR 0066): the client applies its surface's membership\npolicy, with delisted symbols behind the backfill panel's explicit\ntoggle so a survivorship-biased universe stays a visible choice. The\nwalk is ``market=\"stocks\"`` because the lake backfill pipeline can only\ncover stocks; nothing else is offered, so the ensure-coverage gate can\nnever be handed a symbol it cannot fill.\n\nServed from the data-plane core (this router runs on the coordinator in\nthe split fleet, the browser's ingress) rather than the broker surface:\nthe coordinator must construct no provider broker client (FR-041), and\na listing universe is market reference data \u2014 the Polygon account this\nprocess already owns \u2014 not broker-operator evidence.",
+        "operationId": "ticker_catalog_api_tickers_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SymbolCatalogEntry"
+                  },
+                  "title": "Response Ticker Catalog Api Tickers Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ticker Catalog",
+        "tags": [
+          "tickers"
         ]
       }
     },

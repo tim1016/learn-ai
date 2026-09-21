@@ -3,41 +3,45 @@
     <span class="group__eyebrow">
       <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
       Instrument
-      <span class="group__count mono">({{ value().symbols.length }}/{{ tickerPool().length }})</span>
+      <span class="group__count mono"
+        >({{ symbols().length }}/{{ options().length }})</span
+      >
     </span>
     <span class="group__actions">
       <button
         type="button"
         class="link-btn"
         [disabled]="selectAllDisabled()"
-        [attr.title]="
-          selectAllDisabled()
-            ? 'The lake holds more than ' + selectAllLimit + ' instruments — add them individually.'
-            : null
-        "
+        [attr.title]="selectAllTitle()"
         (click)="selectAll()"
       >
         All
       </button>
-      <button type="button" class="link-btn" (click)="selectNone()">None</button>
+      <button type="button" class="link-btn" (click)="selectNone()">
+        None
+      </button>
     </span>
   </header>
 
-  @if (catalogLoading()) {
-    <p class="catalog-note" role="status" aria-live="polite">Loading instruments…</p>
-  } @else if (catalogUnavailable(); as reason) {
+  @if (loading()) {
+    <p class="catalog-note" role="status" aria-live="polite">
+      Loading instruments…
+    </p>
+  } @else if (unavailable(); as reason) {
     <p class="catalog-note" role="status" aria-live="polite">
       {{ reason }}
-      <button type="button" class="link-btn" (click)="retryCatalog()">Retry</button>
+      <button type="button" class="link-btn" (click)="retry.emit()">
+        Retry
+      </button>
     </p>
-  } @else if (tickerPool().length === 0) {
+  } @else if (options().length === 0) {
     <p class="catalog-note" role="status" aria-live="polite">
-      The data lake holds no instruments yet.
+      No instruments available.
     </p>
   }
 
   <div class="chips-row">
-    @for (s of value().symbols; track s) {
+    @for (s of symbols(); track s) {
       <button
         type="button"
         class="chip"
@@ -50,32 +54,9 @@
     }
   </div>
 
-  <div class="add-row">
-    <input
-      type="text"
-      class="add-input mono"
-      placeholder="Add ticker…"
-      [ngModel]="query()"
-      (ngModelChange)="query.set($event)"
-      aria-label="Search to add a ticker"
-    />
-    @if (query() && addable().length > 0) {
-      <ul class="add-suggestions" role="listbox">
-        @for (t of addable(); track t.symbol) {
-          <li>
-            <button
-              type="button"
-              class="suggestion"
-              role="option"
-              [attr.aria-selected]="false"
-              (click)="add(t.symbol)"
-            >
-              <span class="suggestion__symbol mono">{{ t.symbol }}</span>
-              <span class="suggestion__name">{{ t.name }}</span>
-            </button>
-          </li>
-        }
-      </ul>
-    }
-  </div>
+  <app-multi-instrument-search
+    [options]="options()"
+    [selected]="symbols()"
+    (picked)="add($event)"
+  />
 </section>

@@ -1,0 +1,78 @@
+<div class="dropdown">
+  @let model = view();
+  @let status = model.catalogStatus;
+  @if (status.kind === "degraded") {
+    <div class="dropdown__degraded" role="status">
+      Live catalog unavailable — showing lake holdings.
+      <button
+        type="button"
+        class="dropdown__retry"
+        (click)="retryVendor.emit()"
+      >
+        Retry
+      </button>
+    </div>
+  }
+  <div class="dropdown__scroll" id="ticker-range-picker-listbox" role="listbox">
+    @if (model.query === "" && model.recent.length > 0) {
+      <div class="dropdown__header" role="presentation">Recent</div>
+      @for (t of model.recent; track t.symbol) {
+        <app-instrument-option
+          [ticker]="t"
+          [active]="t.symbol === model.activeSymbol"
+          (picked)="pick.emit($event)"
+        />
+      }
+    }
+    <div class="dropdown__header" role="presentation">
+      @if (model.query === "") {
+        {{ model.hostUniverse ? "Instruments" : "All listed instruments" }}
+      } @else {
+        {{ model.matchCount }} match{{ model.matchCount === 1 ? "" : "es" }}
+      }
+    </div>
+    @for (t of model.visible; track t.symbol) {
+      <app-instrument-option
+        [ticker]="t"
+        [active]="t.symbol === model.activeSymbol"
+        (picked)="pick.emit($event)"
+      />
+    }
+  </div>
+
+  @if (gate(); as g) {
+    <app-coverage-gate-strip
+      [state]="g"
+      (retry)="retryGate.emit()"
+      (cancelled)="dismiss.emit()"
+      (dismiss)="dismiss.emit()"
+    />
+  }
+
+  @if (model.matchCount === 0 && gate() === null) {
+    <div class="dropdown__empty" role="status" aria-live="polite">
+      @if (status.kind === "loading") {
+        Loading instruments…
+      } @else if (status.kind === "unavailable") {
+        {{ status.message }}
+        <button
+          type="button"
+          class="dropdown__retry"
+          (click)="retryLake.emit()"
+        >
+          Retry
+        </button>
+      } @else if (model.hostUniverse) {
+        No instrument matches that.
+      } @else if (model.query === "") {
+        No listed symbol matches that, and the lake holds nothing yet.
+        <a routerLink="/data-lake" (click)="dismiss.emit()"
+          >Backfill a symbol</a
+        >
+        to get started.
+      } @else {
+        No listed symbol matches that.
+      }
+    </div>
+  }
+</div>

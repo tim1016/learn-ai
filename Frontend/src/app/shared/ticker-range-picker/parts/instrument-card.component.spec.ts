@@ -7,10 +7,18 @@ import {
   provideFakeTickerCatalog,
   type FakeTickerCatalog,
 } from '../../ticker-catalog/testing/fake-ticker-catalog';
-import type {
-  TickerOption,
-  TickerRange,
-} from '../ticker-range-picker.types';
+import {
+  fakeVendorCatalog,
+  fakeEnsureCoverage,
+  fakeHeldSession,
+  provideFakeVendorCatalog,
+  provideFakeEnsureCoverage,
+  type FakeVendorCatalog,
+  type FakeEnsureCoverage,
+  type FakeCoverageSession,
+} from '../../symbol-catalog/testing/fake-symbol-catalog';
+import type { TickerOption, TickerRange } from '../ticker-range-picker.types';
+import type { VendorSymbolEntry } from '../../symbol-catalog/vendor-catalog.service';
 
 describe('InstrumentCardComponent', () => {
   const baseValue: TickerRange = {
@@ -39,13 +47,22 @@ describe('InstrumentCardComponent', () => {
   let fixture: ComponentFixture<InstrumentCardComponent>;
   let component: InstrumentCardComponent;
   let catalog: FakeTickerCatalog;
+  let alpaca: FakeVendorCatalog;
+  let coverage: FakeEnsureCoverage;
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
     catalog = fakeTickerCatalog(pool);
+    alpaca = fakeVendorCatalog();
+    coverage = fakeEnsureCoverage();
     await TestBed.configureTestingModule({
       imports: [InstrumentCardComponent],
-      providers: [provideRouter([]), provideFakeTickerCatalog(catalog)],
+      providers: [
+        provideRouter([]),
+        provideFakeTickerCatalog(catalog),
+        provideFakeVendorCatalog(alpaca),
+        provideFakeEnsureCoverage(coverage),
+      ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(InstrumentCardComponent);
@@ -55,10 +72,16 @@ describe('InstrumentCardComponent', () => {
   });
 
   function openDropdown(): void {
-    const tickerBox: HTMLElement | null =
-      fixture.nativeElement.querySelector('[role="combobox"]');
+    const tickerBox: HTMLElement | null = fixture.nativeElement.querySelector('[role="combobox"]');
     expect(tickerBox).not.toBeNull();
     tickerBox?.click();
+    fixture.detectChanges();
+  }
+
+  /** Flushes the gate's promise chain; the fake ensure resolves immediately. */
+  async function flushGate(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
     fixture.detectChanges();
   }
 
@@ -96,7 +119,12 @@ describe('InstrumentCardComponent', () => {
   // the lake had them fully backfilled.
   it('offers whatever the catalog lists, not a fixed roster', () => {
     catalog.view.pool.set([
-      { symbol: 'GLD', name: 'SPDR Gold Shares', exchange: 'ARCA', lastHeld: '2026-09-04' },
+      {
+        symbol: 'GLD',
+        name: 'SPDR Gold Shares',
+        exchange: 'ARCA',
+        lastHeld: '2026-09-04',
+      },
     ]);
     fixture.detectChanges();
     openDropdown();
@@ -104,6 +132,114 @@ describe('InstrumentCardComponent', () => {
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('GLD');
     expect(text).toContain('SPDR Gold Shares');
+  });
+
+  // The joined universe: the vendor's listings are offerable even when the
+  // lake has never held them — that is what makes any symbol reachable.
+  it('appends listed-but-unheld symbols after the lake holdings', () => {
+    alpaca.entries.set([
+      {
+        symbol: 'TSLA',
+        name: 'Tesla, Inc.',
+        asset_class: 'us_equity',
+        exchange: 'NASDAQ',
+        status: 'active',
+      },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('TSLA');
+    // An unheld row says so instead of a fake held date.
+    expect(text).toContain('not held');
+  });
+
+  it('renders each row through the shared asset identity', () => {
+    fixture.detectChanges();
+    openDropdown();
+
+    const rows = fixture.nativeElement.querySelectorAll('.dropdown__scroll .row');
+    expect(rows.length).toBeGreaterThan(0);
+    const identities = fixture.nativeElement.querySelectorAll(
+      '.dropdown__scroll .row app-asset-identity',
+    );
+    expect(identities.length).toBe(rows.length);
+  });
+
+  it('never offers a delisted symbol the lake does not already hold', () => {
+    alpaca.entries.set([
+      {
+        symbol: 'AAPL',
+        name: 'Apple Inc.',
+        asset_class: 'us_equity',
+        exchange: 'NASDAQ',
+        status: 'active',
+      },
+      {
+        symbol: 'OLD',
+        name: 'Delisted Corp',
+        asset_class: 'us_equity',
+        exchange: 'NYSE',
+        status: 'inactive',
+      },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('AAPL');
+    expect(text).not.toContain('Delisted Corp');
+  });
+
+  it('badges a held symbol the vendor has delisted, and keeps it pickable', () => {
+    catalog.view.pool.set([
+      {
+        symbol: 'OLD',
+        name: 'Delisted Corp',
+        exchange: 'NYSE',
+        firstHeld: '2019-01-02',
+        lastHeld: '2020-01-31',
+      },
+    ]);
+    alpaca.entries.set([
+      {
+        symbol: 'OLD',
+        name: 'Delisted Corp',
+        asset_class: 'us_equity',
+        exchange: 'NYSE',
+        status: 'inactive',
+      },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('OLD');
+    expect(text).toContain('delisted');
+  });
+
+  it('shows a banner — not a blank list — when the live catalog is dark', () => {
+    alpaca.unavailable.set('The broker catalog is unreachable.');
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Live catalog unavailable');
+    // Degraded, not empty: the lake's own answer still stands.
+    expect(text).toContain('SPY');
+  });
+
+  it('does not claim to show lake holdings when neither source answered', () => {
+    catalog.view.pool.set([]);
+    catalog.view.unavailable.set('The data lake is unreachable.');
+    alpaca.unavailable.set('The live catalog is unreachable.');
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('The data lake is unreachable.');
+    expect(text).not.toContain('showing lake holdings');
   });
 
   it('reports the days held for the selected instrument', () => {
@@ -121,8 +257,7 @@ describe('InstrumentCardComponent', () => {
 
     expect(fixture.nativeElement.textContent).toContain('The data lake is unreachable.');
 
-    const retry: HTMLButtonElement | null =
-      fixture.nativeElement.querySelector('.dropdown__retry');
+    const retry: HTMLButtonElement | null = fixture.nativeElement.querySelector('.dropdown__retry');
     expect(retry).not.toBeNull();
     // Delta, not an absolute: opening the dropdown re-reads too.
     const before = catalog.view.reloadCount;
@@ -130,17 +265,14 @@ describe('InstrumentCardComponent', () => {
     expect(catalog.view.reloadCount).toBe(before + 1);
   });
 
-  it('points a no-match search at backfilling rather than a page with no add flow', () => {
+  it('says a no-match search found no listed symbol', () => {
     fixture.detectChanges();
     openDropdown();
     component.onSearchInput('NOPE');
     fixture.detectChanges();
 
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('holds no bars');
-    const link: HTMLAnchorElement | null =
-      fixture.nativeElement.querySelector('.dropdown__empty a');
-    expect(link?.getAttribute('href')).toBe('/data-lake');
+    expect(text).toContain('No listed symbol matches that');
   });
 
   // The window on screen is the operator's. Switching instrument to compare
@@ -203,13 +335,108 @@ describe('InstrumentCardComponent', () => {
     expect(component.value().to).toBe('2026-05-25');
   });
 
+  // An unheld pick is no longer a dead end: the gate backfills it, and only
+  // a covered symbol reaches value(). This is the populate-then-use loop.
+  it('gates an unheld pick on its backfill and selects it once covered', async () => {
+    coverage.ensureResults.push(true);
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+
+    expect(coverage.ensureCalls).toEqual([{ symbol: 'NVDA', mode: 'polygon_split_adjusted' }]);
+    expect(component.value().symbol).toBe('NVDA');
+  });
+
+  it('leaves the selection untouched when the backfill fails, showing the strip', async () => {
+    // A false verdict hands the card a failed strip, as the real service does.
+    coverage.ensureResults.push(false);
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+
+    expect(component.value().symbol).toBe('SPY');
+    const strip: HTMLElement | null = fixture.nativeElement.querySelector(
+      'app-coverage-gate-strip .gate',
+    );
+    expect(strip).not.toBeNull();
+    expect(strip?.textContent).toContain('The backfill job failed.');
+    // The failure's reason code renders through the receipt-label pipe.
+    expect(strip?.querySelector('.gate__msg .mono')).not.toBeNull();
+    // Cancel is offered so the operator can walk away cleanly.
+    expect(strip?.textContent).toContain('Retry');
+    expect(strip?.textContent).toContain('Dismiss');
+  });
+
+  it('refuses the gate loudly for a view no backfill can produce', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'lean_adjusted');
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    fixture.detectChanges();
+
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(coverage.refusals).toEqual([
+      {
+        symbol: 'NVDA',
+        mode: 'lean_adjusted',
+        reason: 'view_not_backfillable',
+        // The refusal names the view the way the strip renders it.
+        message: expect.stringContaining('Lean Adjusted'),
+      },
+    ]);
+    expect(component.value().symbol).toBe('SPY');
+  });
+
+  it('dismisses the gate strip without selecting', async () => {
+    coverage.ensureResults.push(false);
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+
+    const buttons = fixture.nativeElement.querySelectorAll('app-coverage-gate-strip .gate button');
+    const dismiss = Array.from(buttons).find(
+      (b) => (b as HTMLButtonElement).textContent?.trim() === 'Dismiss',
+    ) as HTMLButtonElement | undefined;
+    dismiss?.click();
+    await flushGate();
+
+    expect((component.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-coverage-gate-strip')).toBeNull();
+  });
+
   it('distinguishes an empty lake from a search that matched nothing', () => {
     catalog.view.pool.set([]);
     fixture.detectChanges();
     openDropdown();
 
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('holds no instruments yet');
+    expect(text).toContain('the lake holds nothing yet');
     expect(text).not.toContain('matching that');
   });
 
@@ -237,20 +464,25 @@ describe('InstrumentCardComponent', () => {
     fixture.detectChanges();
     openDropdown();
 
-    const listbox: HTMLElement | null =
-      fixture.nativeElement.querySelector('[role="listbox"]');
+    const listbox: HTMLElement | null = fixture.nativeElement.querySelector('[role="listbox"]');
     expect(listbox).not.toBeNull();
     // A focusable control inside a listbox is not an option: it lands in the
     // tab order of a widget navigated by arrow keys.
     expect(listbox?.querySelector('button, a')).toBeNull();
   });
 
-  // Ticker Explorer's "Fetch Chain" is a live Polygon lookup, not a backtest.
-  // Pinning it to lake holdings silently removed symbols that endpoint still
-  // serves, so a host may supply its own universe.
-  it('offers a host-supplied universe instead of the lake when given one', () => {
-    catalog.view.pool.set([
-      { symbol: 'GLD', name: 'SPDR Gold Shares', exchange: 'ARCA', lastHeld: '2026-09-04' },
+  // A host may supply its own universe when it owns membership outright —
+  // the backfill panel's vendor list, say. The card renders it verbatim,
+  // with no gate: the host decides what its symbols mean.
+  it('offers a host-supplied universe instead of the joined catalog when given one', () => {
+    alpaca.entries.set([
+      {
+        symbol: 'TSLA',
+        name: 'Tesla, Inc.',
+        asset_class: 'us_equity',
+        exchange: 'NASDAQ',
+        status: 'active',
+      },
     ]);
     fixture.componentRef.setInput('universe', [
       { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
@@ -260,16 +492,24 @@ describe('InstrumentCardComponent', () => {
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('QQQ');
-    expect(text).not.toContain('GLD');
-    // Lake copy must not appear over a list the lake did not supply.
-    expect(text).not.toContain('In the data lake');
+    expect(text).not.toContain('TSLA');
+    // No gate on a host universe: the pick applies directly.
+    component.pickTicker({ symbol: 'QQQ', name: 'Invesco QQQ Trust' });
+    fixture.detectChanges();
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(component.value().symbol).toBe('QQQ');
   });
 
   it('offers the tree its host names', () => {
     // Every mode of the fake starts from the same seed, so a symbol only the
     // raw tree holds is what proves the picker read that tree, not the default.
     catalog.viewFor('raw').pool.set([
-      { symbol: 'RAWONLY', name: 'Raw-tree only', exchange: 'ARCA', lastHeld: '2026-09-04' },
+      {
+        symbol: 'RAWONLY',
+        name: 'Raw-tree only',
+        exchange: 'ARCA',
+        lastHeld: '2026-09-04',
+      },
     ]);
     fixture.componentRef.setInput('adjustmentMode', 'raw');
     fixture.detectChanges();
@@ -283,13 +523,15 @@ describe('InstrumentCardComponent', () => {
 
   // A symbol backfilled after this tab loaded must be selectable without a
   // page reload; the root-scoped resource otherwise serves its first answer
-  // forever.
-  it('re-reads the catalog when the dropdown opens', () => {
+  // forever. The vendor catalog is deliberately *not* re-read — one cached
+  // read per tab, refreshed only through the degraded banner's Retry.
+  it('re-reads only the lake coverage when the dropdown opens', () => {
     fixture.detectChanges();
     const before = catalog.view.reloadCount;
     openDropdown();
 
     expect(catalog.view.reloadCount).toBe(before + 1);
+    expect(alpaca.reloadCount).toBe(before);
   });
 
   it('does not re-read the lake for a host-supplied universe', () => {
@@ -301,5 +543,170 @@ describe('InstrumentCardComponent', () => {
     openDropdown();
 
     expect(catalog.view.reloadCount).toBe(before);
+    expect(alpaca.reloadCount).toBe(before);
+  });
+
+  // A gate in flight must not speak for value() after the operator has
+  // moved on: the held pick wins immediately, the superseded gate is
+  // abandoned, and its eventual completion changes nothing. Ownership is
+  // the session itself — abandoning cancels exactly this card's gate.
+  it('a held pick made while a gate is in flight wins over the finished gate', async () => {
+    coverage.holdNext = true;
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+    const heldGate = component.pendingSession() as FakeCoverageSession;
+    expect(heldGate).not.toBeNull();
+
+    component.pickTicker(pool[0]);
+    fixture.detectChanges();
+
+    expect(component.value().symbol).toBe('SPY');
+    expect(heldGate.cancelCalls).toBe(1);
+
+    heldGate.resolve(true);
+    await flushGate();
+    expect(component.value().symbol).toBe('SPY');
+  });
+
+  it('abandons an old-tree gate when the host changes adjustment mode', async () => {
+    coverage.holdNext = true;
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+    const adjustedGate = component.pendingSession() as FakeCoverageSession;
+
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    expect(adjustedGate.cancelCalls).toBe(1);
+    expect(component.pendingSession()).toBeNull();
+    adjustedGate.resolve(true);
+    await flushGate();
+    expect(component.value().symbol).toBe('SPY');
+  });
+
+  it('releases a pending gate when the card is destroyed', async () => {
+    coverage.holdNext = true;
+    fixture.detectChanges();
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+    const session = component.pendingSession() as FakeCoverageSession;
+
+    fixture.destroy();
+
+    expect(session.cancelCalls).toBe(1);
+  });
+
+  // A card co-waiting on the same run owns its own session: our release
+  // path cannot reach a gate this card was never handed.
+  it("cancels only its own session, never a gate it doesn't hold", async () => {
+    coverage.holdNext = true;
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+    // Another card's gate, co-waiting on the same run in the real service.
+    const otherCardsGate = fakeHeldSession('NVDA');
+    expect(otherCardsGate.cancelCalls).toBe(0);
+
+    component.pickTicker(pool[0]);
+    fixture.detectChanges();
+
+    expect((component.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
+    expect(otherCardsGate.cancelCalls).toBe(0);
+  });
+
+  it('caps the rendered rows and lets the search reach the rest', () => {
+    const many: VendorSymbolEntry[] = Array.from({ length: 80 }, (_, i) => ({
+      symbol: `SYM${i}`,
+      name: `Symbol ${i}`,
+      asset_class: 'us_equity',
+      exchange: 'NASDAQ',
+      status: 'active',
+    }));
+    alpaca.entries.set(many);
+    fixture.detectChanges();
+    openDropdown();
+    component.onSearchInput('SYM');
+    fixture.detectChanges();
+
+    // 80 vendor matches, 50 rendered: the search is the scaler past the cap.
+    const rows = fixture.nativeElement.querySelectorAll('.dropdown__scroll .row');
+    expect(rows.length).toBe(50);
+    // The header count stays honest about what the search covers.
+    expect(fixture.nativeElement.textContent).toContain('80 matches');
+  });
+
+  // With the lake dark, coverage is unknown — every row reads unheld and a
+  // gate would backfill on a guess. The pick is refused with the lake's own
+  // reason instead.
+  it('refuses the gate while the lake coverage verdict is unknown', async () => {
+    catalog.view.unavailable.set('The data lake is unreachable.');
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(coverage.refusals).toEqual([
+      {
+        symbol: 'NVDA',
+        mode: 'polygon_split_adjusted',
+        reason: 'coverage_unknown',
+        message: 'The data lake is unreachable.',
+      },
+    ]);
+    expect(component.value().symbol).toBe('SPY');
+  });
+
+  it('offers no Retry for a refusal retrying cannot fix', async () => {
+    fixture.componentRef.setInput('adjustmentMode', 'lean_adjusted');
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({
+      symbol: 'NVDA',
+      name: 'NVIDIA',
+      exchange: 'NASDAQ',
+    });
+    await flushGate();
+
+    const labels = Array.from(
+      fixture.nativeElement.querySelectorAll('app-coverage-gate-strip .gate button'),
+    ).map((b) => (b as HTMLButtonElement).textContent?.trim());
+    expect(labels).toContain('Dismiss');
+    expect(labels).not.toContain('Retry');
   });
 });

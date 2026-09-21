@@ -1,0 +1,34 @@
+.gate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-subtle);
+  border-top: 1px solid var(--border-light);
+}
+
+.gate__msg {
+  flex: 1;
+  min-width: 0;
+}
+
+.gate__percent {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.gate__btn {
+  margin-left: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
+}

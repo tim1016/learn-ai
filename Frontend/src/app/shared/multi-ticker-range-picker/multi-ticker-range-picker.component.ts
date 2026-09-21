@@ -2,8 +2,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
   model,
+  untracked,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
@@ -19,6 +21,9 @@ import type {
   Resolution,
   TickerRange,
 } from '../ticker-range-picker/ticker-range-picker.types';
+import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService } from '../ticker-catalog';
+import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
+import { toPickerSymbol } from '../symbol-catalog/symbol-catalog.types';
 import { MultiInstrumentCardComponent } from './multi-instrument-card.component';
 import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 
@@ -59,6 +64,28 @@ export class MultiTickerRangePickerComponent {
   readonly showAutoFetch = input(true);
   readonly title = input('Cross-sectional data');
   readonly legendTreatment = input<LegendTreatment>('tinted-bold');
+
+  private readonly catalog = inject(TickerCatalogService);
+  private readonly lakeView = computed(() => {
+    // `viewFor` creates the mode's resource on first ask, and `resource()`
+    // installs an effect — illegal inside a reactive context (NG0602).
+    return untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE));
+  });
+
+  /** The lake universe, adapted into the multi card's typed options. */
+  protected readonly options = computed<readonly PickerSymbol[]>(() =>
+    this.lakeView().pool().map(toPickerSymbol),
+  );
+  protected readonly catalogLoading = computed(() => this.lakeView().loading());
+  protected readonly catalogUnavailable = computed(() => this.lakeView().unavailable());
+
+  protected retryCatalog(): void {
+    this.lakeView().reload();
+  }
+
+  protected setSymbols(symbols: string[]): void {
+    this.value.set({ ...this.value(), symbols });
+  }
 
   /** Project the universe onto a single-symbol TickerRange shape so
    *  the shared TimeWindow + Sampling sub-components can consume it

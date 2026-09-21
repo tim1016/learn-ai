@@ -115,7 +115,7 @@ export class TickerCatalogService implements TickerCatalog {
  */
 function toPool(summary: StorageSummaryResponse): readonly TickerOption[] {
   return summary.symbols
-    .filter(isRunnable)
+    .filter(isRunnableSpan)
     .slice()
     .sort((a, b) => b.artifact_count - a.artifact_count || a.symbol.localeCompare(b.symbol))
     .map(toOption);
@@ -126,8 +126,11 @@ function toPool(summary: StorageSummaryResponse): readonly TickerOption[] {
  * read — the row exists but the bars do not. The endpoint is asked for
  * trade-bar spans specifically, so a symbol whose quote side backfilled and
  * whose trade side failed does not reach here at all.
+ *
+ * Exported because the ensure-coverage gate asks the same question of a
+ * fresh read — membership must mean the same thing in both places.
  */
-function isRunnable(span: SymbolCoverageSpan): boolean {
+export function isRunnableSpan(span: SymbolCoverageSpan): boolean {
   return span.artifact_count > 0 && span.last_trading_date_ms !== null;
 }
 

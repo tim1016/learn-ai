@@ -6867,6 +6867,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickers/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticker Catalog
+         * @description The complete US-stock reference catalog for the shared symbol picker.
+         *
+         *     Serves every listed symbol — active and inactive — in the picker-row
+         *     projection (ADR 0066): the client applies its surface's membership
+         *     policy, with delisted symbols behind the backfill panel's explicit
+         *     toggle so a survivorship-biased universe stays a visible choice. The
+         *     walk is ``market="stocks"`` because the lake backfill pipeline can only
+         *     cover stocks; nothing else is offered, so the ensure-coverage gate can
+         *     never be handed a symbol it cannot fill.
+         *
+         *     Served from the data-plane core (this router runs on the coordinator in
+         *     the split fleet, the browser's ingress) rather than the broker surface:
+         *     the coordinator must construct no provider broker client (FR-041), and
+         *     a listing universe is market reference data — the Polygon account this
+         *     process already owns — not broker-operator evidence.
+         */
+        get: operations["ticker_catalog_api_tickers_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickers/details": {
         parameters: {
             query?: never;
@@ -24595,6 +24629,35 @@ export interface components {
             /** Reason Codes */
             reason_codes?: string[];
         };
+        /**
+         * SymbolCatalogEntry
+         * @description One row of the shared symbol picker's catalog (GET /api/tickers/catalog).
+         *
+         *     The membership projection for pickers: a Polygon reference-tickers walk
+         *     projected onto the fields a picker row renders. ``asset_class`` is
+         *     ``us_equity`` for every row the catalog serves — the walk is
+         *     ``market="stocks"`` — and ``status`` carries the vendor's active flag so
+         *     a picker may offer delisted symbols deliberately (the lake backfill
+         *     panel's toggle) without this endpoint deciding membership for it.
+         */
+        SymbolCatalogEntry: {
+            /**
+             * Asset Class
+             * @constant
+             */
+            asset_class: "us_equity";
+            /** Exchange */
+            exchange: string | null;
+            /** Name */
+            name: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "inactive";
+            /** Symbol */
+            symbol: string;
+        };
         /** SymbolCoverageSpan */
         SymbolCoverageSpan: {
             /** Artifact Count */
@@ -38539,6 +38602,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ticker_catalog_api_tickers_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SymbolCatalogEntry"][];
                 };
             };
         };

@@ -1,11 +1,27 @@
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { JobsService, type JobState } from '../../../services/jobs.service';
+import { JobsService, type JobState, type JobStreamEvent } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
-import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../../../shared/data-lake';
+import type {
+  BackfillDefaults,
+  BackfillFailure,
+  PriceAdjustmentMode,
+} from '../../../shared/data-lake';
+import {
+  fakeVendorCatalog,
+  provideFakeVendorCatalog,
+  type FakeVendorCatalog,
+} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
+import type { VendorSymbolEntry } from '../../../shared/symbol-catalog/vendor-catalog.service';
+import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
@@ -17,6 +33,18 @@ const DEFAULTS: BackfillDefaults = {
   max_trading_range_days: 1830,
   max_symbol_length: 20,
 };
+
+function vendorEntry(overrides: Partial<VendorSymbolEntry> = {}): VendorSymbolEntry {
+  return {
+    symbol: 'SPY',
+    name: 'SPDR S&P 500 ETF',
+    asset_class: 'us_equity',
+    exchange: 'ARCA',
+    status: 'active',
+
+    ...overrides,
+  };
+}
 
 function fakeFailure(symbol: string): BackfillFailure {
   return {
@@ -38,17 +66,40 @@ interface PanelOptions {
   seedEndTradingDate?: string;
   /** What `JobsService.jobs()` already holds when the panel mounts. */
   liveJobs?: readonly Partial<JobState>[];
+  /** The vendor catalog rows the fake asset catalog serves. */
+  vendorEntries?: readonly VendorSymbolEntry[];
+  /** What the lake itself already holds — the vendor-dark fallback. */
+  lakePool?: readonly TickerOption[];
 }
 
 async function renderPanel(options: PanelOptions = {}) {
   const startJob = vi.fn().mockResolvedValue('job-77');
   const cancelJob = vi.fn().mockResolvedValue(undefined);
-  // DataLakeBackfillStore rides JobsService.onEvent() (#1856) instead of
-  // opening its own EventSource — start() registers a listener through it.
-  const onEvent = vi.fn().mockReturnValue(vi.fn());
+  // DataLakeBackfillStore rides the shared BackfillJobRunner, which opens
+  // the one stream through JobsService.onEvent() — start() registers a
+  // listener through it.
+  let eventHandler: ((event: JobStreamEvent) => void) | undefined;
+  const onEvent = vi.fn((_jobId: string, handler: (event: JobStreamEvent) => void) => {
+    eventHandler = handler;
+    return vi.fn();
+  });
   const jobs = signal(options.liveJobs ?? []);
+  const alpaca: FakeVendorCatalog = fakeVendorCatalog(
+    options.vendorEntries ?? [
+      vendorEntry({ symbol: 'SPY' }),
+      vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' }),
+    ],
+  );
+  const lake = fakeTickerCatalog(options.lakePool ?? []);
   const view = await render(LakeBackfillPanelComponent, {
-    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } }],
+    providers: [
+      {
+        provide: JobsService,
+        useValue: { startJob, cancelJob, onEvent, jobs },
+      },
+      provideFakeVendorCatalog(alpaca),
+      provideFakeTickerCatalog(lake),
+    ],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
       seedSymbols: 'SPY',
@@ -58,17 +109,157 @@ async function renderPanel(options: PanelOptions = {}) {
     },
   });
   const store = view.fixture.debugElement.injector.get(DataLakeBackfillStore);
-  return { ...view, startJob, cancelJob, store };
+  return {
+    ...view,
+    startJob,
+    cancelJob,
+    store,
+    alpaca,
+    lake,
+    emitJobEvent: (event: JobStreamEvent) => eventHandler?.(event),
+  };
 }
 
 describe('LakeBackfillPanelComponent', () => {
   it('seeds the form from the window the page is showing', async () => {
     await renderPanel();
 
-    expect((screen.getByLabelText('Symbols to backfill') as HTMLInputElement).value).toBe('SPY');
+    // The seed symbol arrives as a picked chip, not hand-typed text.
+    expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
     expect((screen.getByLabelText('Backfill start date') as HTMLInputElement).value).toBe(
       '2026-05-18',
     );
+  });
+
+  it('picks additional symbols from the vendor catalog, not free text', async () => {
+    const { startJob } = await renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText('Search to add a ticker'), 'QQQ');
+    fireEvent.click(screen.getByRole('option', { name: /QQQ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalled());
+    const [, payload] = startJob.mock.calls[0] as [string, { spec: { symbols: string[] } }];
+    expect(payload.spec.symbols).toEqual(['SPY', 'QQQ']);
+  });
+
+  it("keeps the operator's picks when the host rebinds the seed window", async () => {
+    // The host binds the seeds from the URL query; a reactive seed would
+    // wipe the chips every time the heatmap's window moved.
+    const { fixture, detectChanges } = await renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'SPY (remove)' }));
+    detectChanges();
+    expect(screen.queryByRole('button', { name: /remove/ })).toBeNull();
+
+    fixture.componentRef.setInput('seedSymbols', 'SPY, QQQ, TSLA');
+    fixture.componentRef.setInput('seedStartTradingDate', '2026-06-01');
+    fixture.componentRef.setInput('seedEndTradingDate', '2026-06-30');
+    detectChanges();
+
+    expect(screen.queryByRole('button', { name: /remove/ })).toBeNull();
+  });
+
+  it('offers delisted symbols only behind the explicit toggle', async () => {
+    // Delisted history is real and backfillable, but a universe of only
+    // still-listed names is the survivorship trap: offering it by default
+    // would accrete biased runs by accident.
+    const { alpaca } = await renderPanel({
+      vendorEntries: [
+        vendorEntry({ symbol: 'SPY' }),
+        vendorEntry({
+          symbol: 'OLD',
+          name: 'Delisted Corp',
+          status: 'inactive',
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    const addBox = screen.getByLabelText('Search to add a ticker');
+
+    await user.type(addBox, 'OLD');
+    expect(screen.queryByRole('option')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Include delisted symbols'));
+    await user.clear(addBox);
+    await user.type(addBox, 'OLD');
+    expect(screen.getByRole('option', { name: /OLD/ })).toBeTruthy();
+    expect(alpaca.entries()?.length).toBe(2);
+  });
+
+  it('drops delisted selections when the toggle is cleared', async () => {
+    const { detectChanges } = await renderPanel({
+      vendorEntries: [
+        vendorEntry({ symbol: 'SPY' }),
+        vendorEntry({
+          symbol: 'OLD',
+          name: 'Delisted Corp',
+          status: 'inactive',
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    const addBox = screen.getByLabelText('Search to add a ticker');
+
+    fireEvent.click(screen.getByLabelText('Include delisted symbols'));
+    await user.type(addBox, 'OLD');
+    fireEvent.click(screen.getByRole('option', { name: /OLD/ }));
+    detectChanges();
+    expect(screen.getByRole('button', { name: 'OLD (remove)' })).toBeTruthy();
+
+    // Clearing the toggle is a statement about the universe: the selection
+    // it made possible must not survive into the submitted spec.
+    fireEvent.click(screen.getByLabelText('Include delisted symbols'));
+    detectChanges();
+
+    expect(screen.queryByRole('button', { name: 'OLD (remove)' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
+  });
+
+  it('blocks a seed the vendor catalog cannot vouch for, by name', async () => {
+    // Seeds arrive from the coverage board's free text; lake membership made
+    // them visible but never made them backfillable. With the vendor having
+    // answered, an unvouched pick blocks submission and names itself.
+    // The vendor catalog answers without SPY: the seeded pick is unvouched.
+    await renderPanel({
+      vendorEntries: [vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' })],
+    });
+
+    expect(
+      screen.getByText(
+        'Not in the listing catalog (a typo, a delisted symbol, or not a US stock): SPY. Clear them, or include delisted symbols.',
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it('names a dark vendor catalog, keeps the lake holdings pickable, and offers a retry', async () => {
+    // Vendor dark must degrade to lake holdings — never an empty form. The
+    // Observatory's primary flow survives an outage of one of its two
+    // sources.
+    const { alpaca, detectChanges } = await renderPanel({
+      vendorEntries: [],
+      lakePool: [{ symbol: 'AAPL', name: 'Apple Inc.', lastHeld: '2026-09-04' }],
+    });
+    alpaca.entries.set(null);
+    alpaca.unavailable.set('catalog endpoint down');
+    detectChanges();
+
+    const note = screen.getByText(/Live symbol catalog unavailable/);
+    expect(note.textContent).toContain('catalog endpoint down');
+    expect(note.textContent).toContain('showing lake holdings');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+
+    // The fallback is usable: a lake holding is still addable by search.
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Search to add a ticker'), 'AAPL');
+    expect(screen.getByRole('option', { name: /AAPL/ })).toBeTruthy();
   });
 
   it('submits a spec the backfill job accepts', async () => {
@@ -105,12 +296,12 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it('renders live progress and each session as it lands', async () => {
-    const { store, detectChanges } = await renderPanel();
+    const { store, detectChanges, emitJobEvent } = await renderPanel();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
 
-    store.ingestEvent({ type: 'job.progress', current: 1, total: 3, unit: 'days' });
+    emitJobEvent({ type: 'job.progress', current: 1, total: 3, unit: 'days' });
     store.ingestEvent({
       type: 'data_lake.backfill_day',
       trading_date_ms: MAY_20_OPEN_MS,
@@ -129,7 +320,7 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it('shows a typed failure reason through the receipt-label pipe', async () => {
-    const { store, detectChanges } = await renderPanel();
+    const { store, detectChanges, emitJobEvent } = await renderPanel();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
@@ -155,7 +346,7 @@ describe('LakeBackfillPanelComponent', () => {
         },
       ],
     });
-    store.ingestEvent({ type: 'job.completed' });
+    emitJobEvent({ type: 'job.completed' });
     detectChanges();
 
     expect(screen.getByText('Provider Entitlement Error')).toBeTruthy();
@@ -169,13 +360,17 @@ describe('LakeBackfillPanelComponent', () => {
       // that the operator stopped — between per-day writes still left
       // completed artifacts on disk. Every terminal phase leaves the
       // heatmap stale, not just the successful one.
-      const { store, fixture, detectChanges } = await renderPanel();
+      const { store, fixture, detectChanges, emitJobEvent } = await renderPanel();
       const finished = vi.fn();
       fixture.componentInstance.runFinished.subscribe(finished);
 
       fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
       await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
-      store.ingestEvent({ type: terminalEvent, code: 'io_error', message: 'disk full' });
+      emitJobEvent({
+        type: terminalEvent,
+        code: 'io_error',
+        message: 'disk full',
+      });
       detectChanges();
 
       expect(finished).toHaveBeenCalledTimes(1);
@@ -192,25 +387,41 @@ describe('LakeBackfillPanelComponent', () => {
         'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.',
       ),
     ).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
     expect(startJob).not.toHaveBeenCalled();
   });
 
   it('blocks submission on a browser that cannot mint a durable request id', async () => {
     const realCrypto = globalThis.crypto;
-    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: {},
+    });
     try {
       const { startJob } = await renderPanel();
 
-      expect(screen.getByText('This browser cannot create a durable request identity.')).toBeTruthy();
       expect(
-        (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+        screen.getByText('This browser cannot create a durable request identity.'),
+      ).toBeTruthy();
+      expect(
+        (
+          screen.getByRole('button', {
+            name: 'Run backfill',
+          }) as HTMLButtonElement
+        ).disabled,
       ).toBe(true);
       expect(startJob).not.toHaveBeenCalled();
     } finally {
-      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: realCrypto });
+      Object.defineProperty(globalThis, 'crypto', {
+        configurable: true,
+        value: realCrypto,
+      });
     }
   });
 
@@ -235,7 +446,11 @@ describe('LakeBackfillPanelComponent', () => {
       screen.getByText('That window is 1831 days; the data plane accepts at most 1830.'),
     ).toBeTruthy();
     expect(
-      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     expect(startJob).not.toHaveBeenCalled();
@@ -257,11 +472,17 @@ describe('LakeBackfillPanelComponent', () => {
     // Nothing derives lean_adjusted — it would come from raw bars plus
     // factor files and no producer exists — so the job would succeed and
     // leave the selected view exactly as empty as it started.
-    const { startJob } = await renderPanel({ priceAdjustmentMode: 'lean_adjusted' });
+    const { startJob } = await renderPanel({
+      priceAdjustmentMode: 'lean_adjusted',
+    });
 
     expect(screen.getByText(/Nothing derives/)).toBeTruthy();
     expect(
-      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     expect(startJob).not.toHaveBeenCalled();
@@ -331,7 +552,7 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it('adopts a backfill that was already running when the panel mounted', async () => {
-    const { store, fixture, detectChanges } = await renderPanel({
+    const { store, fixture, detectChanges, emitJobEvent } = await renderPanel({
       liveJobs: [{ id: 'job-live', type: 'data_lake_backfill', status: 'running' }],
     });
     const finished = vi.fn();
@@ -340,7 +561,7 @@ describe('LakeBackfillPanelComponent', () => {
     await vi.waitFor(() => expect(store.jobId()).toBe('job-live'));
     expect(screen.getByText(/Reattached to a backfill that was already running/)).toBeTruthy();
 
-    store.ingestEvent({ type: 'job.completed' });
+    emitJobEvent({ type: 'job.completed' });
     detectChanges();
 
     expect(finished).toHaveBeenCalledTimes(1);
@@ -359,11 +580,11 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it("names a terminal job failure with the framework's own code", async () => {
-    const { store, detectChanges } = await renderPanel();
+    const { store, detectChanges, emitJobEvent } = await renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
 
-    store.ingestEvent({
+    emitJobEvent({
       type: 'job.failed',
       code: 'fetch_timeout',
       message: 'Polygon did not answer within 600s.',
@@ -378,7 +599,10 @@ describe('LakeBackfillPanelComponent', () => {
     await renderPanel();
 
     const results = await axe.run(document.body, {
-      rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
     });
 
     expect(results.violations).toEqual([]);

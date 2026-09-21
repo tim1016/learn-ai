@@ -34,9 +34,15 @@
     border-radius: 50%;
     background: var(--text-muted);
 
-    &--accent { background: var(--accent); }
-    &--bull   { background: var(--bull); }
-    &--warn   { background: var(--warn); }
+    &--accent {
+      background: var(--accent);
+    }
+    &--bull {
+      background: var(--bull);
+    }
+    &--warn {
+      background: var(--warn);
+    }
   }
 
   &__count {
@@ -62,7 +68,10 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
 
-  &:hover { color: var(--accent-hover); text-decoration: underline; }
+  &:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
 }
 
 // ── Chip array ───────────────────────────────────────────────────
@@ -80,91 +89,29 @@
   height: 24px;
   padding: 0 6px 0 8px;
   background: var(--accent-soft);
-  border: 1px solid rgba(var(--accent-rgb, 38, 166, 154), 0.30);
+  border: 1px solid rgba(var(--accent-rgb, 38, 166, 154), 0.3);
   border-radius: var(--radius-pill);
   color: var(--accent);
   font-size: 11px;
   font-weight: var(--fw-semi);
   cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast);
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast);
 
   &:hover {
     background: var(--bg-hover);
     border-color: var(--border);
   }
 
-  &__symbol { letter-spacing: 0.02em; }
+  &__symbol {
+    letter-spacing: 0.02em;
+  }
 
   &__remove {
     font-size: 14px;
     line-height: 1;
     color: var(--text-muted);
-  }
-}
-
-// ── Add input + suggestion list ──────────────────────────────────
-.add-row {
-  position: relative;
-}
-
-.add-input {
-  width: 100%;
-  height: 32px;
-  padding: 0 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  font-size: 12px;
-  outline: none;
-
-  &:focus { border-color: var(--accent); }
-}
-
-.add-suggestions {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-  z-index: 60;
-  list-style: none;
-  margin: 0;
-  padding: 4px 0;
-  max-height: 240px;
-  overflow: auto;
-}
-
-.suggestion {
-  display: grid;
-  grid-template-columns: 64px 1fr;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  padding: 7px 10px;
-  background: transparent;
-  border: none;
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-
-  &:hover { background: var(--bg-hover); }
-
-  &__symbol {
-    font-weight: var(--fw-bold);
-    font-size: 12px;
-    color: var(--text-primary);
-  }
-
-  &__name {
-    font-size: 11px;
-    color: var(--text-subtle);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 }
 

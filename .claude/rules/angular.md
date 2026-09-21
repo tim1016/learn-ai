@@ -31,6 +31,32 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
 - **Reactive Forms** still valid for complex existing forms. Don't migrate just to migrate.
 - Never Template-driven forms.
 
+## Symbol picking (ADR 0066)
+
+- Every symbol input uses the shared instrument card (`app-instrument-card`) or a picker
+  wrapper (`app-ticker-range-picker`, `app-multi-ticker-range-picker`). Never hand-roll a
+  ticker input, a suggestion list, or a membership map — `TICKER_LABELS` is display
+  metadata, never membership.
+- The default universe is the joined catalog (`SymbolCatalogService`): every listed
+  US-equity symbol from the data-plane's Polygon reference catalog (`GET /api/tickers/catalog`),
+  with per-row lake coverage (held span / "not held" / "delisted"). Rows render through
+  `app-asset-identity`.
+- An unheld pick is gated on its lake backfill inside the card (`EnsureCoverageService`);
+  the selection emits only after the lake — re-read, not the job's word — confirms the
+  bars landed. Hosts never implement their own backfill gating.
+- A host-supplied `universe` input (single card) or typed `options` input (the multi-symbol
+  card) is a closed list the host owns outright (no gate); use it only when membership
+  genuinely is the host's — e.g. the backfill panel adapts the joined catalog through its
+  own delisted policy, because the panel is the bulk path the gate defers to.
+- When the vendor catalog is dark, the picker degrades visibly (banner + lake holdings +
+  retry). Never substitute a canned symbol list for a failed read. The vendor catalog is
+  read once per tab: `view.retryVendor()` re-fetches it; `view.reload()` refreshes only
+  the lake's coverage on a dropdown open.
+- **Current exceptions** (mop-up pending, see ADR 0066 Consequences): batch-runner's
+  `multi-ticker-range-picker` is still lake-only (no joined universe, no gate), and the
+  unrouted Ticker Explorer still passes a `TICKER_LABELS` host universe. Don't copy either
+  pattern.
+
 ## Routing
 
 - Lazy-loaded routes via `loadComponent` / `loadChildren`.

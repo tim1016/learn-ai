@@ -24,15 +24,18 @@ const SPEC: DataRunSpec = {
 
 // The store rides JobsService.onEvent() (#1856) rather than opening its own
 // EventSource, so every mocked JobsService below needs a no-op onEvent —
-// start()/reattach() call it to register the store's fold as a listener,
+// start()/reattach() call it to register the runner's lifecycle fold,
 // and jsdom has no EventSource for the real service to construct anyway.
-// The store only ever parses a frame and routes it into `ingestEvent`,
-// which every test below drives directly.
+// Domain-frame tests drive `ingestEvent` directly; lifecycle tests invoke
+// the captured listener so they exercise the runner's one `job.*` fold.
 function makeStore(jobs: Partial<JobsService>): DataLakeBackfillStore {
   TestBed.configureTestingModule({
     providers: [
       DataLakeBackfillStore,
-      { provide: JobsService, useValue: { onEvent: vi.fn().mockReturnValue(vi.fn()), ...jobs } },
+      {
+        provide: JobsService,
+        useValue: { onEvent: vi.fn().mockReturnValue(vi.fn()), ...jobs },
+      },
     ],
   });
   return TestBed.inject(DataLakeBackfillStore);
@@ -65,13 +68,18 @@ describe('DataLakeBackfillStore', () => {
   });
 
   it('rebuilds an adopted run from the replayed stream rather than inventing it', () => {
-    const store = makeStore({} as Partial<JobsService>);
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
     store.reattach('job-live');
 
     // What GET /api/jobs/{id}/events replays when opened with no
     // Last-Event-ID: the whole stream from the start.
-    store.ingestEvent({ type: 'job.started' });
-    store.ingestEvent({ type: 'job.progress', current: 2, total: 3, unit: 'days' });
+    handler?.({ type: 'job.started' });
+    handler?.({ type: 'job.progress', current: 2, total: 3, unit: 'days' });
     for (const dayIndex of [1, 2]) {
       store.ingestEvent({
         type: 'data_lake.backfill_day',
@@ -91,18 +99,28 @@ describe('DataLakeBackfillStore', () => {
   });
 
   it('reaches its terminal phase after adopting, so the caller can re-read', () => {
-    const store = makeStore({} as Partial<JobsService>);
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
     store.reattach('job-live');
 
-    store.ingestEvent({ type: 'job.completed' });
+    handler?.({ type: 'job.completed' });
 
     expect(store.phase()).toBe('completed');
   });
 
   it('ignores a re-adopt of the run it is already following', () => {
-    const store = makeStore({} as Partial<JobsService>);
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
     store.reattach('job-live');
-    store.ingestEvent({ type: 'job.progress', current: 1, total: 2, unit: 'days' });
+    handler?.({ type: 'job.progress', current: 1, total: 2, unit: 'days' });
 
     store.reattach('job-live');
 
@@ -137,14 +155,19 @@ describe('DataLakeBackfillStore', () => {
       new HttpErrorResponse({
         status: 422,
         statusText: 'Unprocessable Entity',
-        error: { detail: { reason: 'range_too_large', message: 'range is 3654 days' } },
+        error: {
+          detail: { reason: 'range_too_large', message: 'range is 3654 days' },
+        },
       }),
     );
     const store = makeStore({ startJob } as unknown as Partial<JobsService>);
 
     await store.start(SPEC);
 
-    expect(store.error()).toEqual({ code: 'range_too_large', message: 'range is 3654 days' });
+    expect(store.error()).toEqual({
+      code: 'range_too_large',
+      message: 'range is 3654 days',
+    });
   });
 
   it('folds a per-day domain event into the run, typed failures intact', () => {
@@ -198,20 +221,36 @@ describe('DataLakeBackfillStore', () => {
   });
 
   it('tracks progress ticks and the terminal completion', () => {
-    const store = makeStore({} as Partial<JobsService>);
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
+    store.reattach('job-live');
 
-    store.ingestEvent({ type: 'job.progress', current: 3, total: 5, unit: 'days' });
-    store.ingestEvent({ type: 'job.completed' });
+    handler?.({ type: 'job.progress', current: 3, total: 5, unit: 'days' });
+    handler?.({ type: 'job.completed' });
 
-    expect(store.progress()).toMatchObject({ current: 3, total: 5, unit: 'days' });
+    expect(store.progress()).toMatchObject({
+      current: 3,
+      total: 5,
+      unit: 'days',
+    });
     expect(store.phase()).toBe('completed');
     expect(store.running()).toBe(false);
   });
 
   it('keeps the failure code the job reported', () => {
-    const store = makeStore({} as Partial<JobsService>);
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
+    store.reattach('job-live');
 
-    store.ingestEvent({ type: 'job.failed', code: 'PythonRejected', message: 'boom' });
+    handler?.({ type: 'job.failed', code: 'PythonRejected', message: 'boom' });
 
     expect(store.error()).toEqual({ code: 'PythonRejected', message: 'boom' });
     expect(store.phase()).toBe('failed');
@@ -230,7 +269,10 @@ describe('DataLakeBackfillStore', () => {
   it('start() rides JobsService.onEvent() instead of opening its own stream', async () => {
     const startJob = vi.fn().mockResolvedValue('job-1');
     const onEvent = vi.fn().mockReturnValue(vi.fn());
-    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+    const store = makeStore({
+      startJob,
+      onEvent,
+    } as unknown as Partial<JobsService>);
 
     await store.start(SPEC);
 
@@ -244,7 +286,10 @@ describe('DataLakeBackfillStore', () => {
       handler = h;
       return vi.fn();
     });
-    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+    const store = makeStore({
+      startJob,
+      onEvent,
+    } as unknown as Partial<JobsService>);
 
     await store.start(SPEC);
     handler?.({ type: 'job.progress', current: 1, total: 2, unit: 'days' });
@@ -260,7 +305,10 @@ describe('DataLakeBackfillStore', () => {
       handler = h;
       return unsubscribe;
     });
-    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+    const store = makeStore({
+      startJob,
+      onEvent,
+    } as unknown as Partial<JobsService>);
 
     await store.start(SPEC);
     handler?.({ type: 'job.completed' });

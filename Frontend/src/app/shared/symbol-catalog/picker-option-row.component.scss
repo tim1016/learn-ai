@@ -1,0 +1,32 @@
+:host {
+  display: contents;
+}
+
+.row__identity {
+  min-width: 0;
+}
+
+.row__name {
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row__meta {
+  color: var(--text-muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.row__held {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.row__held--unheld {
+  color: var(--text-subtle);
+  font-style: italic;
+}

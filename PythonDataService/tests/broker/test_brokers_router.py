@@ -582,6 +582,7 @@ async def test_assets_endpoint_rejects_invalid_status() -> None:
     assert response.status_code == 422
 
 
+
 async def test_clock_endpoint_returns_vendor_evidence() -> None:
     get_broker_registry().register(_FakePort(clock=_clock(is_open=False)))
 

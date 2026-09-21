@@ -1,0 +1,12 @@
+<div
+  class="instrument-foot mono"
+  title="First and last day the lake holds for this symbol. Days in between may still be missing."
+>
+  <span class="instrument-foot__label">days held</span>
+  <span class="instrument-foot__span">
+    @if (firstHeld(); as first) {
+      <span class="instrument-foot__span-val">{{ first }}</span> →
+    }
+    <span class="instrument-foot__span-val">{{ lastHeld() }}</span>
+  </span>
+</div>

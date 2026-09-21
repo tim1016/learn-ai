@@ -1,0 +1,28 @@
+:host {
+  display: contents;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 48px 74px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  transition: background var(--t-fast);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &--active {
+    background: var(--accent-faint);
+    border-left-color: var(--accent);
+  }
+}
