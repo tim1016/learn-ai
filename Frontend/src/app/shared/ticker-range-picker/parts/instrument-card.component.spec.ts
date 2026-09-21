@@ -7,6 +7,14 @@ import {
   provideFakeTickerCatalog,
   type FakeTickerCatalog,
 } from '../../ticker-catalog/testing/fake-ticker-catalog';
+import {
+  fakeAlpacaAssetCatalog,
+  fakeEnsureCoverage,
+  provideFakeAlpacaAssetCatalog,
+  provideFakeEnsureCoverage,
+  type FakeAlpacaAssetCatalog,
+  type FakeEnsureCoverage,
+} from '../../symbol-catalog/testing/fake-symbol-catalog';
 import type {
   TickerOption,
   TickerRange,
@@ -39,13 +47,22 @@ describe('InstrumentCardComponent', () => {
   let fixture: ComponentFixture<InstrumentCardComponent>;
   let component: InstrumentCardComponent;
   let catalog: FakeTickerCatalog;
+  let alpaca: FakeAlpacaAssetCatalog;
+  let coverage: FakeEnsureCoverage;
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
     catalog = fakeTickerCatalog(pool);
+    alpaca = fakeAlpacaAssetCatalog();
+    coverage = fakeEnsureCoverage();
     await TestBed.configureTestingModule({
       imports: [InstrumentCardComponent],
-      providers: [provideRouter([]), provideFakeTickerCatalog(catalog)],
+      providers: [
+        provideRouter([]),
+        provideFakeTickerCatalog(catalog),
+        provideFakeAlpacaAssetCatalog(alpaca),
+        provideFakeEnsureCoverage(coverage),
+      ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(InstrumentCardComponent);
@@ -59,6 +76,13 @@ describe('InstrumentCardComponent', () => {
       fixture.nativeElement.querySelector('[role="combobox"]');
     expect(tickerBox).not.toBeNull();
     tickerBox?.click();
+    fixture.detectChanges();
+  }
+
+  /** Flushes the gate's promise chain; the fake ensure resolves immediately. */
+  async function flushGate(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
     fixture.detectChanges();
   }
 
@@ -106,6 +130,72 @@ describe('InstrumentCardComponent', () => {
     expect(text).toContain('SPDR Gold Shares');
   });
 
+  // The joined universe: the vendor's listings are offerable even when the
+  // lake has never held them — that is what makes any symbol reachable.
+  it('appends listed-but-unheld symbols after the lake holdings', () => {
+    alpaca.entries.set([
+      { symbol: 'TSLA', name: 'Tesla, Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', tradable: true },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('TSLA');
+    // An unheld row says so instead of a fake held date.
+    expect(text).toContain('not held');
+  });
+
+  it('renders each row through the shared asset identity', () => {
+    fixture.detectChanges();
+    openDropdown();
+
+    const rows = fixture.nativeElement.querySelectorAll('.dropdown__scroll .row');
+    expect(rows.length).toBeGreaterThan(0);
+    const identities = fixture.nativeElement.querySelectorAll(
+      '.dropdown__scroll .row app-asset-identity',
+    );
+    expect(identities.length).toBe(rows.length);
+  });
+
+  it('never offers a delisted symbol the lake does not already hold', () => {
+    alpaca.entries.set([
+      { symbol: 'AAPL', name: 'Apple Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', tradable: true },
+      { symbol: 'OLD', name: 'Delisted Corp', asset_class: 'us_equity', exchange: 'NYSE', status: 'inactive', tradable: false },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('AAPL');
+    expect(text).not.toContain('Delisted Corp');
+  });
+
+  it('badges a held symbol the vendor has delisted, and keeps it pickable', () => {
+    catalog.view.pool.set([
+      { symbol: 'OLD', name: 'Delisted Corp', exchange: 'NYSE', firstHeld: '2019-01-02', lastHeld: '2020-01-31' },
+    ]);
+    alpaca.entries.set([
+      { symbol: 'OLD', name: 'Delisted Corp', asset_class: 'us_equity', exchange: 'NYSE', status: 'inactive', tradable: false },
+    ]);
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('OLD');
+    expect(text).toContain('delisted');
+  });
+
+  it('shows a banner — not a blank list — when the live catalog is dark', () => {
+    alpaca.unavailable.set('The broker catalog is unreachable.');
+    fixture.detectChanges();
+    openDropdown();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Live catalog unavailable');
+    // Degraded, not empty: the lake's own answer still stands.
+    expect(text).toContain('SPY');
+  });
+
   it('reports the days held for the selected instrument', () => {
     fixture.detectChanges();
     expect(component.selectedFirstHeld()).toBe('2024-05-20');
@@ -130,17 +220,14 @@ describe('InstrumentCardComponent', () => {
     expect(catalog.view.reloadCount).toBe(before + 1);
   });
 
-  it('points a no-match search at backfilling rather than a page with no add flow', () => {
+  it('says a no-match search found no listed symbol', () => {
     fixture.detectChanges();
     openDropdown();
     component.onSearchInput('NOPE');
     fixture.detectChanges();
 
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('holds no bars');
-    const link: HTMLAnchorElement | null =
-      fixture.nativeElement.querySelector('.dropdown__empty a');
-    expect(link?.getAttribute('href')).toBe('/data-lake');
+    expect(text).toContain('No listed symbol matches that');
   });
 
   // The window on screen is the operator's. Switching instrument to compare
@@ -203,13 +290,107 @@ describe('InstrumentCardComponent', () => {
     expect(component.value().to).toBe('2026-05-25');
   });
 
+  // An unheld pick is no longer a dead end: the gate backfills it, and only
+  // a covered symbol reaches value(). This is the populate-then-use loop.
+  it('gates an unheld pick on its backfill and selects it once covered', async () => {
+    coverage.ensureResults.push(true);
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+
+    expect(coverage.ensureCalls).toEqual([
+      { symbol: 'NVDA', mode: 'polygon_split_adjusted' },
+    ]);
+    expect(component.value().symbol).toBe('NVDA');
+  });
+
+  it('leaves the selection untouched when the backfill fails, showing the strip', async () => {
+    coverage.ensureResults.push(false);
+    coverage.active.set({
+      symbol: 'NVDA',
+      phase: 'failed',
+      percent: null,
+      reason: 'backfill_failed',
+      message: 'The vendor refused the range.',
+    });
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+
+    expect(component.value().symbol).toBe('SPY');
+    const strip: HTMLElement | null =
+      fixture.nativeElement.querySelector('.dropdown__gate');
+    expect(strip).not.toBeNull();
+    expect(strip?.textContent).toContain('The vendor refused the range.');
+    // The failure's reason code renders through the receipt-label pipe.
+    expect(strip?.querySelector('.dropdown__gate-msg .mono')).not.toBeNull();
+    // Cancel is offered so the operator can walk away cleanly.
+    expect(strip?.textContent).toContain('Retry');
+    expect(strip?.textContent).toContain('Dismiss');
+  });
+
+  it('refuses the gate loudly for a view no backfill can produce', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'lean_adjusted');
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    fixture.detectChanges();
+
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(coverage.refusals).toEqual([
+      {
+        symbol: 'NVDA',
+        reason: 'view_not_backfillable',
+        // The refusal names the view the way the strip renders it.
+        message: expect.stringContaining('Lean Adjusted'),
+      },
+    ]);
+    expect(component.value().symbol).toBe('SPY');
+  });
+
+  it('dismisses the gate strip without selecting', async () => {
+    coverage.ensureResults.push(false);
+    coverage.active.set({
+      symbol: 'NVDA',
+      phase: 'failed',
+      percent: null,
+      reason: 'backfill_failed',
+      message: 'The vendor refused the range.',
+    });
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+
+    const buttons = fixture.nativeElement.querySelectorAll('.dropdown__gate button');
+    const dismiss = Array.from(buttons).find(
+      (b) => (b as HTMLButtonElement).textContent?.trim() === 'Dismiss',
+    ) as HTMLButtonElement | undefined;
+    dismiss?.click();
+    await flushGate();
+
+    expect(coverage.cancelCount).toBe(1);
+    expect(
+      fixture.nativeElement.querySelector('.dropdown__gate'),
+    ).toBeNull();
+  });
+
   it('distinguishes an empty lake from a search that matched nothing', () => {
     catalog.view.pool.set([]);
     fixture.detectChanges();
     openDropdown();
 
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('holds no instruments yet');
+    expect(text).toContain('the lake holds nothing yet');
     expect(text).not.toContain('matching that');
   });
 
@@ -245,12 +426,12 @@ describe('InstrumentCardComponent', () => {
     expect(listbox?.querySelector('button, a')).toBeNull();
   });
 
-  // Ticker Explorer's "Fetch Chain" is a live Polygon lookup, not a backtest.
-  // Pinning it to lake holdings silently removed symbols that endpoint still
-  // serves, so a host may supply its own universe.
-  it('offers a host-supplied universe instead of the lake when given one', () => {
-    catalog.view.pool.set([
-      { symbol: 'GLD', name: 'SPDR Gold Shares', exchange: 'ARCA', lastHeld: '2026-09-04' },
+  // A host may supply its own universe when it owns membership outright —
+  // the backfill panel's vendor list, say. The card renders it verbatim,
+  // with no gate: the host decides what its symbols mean.
+  it('offers a host-supplied universe instead of the joined catalog when given one', () => {
+    alpaca.entries.set([
+      { symbol: 'TSLA', name: 'Tesla, Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', tradable: true },
     ]);
     fixture.componentRef.setInput('universe', [
       { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
@@ -260,9 +441,12 @@ describe('InstrumentCardComponent', () => {
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('QQQ');
-    expect(text).not.toContain('GLD');
-    // Lake copy must not appear over a list the lake did not supply.
-    expect(text).not.toContain('In the data lake');
+    expect(text).not.toContain('TSLA');
+    // No gate on a host universe: the pick applies directly.
+    component.pickTicker({ symbol: 'QQQ', name: 'Invesco QQQ Trust' });
+    fixture.detectChanges();
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(component.value().symbol).toBe('QQQ');
   });
 
   it('offers the tree its host names', () => {
@@ -290,6 +474,7 @@ describe('InstrumentCardComponent', () => {
     openDropdown();
 
     expect(catalog.view.reloadCount).toBe(before + 1);
+    expect(alpaca.reloadCount).toBe(before + 1);
   });
 
   it('does not re-read the lake for a host-supplied universe', () => {
@@ -301,5 +486,6 @@ describe('InstrumentCardComponent', () => {
     openDropdown();
 
     expect(catalog.view.reloadCount).toBe(before);
+    expect(alpaca.reloadCount).toBe(before);
   });
 });

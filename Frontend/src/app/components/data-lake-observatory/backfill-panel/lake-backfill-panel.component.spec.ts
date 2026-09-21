@@ -1,11 +1,18 @@
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService, type JobState } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
 import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../../../shared/data-lake';
+import {
+  fakeAlpacaAssetCatalog,
+  provideFakeAlpacaAssetCatalog,
+  type FakeAlpacaAssetCatalog,
+} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import type { AlpacaSymbolEntry } from '../../../shared/symbol-catalog/alpaca-asset-catalog.service';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
@@ -17,6 +24,18 @@ const DEFAULTS: BackfillDefaults = {
   max_trading_range_days: 1830,
   max_symbol_length: 20,
 };
+
+function vendorEntry(overrides: Partial<AlpacaSymbolEntry> = {}): AlpacaSymbolEntry {
+  return {
+    symbol: 'SPY',
+    name: 'SPDR S&P 500 ETF',
+    asset_class: 'us_equity',
+    exchange: 'ARCA',
+    status: 'active',
+    tradable: true,
+    ...overrides,
+  };
+}
 
 function fakeFailure(symbol: string): BackfillFailure {
   return {
@@ -38,6 +57,8 @@ interface PanelOptions {
   seedEndTradingDate?: string;
   /** What `JobsService.jobs()` already holds when the panel mounts. */
   liveJobs?: readonly Partial<JobState>[];
+  /** The vendor catalog rows the fake asset catalog serves. */
+  vendorEntries?: readonly AlpacaSymbolEntry[];
 }
 
 async function renderPanel(options: PanelOptions = {}) {
@@ -47,8 +68,17 @@ async function renderPanel(options: PanelOptions = {}) {
   // opening its own EventSource — start() registers a listener through it.
   const onEvent = vi.fn().mockReturnValue(vi.fn());
   const jobs = signal(options.liveJobs ?? []);
+  const alpaca: FakeAlpacaAssetCatalog = fakeAlpacaAssetCatalog(
+    options.vendorEntries ?? [
+      vendorEntry({ symbol: 'SPY' }),
+      vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' }),
+    ],
+  );
   const view = await render(LakeBackfillPanelComponent, {
-    providers: [{ provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } }],
+    providers: [
+      { provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } },
+      provideFakeAlpacaAssetCatalog(alpaca),
+    ],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
       seedSymbols: 'SPY',
@@ -58,17 +88,65 @@ async function renderPanel(options: PanelOptions = {}) {
     },
   });
   const store = view.fixture.debugElement.injector.get(DataLakeBackfillStore);
-  return { ...view, startJob, cancelJob, store };
+  return { ...view, startJob, cancelJob, store, alpaca };
 }
 
 describe('LakeBackfillPanelComponent', () => {
   it('seeds the form from the window the page is showing', async () => {
     await renderPanel();
 
-    expect((screen.getByLabelText('Symbols to backfill') as HTMLInputElement).value).toBe('SPY');
+    // The seed symbol arrives as a picked chip, not hand-typed text.
+    expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
     expect((screen.getByLabelText('Backfill start date') as HTMLInputElement).value).toBe(
       '2026-05-18',
     );
+  });
+
+  it('picks additional symbols from the vendor catalog, not free text', async () => {
+    const { startJob } = await renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText('Search to add a ticker'), 'QQQ');
+    fireEvent.click(screen.getByRole('option', { name: /QQQ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalled());
+    const [, payload] = startJob.mock.calls[0] as [string, { spec: { symbols: string[] } }];
+    expect(payload.spec.symbols).toEqual(['SPY', 'QQQ']);
+  });
+
+  it('offers delisted symbols only behind the explicit toggle', async () => {
+    // Delisted history is real and backfillable, but a universe of only
+    // still-listed names is the survivorship trap: offering it by default
+    // would accrete biased runs by accident.
+    const { alpaca } = await renderPanel({
+      vendorEntries: [
+        vendorEntry({ symbol: 'SPY' }),
+        vendorEntry({ symbol: 'OLD', name: 'Delisted Corp', status: 'inactive', tradable: false }),
+      ],
+    });
+    const user = userEvent.setup();
+    const addBox = screen.getByLabelText('Search to add a ticker');
+
+    await user.type(addBox, 'OLD');
+    expect(screen.queryByRole('option')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Include delisted symbols'));
+    await user.clear(addBox);
+    await user.type(addBox, 'OLD');
+    expect(screen.getByRole('option', { name: /OLD/ })).toBeTruthy();
+    expect(alpaca.entries()?.length).toBe(2);
+  });
+
+  it('names a dark vendor catalog and offers a retry instead of an empty picker', async () => {
+    const { alpaca, detectChanges } = await renderPanel({ vendorEntries: [] });
+    alpaca.entries.set(null);
+    alpaca.unavailable.set('catalog endpoint down');
+    detectChanges();
+
+    const note = screen.getByText(/Live symbol catalog unavailable/);
+    expect(note.textContent).toContain('catalog endpoint down');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 
   it('submits a spec the backfill job accepts', async () => {

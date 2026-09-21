@@ -37,6 +37,16 @@ export class MultiInstrumentCardComponent {
   /** The lake tree this page's run will read. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
 
+  /**
+   * A universe supplied by the host, for pickers whose membership is not the
+   * lake — the Observatory's backfill panel offers the vendor's listing
+   * catalog, because its whole job is adding symbols the lake doesn't hold
+   * yet. `null` (the default) keeps the lake-universe behavior, including
+   * its loading/unavailable states; a host universe renders verbatim and
+   * owns its own status reporting.
+   */
+  readonly universe = input<readonly TickerOption[] | null>(null);
+
   private readonly catalog = inject(TickerCatalogService);
   private readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
@@ -45,9 +55,16 @@ export class MultiInstrumentCardComponent {
     const mode = this.adjustmentMode();
     return untracked(() => this.catalog.viewFor(mode));
   });
-  readonly tickerPool = computed<readonly TickerOption[]>(() => this.view().pool());
-  readonly catalogLoading = computed(() => this.view().loading());
-  readonly catalogUnavailable = computed<string | null>(() => this.view().unavailable());
+  readonly tickerPool = computed<readonly TickerOption[]>(() => {
+    const hostUniverse = this.universe();
+    return hostUniverse === null ? this.view().pool() : hostUniverse;
+  });
+  readonly catalogLoading = computed(() =>
+    this.universe() === null ? this.view().loading() : false,
+  );
+  readonly catalogUnavailable = computed<string | null>(() =>
+    this.universe() === null ? this.view().unavailable() : null,
+  );
 
   /**
    * A universe of every instrument in the lake is a batch nobody meant to

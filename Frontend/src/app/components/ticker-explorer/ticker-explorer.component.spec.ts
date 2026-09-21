@@ -1,11 +1,18 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
+import { vi } from 'vitest';
 import { TickerExplorerComponent } from './ticker-explorer.component';
 import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
 } from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
+import {
+  fakeAlpacaAssetCatalog,
+  provideFakeAlpacaAssetCatalog,
+} from '../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import { JobsService } from '../../services/jobs.service';
 import { environment } from '../../../environments/environment';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -28,6 +35,18 @@ describe('TickerExplorerComponent', () => {
         provideFakeTickerCatalog(
           fakeTickerCatalog([{ symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ' }]),
         ),
+        // Same for the joined picker universe's vendor catalog and the gate's
+        // job registry — neither is this spec's subject.
+        provideFakeAlpacaAssetCatalog(fakeAlpacaAssetCatalog([])),
+        {
+          provide: JobsService,
+          useValue: {
+            jobs: signal([]),
+            startJob: vi.fn(async () => 'job-fake'),
+            onEvent: vi.fn(() => () => undefined),
+            cancelJob: vi.fn(async () => undefined),
+          },
+        },
       ],
     }).compileComponents();
 

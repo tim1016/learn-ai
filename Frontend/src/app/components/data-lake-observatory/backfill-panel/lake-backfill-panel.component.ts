@@ -12,14 +12,26 @@ import {
 
 import { ReceiptLabelPipe, formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../../services/jobs.service';
-import { parseSymbols } from '../lib/coverage-board';
 import { BackfillRunLogComponent } from './backfill-run-log.component';
+import { MultiInstrumentCardComponent } from '../../../shared/multi-ticker-range-picker/multi-instrument-card.component';
+import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
+import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import {
-  BACKFILL_JOB_TYPE,
-  DataLakeBackfillStore,
-  type BackfillPhase,
-} from '../lib/data-lake-backfill.store';
-import { BackfillDefaults, DataLakeDataType, DataRunSpec, MAX_TRADING_RANGE_DAYS, PriceAdjustmentMode, tradingDateToMs, tradingRangeRejection } from '../../../shared/data-lake';
+  AlpacaAssetCatalogService,
+  LAKE_BACKFILLABLE_ASSET_CLASS,
+} from '../../../shared/symbol-catalog/alpaca-asset-catalog.service';
+import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
+import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
+import { parseSymbols } from '../lib/coverage-board';
+import {
+  BackfillDefaults,
+  DataLakeDataType,
+  DataRunSpec,
+  MAX_TRADING_RANGE_DAYS,
+  PriceAdjustmentMode,
+  tradingDateToMs,
+  tradingRangeRejection,
+} from '../../../shared/data-lake';
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
@@ -30,7 +42,10 @@ function inputValue(event: Event): string {
  *
  * The form seeds itself from the window the heatmap is showing, so the
  * common move — "this stretch is missing, fetch it" — needs no retyping.
- * Progress comes off the job's own SSE stream: a per-day tick plus the
+ * Symbols are picked from the vendor's listing catalog (the picker family,
+ * not free text), with delisted symbols behind an explicit toggle so a
+ * survivorship-biased universe is an operator's visible choice. Progress
+ * comes off the job's own SSE stream: a per-day tick plus the
  * `data_lake.backfill_day` domain event, whose typed `reason` codes reach
  * the operator through the receipt-label pipe rather than being re-worded.
  */
@@ -39,12 +54,13 @@ function inputValue(event: Event): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './lake-backfill-panel.component.html',
   styleUrl: './lake-backfill-panel.component.scss',
-  imports: [ReceiptLabelPipe, BackfillRunLogComponent],
+  imports: [ReceiptLabelPipe, BackfillRunLogComponent, MultiInstrumentCardComponent],
   providers: [DataLakeBackfillStore],
 })
 export class LakeBackfillPanelComponent {
   protected readonly store = inject(DataLakeBackfillStore);
   private readonly jobs = inject(JobsService);
+  private readonly alpaca = inject(AlpacaAssetCatalogService);
 
   /** Null while the defaults read is in flight or the lake is dark. */
   readonly defaults = input<BackfillDefaults | null>(null);
@@ -62,14 +78,51 @@ export class LakeBackfillPanelComponent {
   /** Fired once a run reaches any terminal phase, so the caller can re-read coverage. */
   readonly runFinished = output();
 
-  protected readonly symbolsText = linkedSignal(() => this.seedSymbols());
+  protected readonly selected = linkedSignal<MultiTickerRange>(() => ({
+    // Seeds come from the coverage board, which only ever names storable
+    // symbols; the length bound is the same constant the form used to
+    // enforce on hand-typed text. The window mirrors the seeds — the
+    // panel keeps its own date fields as the submit authority.
+    symbols: [...parseSymbols(this.seedSymbols(), 20).symbols],
+    from: this.seedStartTradingDate(),
+    to: this.seedEndTradingDate(),
+    resolution: 'daily',
+  }));
   protected readonly startTradingDate = linkedSignal(() => this.seedStartTradingDate());
   protected readonly endTradingDate = linkedSignal(() => this.seedEndTradingDate());
   protected readonly includeQuotes = signal(false);
+  /**
+   * Delisted symbols can still be backfilled (the vendor's history for them
+   * persists), but offering them by default would let an unbiased-looking
+   * universe accrete by accident. One toggle keeps it a decision.
+   */
+  protected readonly includeDelisted = signal(false);
 
-  protected readonly parsed = computed(() =>
-    parseSymbols(this.symbolsText(), this.defaults()?.max_symbol_length ?? 20),
-  );
+  /**
+   * The picker universe: the vendor's US-equity catalog — the populate-the-
+   * lake list. Lake holdings are deliberately *not* unioned in: this panel
+   * exists to add what the lake lacks, and a held symbol re-picked here
+   * simply re-ensures at the server, so the vendor list alone is honest.
+   */
+  protected readonly pickerUniverse = computed<readonly TickerOption[]>(() => {
+    const entries = this.alpaca.entries();
+    if (entries === null) return [];
+    return entries
+      .filter((entry) => entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS)
+      .filter((entry) => this.includeDelisted() || entry.status === 'active')
+      .map((entry) => ({
+        symbol: entry.symbol,
+        name: entry.name?.trim() || entry.symbol,
+        exchange: entry.exchange ?? undefined,
+      }));
+  });
+
+  protected readonly catalogLoading = computed(() => this.alpaca.loading());
+  protected readonly catalogUnavailable = computed(() => this.alpaca.unavailable());
+
+  protected retryCatalog(): void {
+    this.alpaca.reload();
+  }
 
   protected readonly digest = computed(() => this.defaults()?.lean_image_digest ?? null);
 
@@ -96,7 +149,7 @@ export class LakeBackfillPanelComponent {
       const mode = this.priceAdjustmentMode();
       return `Nothing derives the ${formatReceiptLabel(mode)} view, so a backfill cannot fill it — those rows arrive by import. Switch the view to Raw or Polygon Split Adjusted to backfill.`;
     }
-    if (this.parsed().symbols.length === 0) return 'Enter at least one symbol.';
+    if (this.selected().symbols.length === 0) return 'Pick at least one symbol.';
     return tradingRangeRejection(
       this.startTradingDate(),
       this.endTradingDate(),
@@ -151,10 +204,6 @@ export class LakeBackfillPanelComponent {
     });
   }
 
-  protected onSymbols(event: Event): void {
-    this.symbolsText.set(inputValue(event));
-  }
-
   protected onStart(event: Event): void {
     this.startTradingDate.set(inputValue(event));
   }
@@ -165,6 +214,10 @@ export class LakeBackfillPanelComponent {
 
   protected onIncludeQuotes(event: Event): void {
     this.includeQuotes.set((event.target as HTMLInputElement).checked);
+  }
+
+  protected onIncludeDelisted(event: Event): void {
+    this.includeDelisted.set((event.target as HTMLInputElement).checked);
   }
 
   protected async submit(): Promise<void> {
@@ -194,7 +247,7 @@ export class LakeBackfillPanelComponent {
       request_id: globalThis.crypto.randomUUID(),
       run_type: 'python_lab',
       market: defaults.market,
-      symbols: this.parsed().symbols,
+      symbols: this.selected().symbols,
       start_trading_date_ms: startMs,
       end_trading_date_ms: endMs,
       data_types: dataTypes,

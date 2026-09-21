@@ -23,7 +23,12 @@
     >
       <i class="pi pi-search ticker-box__icon" aria-hidden="true"></i>
       @if (!open()) {
-        <span class="ticker-box__symbol mono">{{ value().symbol }}</span>
+        <app-asset-identity
+          class="ticker-box__identity"
+          [symbol]="value().symbol"
+          size="sm"
+          [showTitle]="false"
+        />
         <span class="ticker-box__name">
           {{ selectedTicker()?.name || '' }}
         </span>
@@ -49,6 +54,14 @@
 
       @if (open()) {
         <div class="dropdown">
+          @if (catalogDegraded()) {
+            <div class="dropdown__degraded" role="status">
+              Live catalog unavailable — showing lake holdings.
+              <button type="button" class="dropdown__retry" (click)="retryCatalog()">
+                Retry
+              </button>
+            </div>
+          }
           <div class="dropdown__scroll" id="ticker-range-picker-listbox" role="listbox">
             @if (query() === "" && recentTickers().length > 0) {
               <div class="dropdown__header" role="presentation">Recent</div>
@@ -61,16 +74,21 @@
                   [attr.aria-selected]="t.symbol === value().symbol"
                   (click)="pickTicker(t); $event.stopPropagation()"
                 >
-                  <span class="row__symbol mono">{{ t.symbol }}</span>
+                  <app-asset-identity
+                    class="row__identity"
+                    [symbol]="t.symbol"
+                    size="xs"
+                    [showTitle]="false"
+                  />
                   <span class="row__name">{{ t.name }}</span>
                   <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                  <span class="row__held mono">{{ t.lastHeld ?? "—" }}</span>
+                  <span class="row__held mono" [class.row__held--unheld]="t.lastHeld === null">{{ heldCopy(t) }}</span>
                 </button>
               }
             }
             <div class="dropdown__header" role="presentation">
               @if (query() === "") {
-                {{ lakeBacked() ? "In the data lake" : "Instruments" }}
+                {{ hostUniverse() ? "Instruments" : "All listed instruments" }}
               } @else {
                 {{ filteredTickers().length }} match{{
                   filteredTickers().length === 1 ? "" : "es"
@@ -86,15 +104,47 @@
                 [attr.aria-selected]="t.symbol === value().symbol"
                 (click)="pickTicker(t); $event.stopPropagation()"
               >
-                <span class="row__symbol mono">{{ t.symbol }}</span>
+                <app-asset-identity
+                  class="row__identity"
+                  [symbol]="t.symbol"
+                  size="xs"
+                  [showTitle]="false"
+                />
                 <span class="row__name">{{ t.name }}</span>
                 <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                <span class="row__held mono">{{ t.lastHeld ?? "—" }}</span>
+                <span class="row__held mono" [class.row__held--unheld]="t.lastHeld === null">{{ heldCopy(t) }}</span>
               </button>
             }
           </div>
 
-          @if (filteredTickers().length === 0) {
+          @if (gateState(); as gate) {
+            <div class="dropdown__gate" role="status" aria-live="polite">
+              @if (gate.phase === 'backfilling') {
+                <span class="dropdown__gate-msg">
+                  {{ gate.symbol }} is not in the lake — backfilling trade bars
+                  before it can be selected…
+                </span>
+                @if (gate.percent !== null) {
+                  <span class="dropdown__gate-percent mono">{{ gate.percent }}%</span>
+                }
+                <button type="button" class="dropdown__retry" (click)="cancelGate()">
+                  Cancel
+                </button>
+              } @else {
+                <span class="dropdown__gate-msg">
+                  <span class="mono">{{ gate.reason | receiptLabel }}</span> — {{ gate.message }}
+                </span>
+                <button type="button" class="dropdown__retry" (click)="retryGate()">
+                  Retry
+                </button>
+                <button type="button" class="dropdown__retry" (click)="dismissGate()">
+                  Dismiss
+                </button>
+              }
+            </div>
+          }
+
+          @if (filteredTickers().length === 0 && gateState() === null) {
             <div class="dropdown__empty" role="status" aria-live="polite">
               @if (catalogLoading()) {
                 Loading instruments…
@@ -103,16 +153,14 @@
                 <button type="button" class="dropdown__retry" (click)="retryCatalog()">
                   Retry
                 </button>
-              } @else if (!lakeBacked()) {
+              } @else if (hostUniverse()) {
                 No instrument matches that.
               } @else if (catalogEmpty()) {
-                The data lake holds no instruments yet.
-                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill one</a>
-                to make it selectable.
+                No listed symbol matches that, and the lake holds nothing yet.
+                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill a symbol</a>
+                to get started.
               } @else {
-                The lake holds no bars for a symbol matching that.
-                <a routerLink="/data-lake" (click)="closeDropdown()">Backfill it</a>
-                to make it selectable.
+                No listed symbol matches that.
               }
             </div>
           }

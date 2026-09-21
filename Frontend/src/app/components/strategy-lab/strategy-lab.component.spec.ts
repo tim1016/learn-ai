@@ -22,6 +22,10 @@ import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
 } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
+import {
+  fakeAlpacaAssetCatalog,
+  provideFakeAlpacaAssetCatalog,
+} from "../../shared/symbol-catalog/testing/fake-symbol-catalog";
 import { StrategyLabComponent } from "./strategy-lab.component";
 import { inputsFromBacktestJob, inputsFromSavedRun } from "./strategy-lab.models";
 
@@ -217,6 +221,10 @@ async function createLab(
       { provide: BacktestRunsService, useValue: backtestRuns },
       { provide: GoldenValidationService, useValue: { list: () => of([]) } },
       provideFakeTickerCatalog(catalog),
+      // The joined picker universe reads the vendor catalog over HTTP; this
+      // spec drives every request through `HttpTestingController` and
+      // verifies none is left open, so the catalog is stubbed, not served.
+      provideFakeAlpacaAssetCatalog(fakeAlpacaAssetCatalog([])),
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
@@ -316,7 +324,7 @@ describe("Strategy Lab Workbench", () => {
     expect(field(/^Initial cash/).value).toBe("75000");
     expect(field(/^Commission/).value).toBe("0.35");
     expect((root.querySelector("#strategy-picker") as HTMLSelectElement).value).toBe("ema_crossover_signal");
-    expect(root.querySelector(".ticker-box__symbol")?.textContent).toContain("QQQ");
+    expect(root.querySelector(".ticker-box__identity .asset-identity__symbol")?.textContent).toContain("QQQ");
     http.verify();
   });
 
@@ -793,7 +801,7 @@ describe("Strategy Lab saved configuration", () => {
     fixture.detectChanges();
 
     expect(root.querySelector<HTMLElement>("[role='radio'][aria-checked='true']")?.textContent?.trim()).toBe("both");
-    expect(root.querySelector("app-instrument-card .ticker-box__symbol")?.textContent?.trim()).toBe("QQQ");
+    expect(root.querySelector("app-instrument-card .ticker-box__identity .asset-identity__symbol")?.textContent?.trim()).toBe("QQQ");
     const dates = root.querySelectorAll<HTMLInputElement>("app-time-window-card input[type='date']");
     expect(dates[0]?.value).toBe("2026-03-02");
     expect(dates[1]?.value).toBe("2026-04-02");

@@ -18,8 +18,18 @@ import {
   type TickerOption,
   type TickerRange,
 } from '../ticker-range-picker.types';
-import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService } from '../../ticker-catalog';
+import { DEFAULT_ADJUSTMENT_MODE } from '../../ticker-catalog';
+import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.service';
+import {
+  EnsureCoverageService,
+  type BackfillableMode,
+} from '../../symbol-catalog/ensure-coverage.service';
+import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
+import { toPickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { PriceAdjustmentMode } from '../../data-lake';
+import { AssetIdentityComponent } from '../../asset-identity';
+import { ReceiptLabelPipe } from '../../pipes/receipt-label.pipe';
+import { formatReceiptLabel } from '../../pipes/receipt-label.pipe';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 /**
@@ -48,7 +58,7 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 
 @Component({
   selector: 'app-instrument-card',
-  imports: [RouterLink, Tooltip],
+  imports: [RouterLink, Tooltip, AssetIdentityComponent, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-card.component.html',
   styleUrls: ['./instrument-card.component.scss'],
@@ -68,28 +78,30 @@ export class InstrumentCardComponent {
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
 
   /**
-   * A universe supplied by the host, for pickers whose subject is not lake
-   * bars. Ticker Explorer's snapshot hits Polygon live and can query symbols
-   * the lake has never held, so imposing the backtest universe there removes
-   * working functionality. `null` (the default) means "ask the lake".
+   * A universe supplied by the host, for pickers that own their membership
+   * outright (the backfill panel's vendor list, say). A host universe is a
+   * closed list with no gate: the card renders it verbatim. `null` — the
+   * default — means the joined catalog: every listed symbol offered, lake
+   * coverage badged, and an unheld pick gated on its backfill.
    */
   readonly universe = input<readonly TickerOption[] | null>(null);
 
-  private readonly catalog = inject(TickerCatalogService);
+  private readonly symbols = inject(SymbolCatalogService);
+  private readonly coverage = inject(EnsureCoverageService);
   private readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602). Track
     // the mode signal, then step outside tracking to build/fetch the view.
     const mode = this.adjustmentMode();
-    return untracked(() => this.catalog.viewFor(mode));
+    return untracked(() => this.symbols.viewFor(mode));
   });
 
-  // Lake-backed membership is a system-wide fact per mode, not a property of
-  // whichever page mounted the picker; it used to be drilled in as an input
-  // from nine hosts, every one passing the same hardcoded constant.
-  readonly tickerPool = computed<readonly TickerOption[]>(
-    () => this.universe() ?? this.view().pool(),
-  );
+  readonly tickerPool = computed<readonly PickerSymbol[]>(() => {
+    const hostUniverse = this.universe();
+    return hostUniverse === null
+      ? this.view().pool()
+      : hostUniverse.map(toPickerSymbol);
+  });
   readonly recent = computed<readonly string[]>(() =>
     this.universe() === null ? this.view().recent() : [],
   );
@@ -99,8 +111,12 @@ export class InstrumentCardComponent {
   readonly catalogUnavailable = computed<string | null>(() =>
     this.universe() === null ? this.view().unavailable() : null,
   );
-  /** A host-supplied universe is not the lake, so lake copy must not appear. */
-  readonly lakeBacked = computed(() => this.universe() === null);
+  /** The live catalog is dark but the lake answered — degraded, not empty. */
+  readonly catalogDegraded = computed(() =>
+    this.universe() === null ? this.view().degraded() : false,
+  );
+  /** A host-supplied universe is not the joined catalog, so its copy differs. */
+  readonly hostUniverse = computed(() => this.universe() !== null);
 
   private readonly rootEl =
     viewChild.required<ElementRef<HTMLElement>>('rootEl');
@@ -119,7 +135,7 @@ export class InstrumentCardComponent {
     });
   }
 
-  readonly selectedTicker = computed<TickerOption | undefined>(() =>
+  readonly selectedTicker = computed<PickerSymbol | undefined>(() =>
     this.tickerPool().find((t) => t.symbol === this.value().symbol),
   );
 
@@ -131,7 +147,7 @@ export class InstrumentCardComponent {
     () => this.selectedTicker()?.lastHeld ?? null,
   );
 
-  /** The lake answered, and holds nothing at all — distinct from no match. */
+  /** No source answered with anything at all — distinct from no match. */
   readonly catalogEmpty = computed(
     () =>
       this.tickerPool().length === 0 &&
@@ -153,7 +169,7 @@ export class InstrumentCardComponent {
     return `${name} — primary listing venue for ${symbol}.`;
   });
 
-  readonly filteredTickers = computed<readonly TickerOption[]>(() => {
+  readonly filteredTickers = computed<readonly PickerSymbol[]>(() => {
     const q = this.query().trim().toUpperCase();
     const pool = this.tickerPool();
     if (!q) return pool;
@@ -162,21 +178,46 @@ export class InstrumentCardComponent {
     );
   });
 
-  readonly recentTickers = computed<readonly TickerOption[]>(() => {
+  readonly recentTickers = computed<readonly PickerSymbol[]>(() => {
     const recent = this.recent();
     if (recent.length === 0) return [];
     const pool = this.tickerPool();
     return recent
       .map((s) => pool.find((t) => t.symbol === s))
-      .filter((t): t is TickerOption => !!t);
+      .filter((t): t is PickerSymbol => !!t);
+  });
+
+  /**
+   * The symbol this card is waiting on through the ensure-coverage gate, if
+   * the gate belongs to it — the coverage service is app-scoped, so the
+   * strip renders only when the operator's pending pick is the gated one.
+   */
+  readonly pendingSymbol = signal<string | null>(null);
+  readonly gateState = computed(() => {
+    const pending = this.pendingSymbol();
+    if (pending === null) return null;
+    const active = this.coverage.active();
+    return active !== null && active.symbol === pending ? active : null;
+  });
+
+  /** The adjustment modes a backfill can actually write, or null. */
+  readonly backfillableMode = computed<BackfillableMode | null>(() => {
+    const mode = this.adjustmentMode();
+    return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
   });
 
   retryCatalog(): void {
     this.view().reload();
   }
 
-  trackBySymbol(_: number, t: TickerOption): string {
+  trackBySymbol(_: number, t: PickerSymbol): string {
     return t.symbol;
+  }
+
+  /** The row's right-hand coverage copy: the strongest fact about the lake. */
+  heldCopy(t: PickerSymbol): string {
+    if (t.delisted) return 'delisted';
+    return t.lastHeld ?? 'not held';
   }
 
   openDropdown(): void {
@@ -223,7 +264,62 @@ export class InstrumentCardComponent {
     if (target instanceof HTMLInputElement) this.onSearchInput(target.value);
   }
 
+  // Not `async` on purpose: the held path is synchronous so existing callers
+  // keep their timing, and only the gate path awaits the coverage service.
   pickTicker(t: TickerOption): void {
+    // A host universe owns membership outright, and a held symbol is
+    // already runnable — delisted-but-held included; its bars are real.
+    // Both pick exactly as the picker always has. `lastHeld` is absent
+    // (undefined) on a vendor-only row, not null — check both.
+    const held = t.lastHeld !== null && t.lastHeld !== undefined;
+    if (this.universe() !== null || held) {
+      this.applyPick(t);
+      return;
+    }
+
+    this.pendingSymbol.set(t.symbol);
+    const mode = this.backfillableMode();
+    if (mode === null) {
+      this.coverage.refuse(
+        t.symbol,
+        'view_not_backfillable',
+        `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
+      );
+      return;
+    }
+    void this.coverage.ensure(t.symbol, mode).then((ready) => {
+      // A failure leaves the dropdown open with the gate strip carrying the
+      // reason and the retry; nothing is selected on a false answer.
+      if (!ready) return;
+      const fresh = this.tickerPool().find((p) => p.symbol === t.symbol);
+      this.pendingSymbol.set(null);
+      this.applyPick(fresh ?? t);
+    });
+  }
+
+  protected async cancelGate(): Promise<void> {
+    this.pendingSymbol.set(null);
+    await this.coverage.cancel();
+  }
+
+  protected async retryGate(): Promise<void> {
+    const mode = this.backfillableMode();
+    if (mode === null) return;
+    const ready = await this.coverage.retry(mode);
+    if (!ready) return;
+    const fresh = this.tickerPool().find(
+      (p) => p.symbol === this.pendingSymbol(),
+    );
+    this.pendingSymbol.set(null);
+    if (fresh !== undefined) this.applyPick(fresh);
+  }
+
+  protected async dismissGate(): Promise<void> {
+    this.pendingSymbol.set(null);
+    await this.coverage.cancel();
+  }
+
+  private applyPick(t: TickerOption): void {
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
     // Only move the window when the one on screen could not be run against
