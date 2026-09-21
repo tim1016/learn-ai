@@ -2,14 +2,18 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
   linkedSignal,
   output,
+  untracked,
 } from '@angular/core';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { parseSymbols } from '../lib/coverage-board';
 import { DataLakeDataType, MAX_TRADING_RANGE_DAYS, PriceAdjustmentMode, tradingRangeRejection } from '../../../shared/data-lake';
+import { SymbolCatalogService } from '../../../shared/symbol-catalog/symbol-catalog.service';
+import { MultiInstrumentCardComponent } from '../../../shared/multi-ticker-range-picker/multi-instrument-card.component';
 
 export interface ObservatoryQuery {
   readonly symbolsText: string;
@@ -55,7 +59,7 @@ function inputValue(event: Event): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './coverage-query-bar.component.html',
   styleUrl: './coverage-query-bar.component.scss',
-  imports: [ReceiptLabelPipe],
+  imports: [ReceiptLabelPipe, MultiInstrumentCardComponent],
 })
 export class CoverageQueryBarComponent {
   readonly initial = input.required<ObservatoryQuery>();
@@ -71,6 +75,27 @@ export class CoverageQueryBarComponent {
 
   protected readonly draft = linkedSignal(() => this.initial());
 
+  /**
+   * The symbols the card holds, as chips. The card is the query's
+   * membership surface over the joined catalog (ADR 0066) — but deliberately
+   * WITHOUT the ensure-coverage gate: querying coverage is a read-only ask,
+   * "not held" is a truthful heatmap answer, and the backfill panel this
+   * bar seeds remains the populate path. `symbolsText` stays the query's
+   * wire shape (URL seeding included); the chips are its editable form.
+   */
+  protected readonly chips = computed<string[]>(() => [
+    ...parseSymbols(this.draft().symbolsText, this.maxSymbolLength()).symbols,
+  ]);
+
+  private readonly symbols = inject(SymbolCatalogService);
+
+  /** Coverage badges follow the tree the heatmap will answer for. */
+  protected readonly catalogView = computed(() => {
+    // `viewFor` installs a resource — step outside tracking (NG0602).
+    const mode = this.draft().priceAdjustmentMode;
+    return untracked(() => this.symbols.viewFor(mode));
+  });
+
   protected readonly parsed = computed(() =>
     parseSymbols(this.draft().symbolsText, this.maxSymbolLength()),
   );
@@ -84,8 +109,16 @@ export class CoverageQueryBarComponent {
     () => this.parsed().symbols.length > 0 && this.rangeRejection() === null,
   );
 
-  protected onSymbols(event: Event): void {
-    this.patch({ symbolsText: inputValue(event) });
+  protected onChips(symbols: string[]): void {
+    this.patch({ symbolsText: symbols.join(', ') });
+  }
+
+  protected retryCoverage(): void {
+    this.catalogView().reload();
+  }
+
+  protected retryVendorCatalog(): void {
+    this.catalogView().retryVendor();
   }
 
   protected onStart(event: Event): void {

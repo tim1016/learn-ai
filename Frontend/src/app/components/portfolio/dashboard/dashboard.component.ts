@@ -6,11 +6,12 @@ import { catchError, finalize, of, forkJoin } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { PortfolioState, PortfolioValuation, PortfolioMetrics, PortfolioOrderSide } from '../../../graphql/portfolio-types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule, AssetIdentityComponent],
+  imports: [CommonModule, FormsModule, AssetIdentityComponent, SymbolPickerComponent],
   templateUrl: './dashboard.component.html',
   styleUrls: ['./dashboard.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

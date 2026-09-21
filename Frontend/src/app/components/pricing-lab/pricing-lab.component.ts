@@ -38,6 +38,7 @@ import {
   bsTheta, bsVega,
 } from '../../utils/black-scholes';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 
 type ChartMetric = 'price' | GreekType;
 
@@ -122,7 +123,7 @@ export const MODEL_REGISTRY: ModelDef[] = [
 @Component({
   selector: 'app-pricing-lab',
   standalone: true,
-  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, PageHeaderComponent],
+  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, PageHeaderComponent, SymbolPickerComponent],
   templateUrl: './pricing-lab.component.html',
   styleUrls: ['./pricing-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -136,6 +137,13 @@ export class PricingLabComponent implements OnDestroy {
 
   // ── User inputs ──────────────────────────────────────────────
   readonly ticker = signal('SPY');
+
+  /** A pick is one deliberate act — load its expirations immediately. */
+  onTickerPicked(ticker: string): void {
+    this.ticker.set(ticker);
+    void this.fetchExpirations();
+  }
+
   readonly riskFreeRate = signal(0.05);
   readonly spotRangePct = signal(20);
 

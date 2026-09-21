@@ -3,6 +3,7 @@ import { provideHttpClient } from "@angular/common/http";
 import { provideHttpClientTesting } from "@angular/common/http/testing";
 import { provideRouter } from "@angular/router";
 import { RealizedVsIvComponent } from "./realized-vs-iv.component";
+import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
 import {
   EdgeMockDataService,
   type EdgeData,
@@ -24,6 +25,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     await TestBed.configureTestingModule({
       imports: [RealizedVsIvComponent],
       providers: [
+        ...fakePickerWorld().providers,
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),
@@ -187,6 +189,7 @@ describe("RealizedVsIvComponent — live IV30 readout", () => {
     await TestBed.configureTestingModule({
       imports: [RealizedVsIvComponent],
       providers: [
+        ...fakePickerWorld().providers,
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),

@@ -11,6 +11,7 @@ import {
 } from '../../services/data-lab-range-presets.service';
 import { RunSessionService } from '../../services/run-session.service';
 import { DataLabComponent } from './data-lab.component';
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { createDataLabWorkspaceStore, DataLabWorkspaceStore } from './data-lab-workspace-store';
 
 @Component({ selector: 'app-explore-stub', template: 'explore-stub' })
@@ -79,6 +80,8 @@ function shellRoutes(): Routes {
 
 function baseProviders(runSession = idleRunSession()) {
   return [
+    // The scope bar's picker must not construct the real catalog/jobs chain.
+    ...fakePickerWorld().providers,
     { provide: RunSessionService, useValue: runSession },
     {
       provide: DataLabSessionService,
@@ -381,5 +384,22 @@ describe('DataLabComponent (shell)', () => {
 
     expect(store.chartRefreshRequests()).toBe(1);
     expect(screen.queryByText('Ticker is required')).toBeNull();
+  });
+});
+
+describe('DataLabComponent (symbol picker binding)', () => {
+  it('admits symbols against the tree the draft will run: adjusted follows draft.adjusted', async () => {
+    const result = await render(DataLabComponent, {
+      providers: [
+        ...baseProviders(),
+        { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
+        provideRouter(shellRoutes()),
+      ],
+    });
+    await waitFor(() => expect(result.fixture.componentInstance.pickerAdjustmentMode()).toBe('polygon_split_adjusted'));
+
+    result.fixture.componentInstance.store.patchDraft({ adjusted: false });
+    result.fixture.detectChanges();
+    expect(result.fixture.componentInstance.pickerAdjustmentMode()).toBe('raw');
   });
 });

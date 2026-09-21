@@ -1,11 +1,14 @@
 import { signal } from '@angular/core';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
+import { By } from '@angular/platform-browser';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../services/jobs.service';
 import { DataLakeObservatoryComponent } from './data-lake-observatory.component';
 import { ArtifactDetail, BackfillDefaults, CoverageResponse, CoverageStatus, DataLakeRead, DataLakeService, StorageSummaryResponse } from '../../shared/data-lake';
+import { MultiInstrumentCardComponent } from '../../shared/multi-ticker-range-picker/multi-instrument-card.component';
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 
 /** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */
 function sessionOpenMs(day: number): number {
@@ -110,14 +113,29 @@ async function renderObservatory(stubs: LakeStubs = {}) {
         // in these tests, so that panel stays idle.
         useValue: { startJob: vi.fn(), cancelJob: vi.fn(), jobs: signal([]) },
       },
+      // The query bar and backfill panel pick symbols through the shared
+      // multi card; keep its catalog world fake.
+      ...fakePickerWorld().providers,
     ],
   });
-  return { ...view, lake };
+  return { view, lake };
 }
 
-/** Fill the symbol box and press Load coverage. */
-async function loadSymbols(symbols = 'SPY'): Promise<void> {
-  fireEvent.input(screen.getByLabelText('Symbols'), { target: { value: symbols } });
+/**
+ * Press the query bar's chips into place and load coverage. Chips are the
+ * editable form of the query's symbols now (ADR 0066): setting the multi
+ * card's model drives the same symbolsChange the card itself emits.
+ */
+async function loadSymbols(view: RenderResult<DataLakeObservatoryComponent>, symbols = 'SPY'): Promise<void> {
+  const chips = symbols
+    .split(',')
+    .map((symbol) => symbol.trim().toUpperCase())
+    .filter((symbol) => symbol.length > 0);
+  const card = view.fixture.debugElement.query(
+    By.directive(MultiInstrumentCardComponent),
+  ).componentInstance as MultiInstrumentCardComponent;
+  card.symbols.set(chips);
+  view.fixture.detectChanges();
   fireEvent.click(screen.getByRole('button', { name: 'Load coverage' }));
 }
 
@@ -153,10 +171,10 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('reads coverage for each symbol the operator names', async () => {
-    const { lake } = await renderObservatory();
+    const { view, lake } = await renderObservatory();
     await screen.findByText(/The catalog holds no artifacts yet/);
 
-    await loadSymbols('spy, aapl');
+    await loadSymbols(view, 'spy, aapl');
 
     await vi.waitFor(() => expect(lake.coverage).toHaveBeenCalledTimes(2));
     expect(lake.coverage.mock.calls.map(([query]) => (query as { symbol: string }).symbol)).toEqual([
@@ -166,8 +184,8 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('opens the inspector on a clicked cell', async () => {
-    const { lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
-    await loadSymbols();
+    const { view, lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
+    await loadSymbols(view);
 
     const cell = await screen.findByRole('button', {
       name: 'SPY, 2026-05-18, Complete, open artifact receipt',
@@ -180,10 +198,10 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('surfaces a rejected window under its own reason code', async () => {
-    await renderObservatory({
+    const { view } = await renderObservatory({
       coverage: { kind: 'rejected', reason: 'range_too_large', message: 'range is 3654 days' },
     });
-    await loadSymbols();
+    await loadSymbols(view);
 
     expect(await screen.findByText('SPY · Range Too Large')).toBeTruthy();
     expect(screen.getByText('range is 3654 days')).toBeTruthy();
@@ -194,13 +212,13 @@ describe('DataLakeObservatoryComponent', () => {
     // polygon_split_adjusted, but nothing derives lean_adjusted. A backfill
     // submitted from that view would succeed and leave it unchanged, so the
     // panel refuses it — and this pins the wiring, not just the panel's rule.
-    const { lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
+    const { view, lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
     await screen.findByRole('heading', { name: 'Coverage' });
 
     fireEvent.change(screen.getByLabelText('Price adjustment'), {
       target: { value: 'lean_adjusted' },
     });
-    await loadSymbols();
+    await loadSymbols(view);
 
     await vi.waitFor(() =>
       expect(lake.coverage).toHaveBeenCalledWith(
@@ -214,8 +232,8 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('passes AXE with a populated catalog', async () => {
-    await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
-    await loadSymbols();
+    const { view } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
+    await loadSymbols(view);
     await screen.findByRole('button', {
       name: 'SPY, 2026-05-18, Complete, open artifact receipt',
     });

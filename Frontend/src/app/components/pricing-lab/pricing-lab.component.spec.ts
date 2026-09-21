@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { PricingLabComponent } from './pricing-lab.component';
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { PricingCompareResult, SnapshotContractResult } from '../../graphql/types';
 
 vi.mock('lightweight-charts', () => {
@@ -63,7 +64,12 @@ describe('PricingLabComponent', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       imports: [PricingLabComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // The ticker picker must not issue real catalog or jobs reads.
+        ...fakePickerWorld().providers,
+      ],
     });
     const fixture = TestBed.createComponent(PricingLabComponent);
     component = fixture.componentInstance;

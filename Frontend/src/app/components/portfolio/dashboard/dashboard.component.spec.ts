@@ -3,6 +3,7 @@ import { Component } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { DashboardComponent } from './dashboard.component';
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { environment } from '../../../../environments/environment';
 import { PortfolioState, PortfolioMetrics } from '../../../graphql/portfolio-types';
 
@@ -69,7 +70,12 @@ describe('DashboardComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [TestHostComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // The trade form's symbol picker must not issue real catalog reads.
+        ...fakePickerWorld().providers,
+      ],
     }).compileComponents();
 
     hostFixture = TestBed.createComponent(TestHostComponent);
@@ -244,7 +250,9 @@ describe('DashboardComponent', () => {
     expect(secondRow).toContain('SELL');
     expect(rows[1].querySelector('td.sell')).not.toBeNull();
 
-    const identities = el.querySelectorAll('app-asset-identity');
+    // Scoped to the trades table: the trade form's symbol picker also
+    // renders an asset identity, and it is not this table's subject.
+    const identities = el.querySelectorAll('table app-asset-identity');
     expect(identities).toHaveLength(2);
     expect(identities[0].textContent).toContain('AAPL');
     expect(identities[1].textContent).toContain('MSFT');
@@ -260,7 +268,9 @@ describe('DashboardComponent', () => {
 
     const el = getDashboardEl();
     expect(el.textContent).toContain('ID:1');
-    expect(el.querySelector('app-asset-identity')).toBeNull();
+    // Scoped to the trades table — the trade form's picker renders its own
+    // identity for the (empty) symbol being composed.
+    expect(el.querySelector('table app-asset-identity')).toBeNull();
   });
 
   it('should render trade table headers', () => {

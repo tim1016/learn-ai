@@ -1,14 +1,20 @@
 <form class="query" (submit)="$event.preventDefault(); apply()">
-  <div class="field">
-    <label for="lake-symbols">Symbols</label>
-    <input
-      id="lake-symbols"
+  <div class="field field--symbols">
+    <!-- A caption, not a <label>: the multi card is not a labellable
+         control — its own section and search box carry their labels. -->
+    <span>Symbols</span>
+    <app-multi-instrument-card
       class="field__input field__input--wide"
-      type="text"
-      autocomplete="off"
-      placeholder="SPY, AAPL"
-      [value]="draft().symbolsText"
-      (input)="onSymbols($event)"
+      label="Coverage query symbols"
+      [symbols]="chips()"
+      (symbolsChange)="onChips($event)"
+      [options]="catalogView().pool()"
+      [loading]="catalogView().loading()"
+      [unavailable]="catalogView().unavailableMessage()"
+      [degraded]="catalogView().degradedMessage()"
+      [allowEmpty]="false"
+      (retry)="retryCoverage()"
+      (retryVendor)="retryVendorCatalog()"
     />
   </div>
   <div class="field">

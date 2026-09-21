@@ -37,7 +37,9 @@
   <div class="grid grid-cols-[minmax(10rem,0.7fr)_minmax(18rem,1.3fr)] items-start gap-3 max-[720px]:grid-cols-1">
     <div class="grid max-w-96 min-w-0 content-start gap-2">
       <div class="flex items-center gap-2">
-        <label for="deploy-symbol" class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Trading symbol</label>
+        <!-- A caption, not a <label>: the picker is not a labelable control —
+             its combobox carries this name through the picker's own label. -->
+        <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Trading symbol</span>
         <button
           type="button"
           class="info-tip"
@@ -46,18 +48,12 @@
           [attr.aria-label]="'About the trading symbol: ' + actionPlanExplanation()"
         >i</button>
       </div>
-      <input
-        pInputText
+      <app-symbol-picker
         id="deploy-symbol"
-        type="text"
-        [value]="symbol()"
-        placeholder="SPY"
-        autocomplete="off"
-        spellcheck="false"
         class="w-full"
-        [attr.aria-invalid]="symbolError() !== null"
-        (input)="changeSymbol($event)"
-        (blur)="symbolBlur.emit()"
+        label="Trading symbol"
+        [symbol]="symbol()"
+        (symbolChange)="onSymbolPicked($event)"
       />
       @if (symbolError(); as error) { <em role="alert" class="text-[length:var(--fs-xs)] not-italic text-[var(--bear)]">{{ error }}</em> }
     </div>

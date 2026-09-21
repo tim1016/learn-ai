@@ -18,11 +18,8 @@ import { type TickerOption, type TickerRange } from '../ticker-range-picker.type
 import { DEFAULT_ADJUSTMENT_MODE } from '../../ticker-catalog';
 import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.service';
 import type { SymbolCatalogStatus } from '../../symbol-catalog/symbol-catalog.service';
-import {
-  EnsureCoverageService,
-  type BackfillableMode,
-  type CoverageGateSession,
-} from '../../symbol-catalog/ensure-coverage.service';
+import { CoverageGateController } from '../../symbol-catalog/coverage-gate.controller';
+import { isHeldRow } from '../../symbol-catalog/symbol-catalog.types';
 import {
   InstrumentDropdownComponent,
   type InstrumentDropdownView,
@@ -32,7 +29,6 @@ import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import { toPickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { PriceAdjustmentMode } from '../../data-lake';
 import { AssetIdentityComponent } from '../../asset-identity';
-import { formatReceiptLabel } from '../../pipes/receipt-label.pipe';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 /**
@@ -78,8 +74,22 @@ export class InstrumentCardComponent {
   /** Rows rendered per dropdown open — past this, search is the scaler. */
   private static readonly MAX_VISIBLE_ROWS = 50;
 
+  /**
+   * This card's listbox id. Pages can mount several cards (an order entry
+   * with N legs), and every combobox must reference its own listbox — a
+   * shared literal id breaks the association and AXE's duplicate-id check.
+   */
+  private static nextListboxId = 0;
+  readonly listboxId = `ticker-range-picker-listbox-${InstrumentCardComponent.nextListboxId++}`;
+
   readonly value = model.required<TickerRange>();
   readonly appearance = input<'card' | 'flat'>('card');
+  /**
+   * The card's landmark and combobox name. Pages that mount several cards
+   * (an order entry with N legs) must name each — AXE's landmark-unique
+   * rule is about the operator telling the pickers apart.
+   */
+  readonly label = input('Instrument');
 
   /**
    * The tree this picker's run will read. Belongs to the host page — Strategy
@@ -98,8 +108,9 @@ export class InstrumentCardComponent {
   readonly universe = input<readonly TickerOption[] | null>(null);
 
   private readonly symbols = inject(SymbolCatalogService);
-  private readonly coverage = inject(EnsureCoverageService);
   private readonly destroyRef = inject(DestroyRef);
+  /** This card's coverage gate — see {@link CoverageGateController}. */
+  readonly gate = new CoverageGateController(() => this.adjustmentMode());
   private readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602). Track
@@ -118,9 +129,18 @@ export class InstrumentCardComponent {
   readonly catalogStatus = computed<SymbolCatalogStatus>(() =>
     this.universe() === null ? this.view().status() : { kind: 'ready' },
   );
-  readonly catalogUnavailable = computed<string | null>(() => {
-    const state = this.catalogStatus();
-    return state.kind === 'unavailable' ? state.message : null;
+  /**
+   * Why no coverage verdict exists right now — the lake's failure, or its
+   * read still being in flight. A gate may not run on either: while the
+   * lake loads, vendor-only rows already render with no held verdict, and
+   * gating one would be a full-history backfill on a guess.
+   */
+  readonly coverageUnknown = computed<string | null>(() => {
+    if (this.universe() !== null) return null;
+    const status = this.view().status();
+    if (status.kind === 'unavailable') return status.message;
+    if (status.kind === 'loading') return 'The lake coverage read is still in flight.';
+    return null;
   });
   /** A host-supplied universe is not the joined catalog, so its copy differs. */
   readonly hostUniverse = computed(() => this.universe() !== null);
@@ -137,7 +157,7 @@ export class InstrumentCardComponent {
       const nextMode = this.adjustmentMode();
       if (nextMode !== sessionMode) {
         sessionMode = nextMode;
-        this.abandonGate();
+        this.gate.abandon();
       }
     });
     effect(() => {
@@ -146,7 +166,18 @@ export class InstrumentCardComponent {
         if (input) queueMicrotask(() => input.nativeElement.focus());
       }
     });
-    this.destroyRef.onDestroy(() => this.abandonGate());
+    // A symbol that changed without this card picking it — a host seed, a
+    // strategy switch, a reset — voids the pending pick exactly as a fresh
+    // pick does; a finished backfill must never overwrite the newer symbol.
+    let lastSymbol: string | null = null;
+    effect(() => {
+      const symbol = this.value().symbol;
+      if (lastSymbol !== null && symbol !== lastSymbol) {
+        this.gate.abandon();
+      }
+      lastSymbol = symbol;
+    });
+    this.destroyRef.onDestroy(() => this.gate.abandon());
   }
 
   readonly selectedTicker = computed<PickerSymbol | undefined>(() =>
@@ -200,15 +231,6 @@ export class InstrumentCardComponent {
       .filter((t): t is PickerSymbol => !!t);
   });
 
-  /**
-   * This card's gate, if the operator's pending pick is the gated one. The
-   * handle is the ownership — the coverage service is app-scoped, and no
-   * field comparison can say which card a running gate belongs to, so the
-   * strip renders only through the session this card holds.
-   */
-  readonly pendingSession = signal<CoverageGateSession | null>(null);
-  readonly gateState = computed(() => this.pendingSession()?.state() ?? null);
-
   readonly dropdownView = computed<InstrumentDropdownView>(() => ({
     visible: this.visibleTickers(),
     recent: this.recentTickers(),
@@ -218,12 +240,6 @@ export class InstrumentCardComponent {
     catalogStatus: this.catalogStatus(),
     hostUniverse: this.hostUniverse(),
   }));
-
-  /** The adjustment modes a backfill can actually write, or null. */
-  readonly backfillableMode = computed<BackfillableMode | null>(() => {
-    const mode = this.adjustmentMode();
-    return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
-  });
 
   /** The lake's own read failed — retry the lake, not the vendor. */
   retryCatalog(): void {
@@ -292,93 +308,36 @@ export class InstrumentCardComponent {
   pickTicker(t: TickerOption): void {
     // A host universe owns membership outright, and a held symbol is
     // already runnable — delisted-but-held included; its bars are real.
-    // Both pick exactly as the picker always has. `lastHeld` is absent
-    // (undefined) on a vendor-only row, not null — check both.
-    const held = t.lastHeld !== null && t.lastHeld !== undefined;
-    if (this.universe() !== null || held) {
+    // Both pick exactly as the picker always has.
+    if (this.universe() !== null || isHeldRow(t)) {
       this.applyPick(t);
       return;
     }
-
-    const mode = this.adjustmentMode();
-    // No gate may run on an unknown coverage verdict: with the lake dark,
-    // every row reads as unheld and even a held-looking pick would start a
-    // full-history backfill on a guess. The lake's own reason is shown.
-    const lakeReason = this.catalogUnavailable();
-    if (lakeReason !== null) {
-      this.showRefusal(t.symbol, mode, 'coverage_unknown', lakeReason);
-      return;
-    }
-    const backfillable = this.backfillableMode();
-    if (backfillable === null) {
-      this.showRefusal(
-        t.symbol,
-        mode,
-        'view_not_backfillable',
-        `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
-      );
-      return;
-    }
-    this.startGate(t.symbol, backfillable);
+    // An unheld pick is the gate's to decide: refuse while the lake's
+    // verdict is unknowable, refuse a tree nothing can backfill, else
+    // backfill and commit only on the lake's own confirmation.
+    this.gate.admit({
+      symbol: t.symbol,
+      mode: this.adjustmentMode(),
+      lakeDark: () => this.coverageUnknown(),
+      commit: (covered) => this.onCovered(covered),
+    });
   }
 
   protected retryGate(): void {
-    const state = this.gateState();
-    const backfillable = this.backfillableMode();
-    if (state === null || backfillable === null) return;
-    this.startGate(state.symbol, backfillable);
+    this.gate.retry();
   }
 
   /** Cancel and Dismiss are the same act: this card lets its gate go. */
   protected async closeGate(): Promise<void> {
-    this.abandonGate();
+    this.gate.abandon();
     this.refocusSearch();
   }
 
-  /**
-   * Every exit from a pending gate funnels through here — a held pick made
-   * while a gate is in flight included — so a finished backfill can never
-   * overwrite a selection the operator made afterwards.
-   *
-   * Releasing the session is ownership-safe by construction: the coverage
-   * service stops the run only when this session is its last waiter, so a
-   * run another card still awaits cannot be cancelled from here.
-   */
-  private abandonGate(): void {
-    const session = this.pendingSession();
-    if (session === null) return;
-    this.pendingSession.set(null);
-    void session.cancel();
-  }
-
-  private startGate(symbol: string, mode: BackfillableMode): void {
-    this.abandonGate();
-    const session = this.coverage.ensure(symbol, mode);
-    this.pendingSession.set(session);
-    void session.done.then((ready) => {
-      // The operator may have picked another instrument — or dismissed the
-      // gate — while this backfill ran. Only the gate that is still the
-      // pending pick may speak for `value()`.
-      if (this.pendingSession() !== session) return;
-      if (!ready) return;
-      if (this.adjustmentMode() !== mode) {
-        this.abandonGate();
-        return;
-      }
-      const fresh = this.tickerPool().find((p) => p.symbol === symbol);
-      this.pendingSession.set(null);
-      this.applyPick(fresh ?? { symbol, name: symbol });
-    });
-  }
-
-  private showRefusal(
-    symbol: string,
-    mode: PriceAdjustmentMode,
-    reason: string,
-    message: string,
-  ): void {
-    this.abandonGate();
-    this.pendingSession.set(this.coverage.refuse(symbol, mode, reason, message));
+  /** The lake confirmed the bars — select the fresh row (or a bare symbol). */
+  private onCovered(symbol: string): void {
+    const fresh = this.tickerPool().find((p) => p.symbol === symbol);
+    this.applyPick(fresh ?? { symbol, name: symbol });
   }
 
   /** The gate strip's buttons unmount on dismissal; keep focus in the box. */
@@ -388,7 +347,7 @@ export class InstrumentCardComponent {
   }
 
   private applyPick(t: TickerOption): void {
-    this.abandonGate();
+    this.gate.abandon();
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
     // Only move the window when the one on screen could not be run against

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +7,11 @@ import {
   type DeployBotView,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
+import {
+  fakePickerWorld,
+  pickSymbol,
+  symbolPicker,
+} from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget, withAccount } from '../../../fleet/resource-target';
@@ -84,6 +89,7 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
 async function renderWorkflow(service = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
+      ...fakePickerWorld().providers,
       provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
@@ -92,6 +98,23 @@ async function renderWorkflow(service = mockService()) {
   });
   await screen.findByRole('heading', { name: 'Bot binding' });
   return rendered;
+}
+
+/**
+ * A trader symbol edit is a pick now (ADR 0066): set the picker's model and
+ * let its output drive `setSymbol`. Raw strings still flow through so the
+ * scoping rules (`!!` is not a valid ticker) stay exercised.
+ */
+async function typeSymbol(
+  view: RenderResult<AlpacaDeployWorkflowComponent>,
+  value: string,
+): Promise<void> {
+  pickSymbol(view.fixture, value);
+}
+
+/** The symbol the ticket currently holds. */
+function ticketSymbol(view: RenderResult<AlpacaDeployWorkflowComponent>): string {
+  return symbolPicker(view.fixture).symbol();
 }
 
 /**
@@ -111,10 +134,6 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
 
   const SYMBOL_DEBOUNCE_MS = 400;
 
-  async function typeSymbol(value: string): Promise<void> {
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value } });
-  }
-
   function deployButton(): HTMLElement {
     return screen.getByRole('button', { name: /^Deploy / });
   }
@@ -123,10 +142,10 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       service.getDeployView.mockClear();
 
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ');
@@ -147,8 +166,8 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
-      expect((screen.getByPlaceholderText('SPY') as HTMLInputElement).value).toBe('SPY');
+      const view = await renderWorkflow(service);
+      expect(ticketSymbol(view)).toBe('SPY');
       service.getDeployView.mockClear();
 
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
@@ -169,7 +188,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService(QQQ_VIEW);
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       service.getDeployView.mockClear();
 
@@ -178,7 +197,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       });
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('QQQ');
+      expect(ticketSymbol(view)).toBe('QQQ');
       expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ');
     } finally {
       vi.useRealTimers();
@@ -193,10 +212,10 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       service.getDeployView.mockImplementation((_target, symbol) =>
         Promise.resolve(symbol === 'QQQ' ? qqqOnlyView : DEPLOY_VIEW),
       );
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       // A one-row catalog renders its chosen strategy as a label, not a
@@ -219,13 +238,13 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       service.getDeployView.mockImplementation((_target, symbol) =>
         Promise.resolve(symbol === 'SPY' ? spyView : tslaView),
       );
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect((screen.getByPlaceholderText<HTMLInputElement>('SPY')).value).toBe('TSLA');
+      expect(ticketSymbol(view)).toBe('TSLA');
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
-      await typeSymbol('SPY');
+      await typeSymbol(view, 'SPY');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.55');
@@ -244,20 +263,20 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       service.getDeployView.mockImplementation((_target, symbol) =>
         Promise.resolve(symbol === 'TSLA' ? goldenView : legacyView),
       );
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
 
-      await typeSymbol('TSLA');
+      await typeSymbol(view, 'TSLA');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
-      await typeSymbol('SPY');
+      await typeSymbol(view, 'SPY');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.2');
 
-      await typeSymbol('TSLA');
+      await typeSymbol(view, 'TSLA');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
     } finally {
@@ -269,12 +288,12 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       service.getDeployView.mockClear();
 
-      await typeSymbol('Q');
-      await typeSymbol('QQ');
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'Q');
+      await typeSymbol(view, 'QQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(service.getDeployView).toHaveBeenCalledTimes(1);
@@ -290,9 +309,9 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
 
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(screen.queryByLabelText('Loading deployment readiness')).toBeNull();
@@ -306,10 +325,10 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       service.getDeployView.mockClear();
 
-      await typeSymbol('!!');
+      await typeSymbol(view, '!!');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       expect(service.getDeployView).not.toHaveBeenCalled();
@@ -332,11 +351,11 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
 
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       const banner = await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
@@ -356,11 +375,11 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
 
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       const banner = await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
@@ -380,7 +399,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'spy-scope-01' } });
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       // Baseline: this ticket is otherwise deployable, so the assertion below
@@ -388,7 +407,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       expect(deployButton().hasAttribute('disabled')).toBe(false);
 
       service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
 
@@ -407,16 +426,16 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     try {
       const inFlight = deferred<DeployBotView>();
       const service = mockService();
-      await renderWorkflow(service);
+      const view = await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       service.getDeployView.mockImplementation((_broker: string, _account: string, symbol?: string) =>
         symbol === 'QQQ' ? inFlight.promise : Promise.resolve(DEPLOY_VIEW),
       );
-      await typeSymbol('QQQ');
+      await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      await typeSymbol('IWM');
+      await typeSymbol(view, 'IWM');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       inFlight.resolve(DEPLOY_VIEW);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
@@ -437,7 +456,8 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     try {
       const pa9Scoped = deferred<DeployBotView>();
       const service = mockService();
-      const { rerender } = await renderWorkflow(service);
+      const view = await renderWorkflow(service);
+      const { rerender } = view;
 
       service.getDeployView.mockImplementation((_broker: string, accountId: string) =>
         accountId === 'PA9' ? pa9Scoped.promise : Promise.resolve(labelledView('PA7 readiness')),
@@ -453,7 +473,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       // Fail the next refresh so the retained record is what renders, then
       // read off which account it kept.
       service.getDeployView.mockRejectedValue(new Error('data plane unreachable'));
-      await typeSymbol('DIA');
+      await typeSymbol(view, 'DIA');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
 

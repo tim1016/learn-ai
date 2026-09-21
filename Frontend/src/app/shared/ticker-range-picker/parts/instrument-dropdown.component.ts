@@ -27,6 +27,8 @@ import { InstrumentOptionComponent } from './instrument-option.component';
 export class InstrumentDropdownComponent {
   readonly view = input.required<InstrumentDropdownView>();
   readonly gate = input<CoverageGateState | null>(null);
+  /** The owning card's listbox id — one per card instance. */
+  readonly listboxId = input.required<string>();
 
   readonly pick = output<PickerSymbol>();
   readonly retryLake = output();

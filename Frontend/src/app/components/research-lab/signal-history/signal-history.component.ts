@@ -11,7 +11,6 @@ import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of, finalize } from 'rxjs';
 import { ResearchService, SignalExperiment } from '../../../services/research.service';
-import { InputText } from 'primeng/inputtext';
 import { ButtonModule } from 'primeng/button';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
@@ -20,6 +19,7 @@ import { TooltipModule } from 'primeng/tooltip';
 import { DialogModule } from 'primeng/dialog';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../shared/timestamp';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 interface ColumnHelp {
   icon: string;
@@ -33,7 +33,6 @@ interface ColumnHelp {
   imports: [
     CommonModule,
     FormsModule,
-    InputText,
     ButtonModule,
     TableModule,
     TagModule,
@@ -42,6 +41,7 @@ interface ColumnHelp {
     DialogModule,
     AssetIdentityComponent,
     TimestampDisplayPipe,
+    SymbolPickerComponent,
   ],
   templateUrl: './signal-history.component.html',
   styleUrls: ['./signal-history.component.scss'],
@@ -52,6 +52,12 @@ export class SignalHistoryComponent {
   private destroyRef = inject(DestroyRef);
 
   ticker = signal('AAPL');
+
+  /** A pick is one deliberate act — reload the history for it immediately. */
+  onTickerPicked(ticker: string): void {
+    this.ticker.set(ticker);
+    void this.loadExperiments();
+  }
   loading = signal(false);
   experiments = signal<SignalExperiment[]>([]);
   error = signal<string | null>(null);

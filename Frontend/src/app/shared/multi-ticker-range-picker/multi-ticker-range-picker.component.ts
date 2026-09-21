@@ -21,9 +21,10 @@ import type {
   Resolution,
   TickerRange,
 } from '../ticker-range-picker/ticker-range-picker.types';
-import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService } from '../ticker-catalog';
+import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
+import { SymbolCatalogService } from '../symbol-catalog/symbol-catalog.service';
 import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
-import { toPickerSymbol } from '../symbol-catalog/symbol-catalog.types';
+import type { PriceAdjustmentMode } from '../data-lake';
 import { MultiInstrumentCardComponent } from './multi-instrument-card.component';
 import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 
@@ -36,8 +37,11 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
  * and this composer projects/applies the per-call patches onto the
  * MultiTickerRange.
  *
- * Out of v1: per-ticker availability strip, smart advisories, cache
- * hint. Multi-ticker UX for those is a separate UX problem.
+ * The universe is the joined catalog (ADR 0066): the vendor's listing
+ * walk with the lake's coverage on each row, and an unheld pick gated on
+ * its backfill inside the card — a batch over symbols the lake cannot
+ * read would refuse its own data otherwise. Hosts name the tree their
+ * run reads through `adjustmentMode`.
  */
 @Component({
   selector: 'app-multi-ticker-range-picker',
@@ -53,6 +57,8 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
 })
 export class MultiTickerRangePickerComponent {
   readonly value = model.required<MultiTickerRange>();
+  /** The lake tree this picker's run reads; coverage and gating follow it. */
+  readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly availableResolutions = input<readonly Resolution[]>([
     'minute',
     'hour',
@@ -65,22 +71,25 @@ export class MultiTickerRangePickerComponent {
   readonly title = input('Cross-sectional data');
   readonly legendTreatment = input<LegendTreatment>('tinted-bold');
 
-  private readonly catalog = inject(TickerCatalogService);
-  private readonly lakeView = computed(() => {
+  private readonly symbols = inject(SymbolCatalogService);
+  protected readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602).
-    return untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE));
+    const mode = this.adjustmentMode();
+    return untracked(() => this.symbols.viewFor(mode));
   });
 
-  /** The lake universe, adapted into the multi card's typed options. */
+  /** The joined universe, adapted into the multi card's typed options. */
   protected readonly options = computed<readonly PickerSymbol[]>(() =>
-    this.lakeView().pool().map(toPickerSymbol),
+    this.view().pool(),
   );
-  protected readonly catalogLoading = computed(() => this.lakeView().loading());
-  protected readonly catalogUnavailable = computed(() => this.lakeView().unavailable());
 
   protected retryCatalog(): void {
-    this.lakeView().reload();
+    this.view().reload();
+  }
+
+  protected retryVendorCatalog(): void {
+    this.view().retryVendor();
   }
 
   protected setSymbols(symbols: string[]): void {

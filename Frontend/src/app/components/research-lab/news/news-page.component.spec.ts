@@ -8,6 +8,9 @@ import { describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { NewsPageComponent } from './news-page.component';
+import { By } from '@angular/platform-browser';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 const NEWS_URL = `${environment.pythonServiceUrl}/api/news`;
 
@@ -40,7 +43,13 @@ function responseBody(overrides: Record<string, unknown> = {}) {
 
 async function renderPage() {
   const rendered = await render(NewsPageComponent, {
-    providers: [provideZonelessChangeDetection(), provideHttpClient(), provideHttpClientTesting()],
+    providers: [
+      provideZonelessChangeDetection(),
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      // The ticker filter's picker must not issue real catalog reads.
+      ...fakePickerWorld().providers,
+    ],
   });
   const http = TestBed.inject(HttpTestingController);
   return { ...rendered, http };
@@ -91,14 +100,19 @@ describe('NewsPageComponent', () => {
   });
 
   it('does not refetch while the user edits — only on submit', async () => {
-    const { http } = await renderPage();
+    const { http, fixture } = await renderPage();
     http.expectOne((r) => r.url === NEWS_URL).flush(responseBody());
+    await fixture.whenStable();
+    fixture.detectChanges();
 
-    const tickerInput = screen.getByLabelText('Ticker');
-    await userEvent.clear(tickerInput);
-    await userEvent.type(tickerInput, 'NVDA');
+    // The ticker field is the shared picker now: an edit is a pick, and it
+    // must land in the draft without spending the 5-per-minute budget.
+    const picker = fixture.debugElement.query(
+      By.directive(SymbolPickerComponent),
+    ).componentInstance as SymbolPickerComponent;
+    picker.symbol.set('NVDA');
+    fixture.detectChanges();
 
-    // Typing must not spend the 5-per-minute upstream budget.
     http.verify();
 
     await userEvent.click(screen.getByRole('button', { name: /fetch news/i }));

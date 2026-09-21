@@ -73,7 +73,11 @@
       <div class="trade-form">
         <div class="form-group">
           <label for="portfolio-trade-symbol">Symbol</label>
-          <input id="portfolio-trade-symbol" type="text" [ngModel]="tradeSymbol()" (ngModelChange)="tradeSymbol.set($event)" placeholder="e.g. AAPL" />
+          <app-symbol-picker
+            id="portfolio-trade-symbol"
+            [symbol]="tradeSymbol()"
+            (symbolChange)="tradeSymbol.set($event)"
+          />
         </div>
         <div class="form-group">
           <label for="portfolio-trade-side">Side</label>

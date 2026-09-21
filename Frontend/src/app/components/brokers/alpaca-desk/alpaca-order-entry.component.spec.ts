@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../services/brokers.service';
@@ -8,10 +8,20 @@ import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 import type { LaneFence } from '../../../fleet/lane-fence';
 
-async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
-  fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), {
-    target: { value: symbol },
-  });
+import { fakePickerWorld, pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
+
+/**
+ * The symbol leg is the shared picker now, so "typing a symbol" is a pick:
+ * set the picker's model and let its output write the leg's Signal Forms
+ * field, exactly as a real pick does. The picker's combobox carries the
+ * leg-scoped label ('Leg N symbol').
+ */
+async function fillFirstLeg(
+  view: RenderResult<AlpacaOrderEntryComponent>,
+  symbol: string,
+  quantity: string,
+): Promise<void> {
+  pickSymbol(view.fixture, symbol);
   const qtyInput = await screen.findByLabelText('Leg 1 quantity');
   fireEvent.input(qtyInput, { target: { value: quantity } });
   fireEvent.change(qtyInput, { target: { value: quantity } });
@@ -60,7 +70,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       ],
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: FENCE,
@@ -74,7 +84,9 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
-      provideFleetDirectory(),{
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -84,7 +96,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     expect(screen.getByRole('button', { name: 'Add equity leg' })).toBeTruthy();
     expect(screen.getByLabelText('Leg 1 side')).toBeTruthy();
     expect(screen.getAllByText('Market').length).toBeGreaterThan(0);
@@ -168,6 +180,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         {
           provide: BrokersService,
@@ -180,7 +193,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     // The lane rebinds (a directory refresh) between render and the click.
     // `target()` now reports the new generation; the fence frozen at render
     // time, `fence`, does not move.
@@ -213,7 +226,7 @@ describe('AlpacaOrderEntryComponent', () => {
       control_revision: 1,
       subject_id: 'manual-operator:operator',
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: { bindingGeneration: null, routingEpoch: null },
@@ -227,6 +240,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         {
           provide: BrokersService,
@@ -238,7 +252,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
     expect(previewSqliteManualOrder).not.toHaveBeenCalled();
@@ -254,7 +268,7 @@ describe('AlpacaOrderEntryComponent', () => {
       control_revision: 1,
       subject_id: 'manual-operator:operator',
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: FENCE,
@@ -267,7 +281,9 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -276,7 +292,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     selectOption('Leg 1 side', 'sell');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
@@ -344,7 +360,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           getSqliteManualOrderTicket: vi.fn().mockResolvedValue(ticket),
@@ -415,7 +433,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           getSqliteManualOrderTicket: vi.fn().mockResolvedValue(ticket),
@@ -474,7 +494,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { cancelSqliteManualOrderTicket, getSqliteManualOrderTicket },
       }],
@@ -537,7 +559,9 @@ describe('AlpacaOrderEntryComponent', () => {
         manualTicketId: firstTicket.ticket_id,
         manualLegId: firstTicket.legs[0].leg_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { cancelSqliteManualOrderTicket, getSqliteManualOrderTicket },
       }],
@@ -575,7 +599,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: activeTicket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { getSqliteManualOrderTicket },
       }],
@@ -614,7 +640,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: pausedTicket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { getSqliteManualOrderTicket },
       }],
@@ -652,7 +680,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { getSqliteManualOrderTicket },
       }],
@@ -705,7 +735,9 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -714,7 +746,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledOnce());
     view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
@@ -755,7 +787,9 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -764,7 +798,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledOnce());
     view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
@@ -795,7 +829,7 @@ describe('AlpacaOrderEntryComponent', () => {
       control_revision: 1,
       subject_id: 'manual-operator:operator',
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: FENCE,
@@ -809,6 +843,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         {
           provide: BrokersService,
@@ -820,7 +855,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
     // Scoped to the dialog the operator is about to confirm from, not the

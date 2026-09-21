@@ -35,16 +35,14 @@
     }
   </div>
   <div class="dl-shell__scope-controls">
-    <label class="dl-shell__field">
+    <div class="dl-shell__field">
       <span>Ticker</span>
-      <input
-        type="text"
-        name="dl-ticker"
-        [value]="draftTicker()"
-        (input)="onTickerInput($event)"
-        placeholder="SPY"
+      <app-symbol-picker
+        [symbol]="draftTicker()"
+        [adjustmentMode]="pickerAdjustmentMode()"
+        (symbolChange)="onTickerPicked($event)"
       />
-    </label>
+    </div>
     <label class="dl-shell__field">
       <span>From</span>
       <input

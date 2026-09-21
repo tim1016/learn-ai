@@ -47,6 +47,11 @@
 
 .toolbar-spacer { flex: 1 1 auto; }
 
+.chain-symbol-picker {
+  flex: 0 1 300px;
+  min-width: 220px;
+}
+
 .ticker-pill {
   display: inline-flex;
   align-items: center;

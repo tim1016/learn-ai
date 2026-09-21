@@ -2,7 +2,7 @@
   #rootEl
   class="group"
   [class.group--flat]="appearance() === 'flat'"
-  aria-label="Instrument"
+  [attr.aria-label]="label()"
 >
   <header class="group__head">
     <span class="group__eyebrow">
@@ -19,8 +19,9 @@
       tabindex="0"
       [class.ticker-box--open]="open()"
       [attr.aria-expanded]="open()"
+      [attr.aria-label]="label()"
       aria-haspopup="listbox"
-      aria-controls="ticker-range-picker-listbox"
+      [attr.aria-controls]="listboxId"
       (click)="openDropdown()"
       (keydown.enter)="onTickerBoxEnter($event)"
       (keydown.space)="onTickerBoxSpace($event)"
@@ -61,7 +62,8 @@
       @if (open()) {
         <app-instrument-dropdown
           [view]="dropdownView()"
-          [gate]="gateState()"
+          [gate]="gate.state()"
+          [listboxId]="listboxId"
           (pick)="pickTicker($event)"
           (retryLake)="retryCatalog()"
           (retryVendor)="retryVendorCatalog()"

@@ -5,6 +5,7 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { OptionsLabChainComponent } from './options-lab-chain.component';
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { SnapshotContractResult } from '../../../graphql/types';
 
 function makeContract(
@@ -43,7 +44,11 @@ describe('OptionsLabChainComponent', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       imports: [OptionsLabChainComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...fakePickerWorld().providers,
+      ],
     });
     const fixture = TestBed.createComponent(OptionsLabChainComponent);
     component = fixture.componentInstance;

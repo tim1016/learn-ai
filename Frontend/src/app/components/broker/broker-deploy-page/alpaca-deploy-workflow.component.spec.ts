@@ -154,6 +154,7 @@ function mockService(
 async function renderWorkflow(service = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
+      ...fakePickerWorld().providers,
       provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
@@ -163,6 +164,12 @@ async function renderWorkflow(service = mockService()) {
   await screen.findByRole('heading', { name: 'Bot binding' });
   return rendered;
 }
+
+import {
+  fakePickerWorld,
+  pickSymbol,
+  symbolPicker,
+} from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 describe('AlpacaDeployWorkflowComponent', () => {
   it('defaults to a concise trader view without duplicating strategy provenance', async () => {
@@ -303,13 +310,15 @@ describe('AlpacaDeployWorkflowComponent', () => {
       ...DEPLOY_VIEW,
       strategies: [GOLDEN_TSLA_STRATEGY],
     });
-    await renderWorkflow(service);
+    const view = await renderWorkflow(service);
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'golden-tsla-01' },
     });
 
-    expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('TSLA');
+    // The Golden scope seeds the picker's symbol — read it from the picker,
+    // which is the symbol's only editing surface now.
+    expect(symbolPicker(view.fixture).symbol()).toBe('TSLA');
     expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
@@ -679,16 +688,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
   });
 
   it('preserves a trader-edited symbol when the validated strategy changes', async () => {
-    await renderWorkflow();
+    const view = await renderWorkflow();
 
-    fireEvent.input(screen.getByPlaceholderText('SPY'), {
-      target: { value: 'QQQ' },
-    });
+    const picker = pickSymbol(view.fixture, 'QQQ');
     fireEvent.change(screen.getByLabelText('Deployment strategy'), {
       target: { value: 'ema_crossover_signal' },
     });
 
-    expect((screen.getByPlaceholderText('SPY') as HTMLInputElement).value).toBe('QQQ');
+    expect(picker.symbol()).toBe('QQQ');
   });
 
   it('submits only the closed paper canary command and renders its durable receipt', async () => {
@@ -933,8 +940,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await component['submit']();
     fixture.detectChanges();
 
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
-    fixture.detectChanges();
+    pickSymbol(fixture, 'QQQ');
 
     expect(screen.queryByText('Start blocked')).toBeNull();
   });
@@ -951,7 +957,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     const submission = component['submit']();
     await vi.waitFor(() => expect(service.previewStartAdmission).toHaveBeenCalledOnce());
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
+    pickSymbol(fixture, 'QQQ');
     resolvePreview(ADMISSION);
     await submission;
     fixture.detectChanges();
@@ -1011,10 +1017,9 @@ describe('AlpacaDeployWorkflowComponent', () => {
    * admission timestamp must not be presented as a per-edit recheck.
    */
   it('does not claim admission is re-checked on every edit', async () => {
-    const { fixture } = await renderWorkflow();
+    const view = await renderWorkflow();
 
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
-    fixture.detectChanges();
+    pickSymbol(view.fixture, 'QQQ');
 
     expect(screen.queryByText(/on every edit/)).toBeNull();
     expect(screen.getByText(/Account evaluated/)).toBeTruthy();
@@ -1027,9 +1032,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByPlaceholderText('alpaca-spy-01'), {
       target: { value: ' spy-validation-01 ' },
     });
-    fireEvent.input(screen.getByPlaceholderText('SPY'), {
-      target: { value: ' brk.b ' },
-    });
+    pickSymbol(fixture, ' brk.b ');
     component['ticketForm'].instanceId().markAsTouched();
     component['ticketForm'].symbol().markAsTouched();
     fixture.detectChanges();

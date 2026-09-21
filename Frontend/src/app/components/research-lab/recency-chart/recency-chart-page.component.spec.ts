@@ -9,6 +9,7 @@ import { fireEvent, screen } from "@testing-library/angular";
 import { RecencyChartPageComponent } from "./recency-chart-page.component";
 import { JobsService } from "../../../services/jobs.service";
 import { RecencyChartService, type RecencyHero, type RecencyTrade, type RecencyWindowQuery } from "../../../services/recency-chart.service";
+import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
 
 function makeTrade(overrides: Partial<RecencyTrade> = {}): RecencyTrade {
   // Default entry/exit are "now"-relative, not epoch-relative: the page
@@ -83,6 +84,8 @@ async function renderPage(
       { provide: HttpClient, useValue: { get: () => of([]) } },
       { provide: JobsService, useValue: { startJob: vi.fn(async () => "job-1") } },
       { provide: MessageService, useValue: messageServiceMock },
+      // The launch config's symbol picker must not issue real catalog reads.
+      ...fakePickerWorld().providers,
     ],
   }).compileComponents();
 
@@ -269,6 +272,7 @@ describe("RecencyChartPageComponent", () => {
           },
         },
         { provide: MessageService, useValue: messageServiceMock },
+        ...fakePickerWorld().providers,
       ],
     }).compileComponents();
 

@@ -4,13 +4,9 @@
   />
   <!-- Header -->
   <div class="flex items-center gap-3 mb-4 flex-wrap">
-    <input
-      pInputText
-      [ngModel]="ticker()"
-      (ngModelChange)="ticker.set($event)"
-      placeholder="Ticker"
-      class="w-24"
-      (keyup.enter)="fetchExpirations()"
+    <app-symbol-picker
+      [symbol]="ticker()"
+      (symbolChange)="onTickerPicked($event)"
     />
     <p-button
       label="Load"

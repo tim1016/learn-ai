@@ -8,6 +8,7 @@ import { EdgeScoreDrawerComponent } from "../drawers/edge-score-drawer.component
 import { TradeSimDrawerComponent } from "../drawers/trade-sim-drawer.component";
 import { EdgeApiService, type Estimator, type Session } from "../services/edge-api.service";
 import { EdgeMockDataService, type EdgeData } from "../services/edge-mock-data.service";
+import { SymbolPickerComponent } from "../../../shared/symbol-picker/symbol-picker.component";
 
 @Component({
   selector: "app-edge-realized-vs-iv",
@@ -17,6 +18,7 @@ import { EdgeMockDataService, type EdgeData } from "../services/edge-mock-data.s
     EdgeVrpHistogramComponent,
     EdgeScoreDrawerComponent,
     TradeSimDrawerComponent,
+    SymbolPickerComponent,
   ],
   templateUrl: "./realized-vs-iv.component.html",
   styleUrls: ["./realized-vs-iv.component.scss"],

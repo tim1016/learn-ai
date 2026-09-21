@@ -798,10 +798,6 @@ export class AlpacaDeployWorkflowComponent {
     this.ticketForm.instanceId().markAsTouched();
   }
 
-  protected touchSymbol(): void {
-    this.ticketForm.symbol().markAsTouched();
-  }
-
   protected touchQuantity(): void {
     this.ticketForm.quantity().markAsTouched();
   }

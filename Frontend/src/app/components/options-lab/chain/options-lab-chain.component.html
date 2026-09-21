@@ -27,6 +27,12 @@
       </span>
     </div>
 
+    <app-symbol-picker
+      class="chain-symbol-picker"
+      [symbol]="ticker()"
+      (symbolChange)="onTickerPicked($event)"
+    />
+
     <div class="toolbar-spacer"></div>
 
     <div class="strike-chips" role="group" aria-label="Strike range">
