@@ -12,13 +12,14 @@ from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
+from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
 from app.services.session_authority import declared_session_bounds
 from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
@@ -134,6 +135,62 @@ async def test_shadow_entry_and_exit_are_synthesized_from_their_bound_decision_b
         assert exit_receipt.state is EffectOperationState.FLAT, exit_receipt.explanation
         assert await facade.unresolved_effect_count(subject_id=f"bot:{SID}") == 0
         assert await ports.read.list_positions() == []
+    finally:
+        repo.close()
+        evidence.close()
+
+
+async def test_a_shadow_fill_retains_its_exact_simulated_execution_identity(
+    tmp_path: Path,
+) -> None:
+    """#2178: an authoritative no-submit Shadow fill must keep its exact
+    ``shadow-execution:`` identity through the production submission/fold
+    path, so a healthy Shadow bot's economics report complete execution
+    coverage instead of a false cumulative-recovery attention flag."""
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
+    )
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
+    decision = _retain(evidence, minute=600, close="100.25")
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=ports.read,
+        trade=ports.trade,
+        authority_kind="shadow",
+        account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    await facade.register_strategy_run(binding)
+    try:
+        receipt = await facade.execute_for_instance(
+            strategy_instance_id=SID,
+            run_id=RUN_ID,
+            decision_id="decision-identity",
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+            use_rth=True,
+            retained_source_bar=decision,
+        )
+        assert receipt.state == "submitted", receipt.explanation
+
+        [order] = await ports.read.list_orders()
+        assert order.client_order_id is not None
+        order_ref = order.client_order_id
+        fills = repo.fills_for_order(order_ref)
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] == f"shadow-execution:{order_ref}"
+        assert fills[0]["evidence_source"] == "simulated_execution"
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            snapshot = reader.bot_economic_snapshot(SID, session_window=session_window_for_date(DAY))
+            assert snapshot is not None
+            assert snapshot.execution_coverage == "complete"
+        finally:
+            reader.close()
     finally:
         repo.close()
         evidence.close()

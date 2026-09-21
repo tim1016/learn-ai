@@ -575,6 +575,16 @@ class ExecutionSliceFilledFacts:
         return cls(**json.loads(facts_json))
 
 
+#: The closed vocabulary of sources that may carry an exact execution identity
+#: (#2178). ``websocket`` and ``activity_recovery`` name real broker evidence;
+#: ``simulated_execution`` names a deterministic no-submit adapter's own
+#: authoritative execution (the Shadow/Dry-Run worlds' ``shadow-execution:`` /
+#: ``sim-execution:`` identities) — it is never a broker receipt.
+EXACT_EXECUTION_EVIDENCE_SOURCES: frozenset[str] = frozenset(
+    {"websocket", "activity_recovery", "simulated_execution"}
+)
+
+
 @dataclass(frozen=True)
 class ExecutionCoverageQuarantinedFacts:
     """Immutable exact evidence withheld from economics pending coverage proof.
@@ -856,7 +866,7 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
         raise ValueError("symbol must be non-empty")
     if facts.side not in {"BUY", "SELL"}:
         raise ValueError(f"invalid execution side {facts.side!r}")
-    if facts.evidence_source not in {"websocket", "activity_recovery"}:
+    if facts.evidence_source not in EXACT_EXECUTION_EVIDENCE_SOURCES:
         raise ValueError(f"invalid exact-execution evidence source {facts.evidence_source!r}")
     if facts.fee_fidelity not in {"reported", "not_reported"}:
         raise ValueError(f"invalid fee_fidelity {facts.fee_fidelity!r}")
