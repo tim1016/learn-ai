@@ -58,7 +58,7 @@ function inputValue(event: Event): string {
   imports: [ReceiptLabelPipe, BackfillRunLogComponent, MultiInstrumentCardComponent],
   providers: [DataLakeBackfillStore],
 })
-export class LakeBackfillPanelComponent {
+export class LakeBackfillPanelComponent implements OnInit {
   protected readonly store = inject(DataLakeBackfillStore);
   private readonly jobs = inject(JobsService);
   private readonly alpaca = inject(AlpacaAssetCatalogService);

@@ -12,7 +12,9 @@
         [disabled]="selectAllDisabled()"
         [attr.title]="
           selectAllDisabled()
-            ? 'The lake holds more than ' + selectAllLimit + ' instruments — add them individually.'
+            ? (hostUniverse()
+                ? 'The catalog holds more than ' + selectAllLimit + ' instruments — add them individually.'
+                : 'The lake holds more than ' + selectAllLimit + ' instruments — add them individually.')
             : null
         "
         (click)="selectAll()"
@@ -32,7 +34,7 @@
     </p>
   } @else if (tickerPool().length === 0) {
     <p class="catalog-note" role="status" aria-live="polite">
-      The data lake holds no instruments yet.
+      {{ hostUniverse() ? "The catalog is empty." : "The data lake holds no instruments yet." }}
     </p>
   }
 

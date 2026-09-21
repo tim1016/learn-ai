@@ -65,6 +65,8 @@ export class MultiInstrumentCardComponent {
   readonly catalogUnavailable = computed<string | null>(() =>
     this.universe() === null ? this.view().unavailable() : null,
   );
+  /** A host universe is not the lake — the card's copy and guards follow. */
+  readonly hostUniverse = computed(() => this.universe() !== null);
 
   /**
    * A universe of every instrument in the lake is a batch nobody meant to
@@ -102,9 +104,12 @@ export class MultiInstrumentCardComponent {
   remove(symbol: string): void {
     const v = this.value();
     const next = v.symbols.filter((s) => s !== symbol);
-    // Refuse to leave the universe empty — keep the last symbol so the
-    // payload stays valid against MultiTickerRequest's min_length=1.
-    this.value.set({ ...v, symbols: next.length === 0 ? v.symbols : next });
+    // Refuse to leave a lake universe empty — keep the last symbol so the
+    // payload stays valid against MultiTickerRequest's min_length=1. A host
+    // universe has no such invariant: an empty selection is an honest
+    // "nothing picked yet", and the host's own submit gate refuses it.
+    if (next.length === 0 && !this.hostUniverse()) return;
+    this.value.set({ ...v, symbols: next });
   }
 
   selectAll(): void {
@@ -115,6 +120,12 @@ export class MultiInstrumentCardComponent {
   }
 
   selectNone(): void {
+    if (this.hostUniverse()) {
+      // "None" means none — over a vendor universe of thousands, keeping
+      // pool[0] would quietly nominate an arbitrary symbol for backfill.
+      this.value.set({ ...this.value(), symbols: [] });
+      return;
+    }
     const pool = this.tickerPool();
     if (pool.length === 0) return;
     // Always keep at least the first pool symbol selected — see remove().

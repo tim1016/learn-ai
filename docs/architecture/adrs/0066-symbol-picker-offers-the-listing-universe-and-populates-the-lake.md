@@ -1,7 +1,11 @@
 # ADR 0066: The Symbol Picker Offers the Alpaca Listing Universe and Populates the Lake on Selection
 
 Date: 2026-09-20
-Status: Accepted
+
+**Status:** Accepted 2026-09-20
+
+**Vocabulary:** none owed — "membership" (what a picker menu offers) and "coverage" (what the lake holds) are defined in this ADR and in `SymbolCatalogService`/`EnsureCoverageService`; "held", "backfill" and "adjustment mode" keep the meanings the data-lake surfaces already gave them.
+
 Supersedes: none. Refines ADR 0049 (the data lake is the market-data authority) and the
 retained-market-data decision in ADR 0062; it changes what a picker *offers*, not what any
 engine *reads*.

@@ -18,7 +18,9 @@ function entry(overrides: Partial<AlpacaSymbolEntry> = {}): AlpacaSymbolEntry {
 }
 
 /** The one member of `HttpClient` the service touches. */
-type HttpGetStub = { get(url: string): Observable<unknown> };
+interface HttpGetStub {
+  get(url: string): Observable<unknown>;
+}
 
 async function catalogFor(http: HttpGetStub): Promise<AlpacaAssetCatalogService> {
   TestBed.resetTestingModule();

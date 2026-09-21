@@ -1,6 +1,6 @@
 import { Injectable, inject, signal } from '@angular/core';
 
-import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
+import { JobsService } from '../../services/jobs.service';
 import { DataLakeService, classifyDataLakeError } from '../data-lake';
 import { tradingDateToMs, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
 import type { DataRunSpec, PriceAdjustmentMode } from '../data-lake';

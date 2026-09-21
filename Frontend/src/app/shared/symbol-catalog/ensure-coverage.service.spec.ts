@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
 import { DataLakeService, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';

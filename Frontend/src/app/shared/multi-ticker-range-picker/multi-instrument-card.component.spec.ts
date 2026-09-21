@@ -80,6 +80,31 @@ describe('MultiInstrumentCardComponent', () => {
     expect(component.value().symbols).toEqual(['SPY']);
   });
 
+  // The backfill panel's host universe is the vendor catalog: "None" must
+  // mean none, not "an arbitrary symbol from an alphabetically sorted
+  // universe of thousands", which a submit would then backfill.
+  it('selectNone() empties a host universe and remove() may empty it too', () => {
+    fixture.componentRef.setInput('universe', pool);
+    fixture.componentRef.setInput('value', { ...baseValue, symbols: ['SPY', 'QQQ'] });
+    fixture.detectChanges();
+
+    component.selectNone();
+    expect(component.value().symbols).toEqual([]);
+
+    component.add('IWM');
+    component.remove('IWM');
+    expect(component.value().symbols).toEqual([]);
+  });
+
+  it('labels an empty host universe as a catalog, not the lake', () => {
+    fixture.componentRef.setInput('universe', []);
+    fixture.detectChanges();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('The catalog is empty.');
+    expect(text).not.toContain('The data lake holds no instruments yet.');
+  });
+
   it('addable filters out already-selected symbols', () => {
     fixture.componentRef.setInput('value', { ...baseValue, symbols: ['SPY'] });
     fixture.detectChanges();
