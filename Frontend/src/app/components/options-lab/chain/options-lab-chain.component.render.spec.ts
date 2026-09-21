@@ -4,11 +4,14 @@ import { of } from 'rxjs';
 
 import { MarketDataService } from '../../../services/market-data.service';
 import { OptionsLabChainComponent } from './options-lab-chain.component';
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 describe('OptionsLabChainComponent render', () => {
   it('renders the toolbar underlying with the shared asset identity', async () => {
     const { container } = await render(OptionsLabChainComponent, {
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: MarketDataService,
         useValue: {
           getOptionsExpirations: () => of([]),

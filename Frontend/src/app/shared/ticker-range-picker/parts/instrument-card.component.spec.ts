@@ -75,6 +75,19 @@ describe('InstrumentCardComponent', () => {
     fixture.componentRef.setInput('value', baseValue);
   });
 
+  /** A listed active symbol the lake does not hold — the gate's subject. */
+  function seedListedUnheld(): void {
+    alpaca.entries.set([
+      {
+        symbol: 'TSLA',
+        name: 'Tesla, Inc.',
+        asset_class: 'us_equity',
+        exchange: 'NASDAQ',
+        status: 'active',
+      },
+    ]);
+  }
+
 
   it('renders the current symbol and exchange', () => {
     fixture.detectChanges();
@@ -370,6 +383,77 @@ describe('InstrumentCardComponent', () => {
     // Cancel is offered so the operator can walk away cleanly.
     expect(strip?.textContent).toContain('Retry');
     expect(strip?.textContent).toContain('Dismiss');
+  });
+
+  it('refuses the gate while the coverage read is still loading — vendor rows carry no verdict yet', () => {
+    // The vendor catalog answering before the lake's first summary is the
+    // exact window where unheld-looking rows render with no held verdict.
+    seedListedUnheld();
+    catalog.viewFor('polygon_split_adjusted').loading.set(true);
+    fixture.detectChanges();
+    openDropdown(fixture);
+
+    const option = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')).find(
+      (candidate) => (candidate as HTMLElement).textContent?.includes('TSLA'),
+    ) as HTMLElement;
+    option.click();
+    fixture.detectChanges();
+
+    expect(coverage.refusals).toContainEqual(
+      expect.objectContaining({
+        symbol: 'TSLA',
+        reason: 'coverage_unknown',
+        message: 'The lake coverage read is still in flight.',
+      }),
+    );
+    expect(coverage.ensureCalls).toEqual([]);
+  });
+
+  it('a host-driven symbol replacement disarms the pending gate', async () => {
+    seedListedUnheld();
+    fixture.detectChanges();
+    openDropdown(fixture);
+
+    coverage.holdNext = true;
+    const option = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')).find(
+      (candidate) => (candidate as HTMLElement).textContent?.includes('TSLA'),
+    ) as HTMLElement;
+    option.click();
+    fixture.detectChanges();
+    const held = coverage.held[0];
+
+    // The host replaces the symbol (a strategy switch seeding QQQ) while
+    // the backfill runs.
+    fixture.componentRef.setInput('value', { ...baseValue, symbol: 'QQQ' });
+    fixture.detectChanges();
+    expect(held.cancelCalls).toBe(1);
+
+    // Even a successful backfill must not overwrite the newer symbol.
+    held.resolve(true);
+    await flushGate(fixture);
+    expect(component.value().symbol).toBe('QQQ');
+  });
+
+  it('gives each card its own listbox id — two cards on a page stay separate comboboxes', () => {
+    fixture.detectChanges();
+    openDropdown(fixture);
+    const second = TestBed.createComponent(InstrumentCardComponent);
+    second.componentRef.setInput('value', { ...baseValue, symbol: 'QQQ' });
+    second.detectChanges();
+    openDropdown(second);
+
+    const boxes = [
+      ...fixture.nativeElement.querySelectorAll('[role="combobox"]'),
+      ...second.nativeElement.querySelectorAll('[role="combobox"]'),
+    ] as HTMLElement[];
+    const listboxes = [
+      ...fixture.nativeElement.querySelectorAll('[role="listbox"]'),
+      ...second.nativeElement.querySelectorAll('[role="listbox"]'),
+    ] as HTMLElement[];
+    expect(boxes.length).toBe(2);
+    const controls = boxes.map((box) => box.getAttribute('aria-controls'));
+    expect(new Set(controls).size).toBe(2);
+    expect(listboxes.map((list) => list.id).sort()).toEqual([...controls].sort());
   });
 
   it('refuses the gate loudly for a view no backfill can produce', () => {

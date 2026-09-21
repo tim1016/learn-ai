@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { StrategyBuilderComponent } from './strategy-builder.component';
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import {
   SnapshotContractResult,
   StrategyAnalyzeResult,
@@ -85,7 +86,12 @@ describe('StrategyBuilderComponent', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       imports: [StrategyBuilderComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // The ticker picker must not construct the real catalog/jobs chain.
+        ...fakePickerWorld().providers,
+      ],
     });
     const fixture = TestBed.createComponent(StrategyBuilderComponent);
     component = fixture.componentInstance;
@@ -404,7 +410,12 @@ describe('StrategyBuilderComponent', () => {
       TestBed.resetTestingModule();
       TestBed.configureTestingModule({
         imports: [StrategyBuilderComponent],
-        providers: [provideHttpClient(), provideHttpClientTesting()],
+        providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // The ticker picker must not construct the real catalog/jobs chain.
+        ...fakePickerWorld().providers,
+      ],
       });
       const fixture = TestBed.createComponent(StrategyBuilderComponent);
       expect(fixture.componentInstance.chainDensity()).toBe('quick');

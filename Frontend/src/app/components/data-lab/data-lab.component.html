@@ -39,6 +39,7 @@
       <span>Ticker</span>
       <app-symbol-picker
         [symbol]="draftTicker()"
+        [adjustmentMode]="pickerAdjustmentMode()"
         (symbolChange)="onTickerPicked($event)"
       />
     </div>

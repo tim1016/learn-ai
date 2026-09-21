@@ -8,7 +8,7 @@ import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 import type { LaneFence } from '../../../fleet/lane-fence';
 
-import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
+import { fakePickerWorld, pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 /**
  * The symbol leg is the shared picker now, so "typing a symbol" is a pick:
@@ -84,7 +84,9 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
-      provideFleetDirectory(),{
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -178,6 +180,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         {
           provide: BrokersService,
@@ -237,6 +240,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         {
           provide: BrokersService,
@@ -277,7 +281,9 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -354,7 +360,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           getSqliteManualOrderTicket: vi.fn().mockResolvedValue(ticket),
@@ -425,7 +433,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           getSqliteManualOrderTicket: vi.fn().mockResolvedValue(ticket),
@@ -484,7 +494,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: ticket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { cancelSqliteManualOrderTicket, getSqliteManualOrderTicket },
       }],
@@ -547,7 +559,9 @@ describe('AlpacaOrderEntryComponent', () => {
         manualTicketId: firstTicket.ticket_id,
         manualLegId: firstTicket.legs[0].leg_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { cancelSqliteManualOrderTicket, getSqliteManualOrderTicket },
       }],
@@ -585,7 +599,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: activeTicket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { getSqliteManualOrderTicket },
       }],
@@ -624,7 +640,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: pausedTicket.ticket_id,
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { getSqliteManualOrderTicket },
       }],
@@ -662,7 +680,9 @@ describe('AlpacaOrderEntryComponent', () => {
         expectedAccountId: 'PA1',
         manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: { getSqliteManualOrderTicket },
       }],
@@ -715,7 +735,9 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -765,7 +787,9 @@ describe('AlpacaOrderEntryComponent', () => {
           supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
-      providers: [{
+      providers: [
+        ...fakePickerWorld().providers,
+        {
         provide: BrokersService,
         useValue: {
           previewSqliteManualOrder,
@@ -819,6 +843,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       },
       providers: [
+        ...fakePickerWorld().providers,
         provideFleetDirectory(),
         {
           provide: BrokersService,

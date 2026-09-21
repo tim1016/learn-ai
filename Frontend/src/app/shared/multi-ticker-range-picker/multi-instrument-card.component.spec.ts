@@ -243,6 +243,89 @@ describe('MultiInstrumentCardComponent', () => {
     expect(component.symbols()).toEqual(['SPY']);
   });
 
+  it('retries a coverage-unknown refusal by re-asking the lake, not by skipping the check', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.componentRef.setInput('unavailable', 'The lake is unreachable.');
+    fixture.detectChanges();
+
+    component.add('QQQ');
+    expect(coverage.refusals).toContainEqual(
+      expect.objectContaining({ symbol: 'QQQ', reason: 'coverage_unknown' }),
+    );
+    expect(coverage.ensureCalls).toEqual([]);
+
+    // The lake recovers; the strip's Retry re-runs the admission — which now
+    // starts a real gate instead of replaying the refusal.
+    fixture.componentRef.setInput('unavailable', null);
+    fixture.detectChanges();
+
+    // The strip's own Retry button — the operator's path.
+    const retry = Array.from(fixture.nativeElement.querySelectorAll('button')).find((b) =>
+      (b as HTMLButtonElement).textContent?.trim() === 'Retry',
+    ) as HTMLButtonElement;
+    expect(retry).not.toBeNull();
+    retry.click();
+    fixture.detectChanges();
+
+    expect(coverage.ensureCalls).toEqual([{ symbol: 'QQQ', mode: 'raw' }]);
+  });
+
+  it('refuses admission while the coverage read is still loading — no gate on a guess', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.componentRef.setInput('loading', true);
+    fixture.detectChanges();
+
+    component.add('QQQ');
+
+    expect(coverage.refusals).toContainEqual(
+      expect.objectContaining({
+        symbol: 'QQQ',
+        reason: 'coverage_unknown',
+        message: 'The lake coverage read is still in flight.',
+      }),
+    );
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('a cleared selection cancels the pending gate — a finished backfill cannot resurrect it', async () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.componentRef.setInput('allowEmpty', true);
+    fixture.detectChanges();
+
+    coverage.holdNext = true;
+    component.add('QQQ');
+    fixture.detectChanges();
+    const held = coverage.held[0];
+
+    component.selectNone();
+    fixture.detectChanges();
+    expect(held.cancelCalls).toBe(1);
+
+    held.resolve(true);
+    await flushGate(fixture);
+    expect(component.symbols()).toEqual([]);
+  });
+
+  it('a host-driven selection replacement voids the pending pick — no resurrect after a reseed', async () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    coverage.holdNext = true;
+    component.add('QQQ');
+    fixture.detectChanges();
+    const held = coverage.held[0];
+
+    // The host rebinds a fresh selection (a URL reseed, a preset) while the
+    // backfill runs.
+    setInputSymbols(['SPY']);
+    fixture.detectChanges();
+
+    held.resolve(true);
+    await flushGate(fixture);
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
   it('shows the degraded banner with a vendor retry the host wired', () => {
     fixture.componentRef.setInput('degraded', 'catalog endpoint down');
     fixture.detectChanges();

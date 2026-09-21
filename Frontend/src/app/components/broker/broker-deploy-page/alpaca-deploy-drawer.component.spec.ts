@@ -6,6 +6,7 @@ import type { BrokerAccountSnapshot } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployDrawerComponent } from './alpaca-deploy-drawer.component';
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { DEPLOY_VIEW, SHADOW_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { resourceTarget } from '../../../fleet/resource-target';
 
@@ -46,6 +47,7 @@ async function renderDrawer(
   };
   return render(AlpacaDeployDrawerComponent, {
     providers: [
+      ...fakePickerWorld().providers,
       provideRouter([]),
       { provide: BrokersService, useValue: brokers },
       {
@@ -102,6 +104,7 @@ describe('AlpacaDeployDrawerComponent', () => {
     const getAccount = vi.fn().mockResolvedValue(fakeAccount());
     const view = await render(AlpacaDeployDrawerComponent, {
       providers: [
+        ...fakePickerWorld().providers,
         provideRouter([]),
         { provide: BrokersService, useValue: { getAccount } },
         {

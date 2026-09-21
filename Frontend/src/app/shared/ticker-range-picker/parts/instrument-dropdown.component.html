@@ -13,7 +13,7 @@
       </button>
     </div>
   }
-  <div class="dropdown__scroll" id="ticker-range-picker-listbox" role="listbox">
+  <div class="dropdown__scroll" [attr.id]="listboxId()" role="listbox">
     @if (model.query === "" && model.recent.length > 0) {
       <div class="dropdown__header" role="presentation">Recent</div>
       @for (t of model.recent; track t.symbol) {

@@ -13,6 +13,8 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
+import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
+import type { PriceAdjustmentMode } from '../../shared/data-lake';
 import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
 import {
   RUN_DOCK_SOURCE,
@@ -299,6 +301,15 @@ export class DataLabComponent {
 
   // ── Compact scope bar ─────────────────────────────────────
   readonly draftTicker = computed(() => this.store.draft().ticker);
+
+  /**
+   * The tree this page's chart reads — the picker's coverage badge and gate
+   * must follow it, so a session restored with `adjusted: false` admits
+   * symbols against the raw tree the run will actually query.
+   */
+  readonly pickerAdjustmentMode = computed<PriceAdjustmentMode>(() =>
+    this.store.draft().adjusted ? DEFAULT_ADJUSTMENT_MODE : 'raw',
+  );
   readonly draftFromIso = computed(() => utcMsToIsoDate(this.store.draft().window.startMsUtc));
   readonly draftToIso = computed(() => utcMsToIsoDate(this.store.draft().window.endMsUtc));
   readonly draftTimeframeValue = computed(() => {

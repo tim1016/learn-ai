@@ -21,7 +21,7 @@
       [attr.aria-expanded]="open()"
       [attr.aria-label]="label()"
       aria-haspopup="listbox"
-      aria-controls="ticker-range-picker-listbox"
+      [attr.aria-controls]="listboxId"
       (click)="openDropdown()"
       (keydown.enter)="onTickerBoxEnter($event)"
       (keydown.space)="onTickerBoxSpace($event)"
@@ -63,6 +63,7 @@
         <app-instrument-dropdown
           [view]="dropdownView()"
           [gate]="gate.state()"
+          [listboxId]="listboxId"
           (pick)="pickTicker($event)"
           (retryLake)="retryCatalog()"
           (retryVendor)="retryVendorCatalog()"

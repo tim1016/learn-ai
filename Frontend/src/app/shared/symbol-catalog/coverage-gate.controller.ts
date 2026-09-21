@@ -56,11 +56,8 @@ export class CoverageGateController {
 
   /** Release the pending gate, if any; safe to call on every teardown path. */
   abandon(): void {
-    const session = this.pendingSession();
-    if (session === null) return;
-    this.pendingSession.set(null);
+    this.releaseSession();
     this.pending = null;
-    void session.cancel();
   }
 
   /**
@@ -105,8 +102,10 @@ export class CoverageGateController {
   }
 
   private start(symbol: string, mode: BackfillableMode, commit: (symbol: string) => void): void {
-    this.abandon();
-    this.pending = { symbol, mode, lakeDark: () => null, commit };
+    // Release only the session — `this.pending` is the admission `admit()`
+    // just recorded, and its `lakeDark` is what a Retry must re-ask; a null
+    // stub here is how a retry could skip the lake check.
+    this.releaseSession();
     const session = this.coverage.ensure(symbol, mode);
     this.pendingSession.set(session);
     void session.done.then((ready) => {
@@ -132,11 +131,18 @@ export class CoverageGateController {
     message: string,
     retryCommit: ((symbol: string) => void) | null,
   ): void {
-    const session = this.pendingSession();
-    if (session !== null) void session.cancel();
+    this.releaseSession();
     // A refusal with a retry commit keeps it: Retry re-runs `admit` with a
     // fresh lake verdict rather than dead-ending on the strip.
     if (retryCommit === null) this.pending = null;
     this.pendingSession.set(this.coverage.refuse(symbol, mode, reason, message));
+  }
+
+  /** Cancel the session this controller holds; the admission stays armed. */
+  private releaseSession(): void {
+    const session = this.pendingSession();
+    if (session === null) return;
+    this.pendingSession.set(null);
+    void session.cancel();
   }
 }

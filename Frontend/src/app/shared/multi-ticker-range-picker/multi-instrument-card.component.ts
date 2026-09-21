@@ -121,11 +121,23 @@ export class MultiInstrumentCardComponent {
         // The same admission the single-symbol card makes: refuse while
         // the lake's verdict is unknowable, refuse a tree nothing can
         // backfill, else gate the pick on its backfill.
+        // The selection this pick was admitted against. A host-driven
+        // replacement (a reseed, a URL change) writes a new array; a commit
+        // that lands after that would resurrect a pick the host already
+        // superseded, so it only lands into the same selection.
+        const selectionAtAdmission = this.symbols();
         this.gate.admit({
           symbol,
           mode,
-          lakeDark: () => this.unavailable(),
-          commit: (covered) => this.commitAdd(covered),
+          // No verdict exists while the lake read is in flight either —
+          // vendor-only rows already render then, and gating one would be
+          // a backfill on a guess (ADR 0066's coverage-unknown refusal).
+          lakeDark: () =>
+            this.unavailable() ??
+            (this.loading() ? 'The lake coverage read is still in flight.' : null),
+          commit: (covered) => {
+            if (this.symbols() === selectionAtAdmission) this.commitAdd(covered);
+          },
         });
         return;
       }
@@ -134,6 +146,9 @@ export class MultiInstrumentCardComponent {
   }
 
   remove(symbol: string): void {
+    // Editing the selection voids the pending pick — it must not commit
+    // back in over the operator's change.
+    this.gate.abandon();
     const next = this.symbols().filter((s) => s !== symbol);
     // See `allowEmpty`: an empty selection is either honest or refused.
     if (next.length === 0 && !this.allowEmpty()) return;
@@ -142,12 +157,16 @@ export class MultiInstrumentCardComponent {
 
   selectAll(): void {
     if (this.selectAllDisabled()) return;
+    this.gate.abandon();
     const all = this.options().map((t) => t.symbol);
     if (all.length === 0) return;
     this.symbols.set(all);
   }
 
   selectNone(): void {
+    // "None" is a wholesale replacement — a pending gate has nothing left
+    // to speak for and must not resurrect what the operator cleared.
+    this.gate.abandon();
     if (this.allowEmpty()) {
       // "None" means none — over a universe of thousands, keeping options[0]
       // would quietly nominate an arbitrary symbol.

@@ -74,6 +74,14 @@ export class InstrumentCardComponent {
   /** Rows rendered per dropdown open — past this, search is the scaler. */
   private static readonly MAX_VISIBLE_ROWS = 50;
 
+  /**
+   * This card's listbox id. Pages can mount several cards (an order entry
+   * with N legs), and every combobox must reference its own listbox — a
+   * shared literal id breaks the association and AXE's duplicate-id check.
+   */
+  private static nextListboxId = 0;
+  readonly listboxId = `ticker-range-picker-listbox-${InstrumentCardComponent.nextListboxId++}`;
+
   readonly value = model.required<TickerRange>();
   readonly appearance = input<'card' | 'flat'>('card');
   /**
@@ -121,9 +129,19 @@ export class InstrumentCardComponent {
   readonly catalogStatus = computed<SymbolCatalogStatus>(() =>
     this.universe() === null ? this.view().status() : { kind: 'ready' },
   );
-  readonly catalogUnavailable = computed<string | null>(() =>
-    this.universe() === null ? this.view().unavailableMessage() : null,
-  );
+  /**
+   * Why no coverage verdict exists right now — the lake's failure, or its
+   * read still being in flight. A gate may not run on either: while the
+   * lake loads, vendor-only rows already render with no held verdict, and
+   * gating one would be a full-history backfill on a guess.
+   */
+  readonly coverageUnknown = computed<string | null>(() => {
+    if (this.universe() !== null) return null;
+    const status = this.view().status();
+    if (status.kind === 'unavailable') return status.message;
+    if (status.kind === 'loading') return 'The lake coverage read is still in flight.';
+    return null;
+  });
   /** A host-supplied universe is not the joined catalog, so its copy differs. */
   readonly hostUniverse = computed(() => this.universe() !== null);
 
@@ -147,6 +165,17 @@ export class InstrumentCardComponent {
         const input = this.searchInput();
         if (input) queueMicrotask(() => input.nativeElement.focus());
       }
+    });
+    // A symbol that changed without this card picking it — a host seed, a
+    // strategy switch, a reset — voids the pending pick exactly as a fresh
+    // pick does; a finished backfill must never overwrite the newer symbol.
+    let lastSymbol: string | null = null;
+    effect(() => {
+      const symbol = this.value().symbol;
+      if (lastSymbol !== null && symbol !== lastSymbol) {
+        this.gate.abandon();
+      }
+      lastSymbol = symbol;
     });
     this.destroyRef.onDestroy(() => this.gate.abandon());
   }
@@ -290,7 +319,7 @@ export class InstrumentCardComponent {
     this.gate.admit({
       symbol: t.symbol,
       mode: this.adjustmentMode(),
-      lakeDark: () => this.catalogUnavailable(),
+      lakeDark: () => this.coverageUnknown(),
       commit: (covered) => this.onCovered(covered),
     });
   }

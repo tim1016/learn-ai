@@ -8,6 +8,7 @@ import {
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 import {
+  fakePickerWorld,
   pickSymbol,
   symbolPicker,
 } from '../../../shared/symbol-picker/testing/fake-picker-world';
@@ -88,6 +89,7 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
 async function renderWorkflow(service = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
+      ...fakePickerWorld().providers,
       provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },

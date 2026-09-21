@@ -154,6 +154,7 @@ function mockService(
 async function renderWorkflow(service = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
+      ...fakePickerWorld().providers,
       provideFleetDirectory(),
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
@@ -165,6 +166,7 @@ async function renderWorkflow(service = mockService()) {
 }
 
 import {
+  fakePickerWorld,
   pickSymbol,
   symbolPicker,
 } from '../../../shared/symbol-picker/testing/fake-picker-world';
