@@ -25,6 +25,7 @@ import type { TickerRange } from '../ticker-range-picker/ticker-range-picker.typ
     <app-instrument-card
       [appearance]="appearance()"
       [adjustmentMode]="adjustmentMode()"
+      [label]="label()"
       [value]="projection()"
       (valueChange)="onRangePatch($event)"
     />
@@ -38,6 +39,9 @@ export class SymbolPickerComponent {
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
 
   readonly appearance = input<'card' | 'flat'>('flat');
+
+  /** The picker's landmark and combobox name — name every picker on a page. */
+  readonly label = input('Symbol');
 
   protected readonly projection = computed<TickerRange>(() => ({
     symbol: this.symbol(),

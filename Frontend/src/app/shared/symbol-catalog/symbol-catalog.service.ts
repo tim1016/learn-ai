@@ -37,6 +37,14 @@ export interface SymbolCatalogView {
   /** One exhaustive availability verdict; contradictory flag sets cannot exist. */
   readonly status: Signal<SymbolCatalogStatus>;
   /**
+   * The verdict as the three booleans a picker card actually renders, so
+   * hosts stop re-deriving them: the loading note, the lake-dark banner and
+   * the vendor-degraded banner are one mapping, not one per host.
+   */
+  readonly loading: Signal<boolean>;
+  readonly unavailableMessage: Signal<string | null>;
+  readonly degradedMessage: Signal<string | null>;
+  /**
    * Refresh the lake's coverage — the read a dropdown-open means by
    * "reload". The vendor catalog is deliberately untouched: it is read
    * once per tab and shared by every picker, so an ordinary open costs no
@@ -149,17 +157,27 @@ export class SymbolCatalogService {
 
     const lakeView = this.lake.viewFor(mode);
 
+    const status = computed<SymbolCatalogStatus>(() => {
+      const lakeReason = lakeView.unavailable();
+      if (lakeReason !== null) return { kind: 'unavailable', message: lakeReason };
+      if (lakeView.loading()) return { kind: 'loading' };
+      const vendorReason = this.vendor.unavailable();
+      if (vendorReason !== null) return { kind: 'degraded', message: vendorReason };
+      if (this.vendor.loading()) return { kind: 'loading' };
+      return { kind: 'ready' };
+    });
     const view: SymbolCatalogView = {
       pool: computed(() => joinCatalog(lakeView.pool(), this.vendor.entries())),
       recent: lakeView.recent,
-      status: computed<SymbolCatalogStatus>(() => {
-        const lakeReason = lakeView.unavailable();
-        if (lakeReason !== null) return { kind: 'unavailable', message: lakeReason };
-        if (lakeView.loading()) return { kind: 'loading' };
-        const vendorReason = this.vendor.unavailable();
-        if (vendorReason !== null) return { kind: 'degraded', message: vendorReason };
-        if (this.vendor.loading()) return { kind: 'loading' };
-        return { kind: 'ready' };
+      status,
+      loading: computed(() => status().kind === 'loading'),
+      unavailableMessage: computed(() => {
+        const verdict = status();
+        return verdict.kind === 'unavailable' ? verdict.message : null;
+      }),
+      degradedMessage: computed(() => {
+        const verdict = status();
+        return verdict.kind === 'degraded' ? verdict.message : null;
       }),
       reload: () => {
         lakeView.reload();

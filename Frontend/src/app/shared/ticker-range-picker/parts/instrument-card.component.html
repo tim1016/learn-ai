@@ -2,7 +2,7 @@
   #rootEl
   class="group"
   [class.group--flat]="appearance() === 'flat'"
-  aria-label="Instrument"
+  [attr.aria-label]="label()"
 >
   <header class="group__head">
     <span class="group__eyebrow">
@@ -19,6 +19,7 @@
       tabindex="0"
       [class.ticker-box--open]="open()"
       [attr.aria-expanded]="open()"
+      [attr.aria-label]="label()"
       aria-haspopup="listbox"
       aria-controls="ticker-range-picker-listbox"
       (click)="openDropdown()"

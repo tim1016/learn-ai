@@ -10,11 +10,9 @@ import {
   output,
 } from '@angular/core';
 
-import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
-import type { BackfillableMode } from '../symbol-catalog/ensure-coverage.service';
+import { isHeldRow, type PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
 import { CoverageGateController } from '../symbol-catalog/coverage-gate.controller';
 import { CoverageGateStripComponent } from '../symbol-catalog/coverage-gate-strip.component';
-import { formatReceiptLabel } from '../pipes/receipt-label.pipe';
 import type { PriceAdjustmentMode } from '../data-lake';
 import { MultiInstrumentSearchComponent } from './multi-instrument-search.component';
 
@@ -117,9 +115,20 @@ export class MultiInstrumentCardComponent {
 
   add(symbol: string): void {
     const mode = this.adjustmentMode();
-    if (mode !== null && !this.isHeld(symbol)) {
-      this.gateUnheld(symbol, mode);
-      return;
+    if (mode !== null) {
+      const row = this.options().find((t) => t.symbol === symbol);
+      if (row === undefined || !isHeldRow(row)) {
+        // The same admission the single-symbol card makes: refuse while
+        // the lake's verdict is unknowable, refuse a tree nothing can
+        // backfill, else gate the pick on its backfill.
+        this.gate.admit({
+          symbol,
+          mode,
+          lakeDark: () => this.unavailable(),
+          commit: (covered) => this.commitAdd(covered),
+        });
+        return;
+      }
     }
     this.commitAdd(symbol);
   }
@@ -152,9 +161,7 @@ export class MultiInstrumentCardComponent {
   }
 
   protected retryGate(): void {
-    const mode = this.backfillableMode();
-    if (mode === null) return;
-    this.gate.retry(mode);
+    this.gate.retry();
   }
 
   /** Cancel and Dismiss are the same act: this card lets its gate go. */
@@ -162,45 +169,9 @@ export class MultiInstrumentCardComponent {
     this.gate.abandon();
   }
 
-  /** `lastHeld` is absent (undefined) on a vendor-only row, not null. */
-  private isHeld(symbol: string): boolean {
-    const row = this.options().find((t) => t.symbol === symbol);
-    return row !== undefined && row.lastHeld !== null && row.lastHeld !== undefined;
-  }
-
-  /**
-   * The same refusals the single-symbol card makes, over the status the
-   * host adapts: with the lake dark no held verdict exists, so no gate may
-   * run on a guess; a tree nothing can backfill is refused loudly.
-   */
-  private gateUnheld(symbol: string, mode: PriceAdjustmentMode): void {
-    const lakeReason = this.unavailable();
-    if (lakeReason !== null) {
-      this.gate.refuse(symbol, mode, 'coverage_unknown', lakeReason);
-      return;
-    }
-    const backfillable = this.backfillableMode();
-    if (backfillable === null) {
-      this.gate.refuse(
-        symbol,
-        mode,
-        'view_not_backfillable',
-        `Nothing derives the ${formatReceiptLabel(mode)} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
-      );
-      return;
-    }
-    this.gate.start(symbol, backfillable, (covered) => this.commitAdd(covered));
-  }
-
   private commitAdd(symbol: string): void {
     const selected = this.symbols();
     if (selected.includes(symbol)) return;
     this.symbols.set([...selected, symbol]);
-  }
-
-  /** The adjustment modes a backfill can actually write, or null. */
-  private backfillableMode(): BackfillableMode | null {
-    const mode = this.adjustmentMode();
-    return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
   }
 }

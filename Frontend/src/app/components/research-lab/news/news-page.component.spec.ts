@@ -10,18 +10,7 @@ import { environment } from '../../../../environments/environment';
 import { NewsPageComponent } from './news-page.component';
 import { By } from '@angular/platform-browser';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
-import {
-  fakeEnsureCoverage,
-  fakeVendorCatalog,
-  provideFakeEnsureCoverage,
-  provideFakeVendorCatalog,
-} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
-import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
-
-const PICKER_POOL = [
-  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-];
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 const NEWS_URL = `${environment.pythonServiceUrl}/api/news`;
 
@@ -59,9 +48,7 @@ async function renderPage() {
       provideHttpClient(),
       provideHttpClientTesting(),
       // The ticker filter's picker must not issue real catalog reads.
-      provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
-      provideFakeVendorCatalog(fakeVendorCatalog()),
-      provideFakeEnsureCoverage(fakeEnsureCoverage()),
+      ...fakePickerWorld().providers,
     ],
   });
   const http = TestBed.inject(HttpTestingController);

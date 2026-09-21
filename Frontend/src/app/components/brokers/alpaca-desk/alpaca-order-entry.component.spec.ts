@@ -1,28 +1,27 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
-import { By } from '@angular/platform-browser';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../services/brokers.service';
-import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 import type { LaneFence } from '../../../fleet/lane-fence';
 
+import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
+
 /**
  * The symbol leg is the shared picker now, so "typing a symbol" is a pick:
  * set the picker's model and let its output write the leg's Signal Forms
- * field, exactly as a real pick does.
+ * field, exactly as a real pick does. The picker's combobox carries the
+ * leg-scoped label ('Leg N symbol').
  */
 async function fillFirstLeg(
   view: RenderResult<AlpacaOrderEntryComponent>,
   symbol: string,
   quantity: string,
 ): Promise<void> {
-  const picker = view.fixture.debugElement.query(By.directive(SymbolPickerComponent));
-  (picker.componentInstance as SymbolPickerComponent).symbol.set(symbol);
-  view.fixture.detectChanges();
+  pickSymbol(view.fixture, symbol);
   const qtyInput = await screen.findByLabelText('Leg 1 quantity');
   fireEvent.input(qtyInput, { target: { value: quantity } });
   fireEvent.change(qtyInput, { target: { value: quantity } });

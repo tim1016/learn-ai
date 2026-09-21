@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
+import { flushGate } from '../symbol-picker/testing/fake-picker-world';
 import { MultiInstrumentCardComponent } from './multi-instrument-card.component';
 import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
 import {
@@ -33,12 +34,6 @@ describe('MultiInstrumentCardComponent', () => {
     return input;
   }
 
-  /** Flushes the gate's promise chain; the fake ensure resolves immediately. */
-  async function flushGate(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
-    fixture.detectChanges();
-  }
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
@@ -174,7 +169,7 @@ describe('MultiInstrumentCardComponent', () => {
     expect(coverage.ensureCalls).toEqual([{ symbol: 'QQQ', mode: 'raw' }]);
     expect(component.symbols()).toEqual(['SPY']); // populate-then-use
 
-    await flushGate();
+    await flushGate(fixture);
     expect(component.symbols()).toEqual(['SPY', 'QQQ']);
   });
 

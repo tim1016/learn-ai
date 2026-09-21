@@ -1,7 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
-import { By } from '@angular/platform-browser';
-import type { ComponentFixture } from '@angular/core/testing';
 import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { BehaviorSubject, of } from 'rxjs';
@@ -15,7 +13,6 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
-import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
@@ -167,23 +164,10 @@ async function renderWorkflow(service = mockService()) {
   return rendered;
 }
 
-/**
- * The trading symbol is the shared picker now (ADR 0066), so a trader edit
- * is a pick: set the picker's model and let its output drive the workflow's
- * `setSymbol`, exactly as a real pick does. Raw strings (like `' brk.b '`)
- * still flow through, because `setSymbol`'s normalization is what these
- * tests exercise.
- */
-function pickSymbol(
-  fixture: ComponentFixture<AlpacaDeployWorkflowComponent>,
-  value: string,
-): SymbolPickerComponent {
-  const picker = fixture.debugElement.query(By.directive(SymbolPickerComponent));
-  const component = picker.componentInstance as SymbolPickerComponent;
-  component.symbol.set(value);
-  fixture.detectChanges();
-  return component;
-}
+import {
+  pickSymbol,
+  symbolPicker,
+} from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 describe('AlpacaDeployWorkflowComponent', () => {
   it('defaults to a concise trader view without duplicating strategy provenance', async () => {
@@ -332,10 +316,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     // The Golden scope seeds the picker's symbol — read it from the picker,
     // which is the symbol's only editing surface now.
-    const seeded = view.fixture.debugElement.query(
-      By.directive(SymbolPickerComponent),
-    ).componentInstance as SymbolPickerComponent;
-    expect(seeded.symbol()).toBe('TSLA');
+    expect(symbolPicker(view.fixture).symbol()).toBe('TSLA');
     expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));

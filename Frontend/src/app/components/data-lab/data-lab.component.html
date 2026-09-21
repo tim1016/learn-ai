@@ -38,7 +38,6 @@
     <div class="dl-shell__field">
       <span>Ticker</span>
       <app-symbol-picker
-        class="dl-shell__ticker-picker"
         [symbol]="draftTicker()"
         (symbolChange)="onTickerPicked($event)"
       />

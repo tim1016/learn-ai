@@ -72,7 +72,7 @@ export class MultiTickerRangePickerComponent {
   readonly legendTreatment = input<LegendTreatment>('tinted-bold');
 
   private readonly symbols = inject(SymbolCatalogService);
-  private readonly view = computed(() => {
+  protected readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602).
     const mode = this.adjustmentMode();
@@ -83,18 +83,6 @@ export class MultiTickerRangePickerComponent {
   protected readonly options = computed<readonly PickerSymbol[]>(() =>
     this.view().pool(),
   );
-  protected readonly catalogLoading = computed(
-    () => this.view().status().kind === 'loading',
-  );
-  protected readonly catalogUnavailable = computed<string | null>(() => {
-    const status = this.view().status();
-    return status.kind === 'unavailable' ? status.message : null;
-  });
-  /** The vendor is dark but the lake answered — degraded, not empty. */
-  protected readonly vendorUnavailable = computed<string | null>(() => {
-    const status = this.view().status();
-    return status.kind === 'degraded' ? status.message : null;
-  });
 
   protected retryCatalog(): void {
     this.view().reload();

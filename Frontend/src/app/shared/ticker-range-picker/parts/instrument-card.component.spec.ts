@@ -1,6 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  flushGate,
+  openDropdown,
+} from '../../symbol-picker/testing/fake-picker-world';
 import { InstrumentCardComponent } from './instrument-card.component';
 import {
   fakeTickerCatalog,
@@ -71,19 +75,6 @@ describe('InstrumentCardComponent', () => {
     fixture.componentRef.setInput('value', baseValue);
   });
 
-  function openDropdown(): void {
-    const tickerBox: HTMLElement | null = fixture.nativeElement.querySelector('[role="combobox"]');
-    expect(tickerBox).not.toBeNull();
-    tickerBox?.click();
-    fixture.detectChanges();
-  }
-
-  /** Flushes the gate's promise chain; the fake ensure resolves immediately. */
-  async function flushGate(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
-    fixture.detectChanges();
-  }
 
   it('renders the current symbol and exchange', () => {
     fixture.detectChanges();
@@ -95,7 +86,7 @@ describe('InstrumentCardComponent', () => {
   it('opens the dropdown on click and shows the recent list when query is empty', () => {
     catalog.view.recent.set(['QQQ']);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Recent');
@@ -127,7 +118,7 @@ describe('InstrumentCardComponent', () => {
       },
     ]);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('GLD');
@@ -147,7 +138,7 @@ describe('InstrumentCardComponent', () => {
       },
     ]);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('TSLA');
@@ -157,7 +148,7 @@ describe('InstrumentCardComponent', () => {
 
   it('renders each row through the shared asset identity', () => {
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const rows = fixture.nativeElement.querySelectorAll('.dropdown__scroll .row');
     expect(rows.length).toBeGreaterThan(0);
@@ -185,7 +176,7 @@ describe('InstrumentCardComponent', () => {
       },
     ]);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('AAPL');
@@ -212,7 +203,7 @@ describe('InstrumentCardComponent', () => {
       },
     ]);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('OLD');
@@ -222,7 +213,7 @@ describe('InstrumentCardComponent', () => {
   it('shows a banner — not a blank list — when the live catalog is dark', () => {
     alpaca.unavailable.set('The broker catalog is unreachable.');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Live catalog unavailable');
@@ -235,7 +226,7 @@ describe('InstrumentCardComponent', () => {
     catalog.view.unavailable.set('The data lake is unreachable.');
     alpaca.unavailable.set('The live catalog is unreachable.');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('The data lake is unreachable.');
@@ -253,7 +244,7 @@ describe('InstrumentCardComponent', () => {
     catalog.view.pool.set([]);
     catalog.view.unavailable.set('The data lake is unreachable.');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     expect(fixture.nativeElement.textContent).toContain('The data lake is unreachable.');
 
@@ -267,7 +258,7 @@ describe('InstrumentCardComponent', () => {
 
   it('says a no-match search found no listed symbol', () => {
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
     component.onSearchInput('NOPE');
     fixture.detectChanges();
 
@@ -348,7 +339,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
 
     expect(coverage.ensureCalls).toEqual([{ symbol: 'NVDA', mode: 'polygon_split_adjusted' }]);
     expect(component.value().symbol).toBe('NVDA');
@@ -366,7 +357,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
 
     expect(component.value().symbol).toBe('SPY');
     const strip: HTMLElement | null = fixture.nativeElement.querySelector(
@@ -417,14 +408,14 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
 
     const buttons = fixture.nativeElement.querySelectorAll('app-coverage-gate-strip .gate button');
     const dismiss = Array.from(buttons).find(
       (b) => (b as HTMLButtonElement).textContent?.trim() === 'Dismiss',
     ) as HTMLButtonElement | undefined;
     dismiss?.click();
-    await flushGate();
+    await flushGate(fixture);
 
     expect((component.gate.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
     expect(fixture.nativeElement.querySelector('app-coverage-gate-strip')).toBeNull();
@@ -433,7 +424,7 @@ describe('InstrumentCardComponent', () => {
   it('distinguishes an empty lake from a search that matched nothing', () => {
     catalog.view.pool.set([]);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('the lake holds nothing yet');
@@ -444,7 +435,7 @@ describe('InstrumentCardComponent', () => {
     catalog.view.pool.set([]);
     catalog.view.unavailable.set('The data lake is unreachable.');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     // The real service clears `unavailable` for the duration of a reload, so
     // the operator sees the retry working instead of the message that
@@ -462,7 +453,7 @@ describe('InstrumentCardComponent', () => {
     catalog.view.pool.set([]);
     catalog.view.unavailable.set('The data lake is unreachable.');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const listbox: HTMLElement | null = fixture.nativeElement.querySelector('[role="listbox"]');
     expect(listbox).not.toBeNull();
@@ -488,7 +479,7 @@ describe('InstrumentCardComponent', () => {
       { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
     ]);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('QQQ');
@@ -513,7 +504,7 @@ describe('InstrumentCardComponent', () => {
     ]);
     fixture.componentRef.setInput('adjustmentMode', 'raw');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('RAWONLY');
@@ -528,7 +519,7 @@ describe('InstrumentCardComponent', () => {
   it('re-reads only the lake coverage when the dropdown opens', () => {
     fixture.detectChanges();
     const before = catalog.view.reloadCount;
-    openDropdown();
+    openDropdown(fixture);
 
     expect(catalog.view.reloadCount).toBe(before + 1);
     expect(alpaca.reloadCount).toBe(before);
@@ -540,7 +531,7 @@ describe('InstrumentCardComponent', () => {
     ]);
     fixture.detectChanges();
     const before = catalog.view.reloadCount;
-    openDropdown();
+    openDropdown(fixture);
 
     expect(catalog.view.reloadCount).toBe(before);
     expect(alpaca.reloadCount).toBe(before);
@@ -561,7 +552,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
     const heldGate = component.gate.pendingSession() as FakeCoverageSession;
     expect(heldGate).not.toBeNull();
 
@@ -572,7 +563,7 @@ describe('InstrumentCardComponent', () => {
     expect(heldGate.cancelCalls).toBe(1);
 
     heldGate.resolve(true);
-    await flushGate();
+    await flushGate(fixture);
     expect(component.value().symbol).toBe('SPY');
   });
 
@@ -587,7 +578,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
     const adjustedGate = component.gate.pendingSession() as FakeCoverageSession;
 
     fixture.componentRef.setInput('adjustmentMode', 'raw');
@@ -596,7 +587,7 @@ describe('InstrumentCardComponent', () => {
     expect(adjustedGate.cancelCalls).toBe(1);
     expect(component.gate.pendingSession()).toBeNull();
     adjustedGate.resolve(true);
-    await flushGate();
+    await flushGate(fixture);
     expect(component.value().symbol).toBe('SPY');
   });
 
@@ -608,7 +599,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
     const session = component.gate.pendingSession() as FakeCoverageSession;
 
     fixture.destroy();
@@ -629,7 +620,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
     // Another card's gate, co-waiting on the same run in the real service.
     const otherCardsGate = fakeHeldSession('NVDA');
     expect(otherCardsGate.cancelCalls).toBe(0);
@@ -651,7 +642,7 @@ describe('InstrumentCardComponent', () => {
     }));
     alpaca.entries.set(many);
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
     component.onSearchInput('SYM');
     fixture.detectChanges();
 
@@ -676,7 +667,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
 
     expect(coverage.ensureCalls).toEqual([]);
     expect(coverage.refusals).toEqual([
@@ -701,7 +692,7 @@ describe('InstrumentCardComponent', () => {
       name: 'NVIDIA',
       exchange: 'NASDAQ',
     });
-    await flushGate();
+    await flushGate(fixture);
 
     const labels = Array.from(
       fixture.nativeElement.querySelectorAll('app-coverage-gate-strip .gate button'),

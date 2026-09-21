@@ -15,6 +15,15 @@ import type { TickerSnapshot } from '../../shared/ticker-date-picker/ticker-date
   styleUrls: ['./ticker-explorer.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
+/**
+ * Snapshot explorer for live option chains. "Fetch Chain" calls
+ * `getOptionsChainSnapshot`, a live Polygon lookup — not a backtest over
+ * lake bars — yet its picker uses the joined catalog's default anyway
+ * (every listed symbol, unheld picks gated on their backfill): ADR 0066's
+ * accepted trade — one story everywhere beats per-surface special cases —
+ * and a listing-wide menu without a display-label map standing in for
+ * membership (#1960).
+ */
 export class TickerExplorerComponent {
   private marketDataService = inject(MarketDataService);
 
@@ -23,13 +32,6 @@ export class TickerExplorerComponent {
   // The default expiration is the next Friday; the component-supplied
   // minDate restricts selection to today and forward (option expirations
   // are always future-dated).
-  /**
-   * This page's "Fetch Chain" calls `getOptionsChainSnapshot`, a live Polygon
-   * lookup — not a backtest over lake bars. Its picker therefore uses the
-   * joined catalog's default (every listed symbol, unheld picks gated on
-   * their backfill): a listing-wide menu without a label map standing in
-   * for membership (#1960).
-   */
   snapshot = signal<TickerSnapshot>({
     symbol: 'AAPL',
     date: TickerExplorerComponent.getNextFriday(),

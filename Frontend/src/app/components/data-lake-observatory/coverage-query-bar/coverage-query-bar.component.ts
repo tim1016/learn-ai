@@ -90,23 +90,10 @@ export class CoverageQueryBarComponent {
   private readonly symbols = inject(SymbolCatalogService);
 
   /** Coverage badges follow the tree the heatmap will answer for. */
-  private readonly catalogView = computed(() => {
+  protected readonly catalogView = computed(() => {
     // `viewFor` installs a resource — step outside tracking (NG0602).
     const mode = this.draft().priceAdjustmentMode;
     return untracked(() => this.symbols.viewFor(mode));
-  });
-
-  protected readonly pickerOptions = computed(() => this.catalogView().pool());
-  protected readonly pickerLoading = computed(
-    () => this.catalogView().status().kind === 'loading',
-  );
-  protected readonly pickerUnavailable = computed<string | null>(() => {
-    const status = this.catalogView().status();
-    return status.kind === 'unavailable' ? status.message : null;
-  });
-  protected readonly pickerDegraded = computed<string | null>(() => {
-    const status = this.catalogView().status();
-    return status.kind === 'degraded' ? status.message : null;
   });
 
   protected readonly parsed = computed(() =>

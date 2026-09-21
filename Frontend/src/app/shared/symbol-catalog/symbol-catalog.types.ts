@@ -12,6 +12,16 @@ export interface PickerSymbol extends TickerOption {
   readonly delisted: boolean;
 }
 
+/**
+ * Whether a picker row carries a lake-held span. `lastHeld` is absent
+ * (undefined) on rows a host universe built without coverage data and
+ * explicitly `null` on vendor-only rows — both mean "not held", the gate's
+ * subject.
+ */
+export function isHeldRow(row: TickerOption): boolean {
+  return row.lastHeld !== null && row.lastHeld !== undefined;
+}
+
 /** A host-supplied `TickerOption[]` universe lifted into picker rows. */
 export function toPickerSymbol(option: TickerOption): PickerSymbol {
   return { ...option, delisted: false };

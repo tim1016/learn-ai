@@ -75,7 +75,6 @@
           <label for="portfolio-trade-symbol">Symbol</label>
           <app-symbol-picker
             id="portfolio-trade-symbol"
-            class="trade-symbol-picker"
             [symbol]="tradeSymbol()"
             (symbolChange)="tradeSymbol.set($event)"
           />

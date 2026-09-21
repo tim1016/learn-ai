@@ -3,18 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { PricingLabComponent } from './pricing-lab.component';
-import {
-  fakeEnsureCoverage,
-  fakeVendorCatalog,
-  provideFakeEnsureCoverage,
-  provideFakeVendorCatalog,
-} from '../../shared/symbol-catalog/testing/fake-symbol-catalog';
-import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
-
-const PICKER_POOL = [
-  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-];
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { PricingCompareResult, SnapshotContractResult } from '../../graphql/types';
 
 vi.mock('lightweight-charts', () => {
@@ -79,9 +68,7 @@ describe('PricingLabComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         // The ticker picker must not issue real catalog or jobs reads.
-        provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
-        provideFakeVendorCatalog(fakeVendorCatalog()),
-        provideFakeEnsureCoverage(fakeEnsureCoverage()),
+        ...fakePickerWorld().providers,
       ],
     });
     const fixture = TestBed.createComponent(PricingLabComponent);

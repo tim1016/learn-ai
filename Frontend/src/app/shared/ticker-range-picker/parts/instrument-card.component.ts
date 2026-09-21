@@ -18,8 +18,8 @@ import { type TickerOption, type TickerRange } from '../ticker-range-picker.type
 import { DEFAULT_ADJUSTMENT_MODE } from '../../ticker-catalog';
 import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.service';
 import type { SymbolCatalogStatus } from '../../symbol-catalog/symbol-catalog.service';
-import type { BackfillableMode } from '../../symbol-catalog/ensure-coverage.service';
 import { CoverageGateController } from '../../symbol-catalog/coverage-gate.controller';
+import { isHeldRow } from '../../symbol-catalog/symbol-catalog.types';
 import {
   InstrumentDropdownComponent,
   type InstrumentDropdownView,
@@ -29,7 +29,6 @@ import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import { toPickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { PriceAdjustmentMode } from '../../data-lake';
 import { AssetIdentityComponent } from '../../asset-identity';
-import { formatReceiptLabel } from '../../pipes/receipt-label.pipe';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 /**
@@ -77,6 +76,12 @@ export class InstrumentCardComponent {
 
   readonly value = model.required<TickerRange>();
   readonly appearance = input<'card' | 'flat'>('card');
+  /**
+   * The card's landmark and combobox name. Pages that mount several cards
+   * (an order entry with N legs) must name each — AXE's landmark-unique
+   * rule is about the operator telling the pickers apart.
+   */
+  readonly label = input('Instrument');
 
   /**
    * The tree this picker's run will read. Belongs to the host page — Strategy
@@ -116,10 +121,9 @@ export class InstrumentCardComponent {
   readonly catalogStatus = computed<SymbolCatalogStatus>(() =>
     this.universe() === null ? this.view().status() : { kind: 'ready' },
   );
-  readonly catalogUnavailable = computed<string | null>(() => {
-    const state = this.catalogStatus();
-    return state.kind === 'unavailable' ? state.message : null;
-  });
+  readonly catalogUnavailable = computed<string | null>(() =>
+    this.universe() === null ? this.view().unavailableMessage() : null,
+  );
   /** A host-supplied universe is not the joined catalog, so its copy differs. */
   readonly hostUniverse = computed(() => this.universe() !== null);
 
@@ -208,12 +212,6 @@ export class InstrumentCardComponent {
     hostUniverse: this.hostUniverse(),
   }));
 
-  /** The adjustment modes a backfill can actually write, or null. */
-  readonly backfillableMode = computed<BackfillableMode | null>(() => {
-    const mode = this.adjustmentMode();
-    return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
-  });
-
   /** The lake's own read failed — retry the lake, not the vendor. */
   retryCatalog(): void {
     this.view().reload();
@@ -281,40 +279,24 @@ export class InstrumentCardComponent {
   pickTicker(t: TickerOption): void {
     // A host universe owns membership outright, and a held symbol is
     // already runnable — delisted-but-held included; its bars are real.
-    // Both pick exactly as the picker always has. `lastHeld` is absent
-    // (undefined) on a vendor-only row, not null — check both.
-    const held = t.lastHeld !== null && t.lastHeld !== undefined;
-    if (this.universe() !== null || held) {
+    // Both pick exactly as the picker always has.
+    if (this.universe() !== null || isHeldRow(t)) {
       this.applyPick(t);
       return;
     }
-
-    const mode = this.adjustmentMode();
-    // No gate may run on an unknown coverage verdict: with the lake dark,
-    // every row reads as unheld and even a held-looking pick would start a
-    // full-history backfill on a guess. The lake's own reason is shown.
-    const lakeReason = this.catalogUnavailable();
-    if (lakeReason !== null) {
-      this.showRefusal(t.symbol, mode, 'coverage_unknown', lakeReason);
-      return;
-    }
-    const backfillable = this.backfillableMode();
-    if (backfillable === null) {
-      this.showRefusal(
-        t.symbol,
-        mode,
-        'view_not_backfillable',
-        `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
-      );
-      return;
-    }
-    this.startGate(t.symbol, backfillable);
+    // An unheld pick is the gate's to decide: refuse while the lake's
+    // verdict is unknowable, refuse a tree nothing can backfill, else
+    // backfill and commit only on the lake's own confirmation.
+    this.gate.admit({
+      symbol: t.symbol,
+      mode: this.adjustmentMode(),
+      lakeDark: () => this.catalogUnavailable(),
+      commit: (covered) => this.onCovered(covered),
+    });
   }
 
   protected retryGate(): void {
-    const backfillable = this.backfillableMode();
-    if (backfillable === null) return;
-    this.gate.retry(backfillable);
+    this.gate.retry();
   }
 
   /** Cancel and Dismiss are the same act: this card lets its gate go. */
@@ -323,23 +305,10 @@ export class InstrumentCardComponent {
     this.refocusSearch();
   }
 
-  private startGate(symbol: string, mode: BackfillableMode): void {
-    this.gate.start(symbol, mode, (covered) => this.onCovered(covered));
-  }
-
   /** The lake confirmed the bars — select the fresh row (or a bare symbol). */
   private onCovered(symbol: string): void {
     const fresh = this.tickerPool().find((p) => p.symbol === symbol);
     this.applyPick(fresh ?? { symbol, name: symbol });
-  }
-
-  private showRefusal(
-    symbol: string,
-    mode: PriceAdjustmentMode,
-    reason: string,
-    message: string,
-  ): void {
-    this.gate.refuse(symbol, mode, reason, message);
   }
 
   /** The gate strip's buttons unmount on dismissal; keep focus in the box. */

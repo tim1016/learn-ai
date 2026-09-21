@@ -55,6 +55,18 @@ export function fitBackfillWindow(
  */
 export type BackfillableMode = 'raw' | 'polygon_split_adjusted';
 
+/**
+ * The mode narrowed to what the fetch pipeline can actually write, or `null`
+ * for every view whose rows arrive by import. The single card, the multi
+ * card and the backfill panel all refuse loudly on `null` instead of
+ * submitting a spec that changes nothing.
+ */
+export function toBackfillableMode(
+  mode: PriceAdjustmentMode | null,
+): BackfillableMode | null {
+  return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
+}
+
 export interface CoverageGateState {
   readonly symbol: string;
   /** The lake tree this gate fills — part of the gate's identity (ADR 0066). */

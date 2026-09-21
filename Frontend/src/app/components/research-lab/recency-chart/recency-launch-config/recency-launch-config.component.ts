@@ -53,20 +53,10 @@ export class RecencyLaunchConfigComponent {
   /** The tree the recency job reads — its data policy is split-adjusted minute bars. */
   readonly pickerAdjustmentMode = DEFAULT_ADJUSTMENT_MODE;
   private readonly catalog = inject(SymbolCatalogService);
-  private readonly catalogView = computed(() =>
+  protected readonly catalogView = computed(() =>
     // `viewFor` installs a resource — step outside tracking (NG0602).
     untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)),
   );
-  readonly pickerOptions = computed(() => this.catalogView().pool());
-  readonly pickerLoading = computed(() => this.catalogView().status().kind === "loading");
-  readonly pickerUnavailable = computed(() => {
-    const status = this.catalogView().status();
-    return status.kind === "unavailable" ? status.message : null;
-  });
-  readonly pickerDegraded = computed(() => {
-    const status = this.catalogView().status();
-    return status.kind === "degraded" ? status.message : null;
-  });
   readonly attemptedLaunch = signal(false);
   readonly customMonthsError = signal<string | null>(null);
   readonly strategyValidationMessage = computed(() =>

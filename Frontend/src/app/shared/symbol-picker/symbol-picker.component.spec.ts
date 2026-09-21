@@ -1,5 +1,9 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  flushGate,
+  openDropdown,
+} from './testing/fake-picker-world';
 
 import { SymbolPickerComponent } from './symbol-picker.component';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
@@ -68,19 +72,6 @@ describe('SymbolPickerComponent', () => {
     fixture.componentRef.setInput('symbol', 'SPY');
   });
 
-  function openDropdown(): void {
-    const tickerBox = fixture.nativeElement.querySelector('[role="combobox"]') as HTMLElement;
-    expect(tickerBox).not.toBeNull();
-    tickerBox.click();
-    fixture.detectChanges();
-  }
-
-  /** Flushes the gate's promise chain; the fake ensure resolves immediately. */
-  async function flushGate(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
-    fixture.detectChanges();
-  }
 
   it('renders the bound symbol', () => {
     fixture.detectChanges();
@@ -89,7 +80,7 @@ describe('SymbolPickerComponent', () => {
 
   it('offers the joined universe — a listed-but-unheld symbol is on the menu', () => {
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('TSLA');
     expect(text).toContain('not held');
@@ -97,7 +88,7 @@ describe('SymbolPickerComponent', () => {
 
   it('emits exactly the picked symbol — the window half of the card model never crosses back', async () => {
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const option = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')).find(
       (candidate) => (candidate as HTMLElement).textContent?.includes('SPY'),
@@ -110,7 +101,7 @@ describe('SymbolPickerComponent', () => {
 
   it('gates an unheld pick — the symbol arrives only once the lake confirms coverage', async () => {
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const option = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')).find(
       (candidate) => (candidate as HTMLElement).textContent?.includes('TSLA'),
@@ -124,7 +115,7 @@ describe('SymbolPickerComponent', () => {
     });
     expect(component.symbol()).toBe('SPY');
 
-    await flushGate();
+    await flushGate(fixture);
     expect(component.symbol()).toBe('TSLA');
   });
 
@@ -132,7 +123,7 @@ describe('SymbolPickerComponent', () => {
     vendor.entries.set(null);
     vendor.unavailable.set('catalog endpoint down');
     fixture.detectChanges();
-    openDropdown();
+    openDropdown(fixture);
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Live catalog unavailable');

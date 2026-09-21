@@ -4,23 +4,11 @@ import { of, throwError } from 'rxjs';
 
 import { ResearchService } from '../../../services/research.service';
 import { SignalHistoryComponent } from './signal-history.component';
-import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
-import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import {
-  fakeEnsureCoverage,
-  fakeVendorCatalog,
-  provideFakeEnsureCoverage,
-  provideFakeVendorCatalog,
-} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
-import {
-  fakeTickerCatalog,
-  provideFakeTickerCatalog,
-} from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
-
-const PICKER_POOL: readonly TickerOption[] = [
-  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-];
+  fakePickerWorld,
+  pickSymbol,
+  symbolPicker,
+} from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 describe('SignalHistoryComponent', () => {
   let fixture: ComponentFixture<SignalHistoryComponent>;
@@ -33,30 +21,23 @@ describe('SignalHistoryComponent', () => {
       imports: [SignalHistoryComponent],
       providers: [
         { provide: ResearchService, useValue: { getSignalExperiments } },
-        provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
-        provideFakeVendorCatalog(fakeVendorCatalog()),
-        provideFakeEnsureCoverage(fakeEnsureCoverage()),
+        ...fakePickerWorld().providers,
       ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(SignalHistoryComponent);
   });
 
-  function picker(): SymbolPickerComponent {
-    const de = fixture.debugElement.query((node) => node.componentInstance instanceof SymbolPickerComponent);
-    return de.componentInstance as SymbolPickerComponent;
-  }
-
   it('picks its ticker through the shared picker — no free-text ticker input survives', () => {
     fixture.detectChanges();
-    expect(fixture.debugElement.query((n) => n.componentInstance instanceof SymbolPickerComponent)).not.toBeNull();
+    expect(() => symbolPicker(fixture)).not.toThrow();
     expect(fixture.nativeElement.querySelector('input[placeholder="Ticker"]')).toBeNull();
   });
 
   it('reloads the history the moment a symbol is picked', async () => {
     fixture.detectChanges();
 
-    picker().symbol.set('SPY');
+    pickSymbol(fixture, 'SPY');
     await fixture.whenStable();
 
     expect(getSignalExperiments).toHaveBeenCalledWith('SPY');
@@ -66,7 +47,7 @@ describe('SignalHistoryComponent', () => {
     getSignalExperiments.mockReturnValue(throwError(() => new Error('history endpoint down')));
     fixture.detectChanges();
 
-    picker().symbol.set('SPY');
+    pickSymbol(fixture, 'SPY');
     await fixture.whenStable();
     fixture.detectChanges();
 

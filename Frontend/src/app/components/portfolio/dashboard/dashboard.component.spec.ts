@@ -3,18 +3,7 @@ import { Component } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { DashboardComponent } from './dashboard.component';
-import {
-  fakeEnsureCoverage,
-  fakeVendorCatalog,
-  provideFakeEnsureCoverage,
-  provideFakeVendorCatalog,
-} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
-import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
-
-const PICKER_POOL = [
-  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
-];
+import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { environment } from '../../../../environments/environment';
 import { PortfolioState, PortfolioMetrics } from '../../../graphql/portfolio-types';
 
@@ -85,9 +74,7 @@ describe('DashboardComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         // The trade form's symbol picker must not issue real catalog reads.
-        provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
-        provideFakeVendorCatalog(fakeVendorCatalog()),
-        provideFakeEnsureCoverage(fakeEnsureCoverage()),
+        ...fakePickerWorld().providers,
       ],
     }).compileComponents();
 

@@ -9,22 +9,7 @@ import { fireEvent, screen } from "@testing-library/angular";
 import { RecencyChartPageComponent } from "./recency-chart-page.component";
 import { JobsService } from "../../../services/jobs.service";
 import { RecencyChartService, type RecencyHero, type RecencyTrade, type RecencyWindowQuery } from "../../../services/recency-chart.service";
-import {
-  fakeEnsureCoverage,
-  fakeVendorCatalog,
-  provideFakeEnsureCoverage,
-  provideFakeVendorCatalog,
-} from "../../../shared/symbol-catalog/testing/fake-symbol-catalog";
-import {
-  fakeTickerCatalog,
-  provideFakeTickerCatalog,
-} from "../../../shared/ticker-catalog/testing/fake-ticker-catalog";
-
-/** Held rows for the launch config's picker over the joined catalog. */
-const PICKER_POOL = [
-  { symbol: "SPY", name: "SPDR S&P 500", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
-  { symbol: "AAPL", name: "Apple Inc.", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
-];
+import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-picker-world";
 
 function makeTrade(overrides: Partial<RecencyTrade> = {}): RecencyTrade {
   // Default entry/exit are "now"-relative, not epoch-relative: the page
@@ -100,9 +85,7 @@ async function renderPage(
       { provide: JobsService, useValue: { startJob: vi.fn(async () => "job-1") } },
       { provide: MessageService, useValue: messageServiceMock },
       // The launch config's symbol picker must not issue real catalog reads.
-      provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
-      provideFakeVendorCatalog(fakeVendorCatalog()),
-      provideFakeEnsureCoverage(fakeEnsureCoverage()),
+      ...fakePickerWorld().providers,
     ],
   }).compileComponents();
 
@@ -289,9 +272,7 @@ describe("RecencyChartPageComponent", () => {
           },
         },
         { provide: MessageService, useValue: messageServiceMock },
-        provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
-        provideFakeVendorCatalog(fakeVendorCatalog()),
-        provideFakeEnsureCoverage(fakeEnsureCoverage()),
+        ...fakePickerWorld().providers,
       ],
     }).compileComponents();
 

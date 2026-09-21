@@ -5,9 +5,9 @@
   <app-symbol-picker
     class="order-input order-input--symbol"
     appearance="flat"
+    [label]="'Leg ' + (position() + 1) + ' symbol'"
     [symbol]="legForm().symbol().value()"
     (symbolChange)="onSymbolPicked($event)"
-    [attr.aria-label]="'Leg ' + (position() + 1) + ' symbol'"
   />
 </div>
 @if (manualMarketOnly()) {

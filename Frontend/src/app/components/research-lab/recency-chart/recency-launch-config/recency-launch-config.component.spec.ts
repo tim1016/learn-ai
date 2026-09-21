@@ -7,21 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import { RecencyLaunchConfigComponent } from "./recency-launch-config.component";
 import { JobsService } from "../../../../services/jobs.service";
 import type { StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
-import type { TickerOption } from "../../../../shared/ticker-range-picker/ticker-range-picker.types";
-import {
-  fakeEnsureCoverage,
-  fakeVendorCatalog,
-  provideFakeEnsureCoverage,
-  provideFakeVendorCatalog,
-} from "../../../../shared/symbol-catalog/testing/fake-symbol-catalog";
 import type { VendorSymbolEntry } from "../../../../shared/symbol-catalog/vendor-catalog.service";
-import {
-  fakeTickerCatalog,
-  provideFakeTickerCatalog,
-} from "../../../../shared/ticker-catalog/testing/fake-ticker-catalog";
+import { fakePickerWorld } from "../../../../shared/symbol-picker/testing/fake-picker-world";
 
 /** Held rows only — the lake half of the joined catalog the card joins. */
-const LAKE_POOL: readonly TickerOption[] = [
+const LAKE_POOL = [
   { symbol: "SPY", name: "SPDR S&P 500", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
   { symbol: "AAPL", name: "Apple Inc.", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
 ];
@@ -60,18 +50,15 @@ async function renderConfig(
   job: (id: string) => { status: string } | undefined = () => undefined,
   vendorEntries: readonly VendorSymbolEntry[] = [],
 ) {
-  const coverage = fakeEnsureCoverage();
-  const vendor = fakeVendorCatalog(vendorEntries);
+  const world = fakePickerWorld(LAKE_POOL, vendorEntries);
   const view = await render(RecencyLaunchConfigComponent, {
     providers: [
       { provide: HttpClient, useValue: { get: () => of(strategies) } },
       { provide: JobsService, useValue: { startJob, job } },
-      provideFakeTickerCatalog(fakeTickerCatalog(LAKE_POOL)),
-      provideFakeVendorCatalog(vendor),
-      provideFakeEnsureCoverage(coverage),
+      ...world.providers,
     ],
   });
-  return { view, startJob, coverage, vendor };
+  return { view, startJob, coverage: world.coverage, vendor: world.vendor };
 }
 
 /** Adds a symbol through the shared multi card's search, as an operator does. */

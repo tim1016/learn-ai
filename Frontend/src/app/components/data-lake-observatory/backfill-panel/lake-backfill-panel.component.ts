@@ -25,6 +25,7 @@ import {
   VendorCatalogService,
   LAKE_BACKFILLABLE_ASSET_CLASS,
 } from '../../../shared/symbol-catalog/vendor-catalog.service';
+import { toBackfillableMode } from '../../../shared/symbol-catalog/ensure-coverage.service';
 import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 import { parseSymbols } from '../lib/coverage-board';
@@ -118,7 +119,7 @@ export class LakeBackfillPanelComponent implements OnInit {
    * When the vendor is dark the pool degrades to lake holdings on its own —
    * the vendor's answer is never a precondition for offering *something*.
    */
-  private readonly catalogView = computed(() => {
+  protected readonly catalogView = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602).
     const mode = this.backfillableMode() ?? 'raw';
@@ -155,19 +156,6 @@ export class LakeBackfillPanelComponent implements OnInit {
     return this.pickedSymbols().filter((symbol) => !offerable.has(symbol));
   });
 
-  protected readonly catalogLoading = computed(
-    () => this.catalogView().status().kind === 'loading',
-  );
-  protected readonly catalogUnavailable = computed<string | null>(() => {
-    const status = this.catalogView().status();
-    return status.kind === 'unavailable' ? status.message : null;
-  });
-  /** The vendor is dark but the lake answered — degraded, not empty. */
-  protected readonly vendorUnavailable = computed<string | null>(() => {
-    const status = this.catalogView().status();
-    return status.kind === 'degraded' ? status.message : null;
-  });
-
   protected retryVendorCatalog(): void {
     this.vendor.reload();
   }
@@ -183,10 +171,9 @@ export class LakeBackfillPanelComponent implements OnInit {
    * `null` when it cannot. Narrowing here rather than asserting at the submit
    * site keeps `DataRunSpec` honest about which modes it accepts.
    */
-  protected readonly backfillableMode = computed<'raw' | 'polygon_split_adjusted' | null>(() => {
-    const mode = this.priceAdjustmentMode();
-    return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
-  });
+  protected readonly backfillableMode = computed(() =>
+    toBackfillableMode(this.priceAdjustmentMode()),
+  );
 
   protected readonly blockedReason = computed<string | null>(() => {
     // Every reason submit is unavailable lives here, the capability check
