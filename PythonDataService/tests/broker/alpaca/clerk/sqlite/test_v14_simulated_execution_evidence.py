@@ -16,8 +16,15 @@ identity is the Shadow world's own ``shadow-execution:`` namespace.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import reads, schema
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from tests.broker.alpaca.clerk.sqlite.test_folds_execution import (
+    _repository_for_strategy,
+    _simulated_aggregate,
+)
 
 SHADOW_ACCOUNT_ID = "shadow:9LIVE0001"
 PAPER_ACCOUNT_ID = "PA-V14"
@@ -205,5 +212,149 @@ def test_a_fresh_authority_admits_simulated_execution_evidence() -> None:
             ).fetchone()[0]
             == "simulated_execution"
         )
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Mirror rebuild consistency (#2178 review): the migration's re-tag must
+# survive disaster recovery, which replays the immutable transition stream.
+# ---------------------------------------------------------------------------
+
+
+def _legacy_shadow_fill(repo_and_accepted) -> str:
+    """One pre-fix Shadow fill: the authoritative aggregate folded cumulative.
+
+    Before v14, ``fold_order_submission_response`` routed the no-submit
+    adapter's authoritative response through the cumulative path, so this is
+    exactly the transition stream a pre-fix Shadow authority wrote — an
+    ``ORDER_FILL_OBSERVED`` with no execution identity, plus the ack that
+    records the ``shadow-order:`` broker identity.
+    """
+    repo, accepted = repo_and_accepted
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id or "",
+        order=_simulated_aggregate(
+            accepted,
+            broker="shadow",
+            id_prefix="shadow",
+            quantity=10.0,
+            price=100.25,
+            occurred_at_ms=1_786_368_000_501,
+            carry_execution_id=True,
+        ),
+    )
+    order_ref = accepted.order_ref or ""
+    [fill] = repo.fills_for_order(order_ref)
+    assert fill["execution_id"] is None
+    assert fill["evidence_source"] == "cumulative_recovery"
+    return order_ref
+
+
+def _clock_seq(start: int = 1_786_368_100_000):
+    value = [start]
+
+    def tick() -> int:
+        value[0] += 1
+        return value[0]
+
+    return tick
+
+
+def test_mirror_rebuild_reapplies_the_shadow_simulated_retag(tmp_path: Path) -> None:
+    """Replay re-materializes the legacy fill as cumulative recovery (its
+    facts carry no execution identity), so the rebuild must re-apply the
+    same durable-evidence re-tag the v14 migration applies — otherwise
+    disaster recovery resurrects the false cumulative classification."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path, strategy_instance_id="rebuild-shadow-bot", symbol="SPY"
+    )
+    order_ref = _legacy_shadow_fill((repo, accepted))
+    db_path = repo.db_path
+    repo.close()
+    db_path.unlink()
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id="PA-S1-EXECUTION", artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    try:
+        [fill] = rebuilt.fills_for_order(order_ref)
+        assert fill["execution_id"] == f"shadow-execution:{order_ref}"
+        assert fill["evidence_source"] == "simulated_execution"
+    finally:
+        rebuilt.close()
+
+
+def test_migration_then_mirror_rebuild_keeps_the_simulated_retag(tmp_path: Path) -> None:
+    """The full lifecycle: a v13 file migrates to v14 (re-tagged), then a
+    later disaster rebuild replays the same legacy transitions — the rebuilt
+    authority must land on the same simulated classification."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path, strategy_instance_id="migrate-rebuild-bot", symbol="SPY"
+    )
+    order_ref = _legacy_shadow_fill((repo, accepted))
+    db_path = repo.db_path
+    repo.close()
+    _rewind_to_v13(db_path)
+
+    migrated = ClerkSqliteRepository.open(
+        account_id="PA-S1-EXECUTION", artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    try:
+        [fill] = migrated.fills_for_order(order_ref)
+        assert fill["evidence_source"] == "simulated_execution"
+    finally:
+        migrated.close()
+    db_path.unlink()
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id="PA-S1-EXECUTION", artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    try:
+        [fill] = rebuilt.fills_for_order(order_ref)
+        assert fill["execution_id"] == f"shadow-execution:{order_ref}"
+        assert fill["evidence_source"] == "simulated_execution"
+    finally:
+        rebuilt.close()
+
+
+def _rewind_to_v13(db_path: Path) -> None:
+    """Make a real v14 file look like the v13 file a prior build left behind."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            "DROP INDEX IF EXISTS ux_fills_execution_id;\n"
+            "ALTER TABLE fills RENAME TO fills_v14;\n"
+            "CREATE TABLE fills (\n"
+            "    fill_id TEXT PRIMARY KEY,\n"
+            "    order_ref TEXT NOT NULL REFERENCES orders(order_ref),\n"
+            "    qty REAL NOT NULL,\n"
+            "    price REAL NOT NULL,\n"
+            "    side TEXT NOT NULL CHECK (side IN ('BUY','SELL')),\n"
+            "    is_correction INTEGER NOT NULL DEFAULT 0,\n"
+            "    execution_id TEXT,\n"
+            "    evidence_source TEXT NOT NULL DEFAULT 'cumulative_recovery'\n"
+            "        CHECK (evidence_source IN ('websocket','activity_recovery',"
+            "'cumulative_recovery')),\n"
+            "    event_kind TEXT NOT NULL DEFAULT 'fill'"
+            " CHECK (event_kind IN ('fill','correction')),\n"
+            "    superseded_execution_ref TEXT,\n"
+            "    fee REAL,\n"
+            "    fee_fidelity TEXT NOT NULL DEFAULT 'not_reported'"
+            " CHECK (fee_fidelity IN ('reported','not_reported')),\n"
+            "    source_event_at_ms INTEGER,\n"
+            "    clerk_observed_at_ms INTEGER NOT NULL,\n"
+            "    recorded_at_ms INTEGER NOT NULL,\n"
+            "    recorded_transition_sequence INTEGER NOT NULL"
+            " REFERENCES custody_transitions(sequence)\n"
+            ");\n"
+            "INSERT INTO fills SELECT * FROM fills_v14;\n"
+            "DROP TABLE fills_v14;\n"
+            "CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id)"
+            " WHERE execution_id IS NOT NULL;\n"
+            "UPDATE control_meta SET schema_version = 13 WHERE id = 1;\n"
+        )
+        conn.commit()
     finally:
         conn.close()

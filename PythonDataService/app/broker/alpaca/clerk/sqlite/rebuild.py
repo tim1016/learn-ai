@@ -13,6 +13,9 @@ from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     assert_wal_filesystem_supported,
 )
+from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import (
+    SHADOW_SIMULATED_EXECUTION_RETAG_SQL,
+)
 from app.broker.alpaca.paths import fsync_directory_chain
 from app.utils.timestamps import Clock
 
@@ -111,6 +114,12 @@ def rebuild_repository_from_mirror(
                 authority_generation=row.authority_generation,
                 recorded_at_ms=row.recorded_at_ms,
             )
+        # A pre-v14 Shadow fill's ORDER_FILL_OBSERVED facts carry no execution
+        # identity, so replaying them re-materializes cumulative-recovery rows
+        # the v14 migration would have re-tagged. Re-apply the same
+        # durable-evidence decision inside this transaction so a rebuilt
+        # authority and a migrated one can never disagree (#2178).
+        conn.execute(SHADOW_SIMULATED_EXECUTION_RETAG_SQL)
         conn.commit()
     except Exception:
         conn.rollback()

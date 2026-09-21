@@ -10,13 +10,12 @@ import logging
 from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionSliceFilledFacts,
-    UncertaintyRaisedFacts,
+from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
+    WEBSOCKET_EXACT_CONFLICT_COPY,
+    append_exact_execution_slice,
 )
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
     fold_order_evidence,
@@ -28,9 +27,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_account_hold,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
-    ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from app.broker.contract.ports import BrokerReadPort
@@ -205,87 +202,19 @@ class SqliteTradeUpdateEvidenceSink:
                 return "order_event"
 
             if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None:
-                if event.quantity is None or event.price is None:
-                    raise ValueError(
-                        "Alpaca execution event must include a quantity and price when execution_id is set"
-                    )
-                facts = ExecutionSliceFilledFacts(
-                    execution_id=event.execution_id,
-                    symbol=order.symbol,
-                    side=order.side.upper(),
-                    slice_qty=event.quantity,
-                    slice_price=event.price,
-                    fee=None,
-                    fee_fidelity="not_reported",
-                    evidence_source="websocket",
-                    source_event_at_ms=event.occurred_at_ms,
-                )
-
-                def _execution_transition() -> TransitionInput:
-                    return TransitionInput(
-                        strategy_instance_id=owner.strategy_instance_id,
-                        run_id=owner.run_id,
-                        command_id=owner.command_id,
-                        effect_operation_id=owner.effect_operation_id,
-                        order_ref=local_order.order_ref,
-                        broker_order_id=order.order_id,
-                        transition_kind="EXECUTION_SLICE_FILLED",
-                        custody_owner="ACCOUNT_CLERK",
-                        execution_authority="ACCOUNT_CLERK",
-                        operation_state="in_progress",
-                        proof_reference=event_key,
-                        source_event_at_ms=event.occurred_at_ms,
-                        clerk_observed_at_ms=self._repo.clock(),
-                        summary_code="EXECUTION_SLICE_FILLED",
-                        facts_json=facts.to_facts_json(),
-                    )
-
-                def _coverage_conflict_transition() -> TransitionInput:
-                    conflict_facts = UncertaintyRaisedFacts(
-                        severity="error",
-                        blocks_new_exposure=True,
-                        allows_reduction=False,
-                        reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-                        headline="Exact execution conflicts with prior immutable evidence",
-                        explanation=(
-                            "The received websocket execution cannot be safely merged with "
-                            "the order's prior execution evidence."
-                        ),
-                        operator_impact=(
-                            "New exposure is blocked until this order's execution coverage is reconciled."
-                        ),
-                        next_step=(
-                            "Reconcile the broker order and its execution slices before resuming."
-                        ),
-                        evidence_refs=[event_key, event.execution_id],
-                        cause_facts=ExecutionCoverageConflictCause(
-                            order_ref=local_order.order_ref,
-                            execution_id=event.execution_id,
-                        ).to_mapping(),
-                    )
-                    return TransitionInput(
-                        strategy_instance_id=owner.strategy_instance_id,
-                        run_id=owner.run_id,
-                        command_id=owner.command_id,
-                        effect_operation_id=owner.effect_operation_id,
-                        order_ref=local_order.order_ref,
-                        broker_order_id=order.order_id,
-                        transition_kind="UNCERTAINTY_RAISED",
-                        custody_owner="ACCOUNT_CLERK",
-                        execution_authority="ACCOUNT_CLERK",
-                        operation_state="succeeded",
-                        proof_reference=event_key,
-                        source_event_at_ms=event.occurred_at_ms,
-                        clerk_observed_at_ms=self._repo.clock(),
-                        summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-                        facts_json=conflict_facts.to_facts_json(),
-                    )
-
-                self._repo.append_execution_slice_if_absent(
-                    execution_id=event.execution_id,
+                # One shared append flow with the no-submit adapters' exact
+                # evidence (#2178): identity dedup, auto-supersession and
+                # fail-closed quarantine live in exactly one implementation.
+                append_exact_execution_slice(
+                    self._repo,
+                    event=event,
+                    order=order,
                     order_ref=local_order.order_ref,
-                    build_transition=_execution_transition,
-                    build_coverage_conflict=_coverage_conflict_transition,
+                    owner=owner,
+                    evidence_source="websocket",
+                    conflict_copy=WEBSOCKET_EXACT_CONFLICT_COPY,
+                    proof_reference=event_key,
+                    extra_conflict_evidence_refs=[event_key],
                 )
 
             # A websocket's embedded order is aggregate lifecycle evidence,

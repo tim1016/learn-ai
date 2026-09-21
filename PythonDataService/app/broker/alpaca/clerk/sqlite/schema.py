@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
 from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
+from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
 SCHEMA_VERSION = 14
@@ -663,68 +664,9 @@ _V11_TO_V12_STATEMENTS: tuple[str, ...] = (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
 
-# v13 -> v14: a deterministic no-submit adapter's authoritative fills keep
-# their exact simulated execution identity instead of the generic cumulative
-# recovery classification (#2178). SQLite cannot ALTER a CHECK constraint, so
-# the fills table is replaced with one whose evidence_source vocabulary admits
-# 'simulated_execution' (the holds-table replacement above is the precedent).
-# The backfill re-tags only rows whose own durable evidence proves they were
-# synthesized by the Shadow world — the order's broker_order_id is the
-# synthesized `shadow-order:<client_order_id>` identity and the order owns
-# exactly one cumulative fill (a no-submit adapter fills an order exactly
-# once, so a multi-row order is ambiguous and stays untouched). Real
-# Paper/Live cumulative recovery rows are untouched by construction, and the
-# re-derived `shadow-execution:` identity is the Shadow world's own namespace,
-# never a fabricated broker receipt. The Dry-Run world's legacy `sim:` rows
-# are deliberately not re-tagged here; their conversion happens lazily and
-# safely through the auto-supersession proof when the order is next observed.
-_FILLS_V14_TABLE_DDL = """\
-CREATE TABLE fills (
-    fill_id                  TEXT PRIMARY KEY,       -- Alpaca execution id (idempotent identity, §9.4)
-    order_ref                TEXT NOT NULL REFERENCES orders(order_ref),
-    qty                      REAL NOT NULL,
-    price                    REAL NOT NULL,
-    side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
-    is_correction             INTEGER NOT NULL DEFAULT 0,  -- 1 = broker-issued correction, not erasure of prior fact
-    execution_id             TEXT,                   -- Alpaca execution id; null only for cumulative recovery
-    evidence_source          TEXT NOT NULL DEFAULT 'cumulative_recovery'
-                              CHECK (evidence_source IN ('websocket','activity_recovery','cumulative_recovery','simulated_execution')),
-    event_kind               TEXT NOT NULL DEFAULT 'fill'
-                              CHECK (event_kind IN ('fill','correction')),
-    superseded_execution_ref TEXT,                   -- correction target; original execution remains auditable
-    fee                      REAL,
-    fee_fidelity             TEXT NOT NULL DEFAULT 'not_reported'
-                              CHECK (fee_fidelity IN ('reported','not_reported')),
-    source_event_at_ms       INTEGER,                 -- Alpaca's fill timestamp, when supplied
-    clerk_observed_at_ms     INTEGER NOT NULL,
-    recorded_at_ms           INTEGER NOT NULL,
-    recorded_transition_sequence INTEGER NOT NULL REFERENCES custody_transitions(sequence)
-);"""
-
-_V13_TO_V14_STATEMENTS: tuple[str, ...] = (
-    "DROP INDEX IF EXISTS ux_fills_execution_id",
-    "ALTER TABLE fills RENAME TO fills_v13_legacy",
-    _FILLS_V14_TABLE_DDL,
-    "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
-    "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-    "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
-    "SELECT fill_id, order_ref, qty, price, side, is_correction, execution_id, "
-    "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-    "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence "
-    "FROM fills_v13_legacy",
-    "UPDATE fills SET execution_id = 'shadow-execution:' || fills.order_ref, "
-    "evidence_source = 'simulated_execution' "
-    "WHERE fills.evidence_source = 'cumulative_recovery' "
-    "AND fills.execution_id IS NULL "
-    "AND (SELECT COUNT(*) FROM fills other WHERE other.order_ref = fills.order_ref "
-    "AND other.evidence_source = 'cumulative_recovery') = 1 "
-    "AND EXISTS (SELECT 1 FROM orders o WHERE o.order_ref = fills.order_ref "
-    "AND o.client_order_id = o.order_ref "
-    "AND o.broker_order_id = 'shadow-order:' || o.order_ref)",
-    "DROP TABLE fills_v13_legacy",
-    "CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id) "
-    "WHERE execution_id IS NOT NULL",
-)
+# v13 -> v14 lives in ``simulated_execution_schema`` with the rest of that
+# cohesive fragment (the fills replacement, the shadow-only re-tag, and the
+# rebuild's reuse of it). Same statements as ``SCHEMA_MIGRATIONS[13]``.
 
 SCHEMA_V12_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
@@ -742,7 +684,7 @@ SCHEMA_V13_DDL = "\n".join(
 )
 SCHEMA_V14_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
-    for statement in _V13_TO_V14_STATEMENTS
+    for statement in SCHEMA_V14_STATEMENTS
 )
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
@@ -973,8 +915,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     12: SCHEMA_V13_STATEMENTS,
     # v13 -> v14: simulated fills keep their exact execution identity (#2178).
     # Same statements as the fresh v14 block above, including the shadow-only
-    # backfill of persisted cumulative rows.
-    13: _V13_TO_V14_STATEMENTS,
+    # re-tag of persisted cumulative rows; ``simulated_execution_schema`` owns
+    # the fragment and its rebuild reuse.
+    13: SCHEMA_V14_STATEMENTS,
 }
 
 

@@ -697,6 +697,7 @@ def test_authoritative_simulated_fill_retains_its_exact_execution_identity(
                 occurred_at_ms=1_786_368_000_401,
                 carry_execution_id=True,
             ),
+            simulated_authority=True,
         )
 
         fills = repo.fills_for_order(order_ref)
@@ -747,29 +748,30 @@ def test_a_real_rest_aggregate_never_gains_an_exact_execution_classification(
         repo.close()
 
 
-def test_an_execution_id_the_simulated_worlds_did_not_mint_stays_cumulative(
+def test_a_simulated_identity_on_broker_authority_stays_cumulative(
     tmp_path: Path,
 ) -> None:
-    """Even if a future real REST payload carried per-fill execution ids, an
-    identity outside the ``shadow-execution:``/``sim-execution:`` namespaces
-    is not simulated evidence: it folds cumulative, exactly as today, so a
-    real broker aggregate can never be classified as an exact execution."""
+    """Review repro (#2178): a ``broker=\"alpaca\"`` aggregate wearing a
+    ``shadow-execution:`` id is untrusted spelling. The prefix is validation
+    for a trusted source, never an authority claim, so broker authority
+    folds it cumulative — never as simulated execution."""
     repo, accepted = _repository_for_strategy(
         tmp_path,
-        strategy_instance_id="foreign-execution-bot",
+        strategy_instance_id="spoofed-identity-bot",
         symbol="SPY",
     )
     try:
         aggregate = _simulated_aggregate(
             accepted,
             broker="alpaca",
-            id_prefix="broker",
+            id_prefix="shadow",
             quantity=10.0,
             price=100.25,
             occurred_at_ms=1_786_368_000_431,
             carry_execution_id=True,
         )
         assert aggregate.events[0].execution_id is not None
+        assert aggregate.events[0].execution_id.startswith("shadow-execution:")
         fold_order_evidence(
             repo,
             effect_operation_id=accepted.effect_operation_id or "",
@@ -780,6 +782,68 @@ def test_an_execution_id_the_simulated_worlds_did_not_mint_stays_cumulative(
         assert len(fills) == 1
         assert fills[0]["execution_id"] is None
         assert fills[0]["evidence_source"] == "cumulative_recovery"
+    finally:
+        repo.close()
+
+
+def test_simulated_authority_fails_closed_on_an_unregistered_execution_identity(
+    tmp_path: Path,
+) -> None:
+    """A trusted no-submit port that mints an identity outside the registered
+    namespaces is a contract violation: the fold refuses rather than
+    degrading the observation to cumulative recovery."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="unregistered-identity-bot",
+        symbol="SPY",
+    )
+    try:
+        with pytest.raises(ValueError, match="registered execution identities"):
+            fold_order_evidence(
+                repo,
+                effect_operation_id=accepted.effect_operation_id or "",
+                order=_simulated_aggregate(
+                    accepted,
+                    broker="shadow",
+                    id_prefix="broker",
+                    quantity=10.0,
+                    price=100.25,
+                    occurred_at_ms=1_786_368_000_441,
+                    carry_execution_id=True,
+                ),
+                simulated_authority=True,
+            )
+    finally:
+        repo.close()
+
+
+def test_simulated_authority_requires_its_filled_aggregates_exact_event(
+    tmp_path: Path,
+) -> None:
+    """An authoritative adapter that reports fills without its exact execution
+    event owes evidence it cannot provide; folding that as cumulative
+    recovery would recreate the false-attention bug, so it fails closed."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="identityless-bot",
+        symbol="SPY",
+    )
+    try:
+        with pytest.raises(ValueError, match="must carry its exact execution event"):
+            fold_order_evidence(
+                repo,
+                effect_operation_id=accepted.effect_operation_id or "",
+                order=_simulated_aggregate(
+                    accepted,
+                    broker="shadow",
+                    id_prefix="shadow",
+                    quantity=10.0,
+                    price=100.25,
+                    occurred_at_ms=1_786_368_000_451,
+                    carry_execution_id=True,
+                ).model_copy(update={"events": []}),
+                simulated_authority=True,
+            )
     finally:
         repo.close()
 
@@ -821,6 +885,7 @@ def test_simulated_exact_evidence_supersedes_a_legacy_cumulative_row_without_dou
                 occurred_at_ms=1_786_368_000_422,
                 carry_execution_id=True,
             ),
+            simulated_authority=True,
         )
 
         fills = repo.fills_for_order(order_ref)

@@ -12,16 +12,16 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
+from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
+    SIMULATED_EXACT_CONFLICT_COPY,
+    append_exact_execution_slice,
+)
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
-    ExecutionSliceFilledFacts,
     OrderFillObservedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
-    UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
     order_observation_advances,
@@ -34,11 +34,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
-    ExecutionCoverageConflictCause,
-)
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
@@ -69,6 +65,7 @@ __all__ = [
     "order_never_reached_broker",
     "resolve_order_submission",
     "submit_absence_grace_ms",
+    "trade_port_folds_simulated_evidence",
 ]
 
 
@@ -86,6 +83,7 @@ def fold_order_evidence(
     effect_operation_id: str,
     order: BrokerOrder,
     append_stale_ack: bool = True,
+    simulated_authority: bool = False,
 ) -> None:
     """Fold a REST/reconciliation aggregate order observation.
 
@@ -98,15 +96,19 @@ def fold_order_evidence(
     immutable execution slice through ``EXECUTION_SLICE_FILLED`` and calls
     :func:`fold_order_acknowledgement` separately.
 
-    One aggregate does carry its own exact execution identities: a
-    deterministic no-submit adapter (the Shadow and Dry-Run worlds,
-    ``AuthoritativeSubmissionEvidencePort``) executes entirely inside
+    ``simulated_authority`` is the caller's trusted statement that this
+    aggregate came from a deterministic no-submit adapter's own port
+    (:func:`trade_port_folds_simulated_evidence` — never inferred from the
+    aggregate's spelling).  Such an adapter executes entirely inside
     ``submit`` and shapes each fill event with its durable
-    ``shadow-execution:``/``sim-execution:`` identity (#2178). Those events
-    are folded as exact ``simulated_execution`` slices by
+    ``shadow-execution:``/``sim-execution:`` identity, so its events fold as
+    exact ``simulated_execution`` slices by
     :func:`_fold_simulated_execution_evidence` — never downgraded to the
     generic cumulative-recovery delta, which would strand a healthy
-    simulated bot in incomplete execution coverage.
+    simulated bot in incomplete execution coverage (#2178).  Under broker
+    authority an execution-bearing fill event is *not* simulated evidence —
+    a real aggregate wearing a simulated id still folds cumulative, because
+    a prefix is validation for a trusted source, never an authority claim.
 
     The cumulative fill (if the snapshot reports progress; idempotent and
     namespace-attributed via ``_fold_order_fill_observed``) is deliberately
@@ -128,15 +130,13 @@ def fold_order_evidence(
     assert effect is not None
     order_ref = order.client_order_id
     assert order_ref is not None
-    exact_events = _exact_simulated_fill_events(order)
-    if exact_events:
+    if simulated_authority:
         _fold_simulated_execution_evidence(
             repo,
             effect=effect,
             effect_operation_id=effect_operation_id,
             order=order,
             order_ref=order_ref,
-            events=exact_events,
             append_stale_ack=append_stale_ack,
         )
         return
@@ -191,30 +191,55 @@ def fold_order_evidence(
 
 #: The execution-id namespaces the deterministic no-submit worlds mint
 #: (``shape_immediate_order``/the shadow book's ``_fill_event``, from their
-#: ``id_prefix``).  A fill event carrying one of these identities is, by
-#: construction, a simulated execution; gating on the namespace keeps that
-#: claim honest even if a future real REST payload starts carrying per-fill
-#: execution ids — an identity the simulated worlds did not mint folds
-#: through the cumulative path, never as simulated execution (#2178 safety
-#: constraint: never classify a real broker aggregate as an exact execution).
+#: ``id_prefix``).  Under simulated authority every fill event must carry one
+#: of these identities — the trusted port's own spelling is validation, while
+#: the authority itself comes only from the caller's port capability (#2178).
 _SIMULATED_EXECUTION_ID_PREFIXES: tuple[str, ...] = ("shadow-execution:", "sim-execution:")
 
 
-def _exact_simulated_fill_events(order: BrokerOrder) -> list[BrokerOrderEvent]:
-    """The fill events a deterministic no-submit adapter shaped with exact identity.
+def trade_port_folds_simulated_evidence(trade: BrokerTradePort) -> bool:
+    """Whether this trade port is a deterministic no-submit adapter.
 
-    Only the simulated worlds' aggregates carry them: the real REST adapter's
-    synthesized fill events never set ``execution_id``
-    (``adapter._order_events``), and websocket frames never route through
-    ``fold_order_evidence`` at all.
+    The ``AuthoritativeSubmissionEvidencePort`` capability is the trusted
+    source statement: an adapter that executes entirely inside ``submit``
+    and declares its response authoritative is the Shadow/Dry-Run world's
+    own port, so the aggregates it returns are simulated execution. The
+    aggregate's own spelling never establishes this.
     """
-    return [
-        event
-        for event in order.events
-        if event.event_type in {"fill", "partial_fill"}
-        and event.execution_id is not None
-        and event.execution_id.startswith(_SIMULATED_EXECUTION_ID_PREFIXES)
+    return (
+        isinstance(trade, AuthoritativeSubmissionEvidencePort)
+        and trade.submission_response_is_authoritative_evidence
+    )
+
+
+def _simulated_fill_events_validated(order: BrokerOrder) -> list[BrokerOrderEvent]:
+    """The exact fill events a no-submit adapter owes for its filled quantity.
+
+    Fails closed on contract violations rather than degrading: an
+    authoritative simulated aggregate that reports fills without its exact
+    identity, or mints an identity outside the registered namespaces, is
+    corruption in the adapter — folding it as cumulative recovery would
+    recreate the false-attention bug this path exists to fix (#2178).
+    """
+    fill_events = [
+        event for event in order.events if event.event_type in {"fill", "partial_fill"}
     ]
+    for event in fill_events:
+        if event.execution_id is None or not event.execution_id.startswith(
+            _SIMULATED_EXECUTION_ID_PREFIXES
+        ):
+            raise ValueError(
+                "A simulated authority's fill event must carry one of the registered "
+                f"execution identities {_SIMULATED_EXECUTION_ID_PREFIXES}; got "
+                f"{event.execution_id!r} for order {order.client_order_id!r}."
+            )
+    if not fill_events and order.filled_quantity >= FILL_QTY_EPSILON:
+        raise ValueError(
+            "A simulated authority's filled aggregate must carry its exact execution "
+            f"event; order {order.client_order_id!r} reports "
+            f"filled_quantity={order.filled_quantity} with no fill event."
+        )
+    return fill_events
 
 
 def _fold_simulated_execution_evidence(
@@ -224,7 +249,6 @@ def _fold_simulated_execution_evidence(
     effect_operation_id: str,
     order: BrokerOrder,
     order_ref: str,
-    events: list[BrokerOrderEvent],
     append_stale_ack: bool = True,
 ) -> None:
     """Fold a no-submit adapter's authoritative fills as exact executions.
@@ -232,45 +256,24 @@ def _fold_simulated_execution_evidence(
     Each event keeps its durable ``shadow-execution:``/``sim-execution:``
     identity through ``EXECUTION_SLICE_FILLED`` under the
     ``simulated_execution`` evidence source, so a simulated world's fills can
-    prove complete execution coverage (#2178). ``append_execution_slice_if_absent``
-    owns the exact path's discipline: replay dedup on the execution identity,
-    and auto-supersession of a pre-fix cumulative row for the same order —
-    the replacement is a zero-delta representation swap, so exposure can
-    never double-count. An exact observation that cannot be merged with the
-    order's prior evidence fails closed through the same typed
-    ``EXECUTION_COVERAGE_CONFLICT`` uncertainty as a real broker slice.
+    prove complete execution coverage (#2178). The shared
+    ``append_exact_execution_slice`` flow owns the exact path's discipline:
+    replay dedup on the execution identity, and auto-supersession of a
+    pre-fix cumulative row for the same order — the replacement is a
+    zero-delta representation swap, so exposure can never double-count. An
+    exact observation that cannot be merged with the order's prior evidence
+    fails closed through the same typed ``EXECUTION_COVERAGE_CONFLICT``
+    uncertainty as a real broker slice.
     """
-    for event in events:
-        if event.quantity is None or event.price is None:
-            raise ValueError(
-                "A simulated execution event must include its quantity and price "
-                f"when execution_id is set ({event.execution_id!r})."
-            )
-        facts = ExecutionSliceFilledFacts(
-            execution_id=event.execution_id,
-            symbol=order.symbol,
-            side=order.side.upper(),
-            slice_qty=event.quantity,
-            slice_price=event.price,
-            fee=None,
-            fee_fidelity="not_reported",
-            evidence_source="simulated_execution",
-            source_event_at_ms=event.occurred_at_ms,
-        )
-        build_execution, build_conflict = _simulated_execution_transition_builders(
+    for event in _simulated_fill_events_validated(order):
+        append_exact_execution_slice(
             repo,
-            effect=effect,
-            effect_operation_id=effect_operation_id,
+            event=event,
             order=order,
             order_ref=order_ref,
-            event=event,
-            facts=facts,
-        )
-        repo.append_execution_slice_if_absent(
-            execution_id=event.execution_id,
-            order_ref=order_ref,
-            build_transition=build_execution,
-            build_coverage_conflict=build_conflict,
+            owner=effect,
+            evidence_source="simulated_execution",
+            conflict_copy=SIMULATED_EXACT_CONFLICT_COPY,
         )
 
     fold_order_acknowledgement(
@@ -279,86 +282,6 @@ def _fold_simulated_execution_evidence(
         order=order,
         append_stale_ack=append_stale_ack,
     )
-
-
-def _simulated_execution_transition_builders(
-    repo: ClerkSqliteRepository,
-    *,
-    effect: EffectOperationResource,
-    effect_operation_id: str,
-    order: BrokerOrder,
-    order_ref: str,
-    event: BrokerOrderEvent,
-    facts: ExecutionSliceFilledFacts,
-) -> tuple[Callable[[], TransitionInput], Callable[[], TransitionInput]]:
-    """The exact-execution and fail-closed conflict transitions for one event.
-
-    A factory of its own so the builders bind this event's identity as
-    parameters — never a surrounding loop variable.
-    """
-    def _execution_transition() -> TransitionInput:
-        return TransitionInput(
-            strategy_instance_id=effect.strategy_instance_id,
-            run_id=effect.run_id,
-            command_id=effect.command_id,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            broker_order_id=order.order_id,
-            transition_kind="EXECUTION_SLICE_FILLED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="in_progress",
-            proof_reference=event.execution_id,
-            source_event_at_ms=event.occurred_at_ms,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="EXECUTION_SLICE_FILLED",
-            facts_json=facts.to_facts_json(),
-        )
-
-    def _coverage_conflict_transition() -> TransitionInput:
-        conflict_facts = UncertaintyRaisedFacts(
-            severity="error",
-            blocks_new_exposure=True,
-            allows_reduction=False,
-            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-            headline="Simulated execution conflicts with prior immutable evidence",
-            explanation=(
-                "The no-submit adapter's exact execution cannot be safely merged "
-                "with the order's prior execution evidence."
-            ),
-            operator_impact=(
-                "New exposure is blocked until this order's execution coverage "
-                "is reconciled."
-            ),
-            next_step=(
-                "Reconcile the simulated order and its execution evidence before "
-                "resuming."
-            ),
-            evidence_refs=[event.execution_id],
-            cause_facts=ExecutionCoverageConflictCause(
-                order_ref=order_ref,
-                execution_id=event.execution_id,
-            ).to_mapping(),
-        )
-        return TransitionInput(
-            strategy_instance_id=effect.strategy_instance_id,
-            run_id=effect.run_id,
-            command_id=effect.command_id,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            broker_order_id=order.order_id,
-            transition_kind="UNCERTAINTY_RAISED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            proof_reference=event.execution_id,
-            source_event_at_ms=event.occurred_at_ms,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-            facts_json=conflict_facts.to_facts_json(),
-        )
-
-    return _execution_transition, _coverage_conflict_transition
 
 
 def fold_order_acknowledgement(
@@ -498,16 +421,16 @@ def fold_order_submission_response(
     no-submit adapters execute completely inside ``submit`` and explicitly
     advertise that their returned aggregate is the authoritative execution
     observation, so withholding it would create a filled order with no
-    durable position attribution.
+    durable position attribution. That port capability — never the
+    aggregate's own spelling — is what routes the fold to the simulated
+    exact path (#2178).
     """
-    if (
-        isinstance(trade, AuthoritativeSubmissionEvidencePort)
-        and trade.submission_response_is_authoritative_evidence
-    ):
+    if trade_port_folds_simulated_evidence(trade):
         fold_order_evidence(
             repo,
             effect_operation_id=effect_operation_id,
             order=order,
+            simulated_authority=True,
         )
         return
     fold_order_submission_acknowledgement(
@@ -782,7 +705,12 @@ async def resolve_order_submission(
                 order_ref=order_ref,
             )
         else:
-            fold_order_evidence(repo, effect_operation_id=effect.effect_operation_id, order=order)
+            fold_order_evidence(
+                repo,
+                effect_operation_id=effect.effect_operation_id,
+                order=order,
+                simulated_authority=trade_port_folds_simulated_evidence(trade),
+            )
     finally:
         repo.release_operation_claim(
             effect_operation_id=effect.effect_operation_id,
