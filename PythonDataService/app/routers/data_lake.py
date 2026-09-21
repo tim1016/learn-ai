@@ -512,6 +512,25 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
     a data_lake.backfill_day event after each one.
     """
     spec = req.spec
+    # The provider's history floor is enforced here, not only in the caller
+    # that composed the window: a start outside the plan draws a 403 on the
+    # run's oldest day, and ``provider_entitlement_error`` is globally fatal
+    # in ``run_backfill``, so the whole range aborts before a bar is written
+    # (#2241). Only this side holds the credential, so only this side can
+    # refuse it — and refusing here covers the operator typing a date into
+    # the Observatory panel exactly as it covers the picker's gate.
+    floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
+    if spec.start_trading_date < floor:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reason": "before_provider_history",
+                "message": (
+                    f"start_trading_date {spec.start_trading_date} is before the market-data "
+                    f"provider serves; the oldest day available is {floor}"
+                ),
+            },
+        )
     logger.info(
         "[STEP 1] /api/data-lake/backfill received: job_id=%s, request_id=%s, symbols=%s",
         req.job_id,

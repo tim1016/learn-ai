@@ -18,12 +18,11 @@ import {
   toBackfillDayEvent,
   tradingDateToMs,
   tradingRangeRejection,
-  tradingRangeSpanDays,
 } from '../data-lake';
 import type { BackfillFailure, DataRunSpec, PriceAdjustmentMode } from '../data-lake';
 import { isRunnableSpan } from '../ticker-catalog';
 import { TickerCatalogService } from '../ticker-catalog';
-import { etIsoDate, isoDateAfter } from '../date/et-midnight';
+import { etIsoDate } from '../date/et-midnight';
 import { toMostRecentTradingDayIso, toNextTradingDayIso } from '../date/weekday';
 
 /**
@@ -38,9 +37,13 @@ import { toMostRecentTradingDayIso, toNextTradingDayIso } from '../date/weekday'
  * - *The cap* counts inclusively (`(end - start).days + 1`), and the weekday
  *   walk-back on the endpoints can add up to three more days (1830 is not a
  *   whole number of weeks), which is how a window composed on a Monday
- *   landed on a 422 while the same code passed on a Saturday. The start
- *   therefore begins four days inside the cap and steps forward — a step
- *   that keeps both endpoints on weekdays — until the inclusive span fits.
+ *   landed on a 422 while the same code passed on a Saturday. Starting four
+ *   days inside the cap settles it outright: the walk-back moves the start
+ *   at most two days earlier (Sunday to Friday), so the inclusive span is at
+ *   most `capDays - 1` for any cap, and the floor clamp below only ever
+ *   moves the start later. There is deliberately no corrective loop — one
+ *   would be unreachable, and unreachable code that looks like a safety net
+ *   is worse than none.
  * - *The entitlement* is the oldest day the provider will serve, which the
  *   data plane reports on `/backfill-defaults`. `capDays` is emphatically
  *   not a proxy for it: it is a validation ceiling padded to `5 * 366` for
@@ -64,12 +67,7 @@ export function fitBackfillWindow(
   const end = toMostRecentTradingDayIso(todayIso);
   const capStart = toMostRecentTradingDayIso(end, -(capDays - 4));
   // Both are zero-padded `YYYY-MM-DD`, so lexicographic order is chronological.
-  let start = toNextTradingDayIso(capStart < historyStartIso ? historyStartIso : capStart);
-  let guard = 0;
-  while (guard <= 7 && (tradingRangeSpanDays(start, end) ?? capDays + 1) > capDays) {
-    start = isoDateAfter(start);
-    guard++;
-  }
+  const start = toNextTradingDayIso(capStart < historyStartIso ? historyStartIso : capStart);
   return { start, end };
 }
 
@@ -270,7 +268,30 @@ export class EnsureCoverageService {
     return !entry.settled && this.runs.get(entry.key) === entry;
   }
 
+  /**
+   * Run one gate to a verdict. **Never rejects**: every waiter resolves off
+   * `ActiveRun.finished`, and a rejected promise settles none of them, so a
+   * throw anywhere below would leave the strip spinning on what is really a
+   * loud, reportable failure. The catch routes through `fail`, which is
+   * guarded on the run still owning its map entry.
+   */
   private async runBackfill(
+    symbol: string,
+    mode: BackfillableMode,
+    entry: ActiveRun,
+  ): Promise<boolean> {
+    try {
+      return await this.composeAndRun(symbol, mode, entry);
+    } catch (error) {
+      return this.fail(
+        entry,
+        'backfill_run_error',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async composeAndRun(
     symbol: string,
     mode: BackfillableMode,
     entry: ActiveRun,
@@ -288,6 +309,17 @@ export class EnsureCoverageService {
         'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.',
       );
     }
+    // A data plane too old to publish the provider's history floor cannot be
+    // composed against: guessing the floor is what #2241 was. The read is
+    // typed but unvalidated at the HTTP seam, so this is the boundary check.
+    const historyStartMs = defaults.value.provider_history_start_ms;
+    if (typeof historyStartMs !== 'number' || !Number.isFinite(historyStartMs)) {
+      return this.fail(
+        entry,
+        'backfill_history_floor_missing',
+        'The data plane did not report how far back the market-data provider serves, so a backfill window cannot be composed. It is likely running an older build than this page.',
+      );
+    }
 
     // Full allowed history, ending at the most recent trading day: the
     // picker's gate does not know the run window a sibling card may later
@@ -296,7 +328,7 @@ export class EnsureCoverageService {
     const { start, end } = fitBackfillWindow(
       todayIso,
       defaults.value.max_trading_range_days,
-      etIsoDate(defaults.value.provider_history_start_ms),
+      etIsoDate(historyStartMs),
     );
     const rejection = tradingRangeRejection(start, end, defaults.value.max_trading_range_days);
     const startMs = tradingDateToMs(start);
@@ -431,17 +463,23 @@ class ActiveRun {
   jobRun: BackfillJobRun | null = null;
   settled = false;
   /**
-   * The failure that explains an empty run, kept from the first day that
-   * reported one. The worker walks oldest day first and stops on a globally
-   * fatal reason, so a later day cannot be a better explanation than the
-   * one that ended the run.
+   * The failure that explains an empty run, taken from the **last** day that
+   * reported one.
+   *
+   * The worker walks oldest session first and breaks immediately after
+   * emitting the frame whose failure was globally fatal, so the last frame
+   * carrying failures is the one that ended the run. Earlier frames can
+   * carry per-day failures that stopped nothing — `provider_no_data` for a
+   * session before the symbol listed, say — and latching the first would
+   * hand the operator a benign reason for a run a refusal killed.
    */
   rootFailure: BackfillFailure | null = null;
 
-  /** Fold one day's failures; the first real cause wins and is kept. */
+  /** Fold one day's failures; the latest real cause replaces the last. */
   observeFailures(failures: readonly BackfillFailure[] | undefined): void {
-    if (this.rootFailure !== null || failures === undefined) return;
-    this.rootFailure = rootFailureOf(failures);
+    if (failures === undefined || failures.length === 0) return;
+    const candidate = rootFailureOf(failures);
+    if (candidate !== null) this.rootFailure = candidate;
   }
 
   constructor(

@@ -6,7 +6,7 @@ import {
   type BackfillJobRun,
 } from '../../../shared/data-lake/backfill-job-runner';
 import { DataRunSpec, toBackfillDayEvent } from '../../../shared/data-lake';
-import type { BackfillDayEvent, BackfillFailure } from '../../../shared/data-lake';
+import type { BackfillDayEvent, BackfillFailure, SseEvent } from '../../../shared/data-lake';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 
 export { BACKFILL_JOB_TYPE };
@@ -31,8 +31,6 @@ export interface BackfillError {
   readonly code: string;
   readonly message: string;
 }
-
-type SseEvent = { readonly type: string } & Readonly<Record<string, unknown>>;
 
 /**
  * Drives one data-lake backfill from submission to a terminal event.

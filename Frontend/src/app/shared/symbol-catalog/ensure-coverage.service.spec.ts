@@ -146,6 +146,36 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** One typed failure as the worker puts it on the wire; overrides as needed. */
+function failure(
+  overrides: Partial<Record<string, unknown>> & { reason: string },
+): Record<string, unknown> {
+  return {
+    artifact_kind: 'time_series_bars',
+    symbol: 'NVDA',
+    data_type: 'trade',
+    detail: null,
+    provider_status_code: null,
+    attempt_count: 1,
+    trading_date_ms: SEP_2026,
+    ...overrides,
+  };
+}
+
+/** One `data_lake.backfill_day` frame for `dayIndex`, carrying `failures`. */
+function dayFrame(dayIndex: number, failures: Record<string, unknown>[]): JobStreamEvent {
+  return {
+    type: 'data_lake.backfill_day',
+    trading_date_ms: SEP_2026,
+    day_index: dayIndex,
+    total_days: 3,
+    days_remaining: 3 - dayIndex,
+    fetched_count: 0,
+    reused_count: 0,
+    failures,
+  };
+}
+
 function markCovered(freshCoverage: { symbols: SymbolCoverageSpan[] }): void {
   freshCoverage.symbols = [
     ...freshCoverage.symbols,
@@ -316,6 +346,84 @@ describe('EnsureCoverageService', () => {
       reason: 'provider_entitlement_error',
       message: "Polygon 403 for NVDA: your plan doesn't include this data timeframe.",
     });
+  });
+
+  // The worker walks oldest session first and breaks right after the frame
+  // whose failure was fatal, so the *last* failing frame is the cause. An
+  // earlier day can fail benignly — a session before the symbol listed —
+  // and reporting that one hands the operator the wrong reason entirely.
+  it('reports the failure that ended the run, not the first one seen', async () => {
+    const { service, jobs } = configureService();
+
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    jobs.emit('job-1', dayFrame(1, [failure({ reason: 'provider_no_data', detail: 'No bars for this session.' })]));
+    jobs.emit('job-1', dayFrame(2, [failure({ reason: 'provider_no_data', detail: 'No bars for this session.' })]));
+    jobs.emit(
+      'job-1',
+      dayFrame(3, [
+        failure({ reason: 'provider_rate_limited', detail: 'Polygon 429 for NVDA.' }),
+        failure({ reason: 'run_aborted', artifact_kind: 'time_series_bars', detail: 'stopped early' }),
+      ]),
+    );
+    jobs.emit('job-1', { type: 'job.completed' });
+
+    expect(await session.done).toBe(false);
+    expect(session.state()).toMatchObject({
+      reason: 'provider_rate_limited',
+      message: 'Polygon 429 for NVDA.',
+    });
+  });
+
+  // A Phase 0 metadata failure is day-independent and does not stop Pass 1,
+  // so it says nothing about whether the day's bars landed — the data plane
+  // draws exactly this distinction in `_is_bar_affecting_failure` (#1900).
+  // It is also appended *before* the bar failure, so position alone loses.
+  it('prefers the bar failure over a day-independent metadata failure', async () => {
+    const { service, jobs } = configureService();
+
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    jobs.emit(
+      'job-1',
+      dayFrame(1, [
+        failure({
+          reason: 'launcher_unreachable',
+          artifact_kind: 'metadata',
+          symbol: null,
+          detail: 'The LEAN launcher did not answer.',
+        }),
+        failure({ reason: 'provider_entitlement_error', detail: 'Polygon 403 for NVDA.' }),
+      ]),
+    );
+    jobs.emit('job-1', { type: 'job.completed' });
+
+    expect(await session.done).toBe(false);
+    expect(session.state()).toMatchObject({
+      reason: 'provider_entitlement_error',
+      message: 'Polygon 403 for NVDA.',
+    });
+  });
+
+  // A data plane too old to publish the floor must refuse loudly. Composing
+  // against a missing field threw a RangeError out of the run, which nothing
+  // caught — leaving the strip spinning on a gate that could never settle.
+  it('refuses loudly when the data plane reports no provider history floor', async () => {
+    const { service, jobs } = configureService({
+      defaults: {
+        kind: 'ok',
+        value: { ...DEFAULTS, provider_history_start_ms: undefined as unknown as number },
+      },
+    });
+
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
+
+    expect(await session.done).toBe(false);
+    expect(session.state()).toMatchObject({
+      phase: 'failed',
+      reason: 'backfill_history_floor_missing',
+    });
+    expect(jobs.started).toEqual([]);
   });
 
   // A run that failed some days but landed others is still a good pick: the
@@ -661,16 +769,35 @@ describe('fitBackfillWindow', () => {
   });
 
   it('keeps the cap-derived start when the floor is older than the cap allows', () => {
-    const wideFloor = '2000-01-03';
-
+    // A floor this wide cannot bind, so the cap decides — and the resulting
+    // window must be the widest the cap permits, not merely "not rejected".
     const { start, end } = fitBackfillWindow(
       '2026-09-21',
       DEFAULTS.max_trading_range_days,
-      wideFloor,
+      '2000-01-03',
     );
 
-    expect(start > wideFloor).toBe(true);
+    // 2026-09-21 is a Monday, so `end - 1826` lands on Tuesday 2021-09-21
+    // with no walk-back: the widest start the cap permits, 1827 inclusive
+    // days. This is also the exact day Polygon refuses — which is why a
+    // real floor must always win over it.
+    expect(start).toBe('2021-09-21');
+    expect(tradingRangeSpanDays(start, end)).toBe(1827);
     expect(tradingRangeRejection(start, end, DEFAULTS.max_trading_range_days)).toBeNull();
+  });
+
+  // The start is placed four days inside the cap precisely so no corrective
+  // loop is needed: the weekday walk-back moves it at most two days earlier,
+  // so the span cannot reach the cap at any cap value. If this ever fails,
+  // the fix is to re-derive the offset — not to reinstate a loop.
+  it('cannot reach the cap at any cap value, so no corrective step is owed', () => {
+    for (const cap of [1830, 365, 90, 30, 11, 10, 7, 6, 5]) {
+      for (let day = 0; day < 28; day++) {
+        const todayIso = new Date(Date.UTC(2026, 0, 1 + day)).toISOString().slice(0, 10);
+        const { start, end } = fitBackfillWindow(todayIso, cap, '2000-01-03');
+        expect(tradingRangeSpanDays(start, end)).toBeLessThan(cap);
+      }
+    }
   });
 
   it('ends at a trading day, never a weekend', () => {

@@ -1,7 +1,11 @@
 import type { BackfillDayEvent, BackfillFailure } from './data-lake.types';
 
-/** One SSE frame as `JobsService` hands it over: a type plus opaque fields. */
-type SseEvent = { readonly type: string } & Readonly<Record<string, unknown>>;
+/**
+ * One SSE frame as `JobsService` hands it over: a type plus opaque fields.
+ * Exported so the frame's shape is declared once, beside the parser that
+ * reads it, rather than re-spelled by each consumer.
+ */
+export type SseEvent = { readonly type: string } & Readonly<Record<string, unknown>>;
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
@@ -65,17 +69,37 @@ export function toBackfillDayEvent(event: SseEvent): BackfillDayEvent | null {
 const ABORT_MARKER_REASON = 'run_aborted';
 
 /**
+ * The artifact kind whose failure actually means "this day's bars are not
+ * there".
+ *
+ * Canonical implementation: `_is_bar_affecting_failure` in
+ * `PythonDataService/app/data_lake/backfill.py`. A Phase 0 metadata failure
+ * (`artifact_kind: "metadata"`, `symbol: null` — a `launcher_unreachable`,
+ * say) is day-independent and does **not** stop `ensure_data` from running
+ * Pass 1, so it says nothing about whether the day's bars were produced.
+ * The data plane learned this the hard way in #1900, where treating any
+ * failure as bar-affecting silently zeroed a rollup window. A picker that
+ * reported the metadata failure as why a symbol has no bars would be making
+ * the same misreading one layer up.
+ */
+const BAR_ARTIFACT_KIND = 'time_series_bars';
+
+/**
  * The failure that best explains why a run produced nothing, or `null`.
  *
- * Prefers a real cause over the abort marker, and the first one seen over
- * later ones: the worker walks oldest day first and stops on a globally
- * fatal reason, so the earliest failure is the one that ended the run.
+ * Prefers a bar-affecting cause over a day-independent one, and any real
+ * cause over the abort marker. Within one day's frame the worker appends
+ * Phase 0 metadata failures before Pass 1's bar failures, so position alone
+ * would pick the wrong one.
  */
 export function rootFailureOf(
   failures: readonly BackfillFailure[],
 ): BackfillFailure | null {
+  const isCause = (failure: BackfillFailure): boolean =>
+    failure.reason !== ABORT_MARKER_REASON;
   return (
-    failures.find((failure) => failure.reason !== ABORT_MARKER_REASON) ??
+    failures.find((failure) => failure.artifact_kind === BAR_ARTIFACT_KIND && isCause(failure)) ??
+    failures.find(isCause) ??
     failures[0] ??
     null
   );

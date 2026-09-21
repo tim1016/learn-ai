@@ -17,7 +17,8 @@ import asyncio
 import json
 import re
 import threading
-from datetime import date
+import time
+from datetime import date, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -27,7 +28,13 @@ from httpx import ASGITransport, AsyncClient
 
 import app.routers.data_lake as data_lake_router
 from app.data_lake.backfill import BackfillDayProgress, BackfillResult, BackfillWaitProgress
-from app.data_lake.types import ArtifactFailure, DataAvailabilityResult, trading_date_to_calendar_anchor_ms
+from app.data_lake.polygon_fetcher import polygon_history_floor
+from app.data_lake.types import (
+    ArtifactFailure,
+    DataAvailabilityResult,
+    trading_date_at_ms,
+    trading_date_to_calendar_anchor_ms,
+)
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.routers.data_lake import router as data_lake_router_instance
 
@@ -189,6 +196,48 @@ async def test_backfill_reversed_range_rejected() -> None:
     )
     r = await _post_backfill(body)
     assert r.status_code == 422
+
+
+async def test_backfill_before_provider_history_rejected_without_dispatch() -> None:
+    """The floor is enforced here, not only by whoever composed the window.
+
+    A start outside the provider's plan draws a 403 on the run's oldest day,
+    and ``provider_entitlement_error`` is globally fatal in ``run_backfill``,
+    so the entire range aborts before a bar is written (#2241). Refusing at
+    this boundary covers every caller — the picker's gate composes its window
+    from the published floor, but an operator types dates into the Observatory
+    panel by hand.
+    """
+    floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
+    body = _valid_body(
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(floor - timedelta(days=1)),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(floor + timedelta(days=30)),
+    )
+
+    r = await _post_backfill(body)
+
+    assert r.status_code == 422
+    assert r.json()["detail"]["reason"] == "before_provider_history"
+
+
+async def test_backfill_starting_on_the_provider_floor_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The floor is inclusive — refusing its own first day would be the very
+    off-by-one #2241 was."""
+    # Dispatch is stubbed out entirely: this pins the boundary's verdict, and
+    # actually walking the window would need Postgres and a live Polygon key.
+    monkeypatch.setattr(data_lake_router, "run_in_thread", lambda *_a, **_k: None)
+    floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
+    body = _valid_body(
+        job_id="job-on-floor",
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(floor),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(floor + timedelta(days=4)),
+    )
+
+    r = await _post_backfill(body)
+
+    assert r.status_code == 202
 
 
 async def test_backfill_range_over_max_cap_rejected() -> None:
