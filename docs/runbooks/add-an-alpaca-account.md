@@ -482,13 +482,38 @@ the lane, its account assignment, its custody records, or its brokerage account.
 
 ### Permanently retire or reassign a served account
 
-**Currently blocked by an implementation gap.** Accepted [ADR 0063](../architecture/adrs/0063-draining-is-an-observed-lane-handover.md)
-requires observed drain/handover checks that the current fleet CLI does not
-implement. The old `retire`/`release-assignment --proof` surface is not an
-approved substitute. Do not paste its fixed proof phrase, delete registry rows,
-reuse the old volume for another account, or run `down -v`.
+The ADR 0063 drain ceremony now ships. A served lane is retired through the
+host CLI, in order:
 
-Use the reversible disable procedure above until the ADR 0063 ceremony ships.
+```bash
+# 1. Close the door. The command prints the drain deadline — an absolute
+#    instant derived from the deployment duration and the trading calendar.
+.venv/bin/python -m scripts.manage_broker_fleet drain \
+  --control-dir <coordinator-control-root> --clerk-id <clerk-id>
+
+# 2. Wait out the printed deadline, then release each assigned account under
+#    a bounded attribution (who acted, and the incident/change record naming
+#    why — the old fixed proof phrase is deleted and never a substitute).
+.venv/bin/python -m scripts.manage_broker_fleet release-assignment \
+  --control-dir <coordinator-control-root> \
+  --broker alpaca --account-id <canonical-account-id> \
+  --expected-generation <observed-generation> \
+  --operator <named-operator> --change-ref <restricted-record>
+
+# 3. Retire. Until the lane-quiet provider ships (#2154) the plain retire
+#    refuses naming the outstanding item; force-retire is the named exit —
+#    deadline-bound, operator-attributed, and it settles any lost dispatches
+#    as outcome-unknown in a durable ledger beside the registry.
+.venv/bin/python -m scripts.manage_broker_fleet force-retire \
+  --control-dir <coordinator-control-root> --clerk-id <clerk-id> \
+  --operator <named-operator> --change-ref <restricted-record>
+```
+
+Lane-to-lane reassignment remains blocked while a drained lane can resurrect
+its binding by restarting during a coordinator outage (#2155); whole-machine
+migration is the preferred lane move. Do not delete registry rows, reuse the
+old volume for another account, or run `down -v`.
+
 Closing the actual brokerage account is a separate action in Alpaca, outside
 this application. This runbook deliberately does not claim that a saved-profile
 archive or a stopped container has closed it.

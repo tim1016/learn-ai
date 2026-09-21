@@ -36,9 +36,12 @@ from app.broker.fleet.recovery import (
 from app.broker.fleet.store import registry_database_path
 from app.broker.fleet.volume import marker_path
 from app.utils.timestamps import now_ms_utc
-from tests.broker.fleet.conftest import Lane, provision_lane
-
-RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
+from tests.broker.fleet.conftest import (
+    FrozenClock,
+    Lane,
+    provision_lane,
+    release_after_drain,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +54,7 @@ class _CeremonyArtifacts:
     backup_dir: Path
 
 
-def _drive_ceremonies(fleet_service, tmp_path: Path) -> _CeremonyArtifacts:
+def _drive_ceremonies(fleet_service, clock: FrozenClock, tmp_path: Path) -> _CeremonyArtifacts:
     """Drive every ceremony once; return every durable/observable artifact."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="secrets-check", tmp_path=tmp_path
@@ -114,12 +117,7 @@ def _drive_ceremonies(fleet_service, tmp_path: Path) -> _CeremonyArtifacts:
     )
     receipts = fleet_service._store.list_routing_receipts(clerk_id=lane.clerk_id)
 
-    fleet_service.release_assignment(
-        broker="fake_alpha",
-        external_account_id="acct-secret",
-        expected_assignment_generation=secret_assignment.assignment_generation,
-        proof=RELEASE_PROOF,
-    )
+    release_after_drain(fleet_service, clock, lane, account="acct-secret")
     payload = fleet_service.directory(include_retired=True)
 
     backup_dir = tmp_path / "backup"
@@ -132,6 +130,7 @@ def _drive_ceremonies(fleet_service, tmp_path: Path) -> _CeremonyArtifacts:
 
 def test_no_secret_reaches_any_sink_the_ceremony_touches(
     control_dir: Path,
+    clock: FrozenClock,
     fleet_service,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -143,7 +142,7 @@ def test_no_secret_reaches_any_sink_the_ceremony_touches(
     genuinely handles.
     """
     with caplog.at_level(logging.DEBUG):
-        artifacts = _drive_ceremonies(fleet_service, control_dir.parent)
+        artifacts = _drive_ceremonies(fleet_service, clock, control_dir.parent)
 
     registry_bytes = registry_database_path(control_dir).read_bytes()
     for wal_suffix in ("-wal", "-shm"):
@@ -202,10 +201,10 @@ def test_no_secret_reaches_any_sink_the_ceremony_touches(
 
 
 def test_the_worker_key_is_stored_but_never_projected(
-    control_dir: Path, fleet_service
+    control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
     """The worker key lives only in the registry, never in a projection."""
-    artifacts = _drive_ceremonies(fleet_service, control_dir.parent)
+    artifacts = _drive_ceremonies(fleet_service, clock, control_dir.parent)
     db_path = registry_database_path(control_dir)
     registry_bytes = db_path.read_bytes()
     for wal_suffix in ("-wal", "-shm"):

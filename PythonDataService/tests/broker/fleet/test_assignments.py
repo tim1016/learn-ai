@@ -20,9 +20,15 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.records import AssignmentState
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
-from tests.broker.fleet.conftest import FrozenClock, Lane, fake_alpha, provision_lane
-
-RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
+from tests.broker.fleet.conftest import (
+    TEST_CHANGE_REF,
+    TEST_OPERATOR,
+    FrozenClock,
+    Lane,
+    fake_alpha,
+    provision_lane,
+    release_after_drain,
+)
 
 
 def _reserved(fleet_service: FleetControlService, broker: str, clerk_id: str, account: str):
@@ -191,7 +197,7 @@ def test_confirm_moves_reserved_to_effective_and_records_the_binding(
 
 
 def test_confirm_refuses_a_rival_and_a_released_assignment(
-    control_dir: Path, fleet_service
+    control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
     """Rivals, session-less clerks and released assignments can never confirm."""
     owner = provision_lane(fleet_service, broker="fake_alpha", label="own", tmp_path=control_dir.parent)
@@ -228,15 +234,8 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
             routing_epoch=1,
         )
 
-    reserved_o = fleet_service._store.read_assignment(
-        broker="fake_alpha", canonical_account_id="ACCT-O"
-    )
-    assert reserved_o is not None
-    fleet_service.release_assignment(
-        broker="fake_alpha",
-        external_account_id="acct-o",
-        expected_assignment_generation=reserved_o.assignment_generation,
-        proof=RELEASE_PROOF,
+    release_after_drain(
+        fleet_service, clock, owner, account="acct-o"
     )
     owner_session = fleet_service._store.read_session(owner.clerk_id)
     assert owner_session is not None
@@ -251,10 +250,12 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
         )
 
 
-def test_release_requires_the_ceremony_proof_and_starts_a_higher_generation(
+def test_release_requires_the_ceremony_gates_and_starts_a_higher_generation(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """The release ceremony demands its proof token, a pinned generation, and reuse restarts at a higher generation."""
+    """The release ceremony demands a drained, deadline-elapsed predecessor, a
+    bounded attribution, and a pinned generation; reuse restarts at a higher
+    generation (ADR 0063 Decision 4)."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="gen1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="gen2", tmp_path=control_dir.parent)
     _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-g")
@@ -263,34 +264,39 @@ def test_release_requires_the_ceremony_proof_and_starts_a_higher_generation(
     )
     assert reserved_g is not None
 
-    with pytest.raises(ClerkAssignmentConflict):
+    # A blank attribution is a malformed invocation, not a state refusal.
+    with pytest.raises(ValueError, match="attributing who acted"):
         fleet_service.release_assignment(
             broker="fake_alpha",
             external_account_id="acct-g",
             expected_assignment_generation=reserved_g.assignment_generation,
-            proof="",
+            operator="   ",
+            change_ref=TEST_CHANGE_REF,
         )
-    with pytest.raises(ClerkAssignmentConflict):
+    # A provisioned predecessor refuses: the door must be closed first.
+    from app.broker.fleet.errors import ClerkDrainRequired
+
+    with pytest.raises(ClerkDrainRequired, match="door is closed"):
         fleet_service.release_assignment(
             broker="fake_alpha",
             external_account_id="acct-g",
             expected_assignment_generation=reserved_g.assignment_generation,
-            proof="just-trust-me",
+            operator=TEST_OPERATOR,
+            change_ref=TEST_CHANGE_REF,
         )
     # A stale pin refuses: release evidence cannot cross a reassignment.
+    fleet_service.drain_clerk(clerk_id=first.clerk_id)
     with pytest.raises(ClerkAssignmentConflict, match="pinned"):
         fleet_service.release_assignment(
             broker="fake_alpha",
             external_account_id="acct-g",
             expected_assignment_generation=reserved_g.assignment_generation + 5,
-            proof=RELEASE_PROOF,
+            operator=TEST_OPERATOR,
+            change_ref=TEST_CHANGE_REF,
         )
 
-    released = fleet_service.release_assignment(
-        broker="fake_alpha",
-        external_account_id="acct-g",
-        expected_assignment_generation=reserved_g.assignment_generation,
-        proof=RELEASE_PROOF,
+    released = release_after_drain(
+        fleet_service, clock, first, account="acct-g"
     )
     assert released.state == AssignmentState.RELEASED
     # The released row stays as terminal history…

@@ -24,8 +24,6 @@ from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from tests.broker.fleet.conftest import FrozenClock, provision_lane
 
-RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
-
 
 def test_six_clerks_across_two_providers_hold_distinct_volumes_and_one_registry(
     control_dir: Path, clock: FrozenClock, fleet_service

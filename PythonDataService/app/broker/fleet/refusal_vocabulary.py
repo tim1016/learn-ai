@@ -1,6 +1,6 @@
 """The fleet control plane's closed refusal vocabulary (#2067).
 
-Thirty-three distinct reason codes exist on the fleet surface: the 28-class
+Thirty-eight distinct reason codes exist on the fleet surface: the 33-class
 ``FleetControlError`` subclass closure (``FleetControlError`` itself plus
 every subclass, wherever in ``app/`` it is declared) and 5 codes minted
 without a ``FleetControlError`` at all -- a Pydantic-typed literal
@@ -92,7 +92,7 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The complete fleet refusal vocabulary: the 28-class FleetControlError
+#: The complete fleet refusal vocabulary: the 33-class FleetControlError
 #: subclass closure plus the 5 codes minted outside it. Sorted by code.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
@@ -116,14 +116,29 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "clerk_broker_mismatch": RefusalFamily(
         409, "The path broker differs from the clerk's immutable broker."
     ),
+    "clerk_command_quiet_required": RefusalFamily(
+        409, "The clerk holds a dispatched routing attempt whose outcome the coordinator lost."
+    ),
+    "clerk_drain_deadline_pending": RefusalFamily(
+        409, "The drain's calendar-derived deadline instant has not elapsed yet."
+    ),
+    "clerk_drain_required": RefusalFamily(
+        409, "The ceremony requires a clerk whose door is closed: drain it first."
+    ),
     "clerk_endpoint_not_approved": RefusalFamily(
         409, "A registration cites an endpoint the deployment has not approved."
     ),
     "clerk_identity_mismatch": RefusalFamily(
         409, "A session presented facts that contradict the clerk's registry identity."
     ),
+    "clerk_lane_quiet_unproven": RefusalFamily(
+        409, "No lane-quiet confirmation answers the retirement gate; force-retire is the named exit."
+    ),
     "clerk_not_found": RefusalFamily(
         404, "No clerk carries this identity, including malformed or retired ones."
+    ),
+    "clerk_reassignment_blocked": RefusalFamily(
+        409, "Lane-to-lane reassignment is blocked until a drained lane cannot resurrect its binding."
     ),
     "clerk_routing_attempt_conflict": RefusalFamily(
         409, "An illegal transition or idempotency-key reuse on a routing attempt."

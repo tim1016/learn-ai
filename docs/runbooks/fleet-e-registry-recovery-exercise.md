@@ -78,7 +78,7 @@ This command refuses if the restored database contains any effective assignment.
 
 For a same-owner restart, restore only the original Clerk volume, preserve its opaque Clerk and volume identities, and have the original agent re-confirm its exact last-effective binding. The assignment remains with that Clerk; do not release it merely because a heartbeat expired.
 
-For a genuine reassignment, first complete provider-specific shutdown, credential-isolation and obligation-clear proof for the old lane. Verify the successor's original marked volume before the release. Then run the explicit host ceremony, pinning the generation observed before the action:
+For a genuine reassignment, ADR 0063 (accepted 2026-09-15) closes the ceremony until further notice: the predecessor must be draining, and no drained lane may be reassigned while restarting during a coordinator outage can resurrect its binding (#2155). The two constraints leave no legal predecessor state, so `reassign-assignment` refuses with `clerk_reassignment_blocked` regardless of the evidence presented. Whole-machine migration (#2151) is the preferred lane move and needs no successor at all; the successor-verification and generation-pinning steps below remain the shape the ceremony will require once #2155 closes:
 
 ```bash
 .venv/bin/python -m scripts.manage_broker_fleet reassign-assignment \
@@ -86,12 +86,13 @@ For a genuine reassignment, first complete provider-specific shutdown, credentia
   --broker alpaca \
   --account-id <canonical-account-id> \
   --expected-generation <observed-generation> \
-  --proof old-clerk-offline-and-obligations-clear \
+  --operator <named-operator> \
+  --change-ref <restricted-incident-or-change-reference> \
   --successor-clerk-id <original-successor-clerk-id> \
   --successor-volume-root <original-successor-root>
 ```
 
-This releases and reserves under a higher assignment generation but does not confirm or route the successor. The successor must pass all existing provider binding, custody, envelope, capability, risk and Live arming gates. Never use this procedure for an automatic takeover.
+When it reopens, the ceremony will release and reserve under a higher assignment generation but will not confirm or route the successor. The successor must pass all existing provider binding, custody, envelope, capability, risk and Live arming gates. Never use this procedure for an automatic takeover. The old `--proof old-clerk-offline-and-obligations-clear` flag is deleted: the proof token was published in the repository that checked it and named nobody, and ADR 0063 Decision 4 replaces it with the bounded `--operator`/`--change-ref` attribution recorded on the released history row.
 
 ## 5. D-compatible rollback
 

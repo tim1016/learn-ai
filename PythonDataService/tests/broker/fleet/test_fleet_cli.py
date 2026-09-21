@@ -168,8 +168,15 @@ def test_the_ceremony_refusals_exit_two_and_the_unknown_provider_refuses(
     assert payload["error"].startswith("clerk_not_found:")
 
 
-def test_release_requires_the_proof_token(tmp_path: Path, capsys) -> None:
-    """Release demands the proof token and reports the released generation."""
+def test_release_requires_the_drain_and_attribution_and_reports_the_generation(
+    tmp_path: Path, capsys
+) -> None:
+    """Release demands the drained state and a bounded attribution, and
+    reports the released generation (ADR 0063 Decision 4).
+
+    The CLI's own service runs on the wall clock, so the drain is entered
+    through a service seam whose frozen clock sits in the past — the stored
+    deadline has already elapsed by the time the CLI runs."""
     control_dir = tmp_path / "control"
     volume_root = tmp_path / "volumes" / "p"
     volume_root.mkdir(parents=True)
@@ -206,6 +213,7 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys) -> None:
     finally:
         service.close()
 
+    # A provisioned predecessor refuses: the door must be closed first.
     assert (
         main(
             _argv(
@@ -218,13 +226,27 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys) -> None:
                 "acct-cli",
                 "--expected-generation",
                 "1",
-                "--proof",
-                "not-the-proof",
+                "--operator",
+                "cli-operator",
+                "--change-ref",
+                "cli-change-1",
             )
         )
         == 2
     )
-    capsys.readouterr()
+    refusal = json.loads(capsys.readouterr().out)
+    assert refusal["error"].startswith("clerk_drain_required:")
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        service.drain_clerk(clerk_id=clerk_id)
+    finally:
+        service.close()
+
     assert (
         main(
             _argv(
@@ -237,14 +259,126 @@ def test_release_requires_the_proof_token(tmp_path: Path, capsys) -> None:
                 "acct-cli",
                 "--expected-generation",
                 "1",
-                "--proof",
-                "old-clerk-offline-and-obligations-clear",
+                "--operator",
+                "cli-operator",
+                "--change-ref",
+                "cli-change-1",
             )
         )
         == 0
     )
     released = json.loads(capsys.readouterr().out)
     assert released["state"] == "released"
+    assert released["lane_confirmation"] == "absent"
+    assert released["attested_operator"] == "cli-operator"
+
+
+def test_drain_and_force_retire_answer_over_the_cli(tmp_path: Path, capsys) -> None:
+    """The drain and force-retire verbs answer with the drain window's
+    endpoints, refuse before the deadline (exit 2), and complete past it with
+    the forced attribution the operator typed."""
+    control_dir = tmp_path / "control"
+    volume_root = tmp_path / "volumes" / "fr"
+    volume_root.mkdir(parents=True)
+    assert main(_argv("init", "--control-dir", str(control_dir))) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            _argv(
+                "provision",
+                "--control-dir",
+                str(control_dir),
+                "--broker",
+                "alpaca",
+                "--label",
+                "fr",
+                "--volume-root",
+                str(volume_root),
+            )
+        )
+        == 0
+    )
+    clerk_id = json.loads(capsys.readouterr().out)["clerk_id"]
+
+    assert (
+        main(_argv("drain", "--control-dir", str(control_dir), "--clerk-id", clerk_id)) == 0
+    )
+    drained = json.loads(capsys.readouterr().out)
+    assert drained["lifecycle_state"] == "draining"
+    assert drained["draining_since_ms"] is not None
+    assert drained["drain_deadline_at_ms"] is not None
+
+    # The CLI's wall clock is inside the drain window the CLI itself just
+    # opened: force-retire refuses and names the outstanding instant.
+    assert (
+        main(
+            _argv(
+                "force-retire",
+                "--control-dir",
+                str(control_dir),
+                "--clerk-id",
+                clerk_id,
+                "--operator",
+                "cli-operator",
+                "--change-ref",
+                "cli-change-2",
+            )
+        )
+        == 2
+    )
+    refusal = json.loads(capsys.readouterr().out)
+    assert refusal["error"].startswith("clerk_drain_deadline_pending:")
+
+    # The completing path needs a deadline that has elapsed against the CLI's
+    # wall clock; §7.3 forbids moving the first lane's, so enter a second
+    # lane's drain through a service seam whose frozen clock sits far in the
+    # past.
+    past = FrozenClock(start_ms=now_ms_utc() - 90 * 86_400_000)
+    stale_root = tmp_path / "volumes" / "stale"
+    stale_root.mkdir(parents=True)
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=past,
+    )
+    stale_lane = None
+    try:
+        stale_lane = service.provision_clerk(
+            broker="alpaca",
+            display_label="stale",
+            volume_root=stale_root,
+            attestation_id="vol-stale",
+        )
+        service.register_agent_session(
+            fleet_protocol_version=2,
+            clerk_id=stale_lane.clerk.clerk_id,
+            worker_key=stale_lane.clerk.worker_key,
+        )
+        service.drain_clerk(clerk_id=stale_lane.clerk.clerk_id)
+    finally:
+        service.close()
+
+    assert stale_lane is not None
+    assert (
+        main(
+            _argv(
+                "force-retire",
+                "--control-dir",
+                str(control_dir),
+                "--clerk-id",
+                stale_lane.clerk.clerk_id,
+                "--operator",
+                "cli-operator",
+                "--change-ref",
+                "cli-change-3",
+            )
+        )
+        == 0
+    )
+    retired = json.loads(capsys.readouterr().out)
+    assert retired["lifecycle_state"] == "retired"
+    assert retired["lane_confirmation"] == "absent"
+    assert retired["retire_operator"] == "cli-operator"
 
 
 def test_compatibility_cli_requires_complete_zero_hit_evidence_before_retirement(

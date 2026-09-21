@@ -207,6 +207,72 @@ class FleetProtocolIncompatible(FleetControlError):
     status_code: ClassVar[int] = 409
 
 
+class ClerkDrainRequired(FleetControlError):
+    """The ceremony requires a draining clerk (ADR 0063 Decisions 1/4).
+
+    Internal family for the drain ceremony: a clerk that has served retires
+    only through draining, and release/reassignment require a draining
+    predecessor — the closed door is what makes the rest of the ceremony's
+    evidence meaningful.
+    """
+
+    reason: ClassVar[str] = "clerk_drain_required"
+    status_code: ClassVar[int] = 409
+
+
+class ClerkCommandQuietRequired(FleetControlError):
+    """The clerk holds a dispatch whose outcome the coordinator lost.
+
+    ADR 0063 Decision 3: a lane cannot leave service past a routed command
+    whose outcome is unknown — the attempt means "may have executed,
+    reconcile by identity, never resubmit", and retiring the lane would
+    strand that obligation with no owner.
+    """
+
+    reason: ClassVar[str] = "clerk_command_quiet_required"
+    status_code: ClassVar[int] = 409
+
+
+class ClerkLaneQuietUnproven(FleetControlError):
+    """No lane-quiet confirmation answers the retirement gate (ADR 0063 Decision 2).
+
+    The lane's own assertion that it holds no working order and runs no bot
+    decision loop, fenced by the current session's instance and epoch. No
+    provider can answer it yet (#2154), so the normal ``draining -> retired``
+    path refuses rather than degrading to an attestation; ``force-retire`` is
+    the separately named exit.
+    """
+
+    reason: ClassVar[str] = "clerk_lane_quiet_unproven"
+    status_code: ClassVar[int] = 409
+
+
+class ClerkDrainDeadlinePending(FleetControlError):
+    """The drain's deadline instant has not elapsed yet (ADR 0063 Decision 5).
+
+    The two-legged, calendar-derived bound that gates ``force-retire`` and
+    the handover ceremonies; before it elapses the ceremony refuses and
+    names the instant, never silently waits.
+    """
+
+    reason: ClassVar[str] = "clerk_drain_deadline_pending"
+    status_code: ClassVar[int] = 409
+
+
+class ClerkReassignmentBlocked(FleetControlError):
+    """Lane-to-lane reassignment is blocked (ADR 0063 §4.1/§7.1).
+
+    A drained lane must not be reassigned while a restart during a
+    coordinator outage can resurrect its binding (#2155), and reassignment
+    requires a draining predecessor — jointly exhaustive, so the ceremony is
+    unreachable until the resurrection hole closes. Whole-machine migration
+    is the preferred lane move and needs no successor (#2151).
+    """
+
+    reason: ClassVar[str] = "clerk_reassignment_blocked"
+    status_code: ClassVar[int] = 409
+
+
 class FleetRegistryUnavailable(FleetControlError):
     """The fleet registry cannot be opened or read (the coordinator's own store).
 
@@ -281,9 +347,14 @@ __all__ = [
     "ClerkAssignmentConflict",
     "ClerkBindingGenerationConflict",
     "ClerkBrokerMismatch",
+    "ClerkCommandQuietRequired",
+    "ClerkDrainDeadlinePending",
+    "ClerkDrainRequired",
     "ClerkEndpointNotApproved",
     "ClerkIdentityMismatch",
+    "ClerkLaneQuietUnproven",
     "ClerkNotFound",
+    "ClerkReassignmentBlocked",
     "ClerkRoutingAttemptConflict",
     "ClerkRoutingOutcomeUnknown",
     "ClerkUnreachable",

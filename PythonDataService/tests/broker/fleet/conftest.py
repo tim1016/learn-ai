@@ -24,7 +24,7 @@ from app.broker.fleet.provider import (
     ProviderOperation,
     ServedContext,
 )
-from app.broker.fleet.records import StoredLifecycleState
+from app.broker.fleet.records import AccountAssignmentRecord, StoredLifecycleState
 from app.broker.fleet.recovery import (
     BACKUP_DATABASE_FILENAME,
     BACKUP_MANIFEST_FILENAME,
@@ -313,23 +313,182 @@ def bind_lane(
     return session, confirmed
 
 
+#: The bounded attribution every test ceremony carries (ADR 0063 Decision 4).
+TEST_OPERATOR = "host-operator"
+TEST_CHANGE_REF = "test-change-ref-0001"
+
+
+def release_after_drain(
+    service: FleetControlService,
+    clock: FrozenClock,
+    lane: Lane,
+    *,
+    account: str,
+    expected_assignment_generation: int = 1,
+    operator: str = TEST_OPERATOR,
+    change_ref: str = TEST_CHANGE_REF,
+) -> AccountAssignmentRecord:
+    """Drain, wait out the deadline, then release under a bounded attribution.
+
+    The ADR 0063 release ceremony's full order (§4.1): the drain closes the
+    door, the deadline bounds the wait, and the release records the
+    operator/change_ref the deleted proof token used to stand in for.
+    """
+    drained = service.drain_clerk(clerk_id=lane.clerk_id)
+    assert drained.drain_deadline_at_ms is not None
+    clock.advance(drained.drain_deadline_at_ms - clock() + 1)
+    return service.release_assignment(
+        broker=lane.broker,
+        external_account_id=account,
+        expected_assignment_generation=expected_assignment_generation,
+        operator=operator,
+        change_ref=change_ref,
+    )
+
+
 def downgrade_backup_to_v2(backup_dir: Path) -> None:
     """Rewrite a fresh backup into the v2 shape it carried before the upgrade.
 
     A fresh backup carries every object the *current* ``schema.SCHEMA_VERSION``
     adds, not just v3's — so producing genuine pre-upgrade evidence means
-    dropping v3's nested-root index and trigger *and* v4's audit indexes
-    (#2133 P2-a), whatever the current version has grown to. Restamping the
-    meta row is what a D-compatible rollback is for, without reconstructing
-    the v2 DDL by hand.
+    dropping v3's nested-root index and trigger, v4's audit indexes (#2133
+    P2-a), and v5's drain-ceremony columns and triggers (ADR 0063). The v5
+    columns cannot leave through ``ALTER TABLE DROP COLUMN`` — the fresh
+    DDL's cross-column CHECKs reference them — so ``clerks`` and
+    ``account_assignment_history`` are rebuilt without them, the v1→v2
+    migration's own table-replace pattern, and the v2-era triggers and
+    indexes are recreated on the rebuilt tables. Restamping the meta row is
+    what a D-compatible rollback is for, without reconstructing the v2 DDL
+    by hand.
     """
     database = backup_dir / BACKUP_DATABASE_FILENAME
     connection = sqlite3.connect(database)
     try:
-        connection.execute("DROP TRIGGER trg_clerks_volume_root_not_nested")
-        connection.execute("DROP INDEX ux_clerks_volume_root")
-        connection.execute("DROP INDEX ix_routing_receipts_created_at")
-        connection.execute("DROP INDEX ix_routing_receipts_clerk_created_at")
+        connection.execute("DROP TRIGGER IF EXISTS trg_clerks_volume_root_not_nested")
+        connection.execute("DROP INDEX IF EXISTS ux_clerks_volume_root")
+        connection.execute("DROP INDEX IF EXISTS ix_routing_receipts_created_at")
+        connection.execute("DROP INDEX IF EXISTS ix_routing_receipts_clerk_created_at")
+        connection.execute("DROP INDEX IF EXISTS ix_routing_receipts_unsettled")
+        connection.execute("DROP TABLE IF EXISTS force_retire_correlations")
+        connection.execute(
+            """CREATE TABLE clerks_v2 (
+                clerk_id                TEXT PRIMARY KEY,
+                broker                  TEXT NOT NULL CHECK (length(broker) > 0),
+                worker_key              TEXT NOT NULL,
+                display_label           TEXT NOT NULL CHECK (length(display_label) > 0),
+                volume_id               TEXT NOT NULL,
+                volume_root             TEXT NOT NULL CHECK (length(volume_root) > 0),
+                deployment_namespace    TEXT NOT NULL CHECK (length(deployment_namespace) > 0),
+                volume_attestation_kind TEXT NOT NULL CHECK (length(volume_attestation_kind) > 0),
+                volume_attestation_id   TEXT NOT NULL CHECK (length(volume_attestation_id) > 0),
+                lifecycle_state         TEXT NOT NULL CHECK (lifecycle_state IN ('provisioned', 'draining', 'retired')),
+                created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= 253402300799999),
+                retired_at_ms INTEGER CHECK (retired_at_ms IS NULL OR (retired_at_ms >= 0 AND retired_at_ms <= 253402300799999)),
+                CHECK ((retired_at_ms IS NULL) = (lifecycle_state <> 'retired'))
+            )"""
+        )
+        connection.execute(
+            "INSERT INTO clerks_v2 (clerk_id, broker, worker_key, display_label, "
+            "volume_id, volume_root, deployment_namespace, volume_attestation_kind, "
+            "volume_attestation_id, lifecycle_state, created_at_ms, retired_at_ms) "
+            "SELECT clerk_id, broker, worker_key, display_label, volume_id, "
+            "volume_root, deployment_namespace, volume_attestation_kind, "
+            "volume_attestation_id, lifecycle_state, created_at_ms, retired_at_ms "
+            "FROM clerks"
+        )
+        connection.execute("DROP TABLE clerks")
+        connection.execute("ALTER TABLE clerks_v2 RENAME TO clerks")
+        connection.execute(
+            "CREATE UNIQUE INDEX ux_clerks_worker_key ON clerks(worker_key) "
+            "WHERE lifecycle_state <> 'retired'"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX ux_clerks_volume_id ON clerks(volume_id) "
+            "WHERE lifecycle_state <> 'retired'"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX ux_clerks_volume_attestation ON clerks"
+            "(deployment_namespace, volume_attestation_kind, volume_attestation_id) "
+            "WHERE lifecycle_state <> 'retired'"
+        )
+        connection.execute(
+            "CREATE INDEX ix_clerks_listing ON clerks(broker, created_at_ms, clerk_id)"
+        )
+        connection.execute(
+            """CREATE TRIGGER trg_clerks_identity_immutable
+BEFORE UPDATE ON clerks
+FOR EACH ROW WHEN
+    OLD.clerk_id IS NOT NEW.clerk_id
+    OR OLD.broker IS NOT NEW.broker
+    OR OLD.worker_key IS NOT NEW.worker_key
+    OR OLD.volume_id IS NOT NEW.volume_id
+    OR OLD.volume_root IS NOT NEW.volume_root
+    OR OLD.deployment_namespace IS NOT NEW.deployment_namespace
+    OR OLD.volume_attestation_kind IS NOT NEW.volume_attestation_kind
+    OR OLD.volume_attestation_id IS NOT NEW.volume_attestation_id
+    OR OLD.created_at_ms IS NOT NEW.created_at_ms
+BEGIN
+    SELECT RAISE(ABORT, 'a clerk identity is written once at provisioning and never changes');
+END"""
+        )
+        connection.execute(
+            """CREATE TRIGGER trg_clerks_no_delete
+BEFORE DELETE ON clerks
+BEGIN
+    SELECT RAISE(ABORT, 'a clerk is retired, never deleted; IDs are not recycled');
+END"""
+        )
+        connection.execute(
+            """CREATE TRIGGER trg_clerks_lifecycle_forward
+BEFORE UPDATE ON clerks
+FOR EACH ROW WHEN
+    (OLD.lifecycle_state = 'provisioned' AND NEW.lifecycle_state = 'provisioned' AND OLD.retired_at_ms IS NOT NEW.retired_at_ms)
+    OR (OLD.lifecycle_state = 'draining' AND NEW.lifecycle_state NOT IN ('draining', 'retired'))
+    OR (OLD.lifecycle_state = 'retired' AND NEW.lifecycle_state <> 'retired')
+BEGIN
+    SELECT RAISE(ABORT, 'a clerk lifecycle moves forward only');
+END"""
+        )
+        connection.execute(
+            """CREATE TABLE account_assignment_history_v2 (
+                broker                          TEXT NOT NULL,
+                canonical_external_account_id   TEXT NOT NULL,
+                clerk_id                        TEXT NOT NULL,
+                assignment_generation           INTEGER NOT NULL CHECK (assignment_generation >= 1),
+                state                           TEXT NOT NULL CHECK (state IN ('reserved', 'effective', 'released')),
+                effective_profile_id            TEXT,
+                effective_revision              INTEGER,
+                recorded_at_ms                  INTEGER NOT NULL CHECK (recorded_at_ms >= 0 AND recorded_at_ms <= 253402300799999),
+                updated_at_ms                   INTEGER NOT NULL CHECK (updated_at_ms >= 0 AND updated_at_ms <= 253402300799999),
+                PRIMARY KEY (broker, canonical_external_account_id, assignment_generation, state)
+            )"""
+        )
+        connection.execute(
+            "INSERT INTO account_assignment_history_v2 (broker, "
+            "canonical_external_account_id, clerk_id, assignment_generation, state, "
+            "effective_profile_id, effective_revision, recorded_at_ms, updated_at_ms) "
+            "SELECT broker, canonical_external_account_id, clerk_id, "
+            "assignment_generation, state, effective_profile_id, effective_revision, "
+            "recorded_at_ms, updated_at_ms FROM account_assignment_history"
+        )
+        connection.execute("DROP TABLE account_assignment_history")
+        connection.execute(
+            "ALTER TABLE account_assignment_history_v2 RENAME TO account_assignment_history"
+        )
+        connection.execute(
+            """CREATE TRIGGER trg_account_assignment_history_immutable
+BEFORE UPDATE ON account_assignment_history
+BEGIN
+    SELECT RAISE(ABORT, 'assignment history is append-only');
+END"""
+        )
+        connection.execute(
+            """CREATE TRIGGER trg_account_assignment_history_no_delete
+BEFORE DELETE ON account_assignment_history
+BEGIN
+    SELECT RAISE(ABORT, 'assignment history is append-only');
+END"""
+        )
         connection.execute(
             "UPDATE fleet_meta SET schema_version = ? WHERE id = 1",
             (D_COMPATIBLE_SCHEMA_VERSION,),
@@ -347,6 +506,8 @@ def downgrade_backup_to_v2(backup_dir: Path) -> None:
 __all__ = [
     "FAKE_ALPHA_CAPABILITIES",
     "FAKE_BETA_CAPABILITIES",
+    "TEST_CHANGE_REF",
+    "TEST_OPERATOR",
     "FakeProviderAdapter",
     "FrozenClock",
     "Lane",
@@ -355,4 +516,5 @@ __all__ = [
     "fake_alpha",
     "fake_beta",
     "provision_lane",
+    "release_after_drain",
 ]

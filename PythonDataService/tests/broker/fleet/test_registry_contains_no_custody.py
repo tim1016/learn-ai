@@ -4,7 +4,11 @@ Every table and every column of the fleet schema is asserted against a closed
 allowlist. Custody, orders, fills, positions, activation, arming and envelope
 facts live on clerk volumes under provider authority; a column with such a
 name appearing here would mean the coordinator had started storing execution
-data, which ADR 0062 Decision 1 forbids.
+data, which ADR 0062 Decision 1 forbids. ``force_retire_correlations`` is
+admitted deliberately: it stores routing-bookkeeping identities (correlation
+ids and their attribution) that ``routing_receipts`` already owns the
+vocabulary for — the reconciliation work queue a force-retirement leaves
+behind (ADR 0063 Decision 5), not custody data.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ _ALLOWED_TABLES = {
     "account_assignments",
     "account_assignment_history",
     "routing_receipts",
+    "force_retire_correlations",
 }
 
 _FORBIDDEN_NAME_FRAGMENTS = (

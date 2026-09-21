@@ -33,6 +33,18 @@
       "status_code": 409,
       "meaning": "The path broker differs from the clerk's immutable broker."
     },
+    "clerk_command_quiet_required": {
+      "status_code": 409,
+      "meaning": "The clerk holds a dispatched routing attempt whose outcome the coordinator lost."
+    },
+    "clerk_drain_deadline_pending": {
+      "status_code": 409,
+      "meaning": "The drain's calendar-derived deadline instant has not elapsed yet."
+    },
+    "clerk_drain_required": {
+      "status_code": 409,
+      "meaning": "The ceremony requires a clerk whose door is closed: drain it first."
+    },
     "clerk_endpoint_not_approved": {
       "status_code": 409,
       "meaning": "A registration cites an endpoint the deployment has not approved."
@@ -41,9 +53,17 @@
       "status_code": 409,
       "meaning": "A session presented facts that contradict the clerk's registry identity."
     },
+    "clerk_lane_quiet_unproven": {
+      "status_code": 409,
+      "meaning": "No lane-quiet confirmation answers the retirement gate; force-retire is the named exit."
+    },
     "clerk_not_found": {
       "status_code": 404,
       "meaning": "No clerk carries this identity, including malformed or retired ones."
+    },
+    "clerk_reassignment_blocked": {
+      "status_code": 409,
+      "meaning": "Lane-to-lane reassignment is blocked until a drained lane cannot resurrect its binding."
     },
     "clerk_routing_attempt_conflict": {
       "status_code": 409,

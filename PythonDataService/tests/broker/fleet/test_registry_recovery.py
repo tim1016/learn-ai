@@ -17,6 +17,7 @@ from app.broker.fleet.confirmation import (
 from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkIdentityMismatch,
+    ClerkReassignmentBlocked,
     ClerkUnreachable,
     FleetRegistryRecoveryPending,
     FleetRegistryUnavailable,
@@ -32,10 +33,17 @@ from app.broker.fleet.recovery import (
     restore_registry_backup,
 )
 from app.broker.fleet.schema import SCHEMA_VERSION
-from app.broker.fleet.service import RELEASE_PROOF_TOKEN, FleetControlService
+from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
-from tests.broker.fleet.conftest import FrozenClock, bind_lane, downgrade_backup_to_v2, provision_lane
+from tests.broker.fleet.conftest import (
+    TEST_CHANGE_REF,
+    TEST_OPERATOR,
+    FrozenClock,
+    bind_lane,
+    downgrade_backup_to_v2,
+    provision_lane,
+)
 
 
 def _write_lane_evidence(
@@ -467,10 +475,12 @@ def test_restore_refuses_a_manifest_or_database_newer_than_delivery_d(
         )
 
 
-def test_same_owner_restart_and_explicit_reassignment_preserve_identity_fences(
-    control_dir: Path, fleet_service: FleetControlService
+def test_same_owner_restart_preserves_identity_and_reassignment_is_blocked(
+    control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
 ) -> None:
-    """Restart does not remint ownership; reassignment is explicit and unroutable."""
+    """Restart does not remint ownership; explicit reassignment is blocked
+    against a drained lane until #2155 closes (ADR 0063 §4.1/§7.1), leaving
+    the original ownership intact and unroutable for a successor."""
     original = provision_lane(fleet_service, broker="fake_alpha", label="paper", tmp_path=control_dir.parent)
     successor = provision_lane(fleet_service, broker="fake_alpha", label="live", tmp_path=control_dir.parent)
     _, confirmed = bind_lane(fleet_service, original, account="ACCOUNT", binding_generation=2)
@@ -479,17 +489,23 @@ def test_same_owner_restart_and_explicit_reassignment_preserve_identity_fences(
     )
     assert resumed == confirmed
 
-    reassigned = fleet_service.reassign_assignment(
-        broker="fake_alpha",
-        external_account_id="ACCOUNT",
-        expected_assignment_generation=confirmed.assignment_generation,
-        proof=RELEASE_PROOF_TOKEN,
-        successor_clerk_id=successor.clerk_id,
-        successor_volume_root=successor.volume_root,
+    drained = fleet_service.drain_clerk(clerk_id=original.clerk_id)
+    assert drained.drain_deadline_at_ms is not None
+    clock.advance(drained.drain_deadline_at_ms - clock() + 1)
+    with pytest.raises(ClerkReassignmentBlocked, match="#2155"):
+        fleet_service.reassign_assignment(
+            broker="fake_alpha",
+            external_account_id="ACCOUNT",
+            expected_assignment_generation=confirmed.assignment_generation,
+            operator=TEST_OPERATOR,
+            change_ref=TEST_CHANGE_REF,
+            successor_clerk_id=successor.clerk_id,
+            successor_volume_root=successor.volume_root,
+        )
+    unchanged = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCOUNT"
     )
-    assert reassigned.clerk_id == successor.clerk_id
-    assert reassigned.assignment_generation == confirmed.assignment_generation + 1
-    assert reassigned.state.value == "reserved"
+    assert unchanged == confirmed
     with pytest.raises(ClerkUnreachable, match="no registered agent session"):
         fleet_service.resolve_route(broker="fake_alpha", clerk_id=successor.clerk_id)
 
@@ -497,7 +513,15 @@ def test_same_owner_restart_and_explicit_reassignment_preserve_identity_fences(
 def test_reassignment_successor_failure_rolls_back_the_original_owner(
     control_dir: Path, fleet_service: FleetControlService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The second half of reassignment cannot strand a released old owner."""
+    """The second half of reassignment cannot strand a released old owner.
+
+    Exercised at the store seam: the service ceremony is blocked against a
+    drained lane until #2155 closes, but the transactional atomicity it will
+    hand these records to is a property of the store and stays covered."""
+    from dataclasses import replace
+
+    from app.broker.fleet.records import AssignmentState
+
     original = provision_lane(fleet_service, broker="fake_alpha", label="paper", tmp_path=control_dir.parent)
     successor = provision_lane(fleet_service, broker="fake_alpha", label="live", tmp_path=control_dir.parent)
     _, confirmed = bind_lane(fleet_service, original, account="ACCOUNT")
@@ -512,15 +536,28 @@ def test_reassignment_successor_failure_rolls_back_the_original_owner(
             return False
         return cas(*args, **kwargs)
 
+    released = replace(confirmed, state=AssignmentState.RELEASED)
+    reserved = replace(
+        confirmed,
+        clerk_id=successor.clerk_id,
+        assignment_generation=confirmed.assignment_generation + 1,
+        state=AssignmentState.RESERVED,
+        effective_profile_id=None,
+        effective_revision=None,
+        confirmed_binding_generation=None,
+        confirmed_profile_id=None,
+        confirmed_revision=None,
+        confirmed_at_ms=None,
+        confirmed_agent_instance_id=None,
+        confirmed_routing_epoch=None,
+    )
     monkeypatch.setattr(store, "cas_update_assignment", refuse_successor)
-    with pytest.raises(ClerkAssignmentConflict, match="original ownership remains intact"):
-        fleet_service.reassign_assignment(
-            broker="fake_alpha",
-            external_account_id="ACCOUNT",
-            expected_assignment_generation=confirmed.assignment_generation,
-            proof=RELEASE_PROOF_TOKEN,
-            successor_clerk_id=successor.clerk_id,
-            successor_volume_root=successor.volume_root,
+    with pytest.raises(sqlite3.IntegrityError, match="successor reservation refused"), store.transaction() as conn:
+        store.reassign_assignment(
+            conn,
+            released=released,
+            reserved_successor=reserved,
+            previous_state=AssignmentState.EFFECTIVE,
         )
     unchanged = store.read_assignment(broker="fake_alpha", canonical_account_id="ACCOUNT")
     assert unchanged == confirmed
@@ -537,7 +574,8 @@ def test_reassignment_to_current_owner_refuses_without_releasing(
             broker="fake_alpha",
             external_account_id="ACCOUNT",
             expected_assignment_generation=confirmed.assignment_generation,
-            proof=RELEASE_PROOF_TOKEN,
+            operator=TEST_OPERATOR,
+            change_ref=TEST_CHANGE_REF,
             successor_clerk_id=original.clerk_id,
             successor_volume_root=original.volume_root,
         )

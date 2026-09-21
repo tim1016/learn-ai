@@ -23,9 +23,12 @@ from app.utils.error_handlers import install_fleet_control_error_handler
 from tests.broker.fleet.conftest import (
     FAKE_ALPHA_CAPABILITIES,
     FAKE_BETA_CAPABILITIES,
+    TEST_CHANGE_REF,
+    TEST_OPERATOR,
     FrozenClock,
     bind_lane,
     provision_lane,
+    release_after_drain,
 )
 
 #: Every field the directory may carry. Anything else — especially a balance,
@@ -43,6 +46,8 @@ _ALLOWED_DIRECTORY_FIELDS = {
     "capabilities",
     "provider_summary",
     "observed_at_ms",
+    "draining_since_ms",
+    "drain_deadline_at_ms",
 }
 
 
@@ -172,21 +177,27 @@ def test_lifecycle_projects_from_observations_not_stored_flags(
     assert entry()["lifecycle_state"] == "unreachable"
 
 
-def test_retired_lanes_leave_the_default_directory(control_dir: Path, fleet_service) -> None:
-    """Retired lanes disappear from the default directory and stay marked when included."""
+def test_retired_lanes_leave_the_default_directory(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """Retired lanes disappear from the default directory and stay marked when
+    included. A served lane leaves through the drain ceremony: release after
+    the deadline, then the force-retire exit (no provider answers lane quiet
+    yet, ADR 0063)."""
     keeper = _live(fleet_service, control_dir.parent, "fake_alpha", "keeper")
     retiring = _live(fleet_service, control_dir.parent, "fake_alpha", "retiring")
-    retiring_assignment = fleet_service._store.read_assignment(
-        broker="fake_alpha", canonical_account_id="ACCT-RETIRING"
+    release_after_drain(fleet_service, clock, retiring, account="acct-retiring")
+    fleet_service.force_retire_clerk(
+        clerk_id=retiring.clerk_id, operator=TEST_OPERATOR, change_ref=TEST_CHANGE_REF
     )
-    assert retiring_assignment is not None
-    fleet_service.release_assignment(
-        broker="fake_alpha",
-        external_account_id="acct-retiring",
-        expected_assignment_generation=retiring_assignment.assignment_generation,
-        proof="old-clerk-offline-and-obligations-clear",
+    # The drain's deadline wait out-staled the keeper's heartbeat; refresh it
+    # so the directory below reflects the drain ceremony, not staleness.
+    keeper_session = fleet_service._store.read_session(keeper.clerk_id)
+    assert keeper_session is not None
+    fleet_service.observe_session(
+        clerk_id=keeper.clerk_id,
+        agent_instance_id=keeper_session.agent_instance_id,
     )
-    fleet_service.retire_clerk(clerk_id=retiring.clerk_id)
 
     default = fleet_service.directory()
     assert [entry["clerk_id"] for entry in default["clerks"]] == [keeper.clerk_id]
