@@ -2303,7 +2303,7 @@
         "type": "object"
       },
       "BackfillDefaults": {
-        "description": "The parts of a ``DataRunSpec`` only the data plane knows (#1838).\n\n``lean_image_digest`` is required by ``DataRunSpec`` and has no default;\na browser has no way to derive the pinned LEAN image, and hand-typing a\ncontainer digest into a form is not a receipt anybody could audit. The\ncaps come from ``app.data_lake.types`` so the Observatory rejects an\nover-wide window in the form rather than by round-tripping a 422.\n\n``lean_image_digest`` is ``None`` when the data plane has no pin\nconfigured \u2014 reported honestly rather than as an empty string, so the\nUI can say backfill is unavailable instead of submitting a spec that\nwould fail deep inside Phase 0.",
+        "description": "The parts of a ``DataRunSpec`` only the data plane knows (#1838).\n\n``lean_image_digest`` is required by ``DataRunSpec`` and has no default;\na browser has no way to derive the pinned LEAN image, and hand-typing a\ncontainer digest into a form is not a receipt anybody could audit. The\ncaps come from ``app.data_lake.types`` so the Observatory rejects an\nover-wide window in the form rather than by round-tripping a 422.\n\n``lean_image_digest`` is ``None`` when the data plane has no pin\nconfigured \u2014 reported honestly rather than as an empty string, so the\nUI can say backfill is unavailable instead of submitting a spec that\nwould fail deep inside Phase 0.\n\n``provider_history_start_ms`` is the oldest day the configured provider\nplan will actually serve. ``max_trading_range_days`` is *not* a stand-in\nfor it: that cap is a request-validation ceiling padded to ``5 * 366``\nfor leap years, so a window composed against it starts a few days\noutside a 5-year entitlement and dies on a globally-fatal\n``provider_entitlement_error`` before one bar is written (#2241). Only\nthe data plane holds the provider credential, so only the data plane can\nstate this; a browser composing its own floor is guessing at a vendor\nplan.",
         "properties": {
           "lean_image_digest": {
             "anyOf": [
@@ -2328,12 +2328,17 @@
           "max_trading_range_days": {
             "title": "Max Trading Range Days",
             "type": "integer"
+          },
+          "provider_history_start_ms": {
+            "title": "Provider History Start Ms",
+            "type": "integer"
           }
         },
         "required": [
           "lean_image_digest",
           "max_trading_range_days",
-          "max_symbol_length"
+          "max_symbol_length",
+          "provider_history_start_ms"
         ],
         "title": "BackfillDefaults",
         "type": "object"

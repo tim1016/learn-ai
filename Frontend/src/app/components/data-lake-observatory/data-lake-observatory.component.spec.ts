@@ -20,6 +20,8 @@ const DEFAULTS: BackfillDefaults = {
   lean_image_digest: 'sha256:pinned',
   max_trading_range_days: 1830,
   max_symbol_length: 20,
+  // 2021-09-23, calendar-anchored — the oldest day the provider plan serves.
+  provider_history_start_ms: 1632398400000,
 };
 
 const EMPTY_STORAGE: StorageSummaryResponse = { market: 'usa', kinds: [], symbols: [] };

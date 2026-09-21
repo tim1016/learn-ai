@@ -56,6 +56,16 @@ trimmed to the picker-row projection and TTL-cached.
    Populate, then use. The gate always requests the full allowed history (5 years, trade
    bars) so a symbol covered today cannot strand a narrower window chosen tomorrow.
 
+   "Allowed" means **allowed by the provider**, and the two bounds on a window are not the
+   same number. `max_trading_range_days` is a request-validation ceiling padded to `5 * 366`
+   for leap years; the provider's entitlement is a rolling five years whose boundary day is
+   excluded. Composing against the cap put every gate's oldest day one day outside the plan,
+   and because `provider_entitlement_error` is globally fatal in the backfill worker, that
+   one day aborted every run before a bar was written — so no unheld pick could ever be
+   selected (#2241). The data plane therefore publishes the floor it alone can know
+   (`provider_history_start_ms` on `backfill-defaults`, from `polygon_history_floor`) and the
+   gate composes inside it. A browser deriving its own floor is guessing at a vendor plan.
+
 4. **Vendor-only delisted symbols are opt-in.** The shared picker offers active listings plus
    any inactive symbol the lake already holds, because those bars remain real and the row is
    visibly badged "delisted". The Observatory's explicit "include delisted" toggle adds
@@ -66,7 +76,10 @@ trimmed to the picker-row projection and TTL-cached.
 5. **A dark vendor catalog degrades visibly.** If the symbol-catalog read fails, pickers fall
    back to lake holdings under a "live catalog unavailable" banner with a retry — never a
    silent empty list, never a canned fallback. If a backfill fails, the strip says why and
-   offers retry; nothing is selected on a false answer.
+   offers retry; nothing is selected on a false answer. "Says why" means the run's own typed
+   reason: the job framework reports a run the provider refused as `job.completed` — the job
+   ran, the backfill did not — so the gate folds the run's per-day failures and names the one
+   that ended it, rather than falling through to a generic "nothing landed" (#2241).
 
 6. **Crypto and other non-equity classes are not offered** — the lake's `market='usa'`
    pipeline cannot backfill them, so offering them would promise what the gate can never

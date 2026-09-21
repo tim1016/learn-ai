@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -43,6 +44,7 @@ from app.data_lake.backfill import (
 )
 from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
 from app.data_lake.ensure_data import ensure_data, provider_for_data_type
+from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
@@ -59,6 +61,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
     StorageSummaryResponse,
     trading_date_at_ms,
+    trading_date_to_calendar_anchor_ms,
     trading_range_span_days,
 )
 from app.jobs.progress import ProgressEmitter
@@ -312,22 +315,40 @@ class BackfillDefaults(BaseModel):
     configured — reported honestly rather than as an empty string, so the
     UI can say backfill is unavailable instead of submitting a spec that
     would fail deep inside Phase 0.
+
+    ``provider_history_start_ms`` is the oldest day the configured provider
+    plan will actually serve. ``max_trading_range_days`` is *not* a stand-in
+    for it: that cap is a request-validation ceiling padded to ``5 * 366``
+    for leap years, so a window composed against it starts a few days
+    outside a 5-year entitlement and dies on a globally-fatal
+    ``provider_entitlement_error`` before one bar is written (#2241). Only
+    the data plane holds the provider credential, so only the data plane can
+    state this; a browser composing its own floor is guessing at a vendor
+    plan.
     """
 
     market: Literal["usa"] = "usa"
     lean_image_digest: str | None
     max_trading_range_days: int
     max_symbol_length: int
+    #: Calendar-anchored (12:00 UTC) like every other trading date this
+    #: surface puts on the wire — the anchor ``DataRunSpec`` window bounds
+    #: use, so a caller can compare the two without converting.
+    provider_history_start_ms: int
 
 
 @router.get("/backfill-defaults", response_model=BackfillDefaults)
 async def get_backfill_defaults(market: Literal["usa"] = "usa") -> BackfillDefaults:
     """Spec constants for a backfill form. Reads no catalog state."""
+    today_et = trading_date_at_ms(int(time.time() * 1000))
     return BackfillDefaults(
         market=market,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         max_trading_range_days=MAX_TRADING_RANGE_DAYS,
         max_symbol_length=MAX_SYMBOL_LENGTH,
+        provider_history_start_ms=trading_date_to_calendar_anchor_ms(
+            polygon_history_floor(today_et)
+        ),
     )
 
 
