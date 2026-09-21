@@ -125,7 +125,13 @@ class StrategyContext:
     log_lines: list[str] = field(default_factory=list)
     current_time_ms: int | None = None
     # Consolidated bars captured for charting (one list per consolidator).
+    # A summary run stops collecting them (``retain_bars=False``): a strategy
+    # whose consolidator period equals one input bar — a
+    # ``resolution_minutes=1`` sweep candidate — would otherwise retain one
+    # ``TradeBar`` per input bar for the whole cell only for the response to
+    # discard (#1941).
     consolidated_bars: list[TradeBar] = field(default_factory=list)
+    collect_consolidated_bars: bool = True
     # Insight manager — tracks structured predictions and scores them.
     insight_manager: InsightManager = field(default_factory=InsightManager)
     # Engine-owned hook invoked on every fired consolidated bar BEFORE the
@@ -161,7 +167,8 @@ class StrategyContext:
             ctx.current_time_ms = bar.end_ms
             ctx.portfolio.update_reference_price(bar.symbol, bar.close)
             consolidator._last_fired_bar = bar  # type: ignore[attr-defined]
-            ctx.consolidated_bars.append(bar)
+            if ctx.collect_consolidated_bars:
+                ctx.consolidated_bars.append(bar)
             if ctx._pre_handler_hook is not None:
                 ctx._pre_handler_hook(bar)
             handler(bar)

@@ -14062,6 +14062,12 @@
             "title": "Strategy Name",
             "type": "string"
           },
+          "summary_only": {
+            "default": false,
+            "description": "Omit the per-bar response artifacts (equity curve, chart bars, insights, LEAN statistics, validation analytics) and retain no bars. Statistics and trades are identical to a full run; bars_consumed carries the bar count the curve would have had.",
+            "title": "Summary Only",
+            "type": "boolean"
+          },
           "to_date": {
             "anyOf": [
               {
@@ -14097,6 +14103,12 @@
       },
       "EngineBacktestResponse": {
         "properties": {
+          "bars_consumed": {
+            "default": 0,
+            "description": "Bars iterated over the scored window. Equals len(equity_curve) on a full run; on a summary_only run the curve is empty and this field carries the count it would have had.",
+            "title": "Bars Consumed",
+            "type": "integer"
+          },
           "chart_bars": {
             "items": {
               "type": "object"

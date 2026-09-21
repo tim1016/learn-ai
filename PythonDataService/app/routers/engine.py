@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as time_of_day
 from decimal import Decimal
@@ -256,6 +256,23 @@ class EngineBacktestRequest(BaseModel):
             "as Grid Search that record their own summary rows."
         ),
     )
+    # A summary run answers the question a sweep cell asks — statistics, trade
+    # list, counts — without the per-bar artifacts that question never reads:
+    # the response's equity curve, chart bars, insights, LEAN-parity
+    # statistics and validation analytics are left empty, and the engine does
+    # not retain the bars it iterated (``bars_consumed`` carries the count).
+    # At minute resolution over two years those artifacts are ~194k points a
+    # cell held only to discard (#1941). Statistics are computed from the same
+    # equity samples either way and are byte-identical to a full run.
+    summary_only: bool = Field(
+        False,
+        description=(
+            "Omit the per-bar response artifacts (equity curve, chart bars, "
+            "insights, LEAN statistics, validation analytics) and retain no "
+            "bars. Statistics and trades are identical to a full run; "
+            "bars_consumed carries the bar count the curve would have had."
+        ),
+    )
     initial_cash: float | None = Field(None, ge=0)
     # Strategy-specific parameters — validated per-strategy against the
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
@@ -411,6 +428,28 @@ class EngineBacktestRequest(BaseModel):
             raise ValueError("us-equity-raw-ibkr-v1 does not permit execution overrides")
         return self
 
+    @model_validator(mode="after")
+    def _validate_summary_only_does_not_persist(self) -> EngineBacktestRequest:
+        """A summary run cannot be persisted: the study row would be wrong at rest.
+
+        ``summary_only`` exists for a caller that reads the statistics and
+        discards the per-bar evidence — a Grid Search cell (#1941). A study
+        row is the opposite contract: it persists the equity curve, chart
+        bars and LEAN statistics the summary run leaves empty. Allowed
+        through, ``_strict_equity_report`` would narrow the stored window to
+        first-trade→last-trade on the empty curve (a real value silently
+        becoming a wrong one) or fail into ``study_id=None`` with no signal,
+        and a ``requested_engine="both"`` run would then grade a parity
+        companion against that row. The one caller that pairs the flags
+        correctly (Grid Search) already sends ``save_study=False``.
+        """
+        if self.summary_only and self.save_study:
+            raise ValueError(
+                "summary_only cannot be combined with save_study: a persisted study needs the "
+                "per-bar evidence a summary run omits; send save_study=false"
+            )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # DataPolicy + BarsSpec pydantic shapes (engine-side mirror)
@@ -514,6 +553,18 @@ class EngineBacktestResponse(BaseModel):
     trades: list[EngineTradeResponse] = []
     log_lines: list[str] = []
     equity_curve: list[dict] = Field(default_factory=list)
+    # Bars iterated over the scored window — the count a summary consumer
+    # needs without the curve: on a ``summary_only`` run the curve is empty
+    # and this is the count it would have had (#1941). Equals
+    # ``len(equity_curve)`` on a full run.
+    bars_consumed: int = Field(
+        0,
+        description=(
+            "Bars iterated over the scored window. Equals len(equity_curve) on a "
+            "full run; on a summary_only run the curve is empty and this field "
+            "carries the count it would have had."
+        ),
+    )
     # Consolidated OHLCV bars for the price chart (15-min or daily depending
     # on the strategy's consolidator). Much smaller than the full minute-bar
     # stream retained in BacktestResult.bars.
@@ -1423,7 +1474,11 @@ def _execute_engine_backtest_core(
     on_log(f"Running {request.strategy_name} on {getattr(validated_params, 'symbol', '?')} ({request.resolution})")
 
     try:
-        result = engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request))
+        result = engine.run(
+            strategy,
+            evaluation_start_ms=_evaluation_start_ms(request),
+            retain_bars=not request.summary_only,
+        )
     except Exception as exc:
         logger.exception("[ENGINE] Backtest failed for %s", request.strategy_name)
         on_log(f"Engine error: {exc}")
@@ -1582,6 +1637,67 @@ def _validation_analytics(
     return validation_analytics
 
 
+@dataclass(frozen=True)
+class _PerBarArtifacts:
+    """The response's per-bar evidence — everything a summary run omits (#1941).
+
+    The equity curve, chart bars and insights serialize the run bar by bar;
+    the LEAN statistics convert every retained bar into a DataFrame (the
+    largest single allocation of a full minute-resolution aggregation); the
+    validation analytics copy the curve again. A ``summary_only`` request
+    builds none of them: the one guard in :meth:`build` replaces the flag
+    test each producer would otherwise carry, and folding the curve
+    construction in keeps the validation analytics' dependency on it local
+    rather than spanning two producers that must silently agree.
+    """
+
+    equity_curve: list[dict[str, Any]] = field(default_factory=list)
+    chart_bars: list[dict[str, Any]] = field(default_factory=list)
+    insights: list[dict[str, Any]] = field(default_factory=list)
+    lean_statistics: LeanStatisticsResponse | None = None
+    validation_analytics: EngineValidationAnalyticsResponse | None = None
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        result: BacktestResult,
+        request: EngineBacktestRequest,
+        strategy: Strategy,
+        trades: list[LoggedTrade],
+        formatted_trades: list[EngineTradeResponse],
+        on_log: LogCallback,
+    ) -> _PerBarArtifacts:
+        if request.summary_only:
+            return cls()
+        equity_curve_dicts = [
+            {
+                "timestamp": s.timestamp_ms,
+                "equity": float(s.equity),
+                "cash": float(s.cash),
+                "holdings_value": float(s.holdings_value),
+            }
+            for s in result.equity_curve
+        ]
+        return cls(
+            equity_curve=equity_curve_dicts,
+            # ── Serialize consolidated bars for charting ──
+            chart_bars=[_serialize_chart_bar(b) for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])],
+            # ── Serialize insights ──
+            insights=[i.to_dict() for i in result.insights],
+            # ── LEAN-parity statistics ──
+            lean_statistics=_lean_parity_statistics(result=result, trades=trades),
+            validation_analytics=_validation_analytics(
+                result=result,
+                request=request,
+                strategy=strategy,
+                formatted_trades=formatted_trades,
+                equity_curve=equity_curve_dicts,
+                on_log=on_log,
+            ),
+        )
+
+
 def _aggregate_backtest_response(
     *,
     result: BacktestResult,
@@ -1597,6 +1713,12 @@ def _aggregate_backtest_response(
     bars, the run verdict and the validation analytics — the whole wire
     response, from one completed :class:`BacktestResult` and the strategy that
     produced it.
+
+    On a ``summary_only`` request :class:`_PerBarArtifacts` comes back empty —
+    the per-bar evidence is never built. The statistics are NOT skipped: they
+    consume the same engine equity samples a full run consumes and come out
+    byte-identical; only the copies a summary consumer never reads are not
+    made (#1941).
 
     **It also corrects ``request.data_policy.strategy_bars`` in place**, to the
     consolidation cadence the strategy actually ran at
@@ -1614,7 +1736,7 @@ def _aggregate_backtest_response(
         f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics"
     )
 
-    if not result.bars:
+    if not result.equity_curve:
         error = "missing data: backtest evaluated zero bars for the requested window"
         on_log(error)
         return _failed_backtest_response(request, error)
@@ -1668,22 +1790,6 @@ def _aggregate_backtest_response(
         on_log(f"Trade accounting error: {exc}")
         return _failed_backtest_response(request, f"trade accounting failed: {exc}")
 
-    # ── LEAN-parity statistics ──
-    lean_stats_resp = _lean_parity_statistics(result=result, trades=trades)
-
-    equity_curve_dicts = [
-        {
-            "timestamp": s.timestamp_ms,
-            "equity": float(s.equity),
-            "cash": float(s.cash),
-            "holdings_value": float(s.holdings_value),
-        }
-        for s in result.equity_curve
-    ]
-
-    # ── Serialize consolidated bars for charting ──
-    chart_bars_dicts = [_serialize_chart_bar(b) for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])]
-
     # Correct the policy's strategy_bars to the strategy's ACTUAL
     # consolidation timeframe. The legacy synthesizer writes minute/1,
     # but e.g. the EMA crossover consolidates 15-minute bars — the
@@ -1691,17 +1797,16 @@ def _aggregate_backtest_response(
     # chart bars from the store, so it must record the real timeframe.
     # Only single-consolidator strategies are corrected; a multi-
     # consolidator chart is a mix no single timeframe can reproduce.
+    # (Runs before the artifacts below: none of their producers reads
+    # ``request.data_policy`` — verified against every call they make.)
     _record_actual_strategy_bars(request, strategy)
 
-    # ── Serialize insights ──
-    insights_dicts = [i.to_dict() for i in result.insights]
-
-    validation_analytics = _validation_analytics(
+    artifacts = _PerBarArtifacts.build(
         result=result,
         request=request,
         strategy=strategy,
+        trades=trades,
         formatted_trades=formatted,
-        equity_curve=equity_curve_dicts,
         on_log=on_log,
     )
 
@@ -1712,7 +1817,9 @@ def _aggregate_backtest_response(
             "total_trades": total,
             "net_profit": float(result.net_profit),
             "total_fees": float(result.total_fees),
-            "lean_statistics": lean_stats_resp.model_dump(mode="json") if lean_stats_resp else None,
+            "lean_statistics": (
+                artifacts.lean_statistics.model_dump(mode="json") if artifacts.lean_statistics else None
+            ),
         },
         engine="python",
     )
@@ -1730,16 +1837,17 @@ def _aggregate_backtest_response(
         losing_trades=losses,
         win_rate=win_rate,
         statistics=stats,
-        lean_statistics=lean_stats_resp,
+        lean_statistics=artifacts.lean_statistics,
         trades=formatted,
         log_lines=result.log_lines,
-        equity_curve=equity_curve_dicts,
-        chart_bars=chart_bars_dicts,
-        insights=insights_dicts,
+        equity_curve=artifacts.equity_curve,
+        bars_consumed=len(result.equity_curve),
+        chart_bars=artifacts.chart_bars,
+        insights=artifacts.insights,
         insight_summary=result.insight_summary,
         data_policy=request.data_policy,  # PR B — echo the normalized policy
         run_verdict=run_verdict,
-        validation_analytics=validation_analytics,
+        validation_analytics=artifacts.validation_analytics,
         lake_data_availability_hash=lake_manifest,
         evaluation_window=evaluation_window.response(),
     )

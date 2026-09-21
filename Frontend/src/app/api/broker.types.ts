@@ -13400,6 +13400,12 @@ export interface components {
              */
             strategy_name: string;
             /**
+             * Summary Only
+             * @description Omit the per-bar response artifacts (equity curve, chart bars, insights, LEAN statistics, validation analytics) and retain no bars. Statistics and trades are identical to a full run; bars_consumed carries the bar count the curve would have had.
+             * @default false
+             */
+            summary_only?: boolean;
+            /**
              * To Date
              * @description YYYY-MM-DD override (legacy: end_date)
              */
@@ -13412,6 +13418,12 @@ export interface components {
         };
         /** EngineBacktestResponse */
         EngineBacktestResponse: {
+            /**
+             * Bars Consumed
+             * @description Bars iterated over the scored window. Equals len(equity_curve) on a full run; on a summary_only run the curve is empty and this field carries the count it would have had.
+             * @default 0
+             */
+            bars_consumed?: number;
             /** Chart Bars */
             chart_bars?: Record<string, never>[];
             data_policy?: components["schemas"]["_EngineDataPolicyModel"] | null;

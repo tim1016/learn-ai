@@ -73,7 +73,10 @@ class BacktestResult:
     order_events: list[OrderEvent] = field(default_factory=list)
     log_lines: list[str] = field(default_factory=list)
     # Retained bar data for LEAN statistics computation. Each entry is a
-    # consolidated (or raw daily) bar that was actually iterated.
+    # consolidated (or raw daily) bar that was actually iterated. Empty on a
+    # ``retain_bars=False`` run — a summary consumer that never reads them.
+    # The scored-bar count is not stored separately: every processed bar
+    # appends exactly one equity point below, so it is ``len(equity_curve)``.
     bars: list[TradeBar] = field(default_factory=list)
     equity_curve: list[EquitySnapshot] = field(default_factory=list)
     # Phase 1: Insight tracking — all insights emitted during the backtest,
@@ -101,7 +104,13 @@ class BacktestEngine:
         # LeanSetHoldingsSizing to reproduce LEAN's buffered share count.
         self.sizing_model = sizing_model or SimpleFloorSizing()
 
-    def run(self, strategy: Strategy, *, evaluation_start_ms: int | None = None) -> BacktestResult:
+    def run(
+        self,
+        strategy: Strategy,
+        *,
+        evaluation_start_ms: int | None = None,
+        retain_bars: bool = True,
+    ) -> BacktestResult:
         """Execute ``strategy`` over its configured window, one run at a time.
 
         This is the seam every engine run passes through, so it is where the
@@ -118,11 +127,28 @@ class BacktestEngine:
         auto-fetch and persistence, not just the simulation. That hold is the
         outer one, and this acquire passes through it — see
         ``run_gate.one_backtest_in_flight``.
+
+        ``retain_bars=False`` keeps ``result.bars`` empty — for a summary
+        consumer that never reads the bars (a Grid Search cell, #1941), where
+        ~194k retained ``TradeBar`` objects are the single largest allocation
+        of the run. It also stops the context collecting consolidated bars:
+        a strategy consolidating at the input cadence would otherwise retain
+        one bar per input bar for a chart the summary response never builds.
+        Everything else, including the equity curve that feeds the
+        statistics, is produced identically; the scored-bar count survives as
+        ``len(result.equity_curve)``, which every processed bar appends to
+        exactly once.
         """
         with one_backtest_in_flight():
-            return self._run(strategy, evaluation_start_ms=evaluation_start_ms)
+            return self._run(strategy, evaluation_start_ms=evaluation_start_ms, retain_bars=retain_bars)
 
-    def _run(self, strategy: Strategy, *, evaluation_start_ms: int | None = None) -> BacktestResult:
+    def _run(
+        self,
+        strategy: Strategy,
+        *,
+        evaluation_start_ms: int | None = None,
+        retain_bars: bool = True,
+    ) -> BacktestResult:
         """The simulation itself, under the gate :meth:`run` holds.
 
         ``evaluation_start_ms`` (``int64 ms UTC``, an ET-midnight session
@@ -138,6 +164,7 @@ class BacktestEngine:
         # ------------------------------------------------------------------
         portfolio = Portfolio(initial_cash=Decimal(1))  # placeholder; set below
         ctx = StrategyContext(portfolio=portfolio)
+        ctx.collect_consolidated_bars = retain_bars
         strategy.ctx = ctx
         program = strategy.signal_program
         if program is not None:
@@ -465,7 +492,8 @@ class BacktestEngine:
             ctx.insight_manager.step(minute_bar.end_ms, current_prices)
 
             equity_curve.append(self._snapshot(portfolio, minute_bar.end_ms))
-            retained_bars.append(minute_bar)
+            if retain_bars:
+                retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
         if evaluation_pending:
