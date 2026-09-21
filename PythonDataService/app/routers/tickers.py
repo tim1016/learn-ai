@@ -130,7 +130,11 @@ async def _await_catalog(
 ) -> list[SymbolCatalogEntry]:
     global _catalog_entry
     try:
-        return await entry[1]
+        # Shielded: a browser disconnect cancels this request handler, never
+        # the shared walk — concurrent callers keep coalescing onto it.
+        return await asyncio.shield(entry[1])
+    except asyncio.CancelledError:
+        raise
     except BaseException:
         # A failed walk is not cached: the next caller re-loads instead of
         # every picker on the page staring at a sticky error.

@@ -499,6 +499,15 @@ describe('InstrumentCardComponent', () => {
     fixture.detectChanges();
 
     component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    // The real service marks its gate backfilling; mirror that so the
+    // abandon path recognizes the active gate as this card's own.
+    coverage.active.set({
+      symbol: 'NVDA',
+      phase: 'backfilling',
+      percent: null,
+      reason: null,
+      message: null,
+    });
     await flushGate();
     component.pickTicker(pool[0]);
     fixture.detectChanges();
@@ -509,6 +518,33 @@ describe('InstrumentCardComponent', () => {
     coverage.held[0](true);
     await flushGate();
     expect(component.value().symbol).toBe('SPY');
+  });
+
+  // The coverage service is application-scoped: when another card's gate
+  // superseded ours, abandoning our stale pending pick must not cancel
+  // their backfill.
+  it("does not cancel another card's gate when abandoning its own", async () => {
+    coverage.holdNext = true;
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+    // Another surface superseded us: the active gate is no longer ours.
+    coverage.active.set({
+      symbol: 'AMD',
+      phase: 'backfilling',
+      percent: null,
+      reason: null,
+      message: null,
+    });
+
+    component.pickTicker(pool[0]);
+    fixture.detectChanges();
+
+    expect(component.value().symbol).toBe('SPY');
+    expect(coverage.cancelCount).toBe(0);
   });
 
   it('caps the rendered rows and lets the search reach the rest', () => {

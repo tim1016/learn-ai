@@ -352,11 +352,18 @@ export class InstrumentCardComponent {
    * Every exit from a pending gate funnels through here — a held pick made
    * while a gate is in flight included — so a finished backfill can never
    * overwrite a selection the operator made afterwards.
+   *
+   * The coverage service is application-scoped: cancel only when the active
+   * gate is still this card's pending pick. If another card superseded ours,
+   * its gate is not ours to cancel.
    */
   private abandonGate(): void {
-    if (this.pendingSymbol() === null) return;
+    const pending = this.pendingSymbol();
+    if (pending === null) return;
     this.pendingSymbol.set(null);
-    void this.coverage.cancel();
+    if (this.coverage.active()?.symbol === pending) {
+      void this.coverage.cancel();
+    }
   }
 
   /** The gate strip's buttons unmount on dismissal; keep focus in the box. */
