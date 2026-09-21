@@ -1,0 +1,88 @@
+<div class="dropdown">
+  @if (degraded()) {
+    <div class="dropdown__degraded" role="status">
+      Live catalog unavailable — showing lake holdings.
+      <button type="button" class="dropdown__retry" (click)="retryVendor.emit()">
+        Retry
+      </button>
+    </div>
+  }
+  <div class="dropdown__scroll" id="ticker-range-picker-listbox" role="listbox">
+    @if (query() === "" && recent().length > 0) {
+      <div class="dropdown__header" role="presentation">Recent</div>
+      @for (t of recent(); track trackBySymbol($index, t)) {
+        <button
+          type="button"
+          class="row"
+          [class.row--active]="t.symbol === activeSymbol()"
+          role="option"
+          [attr.aria-selected]="t.symbol === activeSymbol()"
+          (click)="pick.emit(t); $event.stopPropagation()"
+        >
+          <app-picker-option-row
+            [symbol]="t.symbol"
+            [name]="t.name"
+            [exchange]="t.exchange"
+            [lastHeld]="t.lastHeld ?? null"
+            [delisted]="t.delisted"
+          />
+        </button>
+      }
+    }
+    <div class="dropdown__header" role="presentation">
+      @if (query() === "") {
+        {{ hostUniverse() ? "Instruments" : "All listed instruments" }}
+      } @else {
+        {{ matchCount() }} match{{ matchCount() === 1 ? "" : "es" }}
+      }
+    </div>
+    @for (t of visible(); track trackBySymbol($index, t)) {
+      <button
+        type="button"
+        class="row"
+        [class.row--active]="t.symbol === activeSymbol()"
+        role="option"
+        [attr.aria-selected]="t.symbol === activeSymbol()"
+        (click)="pick.emit(t); $event.stopPropagation()"
+      >
+        <app-picker-option-row
+          [symbol]="t.symbol"
+          [name]="t.name"
+          [exchange]="t.exchange"
+          [lastHeld]="t.lastHeld ?? null"
+          [delisted]="t.delisted"
+        />
+      </button>
+    }
+  </div>
+
+  @if (gate(); as g) {
+    <app-coverage-gate-strip
+      [state]="g"
+      (retry)="retryGate.emit()"
+      (cancelled)="dismiss.emit()"
+      (dismiss)="dismiss.emit()"
+    />
+  }
+
+  @if (matchCount() === 0 && gate() === null) {
+    <div class="dropdown__empty" role="status" aria-live="polite">
+      @if (loading()) {
+        Loading instruments…
+      } @else if (unavailable(); as reason) {
+        {{ reason }}
+        <button type="button" class="dropdown__retry" (click)="retryLake.emit()">
+          Retry
+        </button>
+      } @else if (hostUniverse()) {
+        No instrument matches that.
+      } @else if (empty()) {
+        No listed symbol matches that, and the lake holds nothing yet.
+        <a routerLink="/data-lake" (click)="dismiss.emit()">Backfill a symbol</a>
+        to get started.
+      } @else {
+        No listed symbol matches that.
+      }
+    </div>
+  }
+</div>

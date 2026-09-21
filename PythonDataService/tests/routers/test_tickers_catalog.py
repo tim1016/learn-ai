@@ -1,15 +1,15 @@
 """Seam tests for GET /api/tickers/catalog — the shared symbol picker's catalog.
 
-The Polygon walk is stubbed at the service boundary; these assert the route's
-transport contract — projection shape, single-flight caching, failure re-arm —
-not any vendor behavior.
+The Polygon walk is stubbed at the service seam; these assert the route's
+transport contract — projection shape, single-flight caching, failure
+re-arm — not any vendor behavior. The vendor-call parameters themselves are
+pinned in tests/services/test_polygon_client_catalog.py.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Generator
 from typing import Any
 
 import pytest
@@ -17,13 +17,33 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.routers import tickers as tickers_router
+from app.services.ticker_catalog_service import TickerCatalogService
 
 
-@pytest.fixture(autouse=True)
-def _clean_catalog_cache() -> Generator[None, None, None]:
-    tickers_router.clear_ticker_catalog_cache_for_testing()
-    yield
-    tickers_router.clear_ticker_catalog_cache_for_testing()
+class _StubCatalogClient:
+    """Stands in for the Polygon client at the TickerCatalogService seam."""
+
+    def __init__(
+        self,
+        entries: list[dict[str, Any]] | None = None,
+        *,
+        error: Exception | None = None,
+        delay_s: float = 0.0,
+    ) -> None:
+        self.entries = entries if entries is not None else _stub_entries()
+        self.error = error
+        self.delay_s = delay_s
+        self.calls = 0
+
+    def list_catalog_tickers(self) -> list[dict[str, Any]]:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        # Hold the walk open when asked so concurrent requests must
+        # interleave onto the same task instead of each starting their own.
+        if self.delay_s > 0:
+            time.sleep(self.delay_s)
+        return self.entries
 
 
 def _stub_entries() -> list[dict[str, Any]]:
@@ -45,15 +65,22 @@ def _stub_entries() -> list[dict[str, Any]]:
     ]
 
 
-async def test_catalog_serves_full_membership_projection(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = 0
+def _install(
+    monkeypatch: pytest.MonkeyPatch,
+    stub: _StubCatalogClient,
+) -> None:
+    monkeypatch.setattr(
+        tickers_router,
+        "catalog_service",
+        TickerCatalogService(client=stub),  # type: ignore[arg-type]
+    )
 
-    def fake_walk() -> list[dict[str, Any]]:
-        nonlocal calls
-        calls += 1
-        return _stub_entries()
 
-    monkeypatch.setattr(tickers_router.polygon_client, "list_catalog_tickers", fake_walk)
+async def test_catalog_serves_full_membership_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubCatalogClient()
+    _install(monkeypatch, stub)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/tickers/catalog")
@@ -64,21 +91,14 @@ async def test_catalog_serves_full_membership_projection(monkeypatch: pytest.Mon
     # choice (backfill panel), not the endpoint's filter to make.
     assert [row["symbol"] for row in body] == ["MSFT", "OLD"]
     assert set(body[0]) == {"symbol", "name", "asset_class", "exchange", "status"}
-    assert calls == 1
+    assert stub.calls == 1
 
 
-async def test_catalog_single_flights_concurrent_walks(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = 0
-
-    def slow_walk() -> list[dict[str, Any]]:
-        nonlocal calls
-        calls += 1
-        # Hold the walk open so concurrent requests must interleave onto the
-        # same task instead of each starting their own vendor walk.
-        time.sleep(0.05)
-        return _stub_entries()
-
-    monkeypatch.setattr(tickers_router.polygon_client, "list_catalog_tickers", slow_walk)
+async def test_catalog_single_flights_concurrent_walks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubCatalogClient(delay_s=0.05)
+    _install(monkeypatch, stub)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         responses = await asyncio.gather(
@@ -86,26 +106,22 @@ async def test_catalog_single_flights_concurrent_walks(monkeypatch: pytest.Monke
         )
 
     assert all(response.status_code == 200 for response in responses)
-    assert calls == 1
+    assert stub.calls == 1
 
 
 async def test_catalog_failure_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom() -> list[dict[str, Any]]:
-        raise RuntimeError("polygon down")
-
-    monkeypatch.setattr(tickers_router.polygon_client, "list_catalog_tickers", boom)
+    stub = _StubCatalogClient(error=RuntimeError("polygon down"))
+    _install(monkeypatch, stub)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         first = await client.get("/api/tickers/catalog")
         assert first.status_code == 503
 
-        monkeypatch.setattr(
-            tickers_router.polygon_client,
-            "list_catalog_tickers",
-            lambda: _stub_entries(),
-        )
+        # A failed walk is not sticky: the picker's Retry must reach the
+        # vendor — same service, next call succeeds.
+        stub.error = None
         second = await client.get("/api/tickers/catalog")
 
-    # A failed walk is not sticky: the picker's Retry must reach the vendor.
     assert second.status_code == 200
     assert second.json()[0]["symbol"] == "MSFT"
+    assert stub.calls == 2

@@ -10,15 +10,18 @@ import {
 import {
   fakeVendorCatalog,
   fakeEnsureCoverage,
+  fakeHeldSession,
   provideFakeVendorCatalog,
   provideFakeEnsureCoverage,
   type FakeVendorCatalog,
   type FakeEnsureCoverage,
+  type FakeCoverageSession,
 } from '../../symbol-catalog/testing/fake-symbol-catalog';
 import type {
   TickerOption,
   TickerRange,
 } from '../ticker-range-picker.types';
+import type { VendorSymbolEntry } from '../../symbol-catalog/vendor-catalog.service';
 
 describe('InstrumentCardComponent', () => {
   const baseValue: TickerRange = {
@@ -308,14 +311,8 @@ describe('InstrumentCardComponent', () => {
   });
 
   it('leaves the selection untouched when the backfill fails, showing the strip', async () => {
+    // A false verdict hands the card a failed strip, as the real service does.
     coverage.ensureResults.push(false);
-    coverage.active.set({
-      symbol: 'NVDA',
-      phase: 'failed',
-      percent: null,
-      reason: 'backfill_failed',
-      message: 'The vendor refused the range.',
-    });
     fixture.detectChanges();
     component.openDropdown();
     fixture.detectChanges();
@@ -325,11 +322,11 @@ describe('InstrumentCardComponent', () => {
 
     expect(component.value().symbol).toBe('SPY');
     const strip: HTMLElement | null =
-      fixture.nativeElement.querySelector('.dropdown__gate');
+      fixture.nativeElement.querySelector('app-coverage-gate-strip .gate');
     expect(strip).not.toBeNull();
-    expect(strip?.textContent).toContain('The vendor refused the range.');
+    expect(strip?.textContent).toContain('The backfill job failed.');
     // The failure's reason code renders through the receipt-label pipe.
-    expect(strip?.querySelector('.dropdown__gate-msg .mono')).not.toBeNull();
+    expect(strip?.querySelector('.gate__msg .mono')).not.toBeNull();
     // Cancel is offered so the operator can walk away cleanly.
     expect(strip?.textContent).toContain('Retry');
     expect(strip?.textContent).toContain('Dismiss');
@@ -348,6 +345,7 @@ describe('InstrumentCardComponent', () => {
     expect(coverage.refusals).toEqual([
       {
         symbol: 'NVDA',
+        mode: 'lean_adjusted',
         reason: 'view_not_backfillable',
         // The refusal names the view the way the strip renders it.
         message: expect.stringContaining('Lean Adjusted'),
@@ -358,29 +356,24 @@ describe('InstrumentCardComponent', () => {
 
   it('dismisses the gate strip without selecting', async () => {
     coverage.ensureResults.push(false);
-    coverage.active.set({
-      symbol: 'NVDA',
-      phase: 'failed',
-      percent: null,
-      reason: 'backfill_failed',
-      message: 'The vendor refused the range.',
-    });
     fixture.detectChanges();
     component.openDropdown();
     fixture.detectChanges();
     component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
     await flushGate();
 
-    const buttons = fixture.nativeElement.querySelectorAll('.dropdown__gate button');
+    const buttons = fixture.nativeElement.querySelectorAll(
+      'app-coverage-gate-strip .gate button',
+    );
     const dismiss = Array.from(buttons).find(
       (b) => (b as HTMLButtonElement).textContent?.trim() === 'Dismiss',
     ) as HTMLButtonElement | undefined;
     dismiss?.click();
     await flushGate();
 
-    expect(coverage.cancelCount).toBe(1);
+    expect((component.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
     expect(
-      fixture.nativeElement.querySelector('.dropdown__gate'),
+      fixture.nativeElement.querySelector('app-coverage-gate-strip'),
     ).toBeNull();
   });
 
@@ -467,14 +460,15 @@ describe('InstrumentCardComponent', () => {
 
   // A symbol backfilled after this tab loaded must be selectable without a
   // page reload; the root-scoped resource otherwise serves its first answer
-  // forever.
-  it('re-reads the catalog when the dropdown opens', () => {
+  // forever. The vendor catalog is deliberately *not* re-read — one cached
+  // read per tab, refreshed only through the degraded banner's Retry.
+  it('re-reads only the lake coverage when the dropdown opens', () => {
     fixture.detectChanges();
     const before = catalog.view.reloadCount;
     openDropdown();
 
     expect(catalog.view.reloadCount).toBe(before + 1);
-    expect(alpaca.reloadCount).toBe(before + 1);
+    expect(alpaca.reloadCount).toBe(before);
   });
 
   it('does not re-read the lake for a host-supplied universe', () => {
@@ -491,7 +485,8 @@ describe('InstrumentCardComponent', () => {
 
   // A gate in flight must not speak for value() after the operator has
   // moved on: the held pick wins immediately, the superseded gate is
-  // abandoned, and its eventual completion changes nothing.
+  // abandoned, and its eventual completion changes nothing. Ownership is
+  // the session itself — abandoning cancels exactly this card's gate.
   it('a held pick made while a gate is in flight wins over the finished gate', async () => {
     coverage.holdNext = true;
     fixture.detectChanges();
@@ -499,31 +494,24 @@ describe('InstrumentCardComponent', () => {
     fixture.detectChanges();
 
     component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
-    // The real service marks its gate backfilling; mirror that so the
-    // abandon path recognizes the active gate as this card's own.
-    coverage.active.set({
-      symbol: 'NVDA',
-      phase: 'backfilling',
-      percent: null,
-      reason: null,
-      message: null,
-    });
     await flushGate();
+    const heldGate = component.pendingSession() as FakeCoverageSession;
+    expect(heldGate).not.toBeNull();
+
     component.pickTicker(pool[0]);
     fixture.detectChanges();
 
     expect(component.value().symbol).toBe('SPY');
-    expect(coverage.cancelCount).toBe(1);
+    expect(heldGate.cancelCalls).toBe(1);
 
-    coverage.held[0](true);
+    heldGate.resolve(true);
     await flushGate();
     expect(component.value().symbol).toBe('SPY');
   });
 
-  // The coverage service is application-scoped: when another card's gate
-  // superseded ours, abandoning our stale pending pick must not cancel
-  // their backfill.
-  it("does not cancel another card's gate when abandoning its own", async () => {
+  // A card co-waiting on the same run owns its own session: our release
+  // path cannot reach a gate this card was never handed.
+  it("cancels only its own session, never a gate it doesn't hold", async () => {
     coverage.holdNext = true;
     fixture.detectChanges();
     component.openDropdown();
@@ -531,30 +519,24 @@ describe('InstrumentCardComponent', () => {
 
     component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
     await flushGate();
-    // Another surface superseded us: the active gate is no longer ours.
-    coverage.active.set({
-      symbol: 'AMD',
-      phase: 'backfilling',
-      percent: null,
-      reason: null,
-      message: null,
-    });
+    // Another card's gate, co-waiting on the same run in the real service.
+    const otherCardsGate = fakeHeldSession('NVDA');
+    expect(otherCardsGate.cancelCalls).toBe(0);
 
     component.pickTicker(pool[0]);
     fixture.detectChanges();
 
-    expect(component.value().symbol).toBe('SPY');
-    expect(coverage.cancelCount).toBe(0);
+    expect((component.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
+    expect(otherCardsGate.cancelCalls).toBe(0);
   });
 
   it('caps the rendered rows and lets the search reach the rest', () => {
-    const many = Array.from({ length: 80 }, (_, i) => ({
+    const many: VendorSymbolEntry[] = Array.from({ length: 80 }, (_, i) => ({
       symbol: `SYM${i}`,
       name: `Symbol ${i}`,
       asset_class: 'us_equity',
       exchange: 'NASDAQ',
       status: 'active',
-     
     }));
     alpaca.entries.set(many);
     fixture.detectChanges();
@@ -585,6 +567,7 @@ describe('InstrumentCardComponent', () => {
     expect(coverage.refusals).toEqual([
       {
         symbol: 'NVDA',
+        mode: 'polygon_split_adjusted',
         reason: 'coverage_unknown',
         message: 'The data lake is unreachable.',
       },
@@ -602,7 +585,9 @@ describe('InstrumentCardComponent', () => {
     await flushGate();
 
     const labels = Array.from(
-      fixture.nativeElement.querySelectorAll('.dropdown__gate button'),
+      fixture.nativeElement.querySelectorAll(
+        'app-coverage-gate-strip .gate button',
+      ),
     ).map((b) => (b as HTMLButtonElement).textContent?.trim());
     expect(labels).toContain('Dismiss');
     expect(labels).not.toContain('Retry');

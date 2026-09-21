@@ -39852,8 +39852,8 @@
         "description": "One row of the shared symbol picker's catalog (GET /api/tickers/catalog).\n\nThe membership projection for pickers: a Polygon reference-tickers walk\nprojected onto the fields a picker row renders. ``asset_class`` is\n``us_equity`` for every row the catalog serves \u2014 the walk is\n``market=\"stocks\"`` \u2014 and ``status`` carries the vendor's active flag so\na picker may offer delisted symbols deliberately (the lake backfill\npanel's toggle) without this endpoint deciding membership for it.",
         "properties": {
           "asset_class": {
-            "title": "Asset Class",
-            "type": "string"
+            "const": "us_equity",
+            "title": "Asset Class"
           },
           "exchange": {
             "anyOf": [
@@ -39878,6 +39878,10 @@
             "title": "Name"
           },
           "status": {
+            "enum": [
+              "active",
+              "inactive"
+            ],
             "title": "Status",
             "type": "string"
           },

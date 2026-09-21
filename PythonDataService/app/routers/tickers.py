@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from time import monotonic
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.requests import RelatedTickersRequest, TickerDetailRequest, TickerListRequest
 from app.models.responses import (
     RelatedTickersResponse,
-    SymbolCatalogEntry,
     TickerAddress,
     TickerDetailResponse,
     TickerInfo,
     TickerListResponse,
 )
+from app.schemas.ticker_catalog import SymbolCatalogEntry
 from app.services.polygon_client import PolygonClientService
+from app.services.ticker_catalog_service import TickerCatalogService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -103,44 +102,10 @@ async def get_related_tickers(request: RelatedTickersRequest) -> RelatedTickersR
         )
 
 
-# The catalog is one paginated vendor walk (~30k reference rows) serving
-# every symbol picker in the browser, cached here so a dropdown-open burst
-# never re-walks it. The cache holds the in-flight task, not a materialized
-# list: concurrent misses single-flight onto one walk, and a failed walk
-# drops its entry so the picker's Retry reaches the vendor instead of a
-# sticky error. The TTL is long because reference data moves on listing/
-# delisting cadence, not per request.
-_CATALOG_CACHE_TTL_S = 3600.0
-_catalog_entry: tuple[float, asyncio.Task[list[SymbolCatalogEntry]]] | None = None
-
-
-def clear_ticker_catalog_cache_for_testing() -> None:
-    """Drop the cached catalog so a test's stubbed client is consulted."""
-    global _catalog_entry
-    _catalog_entry = None
-
-
-async def _load_catalog() -> list[SymbolCatalogEntry]:
-    entries = await asyncio.to_thread(polygon_client.list_catalog_tickers)
-    return [SymbolCatalogEntry(**entry) for entry in entries]
-
-
-async def _await_catalog(
-    entry: tuple[float, asyncio.Task[list[SymbolCatalogEntry]]],
-) -> list[SymbolCatalogEntry]:
-    global _catalog_entry
-    try:
-        # Shielded: a browser disconnect cancels this request handler, never
-        # the shared walk — concurrent callers keep coalescing onto it.
-        return await asyncio.shield(entry[1])
-    except asyncio.CancelledError:
-        raise
-    except BaseException:
-        # A failed walk is not cached: the next caller re-loads instead of
-        # every picker on the page staring at a sticky error.
-        if _catalog_entry is entry:
-            _catalog_entry = None
-        raise
+# Transport only: the TTL cache, the single-flight onto one vendor walk and
+# the failure eviction live in TickerCatalogService; this route projects a
+# failed walk onto HTTP and nothing else.
+catalog_service = TickerCatalogService(polygon_client)
 
 
 @router.get("/catalog", response_model=list[SymbolCatalogEntry])
@@ -161,16 +126,8 @@ async def ticker_catalog() -> list[SymbolCatalogEntry]:
     a listing universe is market reference data — the Polygon account this
     process already owns — not broker-operator evidence.
     """
-    global _catalog_entry
-    entry = _catalog_entry
-    if entry is not None:
-        loaded_at, task = entry
-        if not task.done() or monotonic() - loaded_at < _CATALOG_CACHE_TTL_S:
-            return await _await_catalog(entry)
-    entry = (monotonic(), asyncio.ensure_future(_load_catalog()))
-    _catalog_entry = entry
     try:
-        return await _await_catalog(entry)
+        return await catalog_service.get()
     except HTTPException:
         raise
     except Exception as e:

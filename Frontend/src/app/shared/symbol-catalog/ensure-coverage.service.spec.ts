@@ -5,7 +5,11 @@ import type { SymbolCoverageSpan } from '../data-lake';
 import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
 import { DataLakeService, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
 import type { BackfillDefaults, DataLakeRead } from '../data-lake';
-import { EnsureCoverageService, fitBackfillWindow } from './ensure-coverage.service';
+import {
+  EnsureCoverageService,
+  fitBackfillWindow,
+  type CoverageGateSession,
+} from './ensure-coverage.service';
 import { etIsoDate } from '../date/et-midnight';
 import { fakeTickerCatalog, provideFakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { FakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
@@ -53,8 +57,8 @@ function configureService(
 } {
   const started: FakeJobs['started'] = [];
   const cancelled: string[] = [];
-  // The gate registers its fold through onEvent after startJob resolves, so
-  // emitting goes through whichever handler is registered for the job id.
+  // The runner registers its fold through onEvent after startJob resolves,
+  // so emitting goes through whichever handler is registered for the job id.
   const handlers = new Map<string, (event: JobStreamEvent) => void>();
   const jobs: FakeJobs = {
     started,
@@ -124,21 +128,28 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function markCovered(freshCoverage: { symbols: SymbolCoverageSpan[] }): void {
+  freshCoverage.symbols = [
+    ...freshCoverage.symbols,
+    { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+  ];
+}
+
 describe('EnsureCoverageService', () => {
   it('answers a held symbol immediately, without starting a job', async () => {
     const { service, jobs } = configureService();
 
-    const ready = await service.ensure('SPY', 'polygon_split_adjusted');
+    const session = service.ensure('SPY', 'polygon_split_adjusted');
 
-    expect(ready).toBe(true);
+    await expect(session.done).resolves.toBe(true);
+    expect(session.state()).toBeNull();
     expect(jobs.started).toEqual([]);
-    expect(service.active()).toBeNull();
   });
 
   it('backfills an unheld symbol with a full-history trade-bar spec', async () => {
     const { service, jobs, catalog, freshCoverage } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
 
     expect(jobs.started).toHaveLength(1);
@@ -159,56 +170,56 @@ describe('EnsureCoverageService', () => {
     expect(
       tradingRangeRejection(startIso, endIso, DEFAULTS.max_trading_range_days),
     ).toBeNull();
-    // In flight: the gate names the symbol and carries no failure.
-    expect(service.active()).toMatchObject({ symbol: 'NVDA', phase: 'backfilling' });
+    // In flight: the gate names the symbol and its tree, and no failure.
+    expect(session.state()).toMatchObject({
+      symbol: 'NVDA',
+      mode: 'polygon_split_adjusted',
+      phase: 'backfilling',
+    });
 
     // The job completes and a fresh lake read now holds the symbol.
-    freshCoverage.symbols = [
-      ...freshCoverage.symbols,
-      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
-    ];
+    markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await run;
+    const ready = await session.done;
 
     expect(ready).toBe(true);
-    expect(service.active()).toBeNull();
+    expect(session.state()).toBeNull();
     // Completion re-read the catalog so every picker sees the new coverage.
     expect(catalog.view.reloadCount).toBeGreaterThan(0);
   });
 
   it('shows progress ticks while the backfill runs', async () => {
-    const { service, jobs, catalog, freshCoverage } = configureService();
+    const { service, jobs, freshCoverage } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     jobs.emit('job-1', { type: 'job.progress', current: 250, total: 1000 });
     await flush();
 
-    expect(service.active()).toMatchObject({ phase: 'backfilling', percent: 25 });
+    expect(session.state()).toMatchObject({ phase: 'backfilling', percent: 25 });
 
+    markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
-    freshCoverage.symbols = [
-      ...freshCoverage.symbols,
-      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
-    ];
-    await run;
+    await session.done;
   });
 
   it('fails loudly when the job says failed, without selecting', async () => {
     const { service, jobs } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     jobs.emit('job-1', {
       type: 'job.failed',
       code: 'provider_422',
       message: 'The vendor refused the range.',
     });
-    const ready = await run;
+    const ready = await session.done;
 
     expect(ready).toBe(false);
-    expect(service.active()).toMatchObject({
+    // The failure stays on the session's strip until retry or dismissal.
+    expect(session.state()).toMatchObject({
       symbol: 'NVDA',
+      mode: 'polygon_split_adjusted',
       phase: 'failed',
       reason: 'provider_422',
       message: 'The vendor refused the range.',
@@ -218,13 +229,13 @@ describe('EnsureCoverageService', () => {
   it('does not accept a completed job whose bars never landed', async () => {
     const { service, jobs } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await run;
+    const ready = await session.done;
 
     expect(ready).toBe(false);
-    expect(service.active()).toMatchObject({
+    expect(session.state()).toMatchObject({
       symbol: 'NVDA',
       phase: 'failed',
       reason: 'backfill_empty',
@@ -236,11 +247,11 @@ describe('EnsureCoverageService', () => {
       defaults: { kind: 'unavailable', message: 'The data plane did not answer.' },
     });
 
-    const ready = await service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
 
-    expect(ready).toBe(false);
+    await expect(session.done).resolves.toBe(false);
     expect(jobs.started).toEqual([]);
-    expect(service.active()).toMatchObject({
+    expect(session.state()).toMatchObject({
       phase: 'failed',
       reason: 'backfill_defaults_unavailable',
     });
@@ -249,18 +260,18 @@ describe('EnsureCoverageService', () => {
   it('cancels the job, disarms the stream, and clears the strip', async () => {
     const { service, jobs, catalog } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
-    await service.cancel();
+    await session.cancel();
 
     // A late frame from the cancelled job must not re-open the gate or
     // settle anything: the stream was closed and the run disarmed.
     jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await run;
+    const ready = await session.done;
 
     expect(jobs.cancelled).toEqual(['job-1']);
     expect(ready).toBe(false);
-    expect(service.active()).toBeNull();
+    expect(session.state()).toBeNull();
     expect(catalog.view.reloadCount).toBe(0);
   });
 
@@ -272,34 +283,56 @@ describe('EnsureCoverageService', () => {
     const second = service.ensure('AMD', 'polygon_split_adjusted');
     await flush();
 
-    expect(service.active()).toMatchObject({ symbol: 'AMD', phase: 'backfilling' });
+    expect(second.state()).toMatchObject({ symbol: 'AMD', phase: 'backfilling' });
+    // The superseded session's strip is gone; its waiter answered false.
+    expect(first.state()).toBeNull();
 
     // The abandoned first job completing must not open the AMD gate.
     jobs.emit('job-1', { type: 'job.completed' });
     jobs.emit('job-2', { type: 'job.completed' });
 
-    expect(await first).toBe(false);
-    expect(await second).toBe(false);
+    expect(await first.done).toBe(false);
+    expect(await second.done).toBe(false);
     // AMD's gate is the failure the strip carries — not NVDA's.
-    expect(service.active()).toMatchObject({ symbol: 'AMD', reason: 'backfill_empty' });
+    expect(second.state()).toMatchObject({ symbol: 'AMD', reason: 'backfill_empty' });
   });
 
   it('coalesces a repeated pick of the symbol already being ensured', async () => {
-    const { service, jobs, catalog, freshCoverage } = configureService();
+    const { service, jobs, freshCoverage } = configureService();
 
     const first = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     const second = service.ensure('NVDA', 'polygon_split_adjusted');
 
     expect(jobs.started).toHaveLength(1);
-    freshCoverage.symbols = [
-      ...freshCoverage.symbols,
-      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
-    ];
+    markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
 
-    expect(await first).toBe(true);
-    expect(await second).toBe(true);
+    expect(await first.done).toBe(true);
+    expect(await second.done).toBe(true);
+  });
+
+  it('releases a coalesced session without killing its co-waiter', async () => {
+    const { service, jobs, freshCoverage } = configureService();
+
+    const first = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    const second = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+
+    // Two cards legitimately wait on one run: the first card letting go
+    // detaches its own strip but must not cancel the job the second is
+    // still awaiting.
+    await first.cancel();
+    expect(jobs.cancelled).toEqual([]);
+    expect(first.state()).toBeNull();
+    expect(second.state()).toMatchObject({ symbol: 'NVDA', phase: 'backfilling' });
+
+    markCovered(freshCoverage);
+    jobs.emit('job-1', { type: 'job.completed' });
+
+    expect(await first.done).toBe(false);
+    expect(await second.done).toBe(true);
   });
 
   // The reviewer's masked regression: judging membership against the cached
@@ -308,7 +341,7 @@ describe('EnsureCoverageService', () => {
   it('judges coverage by a fresh read, not the catalog pool', async () => {
     const { service, jobs, catalog } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     // The pool was hand-updated, but the fresh read says otherwise.
     catalog.view.pool.set([
@@ -316,29 +349,26 @@ describe('EnsureCoverageService', () => {
       { symbol: 'NVDA', name: 'NVIDIA', lastHeld: '2026-09-04' },
     ]);
     jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await run;
+    const ready = await session.done;
 
     expect(ready).toBe(false);
-    expect(service.active()).toMatchObject({ phase: 'failed', reason: 'backfill_empty' });
+    expect(session.state()).toMatchObject({ phase: 'failed', reason: 'backfill_empty' });
   });
 
   it('reports coverage_unknown when the fresh read fails', async () => {
     const { service, jobs, freshCoverage } = configureService();
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     // The lake goes dark between submission and completion; even the pool
     // being updated cannot make the verdict when no read answers.
-    freshCoverage.symbols = [
-      ...freshCoverage.symbols,
-      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
-    ];
+    markCovered(freshCoverage);
     storageFailure = 'The data plane did not respond.';
     jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await run;
+    const ready = await session.done;
 
     expect(ready).toBe(false);
-    expect(service.active()).toMatchObject({
+    expect(session.state()).toMatchObject({
       phase: 'failed',
       reason: 'coverage_unknown',
       message: 'The data plane did not respond.',
@@ -361,17 +391,14 @@ describe('EnsureCoverageService', () => {
       price_adjustment_mode: 'polygon_split_adjusted',
     });
 
-    freshCoverage.symbols = [
-      ...freshCoverage.symbols,
-      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
-    ];
+    markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
     jobs.emit('job-2', { type: 'job.completed' });
 
     // The raw gate was superseded by the adjusted one: its promise answers
     // false by design, while the adjusted run proceeds to its own verdict.
-    expect(await raw).toBe(false);
-    expect(await adjusted).toBe(true);
+    expect(await raw.done).toBe(false);
+    expect(await adjusted.done).toBe(true);
   });
 
   it('cancels a job accepted after the operator already walked away', async () => {
@@ -384,9 +411,9 @@ describe('EnsureCoverageService', () => {
       release = resolve;
     });
 
-    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    const session: CoverageGateSession = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
-    const cancelling = service.cancel();
+    const cancelling = session.cancel();
     await flush();
     release('job-1');
     await flush();
@@ -395,9 +422,35 @@ describe('EnsureCoverageService', () => {
     // Submission then resolves into a disarmed gate: the just-accepted job
     // is cancelled, the run answers false, and nothing re-opens the strip.
     expect(jobs.cancelled).toEqual(['job-1']);
-    expect(await run).toBe(false);
-    expect(service.active()).toBeNull();
+    expect(await session.done).toBe(false);
+    expect(session.state()).toBeNull();
     expect(catalog.view.reloadCount).toBe(0);
+  });
+
+  it('renders a refusal without touching any running gate', async () => {
+    const { service, jobs } = configureService();
+
+    const running = service.ensure('AMD', 'raw');
+    await flush();
+    const refusal = service.refuse(
+      'NVDA',
+      'lean_adjusted',
+      'view_not_backfillable',
+      'Nothing derives the Lean Adjusted view.',
+    );
+
+    expect(jobs.started).toHaveLength(1);
+    await expect(refusal.done).resolves.toBe(false);
+    expect(refusal.state()).toMatchObject({
+      symbol: 'NVDA',
+      mode: 'lean_adjusted',
+      phase: 'failed',
+      reason: 'view_not_backfillable',
+    });
+    // The unrelated in-flight gate is nobody's refusal to cancel.
+    await refusal.cancel();
+    expect(running.state()).toMatchObject({ symbol: 'AMD', phase: 'backfilling' });
+    expect(jobs.cancelled).toEqual([]);
   });
 });
 

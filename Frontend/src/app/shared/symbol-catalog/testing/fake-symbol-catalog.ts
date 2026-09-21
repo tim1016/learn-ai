@@ -6,9 +6,11 @@ import {
 } from '../vendor-catalog.service';
 import type {
   BackfillableMode,
+  CoverageGateSession,
   CoverageGateState,
 } from '../ensure-coverage.service';
 import { EnsureCoverageService } from '../ensure-coverage.service';
+import type { PriceAdjustmentMode } from '../../data-lake';
 
 /**
  * One fake per injected collaborator, each starting settled — the same
@@ -42,60 +44,125 @@ export function provideFakeVendorCatalog(catalog: FakeVendorCatalog): Provider {
   return { provide: VendorCatalogService, useValue: catalog };
 }
 
+/** A gate session a card can hold: the strip plus a resolvable verdict. */
+export interface FakeCoverageSession extends CoverageGateSession {
+  readonly state: WritableSignal<CoverageGateState | null>;
+  cancelCalls: number;
+  resolve(ready: boolean): void;
+}
+
+function gateState(
+  symbol: string,
+  overrides: Partial<CoverageGateState>,
+): CoverageGateState {
+  return {
+    symbol,
+    mode: 'raw',
+    phase: 'backfilling',
+    percent: null,
+    reason: null,
+    message: null,
+    ...overrides,
+  };
+}
+
+function fakeSession(
+  symbol: string,
+  state: CoverageGateState | null,
+  ready?: boolean,
+): FakeCoverageSession {
+  let resolveDone!: (ready: boolean) => void;
+  const done = new Promise<boolean>((resolve) => (resolveDone = resolve));
+  if (ready !== undefined) resolveDone(ready);
+  return {
+    state: signal(state),
+    done,
+    cancelCalls: 0,
+    cancel(): Promise<void> {
+      this.cancelCalls++;
+      this.state.set(null);
+      return Promise.resolve();
+    },
+    resolve(ready: boolean): void {
+      resolveDone(ready);
+    },
+  };
+}
+
+/** A held-open gate the test settles with `session.resolve(ready)`. */
+export function fakeHeldSession(symbol: string): FakeCoverageSession {
+  return fakeSession(symbol, gateState(symbol, {}));
+}
+
+/** A gate that has already failed — the strip the card should render. */
+export function fakeFailedSession(
+  symbol: string,
+  reason: string,
+  message: string,
+): FakeCoverageSession {
+  return fakeSession(
+    symbol,
+    gateState(symbol, { phase: 'failed', reason, message }),
+    false,
+  );
+}
+
 export interface FakeEnsureCoverage {
-  readonly active: WritableSignal<CoverageGateState | null>;
-  /** Scripted answers, popped in order; an empty script answers `true`. */
-  readonly ensureResults: boolean[];
   readonly ensureCalls: { symbol: string; mode: BackfillableMode }[];
-  readonly refusals: { symbol: string; reason: string; message: string }[];
-  cancelCount: number;
-  lastRetryMode: BackfillableMode | null;
-  /** When set, the next ensure() returns a promise the test resolves. */
+  readonly refusals: {
+    symbol: string;
+    mode: PriceAdjustmentMode;
+    reason: string;
+    message: string;
+  }[];
+  /**
+   * Verdicts for immediate (non-held) ensures, popped in order; an empty
+   * script answers `true`. A `false` hands the card a failed strip, as the
+   * real service does.
+   */
+  readonly ensureResults: boolean[];
+  /** When set, the next ensure() returns a session the test settles. */
   holdNext: boolean;
-  readonly held: ((ready: boolean) => void)[];
-  ensure(symbol: string, mode: BackfillableMode): Promise<boolean>;
-  refuse(symbol: string, reason: string, message: string): void;
-  cancel(): Promise<void>;
-  retry(mode: BackfillableMode): Promise<boolean>;
+  readonly held: FakeCoverageSession[];
+  ensure(symbol: string, mode: BackfillableMode): CoverageGateSession;
+  refuse(
+    symbol: string,
+    mode: PriceAdjustmentMode,
+    reason: string,
+    message: string,
+  ): CoverageGateSession;
 }
 
 export function fakeEnsureCoverage(): FakeEnsureCoverage {
   return {
-    active: signal(null),
-    ensureResults: [],
     ensureCalls: [],
     refusals: [],
-    cancelCount: 0,
-    lastRetryMode: null,
+    ensureResults: [],
     holdNext: false,
     held: [],
-    ensure(symbol: string, mode: BackfillableMode): Promise<boolean> {
+    ensure(symbol: string, mode: BackfillableMode): CoverageGateSession {
       this.ensureCalls.push({ symbol, mode });
       if (this.holdNext) {
         this.holdNext = false;
-        return new Promise<boolean>((resolve) => this.held.push(resolve));
+        const session = fakeHeldSession(symbol);
+        this.held.push(session);
+        return session;
       }
-      return Promise.resolve(this.ensureResults.shift() ?? true);
+      const ready = this.ensureResults.shift() ?? true;
+      return ready
+        ? fakeSession(symbol, null, true)
+        : fakeFailedSession(symbol, 'backfill_failed', 'The backfill job failed.');
     },
-    refuse(symbol: string, reason: string, message: string): void {
-      this.refusals.push({ symbol, reason, message });
+    refuse(
+      symbol: string,
+      mode: PriceAdjustmentMode,
+      reason: string,
+      message: string,
+    ): CoverageGateSession {
+      this.refusals.push({ symbol, mode, reason, message });
       // The real service renders a refusal through the same failed state as
       // a job failure — mirror that so strip-visibility tests are honest.
-      this.active.set({
-        symbol,
-        phase: 'failed',
-        percent: null,
-        reason,
-        message,
-      });
-    },
-    cancel(): Promise<void> {
-      this.cancelCount++;
-      return Promise.resolve();
-    },
-    retry(mode: BackfillableMode): Promise<boolean> {
-      this.lastRetryMode = mode;
-      return Promise.resolve(this.ensureResults.shift() ?? true);
+      return fakeFailedSession(symbol, reason, message);
     },
   };
 }

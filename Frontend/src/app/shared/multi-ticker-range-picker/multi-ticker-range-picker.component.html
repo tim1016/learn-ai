@@ -16,7 +16,13 @@
   <div class="picker-v2__groups"
        [class.picker-v2__groups--no-sampling]="hideSampling()">
     <app-multi-instrument-card
-      [(value)]="value" />
+      [symbols]="value().symbols"
+      (symbolsChange)="setSymbols($event)"
+      [options]="options()"
+      [loading]="catalogLoading()"
+      [unavailable]="catalogUnavailable()"
+      (retry)="retryCatalog()"
+    />
 
     <app-time-window-card
       [value]="singleProjection()"

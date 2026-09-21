@@ -24,9 +24,9 @@ or an unlabelled symbol silently degraded the product (issue #1960's root cause 
 such an escape: a display-label map was doing membership duty).
 
 The IBKR symbol-search proxy that once powered live lookups is retired; its 500 ms-pacing
-shaped every workaround that survived it. The broker plumbing that replaced it already
-carries a complete asset catalog read (Alpaca `/v2/assets`, surfaced here as
-`GET /api/brokers/alpaca/symbols`, trimmed and TTL-cached).
+shaped every workaround that survived it. The replacement listing source is the data-plane's
+existing Polygon account: a reference-tickers walk surfaced as `GET /api/tickers/catalog`,
+trimmed to the picker-row projection and TTL-cached.
 
 ## Decision
 
@@ -72,13 +72,17 @@ carries a complete asset catalog read (Alpaca `/v2/assets`, surfaced here as
 ## Consequences
 
 - The lake remains the sole market-data authority and the only thing any engine reads
-  (ADR 0049 unchanged). Membership and data are now distinct roles: Alpaca decides what the
-  menu shows; the lake decides what a run can read.
+  (ADR 0049 unchanged). Membership and data are now distinct roles: the listing catalog
+  decides what the menu shows; the lake decides what a run can read.
 - Order entry and other trading surfaces wait on a backfill for unheld symbols even though
   placing the order needs no bars. Accepted: one story everywhere beats a special case, and
   the Observatory panel remains the bulk/explicit path.
-- The broker assets read is on every picker page's critical path. Its TTL cache bounds the
+- The catalog read is on every picker page's critical path. Its TTL cache bounds the
   vendor traffic; its failure is a banner, not an outage of the picker.
+- Backfill submission and the job's SSE fold are owned by one shared runner
+  (`BackfillJobRunner`); the picker's ensure-coverage gate and the Observatory panel are
+  both consumers projecting their own UI onto it, so the app holds one backfill state
+  machine, not two.
 - `TICKER_LABELS` loses its picker role permanently — it is display metadata, never
   membership.
 - Picker hosts pass `adjustmentMode`; the coverage badge and the gate read the lake tree the
@@ -96,5 +100,7 @@ carries a complete asset catalog read (Alpaca `/v2/assets`, surfaced here as
   `.claude/rules/angular.md` bind both Codex and Claude sessions.
 - `InstrumentCardComponent`'s spec pins the gate, the badge join, the degraded banner, and
   the host-universe escape hatch; `EnsureCoverageService`'s spec pins the populate-then-use
-  contract, including the disarmed-gate guarantee (a cancelled or superseded backfill cannot
-  re-open the strip or select a symbol).
+  contract through opaque per-request gate sessions (ownership by handle, never by
+  matching the gate's fields), including the disarmed-gate guarantee (a cancelled or
+  superseded backfill cannot re-open the strip or select a symbol) and the
+  co-waiting guarantee (releasing one session never cancels a run another card waits on).

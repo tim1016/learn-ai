@@ -24641,14 +24641,20 @@ export interface components {
          *     panel's toggle) without this endpoint deciding membership for it.
          */
         SymbolCatalogEntry: {
-            /** Asset Class */
-            asset_class: string;
+            /**
+             * Asset Class
+             * @constant
+             */
+            asset_class: "us_equity";
             /** Exchange */
             exchange: string | null;
             /** Name */
             name: string | null;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "inactive";
             /** Symbol */
             symbol: string;
         };

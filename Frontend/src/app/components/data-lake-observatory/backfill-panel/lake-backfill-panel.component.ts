@@ -9,14 +9,15 @@ import {
   OnInit,
   output,
   signal,
+  untracked,
 } from '@angular/core';
 
 import { ReceiptLabelPipe, formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../../services/jobs.service';
 import { BackfillRunLogComponent } from './backfill-run-log.component';
 import { MultiInstrumentCardComponent } from '../../../shared/multi-ticker-range-picker/multi-instrument-card.component';
-import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
-import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { SymbolCatalogService, delistedVendorRows } from '../../../shared/symbol-catalog/symbol-catalog.service';
+import type { PickerSymbol } from '../../../shared/symbol-catalog/symbol-catalog.types';
 import {
   VendorCatalogService,
   LAKE_BACKFILLABLE_ASSET_CLASS,
@@ -43,8 +44,10 @@ function inputValue(event: Event): string {
  *
  * The form seeds itself from the window the heatmap is showing, so the
  * common move — "this stretch is missing, fetch it" — needs no retyping.
- * Symbols are picked from the vendor's listing catalog (the picker family,
- * not free text), with delisted symbols behind an explicit toggle so a
+ * Symbols are picked from the shared picker family, over the joined
+ * catalog: the vendor's listing universe with the lake's coverage on each
+ * row, so a dark vendor degrades to lake holdings under a banner instead
+ * of an empty form. Delisted symbols sit behind an explicit toggle so a
  * survivorship-biased universe is an operator's visible choice. Progress
  * comes off the job's own SSE stream: a per-day tick plus the
  * `data_lake.backfill_day` domain event, whose typed `reason` codes reach
@@ -61,7 +64,8 @@ function inputValue(event: Event): string {
 export class LakeBackfillPanelComponent implements OnInit {
   protected readonly store = inject(DataLakeBackfillStore);
   private readonly jobs = inject(JobsService);
-  private readonly alpaca = inject(VendorCatalogService);
+  private readonly vendor = inject(VendorCatalogService);
+  private readonly symbols = inject(SymbolCatalogService);
 
   /** Null while the defaults read is in flight or the lake is dark. */
   readonly defaults = input<BackfillDefaults | null>(null);
@@ -80,36 +84,24 @@ export class LakeBackfillPanelComponent implements OnInit {
   readonly runFinished = output();
 
   /**
-   * The panel's own date fields are the submit authority — the `from`/`to`
-   * carried here are dead weight the host never reads — and the seeds apply
-   * exactly once, in `ngOnInit` (the first point where the required inputs
-   * are guaranteed bound): the host rebinds `seedSymbols` and the seed
-   * dates from the URL query, so anything reactive here would wipe the
-   * operator's picks every time the heatmap's window moved. Seed
-   * invalidation is a deliberate operator action (reload), not a side
-   * effect of navigation.
+   * The symbols the operator has picked. The seeds apply exactly once, in
+   * `ngOnInit` (the first point where the required inputs are guaranteed
+   * bound): the host rebinds `seedSymbols` and the seed dates from the URL
+   * query, so anything reactive here would wipe the operator's picks every
+   * time the heatmap's window moved. Seed invalidation is a deliberate
+   * operator action (reload), not a side effect of navigation.
    */
-  protected readonly selected = signal<MultiTickerRange>({
-    symbols: [],
-    from: '',
-    to: '',
-    resolution: 'daily',
-  });
+  protected readonly pickedSymbols = signal<string[]>([]);
 
   ngOnInit(): void {
     // Coverage-board seeds always name storable symbols; the length bound
     // is the same one the removed free-text input enforced.
-    this.selected.set({
-      symbols: [
-        ...parseSymbols(
-          this.seedSymbols(),
-          this.defaults()?.max_symbol_length ?? 20,
-        ).symbols,
-      ],
-      from: this.seedStartTradingDate(),
-      to: this.seedEndTradingDate(),
-      resolution: 'daily',
-    });
+    this.pickedSymbols.set([
+      ...parseSymbols(
+        this.seedSymbols(),
+        this.defaults()?.max_symbol_length ?? 20,
+      ).symbols,
+    ]);
   }
   protected readonly startTradingDate = linkedSignal(() => this.seedStartTradingDate());
   protected readonly endTradingDate = linkedSignal(() => this.seedEndTradingDate());
@@ -122,27 +114,35 @@ export class LakeBackfillPanelComponent implements OnInit {
   protected readonly includeDelisted = signal(false);
 
   /**
-   * The picker universe: the vendor's US-equity catalog — the populate-the-
-   * lake list. Lake holdings are deliberately *not* unioned in: this panel
-   * exists to add what the lake lacks, and a held symbol re-picked here
-   * simply re-ensures at the server, so the vendor list alone is honest.
+   * The joined picker universe, read on the tree this panel's run writes.
+   * When the vendor is dark the pool degrades to lake holdings on its own —
+   * the vendor's answer is never a precondition for offering *something*.
    */
-  protected readonly pickerUniverse = computed<readonly TickerOption[]>(() => {
-    const entries = this.alpaca.entries();
-    if (entries === null) return [];
-    return entries
-      .filter((entry) => entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS)
-      .filter((entry) => this.includeDelisted() || entry.status === 'active')
-      .map((entry) => ({
-        symbol: entry.symbol,
-        name: entry.name?.trim() || entry.symbol,
-        exchange: entry.exchange ?? undefined,
-      }));
+  private readonly catalogView = computed(() => {
+    // `viewFor` creates the mode's resource on first ask, and `resource()`
+    // installs an effect — illegal inside a reactive context (NG0602).
+    const mode = this.backfillableMode() ?? 'raw';
+    return untracked(() => this.symbols.viewFor(mode));
   });
 
   /**
-   * Selected symbols the vendor catalog cannot vouch for — a coverage-board
-   * seed that is a typo, crypto, or inactive with the toggle off. Seeds are
+   * The picker's options: the joined pool, plus the vendor's delisted rows
+   * only while the toggle says so. Held rows always stay — a delisted
+   * symbol the lake holds has real bars, toggle or no toggle.
+   */
+  protected readonly pickerOptions = computed<readonly PickerSymbol[]>(() => {
+    const pool = this.catalogView().pool();
+    if (!this.includeDelisted()) return pool;
+    const present = new Set(pool.map((row) => row.symbol));
+    const extras = delistedVendorRows(this.vendor.entries() ?? []).filter(
+      (row) => !present.has(row.symbol),
+    );
+    return [...pool, ...extras];
+  });
+
+  /**
+   * Selected symbols the catalog cannot vouch for — a coverage-board seed
+   * that is a typo, crypto, or delisted with the toggle off. Seeds are
    * lake-held names, but lake membership alone has never made something
    * backfillable; when the vendor has answered, an unvouched pick blocks
    * submission by name instead of shipping a spec the pipeline refuses.
@@ -150,22 +150,22 @@ export class LakeBackfillPanelComponent implements OnInit {
    * an outage may not silently disable the Observatory's primary flow.
    */
   protected readonly ineligibleSelections = computed<readonly string[]>(() => {
-    const entries = this.alpaca.entries();
-    if (entries === null) return [];
-    const offerable = new Set(
-      entries
-        .filter((entry) => entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS)
-        .filter((entry) => this.includeDelisted() || entry.status === 'active')
-        .map((entry) => entry.symbol),
-    );
-    return this.selected().symbols.filter((symbol) => !offerable.has(symbol));
+    if (this.vendor.entries() === null) return [];
+    const offerable = new Set(this.pickerOptions().map((row) => row.symbol));
+    return this.pickedSymbols().filter((symbol) => !offerable.has(symbol));
   });
 
-  protected readonly catalogLoading = computed(() => this.alpaca.loading());
-  protected readonly catalogUnavailable = computed(() => this.alpaca.unavailable());
+  protected readonly catalogLoading = computed(() => this.catalogView().loading());
+  protected readonly catalogUnavailable = computed(() => this.catalogView().unavailable());
+  /** The vendor is dark but the lake answered — degraded, not empty. */
+  protected readonly vendorUnavailable = computed(() => this.vendor.unavailable());
 
-  protected retryCatalog(): void {
-    this.alpaca.reload();
+  protected retryVendorCatalog(): void {
+    this.vendor.reload();
+  }
+
+  protected reloadCoverage(): void {
+    this.catalogView().reload();
   }
 
   protected readonly digest = computed(() => this.defaults()?.lean_image_digest ?? null);
@@ -196,7 +196,7 @@ export class LakeBackfillPanelComponent implements OnInit {
     if (this.ineligibleSelections().length > 0) {
       return `Not in the listing catalog (a typo, a delisted symbol, or not a US stock): ${this.ineligibleSelections().join(', ')}. Clear them, or include delisted symbols.`;
     }
-    if (this.selected().symbols.length === 0) return 'Pick at least one symbol.';
+    if (this.pickedSymbols().length === 0) return 'Pick at least one symbol.';
     return tradingRangeRejection(
       this.startTradingDate(),
       this.endTradingDate(),
@@ -250,23 +250,30 @@ export class LakeBackfillPanelComponent implements OnInit {
       if (phase !== previous && TERMINAL_REREAD_PHASES.has(phase)) this.runFinished.emit();
     });
 
-    // Clearing the delisted toggle is a statement about the universe, so the
-    // delisted selections it made possible must not survive it — otherwise
-    // the form submits delisted data while its own control says not to
-    // include it. Merely unvouched selections stay: they are the block
-    // message's job to name, not silent deletions to hide.
+    // Clearing the delisted toggle is a statement about the universe, so
+    // the delisted selections it made possible must not survive it —
+    // otherwise the form submits delisted data while its own control says
+    // not to include it. Only what the toggle alone had offered is dropped:
+    // a delisted-but-held row stays offered (and selected) either way, and
+    // merely unvouched picks stay for the block message to name, not as
+    // silent deletions to hide.
     effect(() => {
       if (this.includeDelisted()) return;
-      const delisted = new Set(
-        this.alpaca
-          .entries()
-          ?.filter((entry) => entry.status === 'inactive')
-          .map((entry) => entry.symbol) ?? [],
+      const pool = new Set(this.catalogView().pool().map((row) => row.symbol));
+      const droppable = new Set(
+        (this.vendor.entries() ?? [])
+          .filter(
+            (entry) =>
+              entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS &&
+              entry.status === 'inactive' &&
+              !pool.has(entry.symbol),
+          )
+          .map((entry) => entry.symbol),
       );
-      const current = this.selected().symbols;
-      const kept = current.filter((symbol) => !delisted.has(symbol));
+      const current = this.pickedSymbols();
+      const kept = current.filter((symbol) => !droppable.has(symbol));
       if (kept.length !== current.length) {
-        this.selected.set({ ...this.selected(), symbols: kept });
+        this.pickedSymbols.set(kept);
       }
     });
   }
@@ -314,7 +321,7 @@ export class LakeBackfillPanelComponent implements OnInit {
       request_id: globalThis.crypto.randomUUID(),
       run_type: 'python_lab',
       market: defaults.market,
-      symbols: this.selected().symbols,
+      symbols: this.pickedSymbols(),
       start_trading_date_ms: startMs,
       end_trading_date_ms: endMs,
       data_types: dataTypes,

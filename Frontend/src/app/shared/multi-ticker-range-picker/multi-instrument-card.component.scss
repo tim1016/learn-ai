@@ -139,8 +139,10 @@
 }
 
 .suggestion {
+  // Same four-cell grid as the canonical picker's row — the shared
+  // `app-picker-option-row` renders the cells.
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: 72px minmax(0, 1fr) 48px 74px;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -152,20 +154,6 @@
   color: inherit;
 
   &:hover { background: var(--bg-hover); }
-
-  &__symbol {
-    font-weight: var(--fw-bold);
-    font-size: 12px;
-    color: var(--text-primary);
-  }
-
-  &__name {
-    font-size: 11px;
-    color: var(--text-subtle);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
 }
 
 .catalog-note {

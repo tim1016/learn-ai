@@ -44,14 +44,18 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
 - An unheld pick is gated on its lake backfill inside the card (`EnsureCoverageService`);
   the selection emits only after the lake — re-read, not the job's word — confirms the
   bars landed. Hosts never implement their own backfill gating.
-- A host-supplied `universe` input is a closed list the host owns outright (no gate); use it
-  only when membership genuinely is the host's — e.g. the backfill panel's vendor list with
-  the delisted toggle.
+- A host-supplied `universe` input (single card) or typed `options` input (the multi-symbol
+  card) is a closed list the host owns outright (no gate); use it only when membership
+  genuinely is the host's — e.g. the backfill panel adapts the joined catalog through its
+  own delisted policy, because the panel is the bulk path the gate defers to.
 - When the vendor catalog is dark, the picker degrades visibly (banner + lake holdings +
-  retry). Never substitute a canned symbol list for a failed read.
+  retry). Never substitute a canned symbol list for a failed read. The vendor catalog is
+  read once per tab: `view.retryVendor()` re-fetches it; `view.reload()` refreshes only
+  the lake's coverage on a dropdown open.
 - **Current exceptions** (mop-up pending, see ADR 0066 Consequences): batch-runner's
-  multi-symbol card is still lake-only (no joined universe, no gate), and the unrouted
-  Ticker Explorer still passes a `TICKER_LABELS` host universe. Don't copy either pattern.
+  `multi-ticker-range-picker` is still lake-only (no joined universe, no gate), and the
+  unrouted Ticker Explorer still passes a `TICKER_LABELS` host universe. Don't copy either
+  pattern.
 
 ## Routing
 

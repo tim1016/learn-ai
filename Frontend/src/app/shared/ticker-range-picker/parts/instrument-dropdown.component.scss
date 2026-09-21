@@ -1,0 +1,89 @@
+// Everything inside the open dropdown. The option row's cells and the gate
+// strip style themselves (`app-picker-option-row`, `app-coverage-gate-strip`)
+// — emulated encapsulation keeps those rules in their own components — so
+// this sheet owns only the dropdown frame, the row button and the banners.
+.dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  z-index: 60;
+  max-height: 320px;
+  overflow: auto;
+
+  &__scroll {
+    padding: 4px 0;
+  }
+
+  &__header {
+    padding: 6px 10px;
+    font-size: 9px;
+    font-weight: var(--fw-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  &__empty {
+    padding: 10px;
+    font-size: 11px;
+    color: var(--text-subtle);
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+
+      &:hover { color: var(--accent-hover); text-decoration: underline; }
+    }
+  }
+
+  &__retry {
+    margin-left: 4px;
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+
+    &:hover { color: var(--accent-hover); text-decoration: underline; }
+  }
+
+  &__degraded {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 6px 10px;
+    font-size: 10px;
+    color: var(--text-subtle);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-light);
+  }
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 48px 74px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  border-left: 2px solid transparent;
+  transition: background var(--t-fast);
+
+  &:hover { background: var(--bg-hover); }
+
+  &--active {
+    background: var(--accent-faint);
+    border-left-color: var(--accent);
+  }
+}

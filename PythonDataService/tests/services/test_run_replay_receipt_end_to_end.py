@@ -21,6 +21,11 @@ from tests._helpers.bot_runner.custody import _SID
 from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
 
+# The daily suite runs everything; the PR budget gate (`-m "not slow"`)
+# excludes this module because one end-to-end replay outweighs entire
+# shards' remaining time on shared CI runners.
+pytestmark = pytest.mark.slow
+
 
 async def _run_and_receipt_live_pass(receipts: SqliteDecisionReceipts, *, block_first_enter: bool) -> None:
     """Drive the shared seam exactly as run_trade_bot would and durably receipt it,

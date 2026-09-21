@@ -12,7 +12,12 @@ import {
   provideFakeVendorCatalog,
   type FakeVendorCatalog,
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import type { VendorSymbolEntry } from '../../../shared/symbol-catalog/vendor-catalog.service';
+import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
@@ -59,13 +64,16 @@ interface PanelOptions {
   liveJobs?: readonly Partial<JobState>[];
   /** The vendor catalog rows the fake asset catalog serves. */
   vendorEntries?: readonly VendorSymbolEntry[];
+  /** What the lake itself already holds — the vendor-dark fallback. */
+  lakePool?: readonly TickerOption[];
 }
 
 async function renderPanel(options: PanelOptions = {}) {
   const startJob = vi.fn().mockResolvedValue('job-77');
   const cancelJob = vi.fn().mockResolvedValue(undefined);
-  // DataLakeBackfillStore rides JobsService.onEvent() (#1856) instead of
-  // opening its own EventSource — start() registers a listener through it.
+  // DataLakeBackfillStore rides the shared BackfillJobRunner, which opens
+  // the one stream through JobsService.onEvent() — start() registers a
+  // listener through it.
   const onEvent = vi.fn().mockReturnValue(vi.fn());
   const jobs = signal(options.liveJobs ?? []);
   const alpaca: FakeVendorCatalog = fakeVendorCatalog(
@@ -74,10 +82,12 @@ async function renderPanel(options: PanelOptions = {}) {
       vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' }),
     ],
   );
+  const lake = fakeTickerCatalog(options.lakePool ?? []);
   const view = await render(LakeBackfillPanelComponent, {
     providers: [
       { provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } },
       provideFakeVendorCatalog(alpaca),
+      provideFakeTickerCatalog(lake),
     ],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
@@ -88,7 +98,7 @@ async function renderPanel(options: PanelOptions = {}) {
     },
   });
   const store = view.fixture.debugElement.injector.get(DataLakeBackfillStore);
-  return { ...view, startJob, cancelJob, store, alpaca };
+  return { ...view, startJob, cancelJob, store, alpaca, lake };
 }
 
 describe('LakeBackfillPanelComponent', () => {
@@ -198,15 +208,27 @@ describe('LakeBackfillPanelComponent', () => {
     ).toBe(true);
   });
 
-  it('names a dark vendor catalog and offers a retry instead of an empty picker', async () => {
-    const { alpaca, detectChanges } = await renderPanel({ vendorEntries: [] });
+  it('names a dark vendor catalog, keeps the lake holdings pickable, and offers a retry', async () => {
+    // Vendor dark must degrade to lake holdings — never an empty form. The
+    // Observatory's primary flow survives an outage of one of its two
+    // sources.
+    const { alpaca, detectChanges } = await renderPanel({
+      vendorEntries: [],
+      lakePool: [{ symbol: 'AAPL', name: 'Apple Inc.', lastHeld: '2026-09-04' }],
+    });
     alpaca.entries.set(null);
     alpaca.unavailable.set('catalog endpoint down');
     detectChanges();
 
     const note = screen.getByText(/Live symbol catalog unavailable/);
     expect(note.textContent).toContain('catalog endpoint down');
+    expect(note.textContent).toContain('showing lake holdings');
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+
+    // The fallback is usable: a lake holding is still addable by search.
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Search to add a ticker'), 'AAPL');
+    expect(screen.getByRole('option', { name: /AAPL/ })).toBeTruthy();
   });
 
   it('submits a spec the backfill job accepts', async () => {

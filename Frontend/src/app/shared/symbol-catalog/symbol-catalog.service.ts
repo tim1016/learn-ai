@@ -43,7 +43,15 @@ export interface SymbolCatalogView {
   readonly unavailable: Signal<string | null>;
   /** The live catalog failed but the lake answered — show the banner. */
   readonly degraded: Signal<boolean>;
+  /**
+   * Refresh the lake's coverage — the read a dropdown-open means by
+   * "reload". The vendor catalog is deliberately untouched: it is read
+   * once per tab and shared by every picker, so an ordinary open costs no
+   * vendor traffic.
+   */
   readonly reload: () => void;
+  /** Re-fetch the vendor catalog — only the degraded banner's Retry. */
+  readonly retryVendor: () => void;
 }
 
 /** The vendor rows a picker offers: US-equity actives only. */
@@ -104,6 +112,32 @@ function toVendorOnlyRow(entry: VendorSymbolEntry): PickerSymbol {
   };
 }
 
+/**
+ * The vendor's delisted US-equity rows — the symbols no joined view offers
+ * by default. The backfill panel appends them only behind its explicit
+ * "include delisted" toggle, which keeps a survivorship-biased universe an
+ * operator's choice (ADR 0066, decision 4).
+ */
+export function delistedVendorRows(
+  entries: readonly VendorSymbolEntry[],
+): readonly PickerSymbol[] {
+  return entries
+    .filter(
+      (entry) =>
+        entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS &&
+        entry.status === 'inactive',
+    )
+    .map((entry) => ({
+      symbol: entry.symbol,
+      name: entry.name?.trim() || entry.symbol,
+      exchange: entry.exchange ?? undefined,
+      firstHeld: null,
+      lastHeld: null,
+      delisted: true,
+    }))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
 @Injectable({ providedIn: 'root' })
 export class SymbolCatalogService {
   private readonly vendor = inject(VendorCatalogService);
@@ -137,6 +171,8 @@ export class SymbolCatalogService {
       degraded: computed(() => this.vendor.unavailable() !== null),
       reload: () => {
         lakeView.reload();
+      },
+      retryVendor: () => {
         this.vendor.reload();
       },
     };

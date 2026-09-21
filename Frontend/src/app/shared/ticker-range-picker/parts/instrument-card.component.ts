@@ -11,7 +11,6 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
 import { Tooltip } from 'primeng/tooltip';
 
 import {
@@ -23,12 +22,13 @@ import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.servic
 import {
   EnsureCoverageService,
   type BackfillableMode,
+  type CoverageGateSession,
 } from '../../symbol-catalog/ensure-coverage.service';
+import { InstrumentDropdownComponent } from './instrument-dropdown.component';
 import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import { toPickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { PriceAdjustmentMode } from '../../data-lake';
 import { AssetIdentityComponent } from '../../asset-identity';
-import { ReceiptLabelPipe } from '../../pipes/receipt-label.pipe';
 import { formatReceiptLabel } from '../../pipes/receipt-label.pipe';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
@@ -58,7 +58,11 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 
 @Component({
   selector: 'app-instrument-card',
-  imports: [RouterLink, Tooltip, AssetIdentityComponent, ReceiptLabelPipe],
+  imports: [
+    Tooltip,
+    AssetIdentityComponent,
+    InstrumentDropdownComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-card.component.html',
   styleUrls: ['./instrument-card.component.scss'],
@@ -82,10 +86,10 @@ export class InstrumentCardComponent {
 
   /**
    * A universe supplied by the host, for pickers that own their membership
-   * outright (the backfill panel's vendor list, say). A host universe is a
-   * closed list with no gate: the card renders it verbatim. `null` — the
-   * default — means the joined catalog: every listed symbol offered, lake
-   * coverage badged, and an unheld pick gated on its backfill.
+   * outright. A host universe is a closed list with no gate: the card
+   * renders it verbatim. `null` — the default — means the joined catalog:
+   * every listed symbol offered, lake coverage badged, and an unheld pick
+   * gated on its backfill.
    */
   readonly universe = input<readonly TickerOption[] | null>(null);
 
@@ -202,17 +206,13 @@ export class InstrumentCardComponent {
   });
 
   /**
-   * The symbol this card is waiting on through the ensure-coverage gate, if
-   * the gate belongs to it — the coverage service is app-scoped, so the
-   * strip renders only when the operator's pending pick is the gated one.
+   * This card's gate, if the operator's pending pick is the gated one. The
+   * handle is the ownership — the coverage service is app-scoped, and no
+   * field comparison can say which card a running gate belongs to, so the
+   * strip renders only through the session this card holds.
    */
-  readonly pendingSymbol = signal<string | null>(null);
-  readonly gateState = computed(() => {
-    const pending = this.pendingSymbol();
-    if (pending === null) return null;
-    const active = this.coverage.active();
-    return active !== null && active.symbol === pending ? active : null;
-  });
+  readonly pendingSession = signal<CoverageGateSession | null>(null);
+  readonly gateState = computed(() => this.pendingSession()?.state() ?? null);
 
   /** The adjustment modes a backfill can actually write, or null. */
   readonly backfillableMode = computed<BackfillableMode | null>(() => {
@@ -220,18 +220,18 @@ export class InstrumentCardComponent {
     return mode === 'raw' || mode === 'polygon_split_adjusted' ? mode : null;
   });
 
+  /** The lake's own read failed — retry the lake, not the vendor. */
   retryCatalog(): void {
     this.view().reload();
   }
 
-  trackBySymbol(_: number, t: PickerSymbol): string {
-    return t.symbol;
+  /** The live catalog is dark but the lake answered — retry the vendor. */
+  retryVendorCatalog(): void {
+    this.view().retryVendor();
   }
 
-  /** The row's right-hand coverage copy: the strongest fact about the lake. */
-  heldCopy(t: PickerSymbol): string {
-    if (t.delisted) return 'delisted';
-    return t.lastHeld ?? 'not held';
+  trackBySymbol(_: number, t: PickerSymbol): string {
+    return t.symbol;
   }
 
   openDropdown(): void {
@@ -239,8 +239,12 @@ export class InstrumentCardComponent {
     this.open.set(true);
     this.query.set('');
     // Re-read on open so a symbol backfilled since this tab loaded is
-    // selectable without a page reload. `resource.reload()` is a no-op while
-    // one is already in flight, so opening repeatedly costs at most one read.
+    // selectable without a page reload. Only the lake's coverage is
+    // refreshed — the vendor catalog is read once per tab and re-fetched
+    // solely through the degraded banner's Retry, which is a statement
+    // that the last vendor answer was bad. `resource.reload()` is a no-op
+    // while one is already in flight, so opening repeatedly costs at most
+    // one read.
     if (this.universe() === null) this.view().reload();
   }
 
@@ -291,60 +295,42 @@ export class InstrumentCardComponent {
       return;
     }
 
-    this.pendingSymbol.set(t.symbol);
+    const mode = this.adjustmentMode();
     // No gate may run on an unknown coverage verdict: with the lake dark,
     // every row reads as unheld and even a held-looking pick would start a
     // full-history backfill on a guess. The lake's own reason is shown.
     const lakeReason = this.catalogUnavailable();
     if (lakeReason !== null) {
-      this.coverage.refuse(t.symbol, 'coverage_unknown', lakeReason);
-      return;
-    }
-    const mode = this.backfillableMode();
-    if (mode === null) {
-      this.coverage.refuse(
-        t.symbol,
-        'view_not_backfillable',
-        `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
+      this.pendingSession.set(
+        this.coverage.refuse(t.symbol, mode, 'coverage_unknown', lakeReason),
       );
       return;
     }
-    void this.coverage.ensure(t.symbol, mode).then((ready) => {
-      // The operator may have picked another instrument — or dismissed the
-      // gate — while this backfill ran. Only the gate that is still the
-      // pending pick may speak for `value()`.
-      if (this.pendingSymbol() !== t.symbol) return;
-      if (!ready) return;
-      const fresh = this.tickerPool().find((p) => p.symbol === t.symbol);
-      this.pendingSymbol.set(null);
-      this.applyPick(fresh ?? t);
-    });
+    const backfillable = this.backfillableMode();
+    if (backfillable === null) {
+      this.pendingSession.set(
+        this.coverage.refuse(
+          t.symbol,
+          mode,
+          'view_not_backfillable',
+          `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
+        ),
+      );
+      return;
+    }
+    this.awaitSession(this.coverage.ensure(t.symbol, backfillable), t.symbol);
   }
 
-  protected async cancelGate(): Promise<void> {
-    const pending = this.pendingSymbol();
-    this.pendingSymbol.set(null);
-    if (pending !== null) await this.coverage.cancel();
-    this.refocusSearch();
+  protected retryGate(): void {
+    const state = this.gateState();
+    const backfillable = this.backfillableMode();
+    if (state === null || backfillable === null) return;
+    this.awaitSession(this.coverage.ensure(state.symbol, backfillable), state.symbol);
   }
 
-  protected async retryGate(): Promise<void> {
-    const mode = this.backfillableMode();
-    const symbol = this.pendingSymbol();
-    if (mode === null || symbol === null) return;
-    const ready = await this.coverage.retry(mode);
-    if (!ready || this.pendingSymbol() !== symbol) return;
-    const fresh = this.tickerPool().find((p) => p.symbol === symbol);
-    this.pendingSymbol.set(null);
-    // Mirror pickTicker's fallback: the pick survives even when the fresh
-    // pool read has not caught up with the coverage it just verified.
-    this.applyPick(fresh ?? { symbol, name: symbol });
-  }
-
-  protected async dismissGate(): Promise<void> {
-    const pending = this.pendingSymbol();
-    this.pendingSymbol.set(null);
-    if (pending !== null) await this.coverage.cancel();
+  /** Cancel and Dismiss are the same act: this card lets its gate go. */
+  protected async closeGate(): Promise<void> {
+    this.abandonGate();
     this.refocusSearch();
   }
 
@@ -353,17 +339,30 @@ export class InstrumentCardComponent {
    * while a gate is in flight included — so a finished backfill can never
    * overwrite a selection the operator made afterwards.
    *
-   * The coverage service is application-scoped: cancel only when the active
-   * gate is still this card's pending pick. If another card superseded ours,
-   * its gate is not ours to cancel.
+   * Releasing the session is ownership-safe by construction: the coverage
+   * service stops the run only when this session is its last waiter, so a
+   * gate another card superseded cannot be cancelled from here.
    */
   private abandonGate(): void {
-    const pending = this.pendingSymbol();
-    if (pending === null) return;
-    this.pendingSymbol.set(null);
-    if (this.coverage.active()?.symbol === pending) {
-      void this.coverage.cancel();
-    }
+    const session = this.pendingSession();
+    if (session === null) return;
+    this.pendingSession.set(null);
+    void session.cancel();
+  }
+
+  private awaitSession(session: CoverageGateSession, symbol: string): void {
+    this.abandonGate();
+    this.pendingSession.set(session);
+    void session.done.then((ready) => {
+      // The operator may have picked another instrument — or dismissed the
+      // gate — while this backfill ran. Only the gate that is still the
+      // pending pick may speak for `value()`.
+      if (this.pendingSession() !== session) return;
+      if (!ready) return;
+      const fresh = this.tickerPool().find((p) => p.symbol === symbol);
+      this.pendingSession.set(null);
+      this.applyPick(fresh ?? { symbol, name: symbol });
+    });
   }
 
   /** The gate strip's buttons unmount on dismissal; keep focus in the box. */

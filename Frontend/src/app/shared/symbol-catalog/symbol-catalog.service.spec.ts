@@ -12,16 +12,23 @@ import {
 import { joinCatalog, SymbolCatalogService } from './symbol-catalog.service';
 import type { VendorSymbolEntry } from './vendor-catalog.service';
 
-function vendor(overrides: Partial<VendorSymbolEntry> = {}): VendorSymbolEntry {
+function vendor(
+  // `asset_class`/`status` are Literal-typed on the wire; the string-typed
+  // override here exists only so boundary tests can hand a row the catalog
+  // must refuse.
+  overrides:
+    & Partial<Omit<VendorSymbolEntry, 'asset_class' | 'status'>>
+    & Partial<Record<'asset_class' | 'status', string>> = {},
+): VendorSymbolEntry {
   return {
     symbol: 'AAPL',
     name: 'Apple Inc.',
     asset_class: 'us_equity',
     exchange: 'NASDAQ',
     status: 'active',
-   
+
     ...overrides,
-  };
+  } as VendorSymbolEntry;
 }
 
 const SPY: TickerOption = {
@@ -54,8 +61,11 @@ describe('joinCatalog', () => {
   });
 
   it('drops a lake row the vendor classifies outside the backfillable universe', () => {
-    // A legacy import the lake holds but Polygon marks as a crypto pair can
-    // never be covered by the gate — bars or no bars, it is not offerable.
+    // A legacy import the lake holds but the vendor marks as a crypto pair
+    // can never be covered by the gate — bars or no bars, it is not
+    // offerable. The wire's `asset_class` Literal makes such a row
+    // unreachable from today's catalog; this pins the client-side boundary
+    // for the day the walk widens.
     const joined = joinCatalog(
       [{ symbol: 'BTCUSD', name: 'Bitcoin', lastHeld: '2026-01-31' }, SPY],
       [vendor({ symbol: 'BTCUSD', asset_class: 'crypto', exchange: null })],
@@ -139,10 +149,17 @@ describe('SymbolCatalogService', () => {
     expect(view.degraded()).toBe(true);
   });
 
-  it('reloads both sources', () => {
+  it('reloads only the lake on an ordinary refresh; the vendor retries separately', () => {
     const service = TestBed.inject(SymbolCatalogService);
-    service.viewFor('polygon_split_adjusted').reload();
+    const view = service.viewFor('polygon_split_adjusted');
 
+    // A dropdown-open refresh costs no vendor traffic: the catalog is read
+    // once per tab and re-fetched only through the degraded banner's Retry.
+    view.reload();
+    expect(catalog.view.reloadCount).toBe(1);
+    expect(alpaca.reloadCount).toBe(0);
+
+    view.retryVendor();
     expect(catalog.view.reloadCount).toBe(1);
     expect(alpaca.reloadCount).toBe(1);
   });

@@ -1063,29 +1063,34 @@ class PolygonClientService:
     def list_catalog_tickers(self) -> list[dict[str, Any]]:
         """The whole US-stock reference catalog for the shared symbol picker.
 
-        One paginated walk of ``GET /v3/reference/tickers`` with
-        ``market="stocks"``. ``active`` is deliberately left unfiltered so
-        delisted symbols ship too — offering them is the picker's explicit
-        toggle and the lake backfill panel's decision, never this client's.
-        The lake backfill pipeline can only cover stocks, so the market
-        filter is the one membership cut made here: a crypto/fx/otc row can
-        never be backfilled and must not be offered at all.
+        Two paginated walks of ``GET /v3/reference/tickers`` with
+        ``market="stocks"`` — one ``active=True``, one ``active=False``.
+        The API reads an omitted ``active`` filter as active-only, so the
+        delisted half of the universe exists only when explicitly asked
+        for; offering delisted symbols is the picker's explicit toggle and
+        the lake backfill panel's decision, never this client's. The lake
+        backfill pipeline can only cover stocks, so the market filter is
+        the one membership cut made here: a crypto/fx/otc row can never be
+        backfilled and must not be offered at all.
         """
         try:
             entries: list[dict[str, Any]] = []
-            for t in self.client.list_tickers(market="stocks", limit=1000):
-                symbol = getattr(t, "ticker", None)
-                if not symbol:
-                    continue
-                entries.append(
-                    {
-                        "symbol": symbol,
-                        "name": getattr(t, "name", None) or None,
-                        "asset_class": "us_equity",
-                        "exchange": getattr(t, "primary_exchange", None),
-                        "status": "active" if getattr(t, "active", True) else "inactive",
-                    }
-                )
+            seen: set[str] = set()
+            for active in (True, False):
+                for t in self.client.list_tickers(market="stocks", active=active, limit=1000):
+                    symbol = getattr(t, "ticker", None)
+                    if not symbol or symbol in seen:
+                        continue
+                    seen.add(symbol)
+                    entries.append(
+                        {
+                            "symbol": symbol,
+                            "name": getattr(t, "name", None) or None,
+                            "asset_class": "us_equity",
+                            "exchange": getattr(t, "primary_exchange", None),
+                            "status": "active" if getattr(t, "active", True) else "inactive",
+                        }
+                    )
             return entries
         except Exception as e:
             logger.error(f"[Tickers] Error fetching the symbol catalog: {e!s}")

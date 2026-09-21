@@ -1,7 +1,15 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
-import { JobsService, type JobStreamEvent } from '../../../services/jobs.service';
-import { BackfillDayEvent, BackfillFailure, DataRunSpec, classifyDataLakeError } from '../../../shared/data-lake';
+import { JobsService } from '../../../services/jobs.service';
+import {
+  BackfillJobRunner,
+  BackfillSubmissionError,
+} from '../../../shared/data-lake/backfill-job-runner';
+import {
+  BackfillDayEvent,
+  BackfillFailure,
+  DataRunSpec,
+} from '../../../shared/data-lake';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 
 export { BACKFILL_JOB_TYPE };
@@ -76,24 +84,18 @@ const TERMINAL_EVENTS = new Set(['job.completed', 'job.failed', 'job.cancelled']
 /**
  * Drives one data-lake backfill from submission to a terminal event.
  *
- * Submission goes through `JobsService.startJob`, which is what mints the
- * job id and writes its initial Redis state; the worker on the Python side
- * then streams `job.*` lifecycle events *and* the domain-specific
- * `data_lake.backfill_day` payload over the same Redis-backed SSE channel.
- * `JobsService` deliberately understands only the `job.*` verbs, so this
- * store rides `JobsService.onEvent()` (#1856) — the same one stream
- * `RunSessionService` rides for the dataset bundler — rather than each
- * domain consumer opening its own second `EventSource` to the same
- * endpoint. Domain handling (the fold below) stays local to this store
- * rather than bloating the shared registry.
- *
- * `ingestEvent` is public so the fold is unit-testable without an
- * `EventSource` (jsdom has none); the SSE handler only parses a frame and
- * routes it here.
+ * Submission goes through the shared `BackfillJobRunner` — the one
+ * submission path and one `JobsService` stream subscription per job in the
+ * app (#1856) — and every frame the runner forwards lands in `ingestEvent`
+ * here, because the per-day receipts are this panel's domain, not the
+ * runner's. `ingestEvent` is public so the fold is unit-testable without
+ * an `EventSource` (jsdom has none); the SSE handler only parses a frame
+ * and routes it here.
  */
 @Injectable()
 export class DataLakeBackfillStore {
   private readonly jobs = inject(JobsService);
+  private readonly runner = inject(BackfillJobRunner);
   private readonly destroyRef = inject(DestroyRef);
 
   private readonly phaseState = signal<BackfillPhase>('idle');
@@ -128,7 +130,8 @@ export class DataLakeBackfillStore {
     this.daysState().reduce((total, day) => total + day.reused_count, 0),
   );
 
-  private unsubscribeEvents: (() => void) | null = null;
+  /** The runner's handle for the currently-open stream, if any. */
+  private run: ReturnType<BackfillJobRunner['observe']> | null = null;
 
   constructor() {
     this.destroyRef.onDestroy(() => this.closeStream());
@@ -137,21 +140,22 @@ export class DataLakeBackfillStore {
   async start(spec: DataRunSpec): Promise<void> {
     this.reset();
     this.phaseState.set('submitting');
-    let jobId: string;
     try {
-      jobId = await this.jobs.startJob(BACKFILL_JOB_TYPE, { spec });
+      this.run = await this.runner.start(spec, { onEvent: (event) => this.ingestEvent(event) });
     } catch (error) {
-      const classified = classifyDataLakeError(error);
+      if (!(error instanceof BackfillSubmissionError)) throw error;
       this.phaseState.set('failed');
       this.errorState.set({
-        code: classified.kind === 'rejected' ? classified.reason : 'submission_failed',
-        message: classified.message,
+        code:
+          error.classifiedKind === 'rejected'
+            ? (error.classifiedReason ?? 'submission_failed')
+            : 'submission_failed',
+        message: error.message,
       });
       return;
     }
-    this.jobIdState.set(jobId);
+    this.jobIdState.set(this.run.jobId);
     this.phaseState.set('running');
-    this.openStream(jobId);
   }
 
   /**
@@ -178,7 +182,7 @@ export class DataLakeBackfillStore {
     this.jobIdState.set(jobId);
     this.reattachedState.set(true);
     this.phaseState.set('running');
-    this.openStream(jobId);
+    this.openStream(this.runner.observe(jobId, { onEvent: (event) => this.ingestEvent(event) }));
   }
 
   async cancel(): Promise<void> {
@@ -248,12 +252,15 @@ export class DataLakeBackfillStore {
     if (TERMINAL_EVENTS.has(event.type)) this.closeStream();
   }
 
-  private openStream(jobId: string): void {
-    this.unsubscribeEvents = this.jobs.onEvent(jobId, (event: JobStreamEvent) => this.ingestEvent(event));
+  private openStream(run: ReturnType<BackfillJobRunner['observe']>): void {
+    this.run = run;
   }
 
   private closeStream(): void {
-    this.unsubscribeEvents?.();
-    this.unsubscribeEvents = null;
+    // Detaching stops the frames; a terminal frame that already arrived
+    // still reached the fold, and the runner's terminal promise is settled
+    // either way.
+    this.run?.detach();
+    this.run = null;
   }
 }
