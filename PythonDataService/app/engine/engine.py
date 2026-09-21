@@ -131,7 +131,10 @@ class BacktestEngine:
         ``retain_bars=False`` keeps ``result.bars`` empty — for a summary
         consumer that never reads the bars (a Grid Search cell, #1941), where
         ~194k retained ``TradeBar`` objects are the single largest allocation
-        of the run. Everything else, including the equity curve that feeds the
+        of the run. It also stops the context collecting consolidated bars:
+        a strategy consolidating at the input cadence would otherwise retain
+        one bar per input bar for a chart the summary response never builds.
+        Everything else, including the equity curve that feeds the
         statistics, is produced identically; the scored-bar count survives as
         ``len(result.equity_curve)``, which every processed bar appends to
         exactly once.
@@ -161,6 +164,7 @@ class BacktestEngine:
         # ------------------------------------------------------------------
         portfolio = Portfolio(initial_cash=Decimal(1))  # placeholder; set below
         ctx = StrategyContext(portfolio=portfolio)
+        ctx.collect_consolidated_bars = retain_bars
         strategy.ctx = ctx
         program = strategy.signal_program
         if program is not None:

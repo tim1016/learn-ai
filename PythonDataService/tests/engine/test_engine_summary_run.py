@@ -93,7 +93,9 @@ def _run(retain_bars: bool):
             slippage_per_share=Decimal("0"),
         ),
     )
-    return engine.run(_EnterExitStrategy(), retain_bars=retain_bars)
+    strategy = _EnterExitStrategy()
+    result = engine.run(strategy, retain_bars=retain_bars)
+    return result, strategy
 
 
 def _curve_points(curve: list[EquitySnapshot]) -> list[tuple[int, Decimal, Decimal, Decimal]]:
@@ -101,13 +103,19 @@ def _curve_points(curve: list[EquitySnapshot]) -> list[tuple[int, Decimal, Decim
 
 
 def test_a_run_without_bar_retention_keeps_every_figure() -> None:
-    full = _run(retain_bars=True)
-    summary = _run(retain_bars=False)
+    full, full_strategy = _run(retain_bars=True)
+    summary, summary_strategy = _run(retain_bars=False)
 
     # The retention is the only difference; the scored-bar count survives as
     # the curve's length, which every processed bar appends to exactly once.
     assert summary.bars == []
     assert len(full.bars) == len(full.equity_curve)
+
+    # Consolidated-bar collection stops too: a strategy consolidating at the
+    # input cadence would retain one bar per input bar for a chart the
+    # summary response never builds.
+    assert len(full_strategy.ctx.consolidated_bars) == 2  # day-1's and day-2's daily bars fired in-loop
+    assert summary_strategy.ctx.consolidated_bars == []
 
     # Everything the statistics consume is produced identically.
     assert _curve_points(summary.equity_curve) == _curve_points(full.equity_curve)

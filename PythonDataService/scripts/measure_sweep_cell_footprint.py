@@ -7,8 +7,9 @@ allocator effects do not cancel out across modes in a single process:
     .venv/bin/python scripts/measure_sweep_cell_footprint.py --mode summary
     .venv/bin/python scripts/measure_sweep_cell_footprint.py --mode full
 
-Seeds a synthetic SPY minute lake (two years of regular sessions, ~194k
-bars) under a temporary write root, then runs ONE cell —
+Seeds a synthetic SPY minute lake (two years of scheduled sessions — the
+calendar decides each day's bounds, early closes included — ~190k bars)
+under a temporary write root, then runs ONE cell —
 ``ema_crossover_signal``, minute bars, through the same
 ``execute_engine_backtest`` entry point a sweep drives — and reports
 resident memory at three points: after imports and lake seed, the
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import logging
 import os
 import random
 import resource
@@ -42,17 +44,20 @@ from app.config import settings  # noqa: E402
 from app.data_lake.path_policy import lake_subpath  # noqa: E402
 from app.engine.data.lean_format import write_lean_day_zip  # noqa: E402
 from app.engine.data.trade_bar import TradeBar  # noqa: E402
-from app.lean_sidecar.trading_calendar import expected_sessions  # noqa: E402
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_minute_et  # noqa: E402
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 EASTERN = ZoneInfo("America/New_York")
 SYMBOL = "SPY"
 START, END = date(2024, 9, 5), date(2026, 9, 3)
 WARMUP_SESSIONS = 5
+SESSION_OPEN_MINUTE_ET = 9 * 60 + 30
 
 
 def _seed_lake(root: Path) -> tuple[date, date]:
-    """Two years of regular-session minute bars; returns (data_start, data_end)."""
+    """Two years of scheduled-session minute bars; returns (data_start, data_end)."""
     lake_dir = root / lake_subpath("polygon_split_adjusted")
     lake_dir.mkdir(parents=True)
     rng = random.Random(1941)
@@ -60,9 +65,12 @@ def _seed_lake(root: Path) -> tuple[date, date]:
     sessions = list(expected_sessions(START, END))
     for day in sessions:
         base *= Decimal("1") + Decimal(str(rng.uniform(-0.01, 0.011)))
+        # The calendar owns the session bounds — early closes seed 09:30→13:00,
+        # not a fabricated full day (temporal-rigor: no hardcoded session times).
+        bar_count = session_close_minute_et(day) - SESSION_OPEN_MINUTE_ET
         open_et = datetime(day.year, day.month, day.day, 9, 30, tzinfo=EASTERN)
         bars: list[TradeBar] = []
-        for i in range(390):
+        for i in range(bar_count):
             wiggle = Decimal(str(rng.uniform(-0.4, 0.4)))
             o = base + wiggle
             c = o + Decimal(str(rng.uniform(-0.3, 0.3)))
@@ -113,6 +121,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("summary", "full"), required=True)
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     with tempfile.TemporaryDirectory(prefix="sweep-cell-measure-") as tmp:
         root = Path(tmp)
@@ -120,7 +129,7 @@ def main() -> None:
         data_start, data_end = _seed_lake(root)
         gc.collect()
         baseline = _current_rss()
-        print(f"mode={args.mode} baseline after imports + lake seed: {_mb(baseline)} MB")
+        logger.info(f"mode={args.mode} baseline after imports + lake seed: {_mb(baseline)} MB")
 
         sessions = list(expected_sessions(data_start, data_end))
         evaluation_start = sessions[WARMUP_SESSIONS]
@@ -143,17 +152,17 @@ def main() -> None:
         )
         elapsed = time.monotonic() - started
         assert response.success, response.error
-        print(
+        logger.info(
             f"cell: bars_consumed={response.bars_consumed} trades={response.total_trades} "
             f"equity_points={len(response.equity_curve)} wall={elapsed:.1f}s"
         )
         peak = _peak_rss()
-        print(f"peak (ru_maxrss): {_mb(peak)} MB ({_mb(peak - baseline)} MB above baseline)")
+        logger.info(f"peak (ru_maxrss): {_mb(peak)} MB ({_mb(peak - baseline)} MB above baseline)")
 
         del response
         gc.collect()
         retained = _current_rss()
-        print(f"retained after response dropped + gc: {_mb(retained)} MB ({_mb(retained - baseline)} MB above baseline)")
+        logger.info(f"retained after response dropped + gc: {_mb(retained)} MB ({_mb(retained - baseline)} MB above baseline)")
 
 
 if __name__ == "__main__":
