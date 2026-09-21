@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 
@@ -20,6 +20,36 @@ logger = logging.getLogger(__name__)
 
 _POLYGON_BASE = "https://api.polygon.io"
 _TIMEOUT_S = 30.0
+
+#: How far back the configured Polygon plan serves aggregate bars.
+POLYGON_HISTORY_YEARS = 5
+
+#: Days of headroom over the plan's boundary, because the boundary day itself
+#: is **excluded**: probed 2026-09-21, ``today - 5 years`` (2021-09-21)
+#: answered 403 NOT_AUTHORIZED while the following day answered 200. One day
+#: covers that exclusion; the second keeps a window composed just before an
+#: ET midnight inside the entitlement when the worker issues the call.
+_HISTORY_FLOOR_MARGIN_DAYS = 2
+
+
+def polygon_history_floor(today: date) -> date:
+    """The oldest date this plan will serve aggregate bars for, as of ``today``.
+
+    The single statement in the repo of where Polygon's rolling history
+    window begins. A request whose oldest day falls outside it is not a
+    partial failure: ``provider_entitlement_error`` is globally fatal in
+    ``backfill.py``, so one unauthorized day aborts the whole run before a
+    single bar is written. Callers compose *inside* this floor rather than
+    against ``MAX_TRADING_RANGE_DAYS``, which is a request-validation
+    ceiling padded to ``5 * 366`` for leap years and says nothing about what
+    the provider will actually serve.
+    """
+    try:
+        anniversary = today.replace(year=today.year - POLYGON_HISTORY_YEARS)
+    except ValueError:
+        # 29 February with a non-leap anniversary year.
+        anniversary = today.replace(year=today.year - POLYGON_HISTORY_YEARS, day=28)
+    return anniversary + timedelta(days=_HISTORY_FLOOR_MARGIN_DAYS)
 
 
 class PolygonFetchError(RuntimeError):

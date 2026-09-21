@@ -20,6 +20,7 @@
         class="field__input"
         type="date"
         [value]="startTradingDate()"
+        [attr.min]="providerHistoryStart()"
         (input)="onStart($event)"
       />
     </div>

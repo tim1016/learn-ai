@@ -13,38 +13,61 @@ import {
   BackfillSubmissionError,
   type BackfillJobRun,
 } from '../data-lake/backfill-job-runner';
-import { tradingDateToMs, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
-import type { DataRunSpec, PriceAdjustmentMode } from '../data-lake';
+import {
+  rootFailureOf,
+  toBackfillDayEvent,
+  tradingDateToMs,
+  tradingRangeRejection,
+} from '../data-lake';
+import type { BackfillFailure, DataRunSpec, PriceAdjustmentMode } from '../data-lake';
 import { isRunnableSpan } from '../ticker-catalog';
 import { TickerCatalogService } from '../ticker-catalog';
-import { etIsoDate, isoDateAfter } from '../date/et-midnight';
-import { toMostRecentTradingDayIso } from '../date/weekday';
+import { etIsoDate } from '../date/et-midnight';
+import { toMostRecentTradingDayIso, toNextTradingDayIso } from '../date/weekday';
 
 /**
- * The widest backfill window that fits the data plane's **inclusive** range
- * cap, ending at the most recent trading day on or before `todayIso`.
+ * The widest backfill window that clears **both** bounds on a backfill:
+ * the data plane's inclusive range cap, and the provider's own history
+ * entitlement. It ends at the most recent trading day on or before
+ * `todayIso`.
  *
- * A naive `today - cap` start is wrong twice over: the cap counts the window
- * inclusively (`(end - start).days + 1`), and the weekday walk-back on the
- * endpoints can add up to three more days (1830 is not a whole number of
- * weeks), which is how a window composed on a Monday lands on a 422 while
- * the same code passes on a Saturday. The start therefore begins four days
- * inside the cap and steps forward — a step that keeps both endpoints on
- * weekdays — until the inclusive span fits, and the caller still runs the
- * result through `tradingRangeRejection` so a cap the data plane lowered
- * fails loudly instead of shipping an oversized spec.
+ * Two different things can refuse this window, and satisfying one is not
+ * satisfying the other:
+ *
+ * - *The cap* counts inclusively (`(end - start).days + 1`), and the weekday
+ *   walk-back on the endpoints can add up to three more days (1830 is not a
+ *   whole number of weeks), which is how a window composed on a Monday
+ *   landed on a 422 while the same code passed on a Saturday. Starting four
+ *   days inside the cap settles it outright: the walk-back moves the start
+ *   at most two days earlier (Sunday to Friday), so the inclusive span is at
+ *   most `capDays - 1` for any cap, and the floor clamp below only ever
+ *   moves the start later. There is deliberately no corrective loop — one
+ *   would be unreachable, and unreachable code that looks like a safety net
+ *   is worse than none.
+ * - *The entitlement* is the oldest day the provider will serve, which the
+ *   data plane reports on `/backfill-defaults`. `capDays` is emphatically
+ *   not a proxy for it: it is a validation ceiling padded to `5 * 366` for
+ *   leap years, so `cap - 4` is exactly five years, and five years to the
+ *   day is the one day Polygon's five-year plan excludes. That put every
+ *   unheld pick's first day outside the plan, and because
+ *   `provider_entitlement_error` is globally fatal in the backfill worker,
+ *   one such day aborted the whole run before a single bar was written
+ *   (#2241). The floor is therefore clamped, and snapped forward off a
+ *   weekend — walking it back is what would step outside it again.
+ *
+ * The caller still runs the result through `tradingRangeRejection`, so a cap
+ * the data plane lowered, or a floor that has overtaken the end date, fails
+ * loudly instead of shipping a window that cannot be served.
  */
 export function fitBackfillWindow(
   todayIso: string,
   capDays: number,
+  historyStartIso: string,
 ): { start: string; end: string } {
   const end = toMostRecentTradingDayIso(todayIso);
-  let start = toMostRecentTradingDayIso(end, -(capDays - 4));
-  let guard = 0;
-  while (guard <= 7 && (tradingRangeSpanDays(start, end) ?? capDays + 1) > capDays) {
-    start = isoDateAfter(start);
-    guard++;
-  }
+  const capStart = toMostRecentTradingDayIso(end, -(capDays - 4));
+  // Both are zero-padded `YYYY-MM-DD`, so lexicographic order is chronological.
+  const start = toNextTradingDayIso(capStart < historyStartIso ? historyStartIso : capStart);
   return { start, end };
 }
 
@@ -245,7 +268,30 @@ export class EnsureCoverageService {
     return !entry.settled && this.runs.get(entry.key) === entry;
   }
 
+  /**
+   * Run one gate to a verdict. **Never rejects**: every waiter resolves off
+   * `ActiveRun.finished`, and a rejected promise settles none of them, so a
+   * throw anywhere below would leave the strip spinning on what is really a
+   * loud, reportable failure. The catch routes through `fail`, which is
+   * guarded on the run still owning its map entry.
+   */
   private async runBackfill(
+    symbol: string,
+    mode: BackfillableMode,
+    entry: ActiveRun,
+  ): Promise<boolean> {
+    try {
+      return await this.composeAndRun(symbol, mode, entry);
+    } catch (error) {
+      return this.fail(
+        entry,
+        'backfill_run_error',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async composeAndRun(
     symbol: string,
     mode: BackfillableMode,
     entry: ActiveRun,
@@ -263,12 +309,27 @@ export class EnsureCoverageService {
         'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.',
       );
     }
+    // A data plane too old to publish the provider's history floor cannot be
+    // composed against: guessing the floor is what #2241 was. The read is
+    // typed but unvalidated at the HTTP seam, so this is the boundary check.
+    const historyStartMs = defaults.value.provider_history_start_ms;
+    if (typeof historyStartMs !== 'number' || !Number.isFinite(historyStartMs)) {
+      return this.fail(
+        entry,
+        'backfill_history_floor_missing',
+        'The data plane did not report how far back the market-data provider serves, so a backfill window cannot be composed. It is likely running an older build than this page.',
+      );
+    }
 
     // Full allowed history, ending at the most recent trading day: the
     // picker's gate does not know the run window a sibling card may later
     // hold, and a maximally covered symbol cannot strand a narrower window.
     const todayIso = etIsoDate(Date.now());
-    const { start, end } = fitBackfillWindow(todayIso, defaults.value.max_trading_range_days);
+    const { start, end } = fitBackfillWindow(
+      todayIso,
+      defaults.value.max_trading_range_days,
+      etIsoDate(historyStartMs),
+    );
     const rejection = tradingRangeRejection(start, end, defaults.value.max_trading_range_days);
     const startMs = tradingDateToMs(start);
     const endMs = tradingDateToMs(end);
@@ -294,7 +355,12 @@ export class EnsureCoverageService {
 
     let jobRun: BackfillJobRun;
     try {
-      jobRun = await this.runner.start(spec);
+      // The per-day frames are the only place the run says *why* it wrote
+      // nothing; without them a run the provider refused outright is
+      // indistinguishable from a symbol that genuinely has no bars.
+      jobRun = await this.runner.start(spec, {
+        onDomainEvent: (event) => entry.observeFailures(toBackfillDayEvent(event)?.failures),
+      });
     } catch (error) {
       if (!(error instanceof BackfillSubmissionError)) throw error;
       return this.fail(entry, 'backfill_submission_failed', error.message);
@@ -328,6 +394,11 @@ export class EnsureCoverageService {
    * answer, so judging membership against it would report `backfill_empty`
    * for bars that just landed. The reload still runs, to refresh every
    * picker's pool; the verdict comes from the read this gate awaits.
+   *
+   * The lake stays the arbiter of "did this pick become runnable" — a run
+   * that failed some days but landed others is a good pick — so the run's
+   * own failures are consulted only once the lake has said no, and then to
+   * name the reason rather than to reach the verdict.
    */
   private async settle(symbol: string, mode: BackfillableMode, entry: ActiveRun): Promise<boolean> {
     this.lake.viewFor(mode).reload();
@@ -339,6 +410,19 @@ export class EnsureCoverageService {
     if (read.value.symbols.some((span) => span.symbol === symbol && isRunnableSpan(span))) {
       entry.state.set(null);
       return true;
+    }
+    // The job framework reports a run the provider refused as `job.completed`
+    // — the *job* ran; the *backfill* did not — so a gate that only watched
+    // the lifecycle could say nothing beyond "empty". The typed reason was
+    // on the wire all along (#2241).
+    const failure = entry.rootFailure;
+    if (failure !== null) {
+      return this.fail(
+        entry,
+        failure.reason,
+        failure.detail ??
+          'The backfill wrote no bars for this symbol and reported no detail.',
+      );
     }
     return this.fail(
       entry,
@@ -378,6 +462,25 @@ class ActiveRun {
   readonly finished: Promise<boolean>;
   jobRun: BackfillJobRun | null = null;
   settled = false;
+  /**
+   * The failure that explains an empty run, taken from the **last** day that
+   * reported one.
+   *
+   * The worker walks oldest session first and breaks immediately after
+   * emitting the frame whose failure was globally fatal, so the last frame
+   * carrying failures is the one that ended the run. Earlier frames can
+   * carry per-day failures that stopped nothing — `provider_no_data` for a
+   * session before the symbol listed, say — and latching the first would
+   * hand the operator a benign reason for a run a refusal killed.
+   */
+  rootFailure: BackfillFailure | null = null;
+
+  /** Fold one day's failures; the latest real cause replaces the last. */
+  observeFailures(failures: readonly BackfillFailure[] | undefined): void {
+    if (failures === undefined || failures.length === 0) return;
+    const candidate = rootFailureOf(failures);
+    if (candidate !== null) this.rootFailure = candidate;
+  }
 
   constructor(
     readonly key: string,

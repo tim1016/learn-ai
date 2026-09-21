@@ -5,7 +5,8 @@ import {
   BackfillSubmissionError,
   type BackfillJobRun,
 } from '../../../shared/data-lake/backfill-job-runner';
-import { BackfillDayEvent, BackfillFailure, DataRunSpec } from '../../../shared/data-lake';
+import { DataRunSpec, toBackfillDayEvent } from '../../../shared/data-lake';
+import type { BackfillDayEvent, BackfillFailure, SseEvent } from '../../../shared/data-lake';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 
 export { BACKFILL_JOB_TYPE };
@@ -29,50 +30,6 @@ export interface BackfillError {
   /** A code when the job framework gave one, else a synthesized reason code. Render through `receiptLabel`. */
   readonly code: string;
   readonly message: string;
-}
-
-type SseEvent = { readonly type: string } & Readonly<Record<string, unknown>>;
-
-function asString(value: unknown): string | null {
-  return typeof value === 'string' ? value : null;
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function toFailure(raw: unknown): BackfillFailure | null {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const record = raw as Record<string, unknown>;
-  const reason = asString(record['reason']);
-  if (reason === null) return null;
-  return {
-    artifact_kind: asString(record['artifact_kind']) ?? '',
-    symbol: asString(record['symbol']),
-    trading_date_ms: asNumber(record['trading_date_ms']),
-    data_type: asString(record['data_type']),
-    reason,
-    detail: asString(record['detail']),
-    provider_status_code: asNumber(record['provider_status_code']),
-    attempt_count: asNumber(record['attempt_count']) ?? 0,
-  };
-}
-
-function toDayEvent(event: SseEvent): BackfillDayEvent | null {
-  const tradingDateMs = asNumber(event['trading_date_ms']);
-  const dayIndex = asNumber(event['day_index']);
-  const totalDays = asNumber(event['total_days']);
-  if (tradingDateMs === null || dayIndex === null || totalDays === null) return null;
-  const rawFailures = Array.isArray(event['failures']) ? event['failures'] : [];
-  return {
-    trading_date_ms: tradingDateMs,
-    day_index: dayIndex,
-    total_days: totalDays,
-    days_remaining: asNumber(event['days_remaining']) ?? Math.max(0, totalDays - dayIndex),
-    fetched_count: asNumber(event['fetched_count']) ?? 0,
-    reused_count: asNumber(event['reused_count']) ?? 0,
-    failures: rawFailures.map(toFailure).filter((f): f is BackfillFailure => f !== null),
-  };
 }
 
 /**
@@ -218,8 +175,7 @@ export class DataLakeBackfillStore {
 
   /** Folds one already-parsed domain frame. Unknown event types are ignored. */
   ingestEvent(event: SseEvent): void {
-    if (event.type !== 'data_lake.backfill_day') return;
-    const day = toDayEvent(event);
+    const day = toBackfillDayEvent(event);
     if (day === null) return;
     // A reconnect may redeliver the frame straddling the drop. Key on the
     // day index so a replayed session is corrected instead of duplicated.

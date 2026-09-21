@@ -53,3 +53,22 @@ export function toMostRecentTradingDayIso(iso: string, daysOffset = 0): string {
   }
   return date.toISOString().slice(0, 10);
 }
+
+/**
+ * The mirror of {@link toMostRecentTradingDayIso}: walks a ``YYYY-MM-DD``
+ * date *forward* to the next Mon-Fri, in UTC, for the same reason that one
+ * walks backward in UTC.
+ *
+ * Use this wherever the date being snapped is a **floor** — the oldest day a
+ * provider will serve, the first day of a held span — because walking such a
+ * date backward off a weekend steps it outside the very bound it represents.
+ * Holidays are still not handled here, by the same deliberate choice.
+ */
+export function toNextTradingDayIso(iso: string): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  while (date.getUTCDay() === 0 || date.getUTCDay() === 6) {
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return date.toISOString().slice(0, 10);
+}

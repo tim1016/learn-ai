@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { toMostRecentTradingDayIso, toMostRecentWeekday } from './weekday';
+import { toMostRecentTradingDayIso, toMostRecentWeekday, toNextTradingDayIso } from './weekday';
 
 describe('toMostRecentWeekday', () => {
   it('returns the same date when input is already a weekday', () => {
@@ -65,5 +65,28 @@ describe('toMostRecentTradingDayIso', () => {
     expect(toMostRecentTradingDayIso('2026-05-25')).toBe('2026-05-25');
     expect(toMostRecentTradingDayIso('2026-05-26')).toBe('2026-05-26');
     expect(toMostRecentTradingDayIso('2026-05-27')).toBe('2026-05-27');
+  });
+});
+
+describe('toNextTradingDayIso', () => {
+  it('returns the same date when it is already a weekday', () => {
+    expect(toNextTradingDayIso('2026-09-21')).toBe('2026-09-21');
+  });
+
+  it('walks a Saturday forward to Monday', () => {
+    expect(toNextTradingDayIso('2026-04-25')).toBe('2026-04-27');
+  });
+
+  it('walks a Sunday forward to Monday', () => {
+    expect(toNextTradingDayIso('2025-05-25')).toBe('2025-05-26');
+  });
+
+  // The reason this exists: a floor walked *backward* off a weekend lands
+  // outside the bound it represents — which for a provider history floor is
+  // the 403 the backward walk was supposed to avoid.
+  it('never steps a floor earlier than itself', () => {
+    for (const iso of ['2021-09-23', '2021-09-25', '2021-09-26', '2021-09-27']) {
+      expect(toNextTradingDayIso(iso) >= iso).toBe(true);
+    }
   });
 });

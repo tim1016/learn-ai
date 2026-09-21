@@ -8242,6 +8242,16 @@ export interface components {
          *     configured — reported honestly rather than as an empty string, so the
          *     UI can say backfill is unavailable instead of submitting a spec that
          *     would fail deep inside Phase 0.
+         *
+         *     ``provider_history_start_ms`` is the oldest day the configured provider
+         *     plan will actually serve. ``max_trading_range_days`` is *not* a stand-in
+         *     for it: that cap is a request-validation ceiling padded to ``5 * 366``
+         *     for leap years, so a window composed against it starts a few days
+         *     outside a 5-year entitlement and dies on a globally-fatal
+         *     ``provider_entitlement_error`` before one bar is written (#2241). Only
+         *     the data plane holds the provider credential, so only the data plane can
+         *     state this; a browser composing its own floor is guessing at a vendor
+         *     plan.
          */
         BackfillDefaults: {
             /** Lean Image Digest */
@@ -8256,6 +8266,8 @@ export interface components {
             max_symbol_length: number;
             /** Max Trading Range Days */
             max_trading_range_days: number;
+            /** Provider History Start Ms */
+            provider_history_start_ms: number;
         };
         /**
          * BackfillJobRequest

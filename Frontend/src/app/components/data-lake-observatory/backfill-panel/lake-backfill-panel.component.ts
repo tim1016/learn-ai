@@ -26,6 +26,7 @@ import {
   LAKE_BACKFILLABLE_ASSET_CLASS,
 } from '../../../shared/symbol-catalog/vendor-catalog.service';
 import { toBackfillableMode } from '../../../shared/symbol-catalog/ensure-coverage.service';
+import { etIsoDate } from '../../../shared/date/et-midnight';
 import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 import { parseSymbols } from '../lib/coverage-board';
@@ -192,11 +193,26 @@ export class LakeBackfillPanelComponent implements OnInit {
       return `Not in the listing catalog (a typo, a delisted symbol, or not a US stock): ${this.ineligibleSelections().join(', ')}. Clear them, or include delisted symbols.`;
     }
     if (this.pickedSymbols().length === 0) return 'Pick at least one symbol.';
-    return tradingRangeRejection(
+    const rejection = tradingRangeRejection(
       this.startTradingDate(),
       this.endTradingDate(),
       this.defaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
     );
+    if (rejection !== null) return rejection;
+    // The cap is not the only bound on a window. A start before the provider
+    // serves aborts the whole run on its oldest day (#2241); the data plane
+    // refuses it too, so this only spares the operator the round trip.
+    const floor = this.providerHistoryStart();
+    if (floor !== null && this.startTradingDate() < floor) {
+      return `The market-data provider serves no bars before ${floor}. Start on or after that date.`;
+    }
+    return null;
+  });
+
+  /** The oldest day the provider serves, as the data plane reports it. */
+  protected readonly providerHistoryStart = computed<string | null>(() => {
+    const ms = this.defaults()?.provider_history_start_ms;
+    return typeof ms === 'number' && Number.isFinite(ms) ? etIsoDate(ms) : null;
   });
 
   protected readonly canSubmit = computed(

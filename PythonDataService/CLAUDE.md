@@ -144,7 +144,7 @@ app/
 
 ## Gotchas
 
-- Polygon Starter plan: 2-year max history, 15-min delayed, options snapshots only for live contracts
+- Polygon plan: 15-min delayed, options snapshots only for live contracts. **Aggregate history is 5 years, and the boundary day is excluded** — probed on the live key 2026-09-21: `today - 5 years` answered 403 `NOT_AUTHORIZED`, the day after it answered 200. (This line used to say "2-year max history"; that was wrong and is the likely source of `_POLYGON_HISTORY_YEARS = 2` in `app/services/broker_v2_panel/history_batch_walk.py`, which under-claims and so only costs history rather than failing.) The canonical floor is `polygon_history_floor()` in `app/data_lake/polygon_fetcher.py`, published on `GET /api/data-lake/backfill-defaults`; never re-derive it, and never treat `MAX_TRADING_RANGE_DAYS` as a proxy for it (#2241).
 - `DatetimeIndex.astype("int64")` returns **microseconds** in pandas 3.0 (not nanoseconds)
 - Polygon 07:00 ET bars can have inflated close prices from late settlement trades
 - Volume mount in compose: `./PythonDataService/app:/app/app:z` — only `app/` is hot-reloaded

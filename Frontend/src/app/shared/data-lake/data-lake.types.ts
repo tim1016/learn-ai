@@ -91,6 +91,14 @@ export interface BackfillDefaults {
   readonly lean_image_digest: string | null;
   readonly max_trading_range_days: number;
   readonly max_symbol_length: number;
+  /**
+   * The oldest day the provider plan will actually serve, calendar-anchored
+   * like every other trading date on this surface. Not derivable from
+   * `max_trading_range_days`: that cap is a request-validation ceiling
+   * padded to `5 * 366` for leap years, and a window composed against it
+   * starts outside a 5-year entitlement.
+   */
+  readonly provider_history_start_ms: number;
 }
 
 /**
