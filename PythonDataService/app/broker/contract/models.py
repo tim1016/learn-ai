@@ -316,6 +316,37 @@ class BrokerAsset(_ContractModel):
     shortable: bool | None
     marginable: bool | None
 
+    @classmethod
+    def to_picker_symbol(cls, asset: BrokerAsset) -> BrokerSymbol:
+        """Project the full asset read onto the picker-row shape."""
+        return BrokerSymbol(
+            symbol=asset.symbol,
+            name=asset.name,
+            asset_class=asset.asset_class,
+            exchange=asset.exchange,
+            status=asset.status,
+            tradable=asset.tradable,
+        )
+
+
+class BrokerSymbol(_ContractModel):
+    """Trimmed asset-catalog row for symbol pickers.
+
+    The browser fetches the whole catalog once per session (ADR — symbol
+    picker, 2026-09-20), so the projection keeps only the fields a picker row
+    renders and drops the eligibility flags (``fractionable`` and friends)
+    that belong to order-time checks. Membership policy — which asset classes
+    and statuses a given picker offers — is the picker's decision, not this
+    endpoint's, so every row is served and the client filters.
+    """
+
+    symbol: str
+    name: str | None
+    asset_class: str
+    exchange: str | None
+    status: str
+    tradable: bool
+
 
 class BrokerClockEvidence(_ContractModel):
     """Market-wide broker-clock evidence — not scheduled-session authority.
