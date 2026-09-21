@@ -1,11 +1,11 @@
-"""``retain_bars=False``: a summary run keeps the count, drops the list (#1941).
+"""``retain_bars=False``: a summary run drops the list, keeps every figure (#1941).
 
-A Grid Search cell never reads the bars the engine iterated; it read
-``len(equity_curve)`` off the response and six statistics. This is the
-engine half of that contract: without retention the run must produce the
-identical equity curve and result figures — the samples the statistics
-consume — and carry the bar count in ``bars_consumed`` instead of a
-materialised ``list[TradeBar]``.
+A Grid Search cell never reads the bars the engine iterated; it read six
+statistics and a bar count. This is the engine half of that contract:
+without retention the run must produce the identical equity curve and
+result figures — the samples the statistics consume, and the curve whose
+length *is* the bar count — while the ~194k ``TradeBar`` objects a
+minute-resolution cell would hold are never retained.
 """
 
 from __future__ import annotations
@@ -100,13 +100,14 @@ def _curve_points(curve: list[EquitySnapshot]) -> list[tuple[int, Decimal, Decim
     return [(s.timestamp_ms, s.equity, s.cash, s.holdings_value) for s in curve]
 
 
-def test_a_run_without_bar_retention_reports_the_count_and_keeps_every_figure() -> None:
+def test_a_run_without_bar_retention_keeps_every_figure() -> None:
     full = _run(retain_bars=True)
     summary = _run(retain_bars=False)
 
-    # The count replaces the list, and full runs carry it too.
+    # The retention is the only difference; the scored-bar count survives as
+    # the curve's length, which every processed bar appends to exactly once.
     assert summary.bars == []
-    assert summary.bars_consumed == len(full.bars) == full.bars_consumed
+    assert len(full.bars) == len(full.equity_curve)
 
     # Everything the statistics consume is produced identically.
     assert _curve_points(summary.equity_curve) == _curve_points(full.equity_curve)
@@ -117,10 +118,10 @@ def test_a_run_without_bar_retention_reports_the_count_and_keeps_every_figure() 
     assert len(summary.order_events) >= 2  # the entry and the exit actually ran
 
 
-def test_the_count_describes_the_scored_window_not_the_warmup() -> None:
-    """A primed run reads warmup bars it never scores; the count restarts at the
-    evaluation boundary together with the curve and the retained bars, so
-    ``bars_consumed == len(equity_curve)`` holds in both modes (#1941)."""
+def test_bars_and_curve_describe_the_scored_window_not_the_warmup() -> None:
+    """A primed run reads warmup bars it never scores; both the retained bars
+    and the curve restart at the evaluation boundary, so the count derived
+    from the curve describes the scored window in either retention mode."""
     evaluation_start_ms = int(datetime(2026, 2, 10, tzinfo=NY).timestamp() * 1000)
 
     def _run(retain_bars: bool):
@@ -136,4 +137,4 @@ def test_the_count_describes_the_scored_window_not_the_warmup() -> None:
 
     full, summary = _run(True), _run(False)
     # Day 1 is warmup (3 bars); days 2-3 are the scored window (5 bars).
-    assert summary.bars_consumed == len(full.bars) == len(summary.equity_curve) == 5
+    assert len(full.bars) == len(full.equity_curve) == len(summary.equity_curve) == 5

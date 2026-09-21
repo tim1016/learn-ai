@@ -74,11 +74,10 @@ class BacktestResult:
     log_lines: list[str] = field(default_factory=list)
     # Retained bar data for LEAN statistics computation. Each entry is a
     # consolidated (or raw daily) bar that was actually iterated. Empty on a
-    # ``retain_bars=False`` run, where only the count below was kept.
+    # ``retain_bars=False`` run — a summary consumer that never reads them.
+    # The scored-bar count is not stored separately: every processed bar
+    # appends exactly one equity point below, so it is ``len(equity_curve)``.
     bars: list[TradeBar] = field(default_factory=list)
-    # Bars iterated over the scored window — always populated, retained bars
-    # or not, so a summary consumer never counts a materialised list (#1941).
-    bars_consumed: int = 0
     equity_curve: list[EquitySnapshot] = field(default_factory=list)
     # Phase 1: Insight tracking — all insights emitted during the backtest,
     # scored after their prediction period expires.
@@ -129,12 +128,13 @@ class BacktestEngine:
         outer one, and this acquire passes through it — see
         ``run_gate.one_backtest_in_flight``.
 
-        ``retain_bars=False`` keeps ``result.bars`` empty and counts into
-        ``result.bars_consumed`` instead — for a summary consumer that never
-        reads the bars (a Grid Search cell, #1941), where ~194k retained
-        ``TradeBar`` objects are the single largest allocation of the run.
-        Everything else, including the equity curve that feeds the statistics,
-        is produced identically.
+        ``retain_bars=False`` keeps ``result.bars`` empty — for a summary
+        consumer that never reads the bars (a Grid Search cell, #1941), where
+        ~194k retained ``TradeBar`` objects are the single largest allocation
+        of the run. Everything else, including the equity curve that feeds the
+        statistics, is produced identically; the scored-bar count survives as
+        ``len(result.equity_curve)``, which every processed bar appends to
+        exactly once.
         """
         with one_backtest_in_flight():
             return self._run(strategy, evaluation_start_ms=evaluation_start_ms, retain_bars=retain_bars)
@@ -188,7 +188,6 @@ class BacktestEngine:
 
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
-        bars_consumed = 0
         equity_curve: list[EquitySnapshot] = []
 
         active_brackets: list[_ActiveBracket] = []
@@ -297,10 +296,6 @@ class BacktestEngine:
                     equity_curve=equity_curve,
                     retained_bars=retained_bars,
                 )
-                # The boundary just cleared the curve and the retained bars;
-                # the count restarts with them, so ``bars_consumed`` describes
-                # the scored window exactly as ``len(equity_curve)`` did.
-                bars_consumed = 0
                 evaluation_pending = False
 
             # Update portfolio reference price with the latest close.
@@ -493,7 +488,6 @@ class BacktestEngine:
             ctx.insight_manager.step(minute_bar.end_ms, current_prices)
 
             equity_curve.append(self._snapshot(portfolio, minute_bar.end_ms))
-            bars_consumed += 1
             if retain_bars:
                 retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
@@ -533,7 +527,6 @@ class BacktestEngine:
             order_events=order_events,
             log_lines=list(ctx.log_lines),
             bars=retained_bars,
-            bars_consumed=bars_consumed,
             equity_curve=equity_curve,
             insights=ctx.insight_manager.all_insights,
             insight_summary=insight_summary.to_dict(),

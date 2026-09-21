@@ -11,8 +11,9 @@ Seeds a synthetic SPY minute lake (two years of regular sessions, ~194k
 bars) under a temporary write root, then runs ONE cell —
 ``ema_crossover_signal``, minute bars, through the same
 ``execute_engine_backtest`` entry point a sweep drives — and reports
-resident memory at three points: after imports and lake seed, peak during
-the cell, and retained after the response is dropped and the allocator
+resident memory at three points: after imports and lake seed, the
+kernel-accounted peak (``ru_maxrss``, stdlib only — no undeclared
+dependency), and retained after the response is dropped and the allocator
 asked to give back. Prices are a seeded daily random walk with intraday
 wiggle, so the EMAs cross and the run trades; the footprint depends on
 the bar count, not the price path.
@@ -22,10 +23,12 @@ from __future__ import annotations
 
 import argparse
 import gc
+import os
 import random
+import resource
+import subprocess
 import sys
 import tempfile
-import threading
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -34,8 +37,6 @@ from zoneinfo import ZoneInfo
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE_ROOT))
-
-import psutil  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.data_lake.path_policy import lake_subpath  # noqa: E402
@@ -84,31 +85,24 @@ def _seed_lake(root: Path) -> tuple[date, date]:
     return sessions[0], sessions[-1]
 
 
-class _PeakSampler:
-    """Sample RSS in the background while the cell runs."""
+def _current_rss() -> int:
+    """Resident bytes right now — ``/proc`` on Linux, ``ps`` elsewhere (stdlib only)."""
+    proc_status = Path("/proc/self/status")
+    if proc_status.exists():
+        for line in proc_status.read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    out = subprocess.check_output(["ps", "-o", "rss=", "-p", str(os.getpid())], text=True)
+    return int(out.strip()) * 1024
 
-    def __init__(self) -> None:
-        self._proc = psutil.Process()
-        self._peak = 0
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
 
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            self._peak = max(self._peak, self._proc.memory_info().rss)
-            time.sleep(0.025)
+def _peak_rss() -> int:
+    """Peak resident bytes of the process so far, from the kernel's accounting.
 
-    def __enter__(self) -> _PeakSampler:
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2)
-
-    @property
-    def peak(self) -> int:
-        return max(self._peak, self._proc.memory_info().rss)
+    ``ru_maxrss`` is kilobytes on Linux and bytes on darwin.
+    """
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak if sys.platform == "darwin" else peak * 1024
 
 
 def _mb(value: int) -> int:
@@ -125,7 +119,7 @@ def main() -> None:
         settings.LEAN_DATA_WRITE_ROOT = str(root)
         data_start, data_end = _seed_lake(root)
         gc.collect()
-        baseline = psutil.Process().memory_info().rss
+        baseline = _current_rss()
         print(f"mode={args.mode} baseline after imports + lake seed: {_mb(baseline)} MB")
 
         sessions = list(expected_sessions(data_start, data_end))
@@ -142,23 +136,23 @@ def main() -> None:
         )
 
         started = time.monotonic()
-        with _PeakSampler() as sampler:
-            response = execute_engine_backtest(
-                request=request,
-                on_phase=lambda phase: None,
-                on_log=lambda message: None,
-            )
+        response = execute_engine_backtest(
+            request=request,
+            on_phase=lambda phase: None,
+            on_log=lambda message: None,
+        )
         elapsed = time.monotonic() - started
         assert response.success, response.error
         print(
             f"cell: bars_consumed={response.bars_consumed} trades={response.total_trades} "
             f"equity_points={len(response.equity_curve)} wall={elapsed:.1f}s"
         )
-        print(f"peak during cell: {_mb(sampler.peak)} MB ({_mb(sampler.peak - baseline)} MB above baseline)")
+        peak = _peak_rss()
+        print(f"peak (ru_maxrss): {_mb(peak)} MB ({_mb(peak - baseline)} MB above baseline)")
 
         del response
         gc.collect()
-        retained = psutil.Process().memory_info().rss
+        retained = _current_rss()
         print(f"retained after response dropped + gc: {_mb(retained)} MB ({_mb(retained - baseline)} MB above baseline)")
 
 

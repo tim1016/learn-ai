@@ -18,6 +18,7 @@ from pathlib import Path
 
 import asyncpg
 import pytest
+from pydantic import ValidationError
 
 from app.config import settings
 from app.data_lake.path_policy import lake_subpath
@@ -144,3 +145,52 @@ async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_ar
     assert cell.net_profit == direct.statistics["net_profit"]
     assert cell.total_return_pct == direct.statistics["net_profit_pct"]
     assert cell.max_drawdown_pct == direct.statistics["max_drawdown_pct"]
+
+
+def test_a_summary_run_is_byte_identical_to_a_full_run_without_a_database(lake: Path) -> None:
+    """The PR-gate half of the parity claim: no ``conn`` fixture, so this runs
+    on every CI shard (``ci.yml`` sets no ``POSTGRES_URL``; the receipt-minting
+    parity test above runs daily instead). The same request executes twice —
+    once full, once ``summary_only`` — and everything a cell reads must match
+    byte for byte (#1941)."""
+    common = dict(
+        strategy_name="sma_crossover",
+        params={"symbol": "SPY", "short_window": 2, "long_window": 5, "resolution_minutes": 60},
+        from_date=SESSIONS[1].isoformat(),
+        to_date=END.isoformat(),
+        warmup_from_date=START.isoformat(),
+        save_study=False,
+        auto_fetch=False,
+    )
+    full, summary = (
+        asyncio.run(
+            asyncio.to_thread(
+                execute_engine_backtest,
+                request=EngineBacktestRequest(**common, summary_only=summary_only),
+                on_phase=_noop,
+                on_log=_noop,
+            )
+        )
+        for summary_only in (False, True)
+    )
+
+    assert full.success and summary.success, (full.error, summary.error)
+    # The byte-identity the summary mode is named for.
+    assert summary.statistics == full.statistics
+    assert summary.trades == full.trades
+    assert summary.total_trades == full.total_trades == full.statistics["total_trades"]
+    assert summary.bars_consumed == len(full.equity_curve)
+    # The summary shape: the per-bar artifacts are never built.
+    assert summary.equity_curve == []
+    assert summary.chart_bars == []
+    assert summary.insights == []
+    assert summary.lean_statistics is None
+    assert summary.validation_analytics is None
+
+
+def test_a_summary_run_cannot_ask_for_a_persisted_study() -> None:
+    """``summary_only`` pairs with ``save_study=False`` by contract; the
+    request model rejects the combination rather than persisting a row whose
+    per-bar evidence was never built (#1941)."""
+    with pytest.raises(ValidationError, match="summary_only cannot be combined with save_study"):
+        EngineBacktestRequest(strategy_name="sma_crossover", params={"symbol": "SPY"}, summary_only=True)
