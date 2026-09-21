@@ -251,7 +251,9 @@ describe('LakeBackfillPanelComponent', () => {
     alpaca.unavailable.set('catalog endpoint down');
     detectChanges();
 
-    const note = screen.getByText(/Live symbol catalog unavailable/);
+    // The degraded banner now lives inside the shared multi card, with the
+    // picker family's canonical copy.
+    const note = screen.getByText(/Live catalog unavailable/);
     expect(note.textContent).toContain('catalog endpoint down');
     expect(note.textContent).toContain('showing lake holdings');
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();

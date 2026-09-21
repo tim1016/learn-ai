@@ -426,7 +426,7 @@ describe('InstrumentCardComponent', () => {
     dismiss?.click();
     await flushGate();
 
-    expect((component.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
+    expect((component.gate.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
     expect(fixture.nativeElement.querySelector('app-coverage-gate-strip')).toBeNull();
   });
 
@@ -562,7 +562,7 @@ describe('InstrumentCardComponent', () => {
       exchange: 'NASDAQ',
     });
     await flushGate();
-    const heldGate = component.pendingSession() as FakeCoverageSession;
+    const heldGate = component.gate.pendingSession() as FakeCoverageSession;
     expect(heldGate).not.toBeNull();
 
     component.pickTicker(pool[0]);
@@ -588,13 +588,13 @@ describe('InstrumentCardComponent', () => {
       exchange: 'NASDAQ',
     });
     await flushGate();
-    const adjustedGate = component.pendingSession() as FakeCoverageSession;
+    const adjustedGate = component.gate.pendingSession() as FakeCoverageSession;
 
     fixture.componentRef.setInput('adjustmentMode', 'raw');
     fixture.detectChanges();
 
     expect(adjustedGate.cancelCalls).toBe(1);
-    expect(component.pendingSession()).toBeNull();
+    expect(component.gate.pendingSession()).toBeNull();
     adjustedGate.resolve(true);
     await flushGate();
     expect(component.value().symbol).toBe('SPY');
@@ -609,7 +609,7 @@ describe('InstrumentCardComponent', () => {
       exchange: 'NASDAQ',
     });
     await flushGate();
-    const session = component.pendingSession() as FakeCoverageSession;
+    const session = component.gate.pendingSession() as FakeCoverageSession;
 
     fixture.destroy();
 
@@ -637,7 +637,7 @@ describe('InstrumentCardComponent', () => {
     component.pickTicker(pool[0]);
     fixture.detectChanges();
 
-    expect((component.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
+    expect((component.gate.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
     expect(otherCardsGate.cancelCalls).toBe(0);
   });
 

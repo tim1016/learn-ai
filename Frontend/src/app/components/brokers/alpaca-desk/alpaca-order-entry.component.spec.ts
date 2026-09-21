@@ -1,17 +1,28 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
+import { By } from '@angular/platform-browser';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget } from '../../../fleet/resource-target';
 import type { LaneFence } from '../../../fleet/lane-fence';
 
-async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
-  fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), {
-    target: { value: symbol },
-  });
+/**
+ * The symbol leg is the shared picker now, so "typing a symbol" is a pick:
+ * set the picker's model and let its output write the leg's Signal Forms
+ * field, exactly as a real pick does.
+ */
+async function fillFirstLeg(
+  view: RenderResult<AlpacaOrderEntryComponent>,
+  symbol: string,
+  quantity: string,
+): Promise<void> {
+  const picker = view.fixture.debugElement.query(By.directive(SymbolPickerComponent));
+  (picker.componentInstance as SymbolPickerComponent).symbol.set(symbol);
+  view.fixture.detectChanges();
   const qtyInput = await screen.findByLabelText('Leg 1 quantity');
   fireEvent.input(qtyInput, { target: { value: quantity } });
   fireEvent.change(qtyInput, { target: { value: quantity } });
@@ -60,7 +71,7 @@ describe('AlpacaOrderEntryComponent', () => {
         },
       ],
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: FENCE,
@@ -84,7 +95,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     expect(screen.getByRole('button', { name: 'Add equity leg' })).toBeTruthy();
     expect(screen.getByLabelText('Leg 1 side')).toBeTruthy();
     expect(screen.getAllByText('Market').length).toBeGreaterThan(0);
@@ -180,7 +191,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     // The lane rebinds (a directory refresh) between render and the click.
     // `target()` now reports the new generation; the fence frozen at render
     // time, `fence`, does not move.
@@ -213,7 +224,7 @@ describe('AlpacaOrderEntryComponent', () => {
       control_revision: 1,
       subject_id: 'manual-operator:operator',
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: { bindingGeneration: null, routingEpoch: null },
@@ -238,7 +249,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
     expect(previewSqliteManualOrder).not.toHaveBeenCalled();
@@ -254,7 +265,7 @@ describe('AlpacaOrderEntryComponent', () => {
       control_revision: 1,
       subject_id: 'manual-operator:operator',
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: FENCE,
@@ -276,7 +287,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     selectOption('Leg 1 side', 'sell');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
@@ -714,7 +725,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledOnce());
     view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
@@ -764,7 +775,7 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledOnce());
     view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
@@ -795,7 +806,7 @@ describe('AlpacaOrderEntryComponent', () => {
       control_revision: 1,
       subject_id: 'manual-operator:operator',
     });
-    await render(AlpacaOrderEntryComponent, {
+    const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
         target: TARGET,
         fence: FENCE,
@@ -820,7 +831,7 @@ describe('AlpacaOrderEntryComponent', () => {
       ],
     });
 
-    await fillFirstLeg('spy', '2');
+    await fillFirstLeg(view, 'spy', '2');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
 
     // Scoped to the dialog the operator is about to confirm from, not the

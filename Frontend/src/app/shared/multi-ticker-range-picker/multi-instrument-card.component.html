@@ -1,4 +1,4 @@
-<section class="group" aria-label="Instrument universe">
+<section class="group" [attr.aria-label]="label()">
   <header class="group__head">
     <span class="group__eyebrow">
       <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
@@ -34,6 +34,13 @@
         Retry
       </button>
     </p>
+  } @else if (degraded(); as reason) {
+    <p class="catalog-note" role="status" aria-live="polite">
+      Live catalog unavailable — showing lake holdings. {{ reason }}
+      <button type="button" class="link-btn" (click)="retryVendor.emit()">
+        Retry
+      </button>
+    </p>
   } @else if (options().length === 0) {
     <p class="catalog-note" role="status" aria-live="polite">
       No instruments available.
@@ -59,4 +66,13 @@
     [selected]="symbols()"
     (picked)="add($event)"
   />
+
+  @if (gate.state(); as state) {
+    <app-coverage-gate-strip
+      [state]="state"
+      (retry)="retryGate()"
+      (cancelled)="closeGate()"
+      (dismiss)="closeGate()"
+    />
+  }
 </section>

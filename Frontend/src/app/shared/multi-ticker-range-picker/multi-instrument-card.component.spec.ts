@@ -2,16 +2,22 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MultiInstrumentCardComponent } from './multi-instrument-card.component';
 import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
+import {
+  fakeEnsureCoverage,
+  provideFakeEnsureCoverage,
+  type FakeEnsureCoverage,
+} from '../symbol-catalog/testing/fake-symbol-catalog';
 
 describe('MultiInstrumentCardComponent', () => {
   const options: PickerSymbol[] = [
-    { symbol: 'SPY', name: 'SPDR S&P 500', delisted: false },
+    { symbol: 'SPY', name: 'SPDR S&P 500', delisted: false, firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
     { symbol: 'QQQ', name: 'Invesco QQQ', delisted: false },
     { symbol: 'IWM', name: 'iShares Russell 2000', delisted: false },
   ];
 
   let fixture: ComponentFixture<MultiInstrumentCardComponent>;
   let component: MultiInstrumentCardComponent;
+  let coverage: FakeEnsureCoverage;
 
   function setInputSymbols(symbols: string[]): void {
     fixture.componentRef.setInput('symbols', symbols);
@@ -27,10 +33,19 @@ describe('MultiInstrumentCardComponent', () => {
     return input;
   }
 
+  /** Flushes the gate's promise chain; the fake ensure resolves immediately. */
+  async function flushGate(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.detectChanges();
+  }
+
   beforeEach(async () => {
     TestBed.resetTestingModule();
+    coverage = fakeEnsureCoverage();
     await TestBed.configureTestingModule({
       imports: [MultiInstrumentCardComponent],
+      providers: [provideFakeEnsureCoverage(coverage)],
     }).compileComponents();
 
     fixture = TestBed.createComponent(MultiInstrumentCardComponent);
@@ -135,5 +150,115 @@ describe('MultiInstrumentCardComponent', () => {
     );
     expect(optionsText.some((text) => text.includes('SPY'))).toBe(false);
     expect(optionsText.some((text) => text.includes('IWM'))).toBe(true);
+  });
+  // ── The optional coverage gate (ADR 0066) ────────────────────────────────
+
+  it('with an adjustment mode, a held pick applies immediately — no gate', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    component.add('SPY');
+    component.add('SPY'); // idempotent
+
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('gates an unheld pick: the chip appears only once the lake confirms coverage', async () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    component.add('QQQ'); // vendor-only row — no held span
+    fixture.detectChanges();
+
+    expect(coverage.ensureCalls).toEqual([{ symbol: 'QQQ', mode: 'raw' }]);
+    expect(component.symbols()).toEqual(['SPY']); // populate-then-use
+
+    await flushGate();
+    expect(component.symbols()).toEqual(['SPY', 'QQQ']);
+  });
+
+  it('renders the gate strip while the gate runs, and can dismiss it', async () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    coverage.holdNext = true;
+    component.add('QQQ');
+    fixture.detectChanges();
+
+    const strip = fixture.nativeElement.querySelector('app-coverage-gate-strip');
+    expect(strip).not.toBeNull();
+    expect(component.symbols()).toEqual(['SPY']);
+
+    const held = coverage.held[0];
+    held.cancel();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('app-coverage-gate-strip')).toBeNull();
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('refuses the gate while the lake verdict is unknown', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.componentRef.setInput('unavailable', 'The lake is unreachable.');
+    fixture.detectChanges();
+
+    component.add('QQQ');
+
+    expect(coverage.refusals).toContainEqual(
+      expect.objectContaining({ symbol: 'QQQ', reason: 'coverage_unknown' }),
+    );
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('refuses the gate loudly for a view no backfill can produce', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'lean_adjusted');
+    fixture.detectChanges();
+
+    component.add('QQQ');
+
+    expect(coverage.refusals).toContainEqual(
+      expect.objectContaining({ symbol: 'QQQ', reason: 'view_not_backfillable' }),
+    );
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('releases a pending gate when the host changes the adjustment mode', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    coverage.holdNext = true;
+    component.add('QQQ');
+    fixture.detectChanges();
+    const held = coverage.held[0];
+
+    fixture.componentRef.setInput('adjustmentMode', 'polygon_split_adjusted');
+    fixture.detectChanges();
+
+    expect(held.cancelCalls).toBe(1);
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('never offers All on a gated card — unheld symbols backfill one at a time', () => {
+    fixture.componentRef.setInput('adjustmentMode', 'raw');
+    fixture.detectChanges();
+
+    component.selectAll();
+    expect(component.symbols()).toEqual(['SPY']);
+  });
+
+  it('shows the degraded banner with a vendor retry the host wired', () => {
+    fixture.componentRef.setInput('degraded', 'catalog endpoint down');
+    fixture.detectChanges();
+
+    const text: string = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Live catalog unavailable');
+    expect(text).toContain('showing lake holdings');
+    expect(text).toContain('catalog endpoint down');
+    const retry = Array.from(fixture.nativeElement.querySelectorAll('button')).find((b) =>
+      (b as HTMLButtonElement).textContent?.includes('Retry'),
+    );
+    expect(retry).not.toBeNull();
   });
 });

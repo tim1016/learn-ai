@@ -18,11 +18,8 @@ import { type TickerOption, type TickerRange } from '../ticker-range-picker.type
 import { DEFAULT_ADJUSTMENT_MODE } from '../../ticker-catalog';
 import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.service';
 import type { SymbolCatalogStatus } from '../../symbol-catalog/symbol-catalog.service';
-import {
-  EnsureCoverageService,
-  type BackfillableMode,
-  type CoverageGateSession,
-} from '../../symbol-catalog/ensure-coverage.service';
+import type { BackfillableMode } from '../../symbol-catalog/ensure-coverage.service';
+import { CoverageGateController } from '../../symbol-catalog/coverage-gate.controller';
 import {
   InstrumentDropdownComponent,
   type InstrumentDropdownView,
@@ -98,8 +95,9 @@ export class InstrumentCardComponent {
   readonly universe = input<readonly TickerOption[] | null>(null);
 
   private readonly symbols = inject(SymbolCatalogService);
-  private readonly coverage = inject(EnsureCoverageService);
   private readonly destroyRef = inject(DestroyRef);
+  /** This card's coverage gate — see {@link CoverageGateController}. */
+  readonly gate = new CoverageGateController(() => this.adjustmentMode());
   private readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602). Track
@@ -137,7 +135,7 @@ export class InstrumentCardComponent {
       const nextMode = this.adjustmentMode();
       if (nextMode !== sessionMode) {
         sessionMode = nextMode;
-        this.abandonGate();
+        this.gate.abandon();
       }
     });
     effect(() => {
@@ -146,7 +144,7 @@ export class InstrumentCardComponent {
         if (input) queueMicrotask(() => input.nativeElement.focus());
       }
     });
-    this.destroyRef.onDestroy(() => this.abandonGate());
+    this.destroyRef.onDestroy(() => this.gate.abandon());
   }
 
   readonly selectedTicker = computed<PickerSymbol | undefined>(() =>
@@ -199,15 +197,6 @@ export class InstrumentCardComponent {
       .map((s) => pool.find((t) => t.symbol === s))
       .filter((t): t is PickerSymbol => !!t);
   });
-
-  /**
-   * This card's gate, if the operator's pending pick is the gated one. The
-   * handle is the ownership — the coverage service is app-scoped, and no
-   * field comparison can say which card a running gate belongs to, so the
-   * strip renders only through the session this card holds.
-   */
-  readonly pendingSession = signal<CoverageGateSession | null>(null);
-  readonly gateState = computed(() => this.pendingSession()?.state() ?? null);
 
   readonly dropdownView = computed<InstrumentDropdownView>(() => ({
     visible: this.visibleTickers(),
@@ -323,52 +312,25 @@ export class InstrumentCardComponent {
   }
 
   protected retryGate(): void {
-    const state = this.gateState();
     const backfillable = this.backfillableMode();
-    if (state === null || backfillable === null) return;
-    this.startGate(state.symbol, backfillable);
+    if (backfillable === null) return;
+    this.gate.retry(backfillable);
   }
 
   /** Cancel and Dismiss are the same act: this card lets its gate go. */
   protected async closeGate(): Promise<void> {
-    this.abandonGate();
+    this.gate.abandon();
     this.refocusSearch();
   }
 
-  /**
-   * Every exit from a pending gate funnels through here — a held pick made
-   * while a gate is in flight included — so a finished backfill can never
-   * overwrite a selection the operator made afterwards.
-   *
-   * Releasing the session is ownership-safe by construction: the coverage
-   * service stops the run only when this session is its last waiter, so a
-   * run another card still awaits cannot be cancelled from here.
-   */
-  private abandonGate(): void {
-    const session = this.pendingSession();
-    if (session === null) return;
-    this.pendingSession.set(null);
-    void session.cancel();
+  private startGate(symbol: string, mode: BackfillableMode): void {
+    this.gate.start(symbol, mode, (covered) => this.onCovered(covered));
   }
 
-  private startGate(symbol: string, mode: BackfillableMode): void {
-    this.abandonGate();
-    const session = this.coverage.ensure(symbol, mode);
-    this.pendingSession.set(session);
-    void session.done.then((ready) => {
-      // The operator may have picked another instrument — or dismissed the
-      // gate — while this backfill ran. Only the gate that is still the
-      // pending pick may speak for `value()`.
-      if (this.pendingSession() !== session) return;
-      if (!ready) return;
-      if (this.adjustmentMode() !== mode) {
-        this.abandonGate();
-        return;
-      }
-      const fresh = this.tickerPool().find((p) => p.symbol === symbol);
-      this.pendingSession.set(null);
-      this.applyPick(fresh ?? { symbol, name: symbol });
-    });
+  /** The lake confirmed the bars — select the fresh row (or a bare symbol). */
+  private onCovered(symbol: string): void {
+    const fresh = this.tickerPool().find((p) => p.symbol === symbol);
+    this.applyPick(fresh ?? { symbol, name: symbol });
   }
 
   private showRefusal(
@@ -377,8 +339,7 @@ export class InstrumentCardComponent {
     reason: string,
     message: string,
   ): void {
-    this.abandonGate();
-    this.pendingSession.set(this.coverage.refuse(symbol, mode, reason, message));
+    this.gate.refuse(symbol, mode, reason, message);
   }
 
   /** The gate strip's buttons unmount on dismissal; keep focus in the box. */
@@ -388,7 +349,7 @@ export class InstrumentCardComponent {
   }
 
   private applyPick(t: TickerOption): void {
-    this.abandonGate();
+    this.gate.abandon();
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
     // Only move the window when the one on screen could not be run against

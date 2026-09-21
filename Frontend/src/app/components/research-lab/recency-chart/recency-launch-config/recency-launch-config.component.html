@@ -12,31 +12,18 @@
 
   <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-lg shadow-black/10">
     <section class="border-b border-slate-700 p-4 sm:p-6">
-      <div class="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 id="recency-symbols-heading" class="m-0 text-base font-semibold text-slate-100">Symbols</h3>
-        <p class="m-0 text-xs text-slate-400">Use a comma or Enter to add another.</p>
-      </div>
-      <div class="mb-2 flex flex-wrap gap-2">
-        @for (symbol of committedSymbols(); track symbol) {
-          <span class="inline-flex items-center gap-1 rounded-full border border-blue-400/30 bg-blue-950/60 py-1 pl-3 pr-1 text-blue-100">
-            <app-asset-identity [symbol]="symbol" size="sm" />
-            <button pButton type="button" severity="secondary" size="small" [text]="true" [rounded]="true"
-              [attr.aria-label]="'Remove ' + symbol"
-              (click)="removeSymbol(symbol)"
-            ><i class="pi pi-times" aria-hidden="true"></i></button>
-          </span>
-        }
-      </div>
-      <label class="sr-only" for="recency-symbols">Symbols</label>
-      <input pInputText id="recency-symbols" type="text" class="w-full"
-        placeholder="SPY, AAPL, QQQ"
-        [value]="symbolDraft()"
-        [attr.aria-describedby]="symbolValidationMessage() ? 'recency-symbols-helper recency-symbols-error' : 'recency-symbols-helper'"
-        [attr.aria-invalid]="symbolValidationMessage() ? 'true' : null"
-        [class.border-red-400]="symbolValidationMessage() !== null"
-        (input)="onSymbolsInput($event)"
-        (keydown)="onSymbolsKeydown($event)"
-        (blur)="commitSymbolDraft()"
+      <h3 id="recency-symbols-heading" class="mb-4 text-base font-semibold text-slate-100">Symbols</h3>
+      <app-multi-instrument-card
+        label="Timeline symbols"
+        [(symbols)]="symbols"
+        [options]="pickerOptions()"
+        [loading]="pickerLoading()"
+        [unavailable]="pickerUnavailable()"
+        [degraded]="pickerDegraded()"
+        [adjustmentMode]="pickerAdjustmentMode"
+        [allowEmpty]="true"
+        (retry)="retryCoverage()"
+        (retryVendor)="retryVendorCatalog()"
       />
       <p id="recency-symbols-helper" class="mb-0 mt-2 text-xs text-slate-400">Each selected symbol becomes one timeline lane.</p>
       @if (symbolValidationMessage(); as message) {

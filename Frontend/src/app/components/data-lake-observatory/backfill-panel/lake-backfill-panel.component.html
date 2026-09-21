@@ -1,19 +1,16 @@
 <form class="backfill" (submit)="$event.preventDefault(); submit()">
   <div class="backfill__fields">
     <div class="field field--picker">
-      @if (vendorUnavailable(); as reason) {
-        <p class="backfill__note" role="status" aria-live="polite">
-          Live symbol catalog unavailable — showing lake holdings. {{ reason }}
-          <button type="button" class="backfill__retry" (click)="retryVendorCatalog()">Retry</button>
-        </p>
-      }
       <app-multi-instrument-card
+        label="Backfill symbols"
         [(symbols)]="pickedSymbols"
         [options]="pickerOptions()"
         [loading]="catalogLoading()"
         [unavailable]="catalogUnavailable()"
+        [degraded]="vendorUnavailable()"
         [allowEmpty]="true"
         (retry)="reloadCoverage()"
+        (retryVendor)="retryVendorCatalog()"
       />
     </div>
     <div class="field">

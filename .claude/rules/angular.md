@@ -52,10 +52,11 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
   retry). Never substitute a canned symbol list for a failed read. The vendor catalog is
   read once per tab: `view.retryVendor()` re-fetches it; `view.reload()` refreshes only
   the lake's coverage on a dropdown open.
-- **Current exceptions** (mop-up pending, see ADR 0066 Consequences): batch-runner's
-  `multi-ticker-range-picker` is still lake-only (no joined universe, no gate), and the
-  unrouted Ticker Explorer still passes a `TICKER_LABELS` host universe. Don't copy either
-  pattern.
+- A symbol-only host binds `app-symbol-picker` (`[(symbol)]`, `adjustmentMode`) instead of
+  projecting a `TickerRange` by hand; a multi-symbol host whose runs read the lake passes
+  the multi card an `adjustmentMode` so unheld picks are gated, while a host that owns its
+  membership outright (the backfill panel; the Observatory's read-only coverage query)
+  leaves the mode unset and the list closed.
 
 ## Routing
 

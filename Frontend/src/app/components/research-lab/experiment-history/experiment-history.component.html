@@ -2,8 +2,11 @@
   <!-- Toolbar -->
   <div class="history-toolbar">
     <div class="toolbar-loader">
-      <input pInputText id="historyTicker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)"
-        placeholder="Ticker" (keydown.enter)="loadExperiments()" aria-label="Ticker symbol" />
+      <app-symbol-picker
+        class="history-ticker-picker"
+        [symbol]="ticker()"
+        (symbolChange)="onTickerPicked($event)"
+      />
       <button class="btn-load" [disabled]="loading()" (click)="loadExperiments()">
         <i [class]="loading() ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'" aria-hidden="true"></i>
         Load

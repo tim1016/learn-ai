@@ -7,6 +7,33 @@ import { describe, expect, it, vi } from "vitest";
 import { RecencyLaunchConfigComponent } from "./recency-launch-config.component";
 import { JobsService } from "../../../../services/jobs.service";
 import type { StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
+import type { TickerOption } from "../../../../shared/ticker-range-picker/ticker-range-picker.types";
+import {
+  fakeEnsureCoverage,
+  fakeVendorCatalog,
+  provideFakeEnsureCoverage,
+  provideFakeVendorCatalog,
+} from "../../../../shared/symbol-catalog/testing/fake-symbol-catalog";
+import type { VendorSymbolEntry } from "../../../../shared/symbol-catalog/vendor-catalog.service";
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from "../../../../shared/ticker-catalog/testing/fake-ticker-catalog";
+
+/** Held rows only — the lake half of the joined catalog the card joins. */
+const LAKE_POOL: readonly TickerOption[] = [
+  { symbol: "SPY", name: "SPDR S&P 500", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
+  { symbol: "AAPL", name: "Apple Inc.", firstHeld: "2024-01-02", lastHeld: "2026-09-18" },
+];
+
+/** A listed active symbol the lake does not hold — the gate's subject. */
+const LISTED_UNHELD: VendorSymbolEntry = {
+  symbol: "TSLA",
+  name: "Tesla, Inc.",
+  asset_class: "us_equity",
+  exchange: "NASDAQ",
+  status: "active",
+};
 
 function makeStrategy(overrides: Partial<StrategyInfo> = {}): StrategyInfo {
   return {
@@ -31,14 +58,28 @@ async function renderConfig(
   strategies: StrategyInfo[],
   startJob = vi.fn(async () => "job-1"),
   job: (id: string) => { status: string } | undefined = () => undefined,
+  vendorEntries: readonly VendorSymbolEntry[] = [],
 ) {
+  const coverage = fakeEnsureCoverage();
+  const vendor = fakeVendorCatalog(vendorEntries);
   const view = await render(RecencyLaunchConfigComponent, {
     providers: [
       { provide: HttpClient, useValue: { get: () => of(strategies) } },
       { provide: JobsService, useValue: { startJob, job } },
+      provideFakeTickerCatalog(fakeTickerCatalog(LAKE_POOL)),
+      provideFakeVendorCatalog(vendor),
+      provideFakeEnsureCoverage(coverage),
     ],
   });
-  return { view, startJob };
+  return { view, startJob, coverage, vendor };
+}
+
+/** Adds a symbol through the shared multi card's search, as an operator does. */
+async function addSymbol(view: { fixture: { whenStable: () => Promise<unknown> } }, query: string): Promise<void> {
+  fireEvent.input(screen.getByLabelText("Search to add a ticker"), { target: { value: query } });
+  const option = await screen.findByRole("option", { name: new RegExp(query, "i") });
+  fireEvent.click(option);
+  await view.fixture.whenStable();
 }
 
 describe("RecencyLaunchConfigComponent", () => {
@@ -80,24 +121,45 @@ describe("RecencyLaunchConfigComponent", () => {
     expect(screen.getByText("1 selected")).not.toBeNull();
   });
 
-  it("turns entered symbols into removable timeline lanes", async () => {
+  it("turns picked symbols into removable timeline lanes — there is no free-text symbols input", async () => {
     const { view } = await renderConfig([makeStrategy()]);
-    const symbols = screen.getByRole("textbox", { name: "Symbols" });
 
-    // SPY is seeded by default, so entering it again proves nothing -- the chip
-    // would survive on dedup alone. Add a symbol that is not already committed.
-    fireEvent.input(symbols, { target: { value: "aapl" } });
-    fireEvent.keyDown(symbols, { key: "Enter" });
+    // No free-text symbols field survives the ADR 0066 conversion: the
+    // multi card's search is the only way in.
+    expect(screen.queryByRole("textbox", { name: /symbols/i })).toBeNull();
+
+    // SPY is seeded by default, so picking it again proves nothing -- the
+    // chip would survive on dedup alone. Pick a symbol that is not selected.
+    await addSymbol(view, "AAPL");
+
+    expect(screen.getByRole("button", { name: "AAPL (remove)" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "SPY (remove)" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "AAPL (remove)" }));
     await view.fixture.whenStable();
 
-    expect(screen.getByRole("button", { name: "Remove AAPL" })).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Remove SPY" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "AAPL (remove)" })).toBeNull();
+    expect(screen.getByRole("button", { name: "SPY (remove)" })).not.toBeNull();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove AAPL" }));
+  it("gates an unheld pick on its backfill — the lane appears only once covered", async () => {
+    const { view, coverage } = await renderConfig([makeStrategy()], undefined, undefined, [LISTED_UNHELD]);
+
+    await addSymbol(view, "TSLA");
+    // The pick reached the gate on the tree the recency job reads.
+    expect(coverage.ensureCalls).toContainEqual({
+      symbol: "TSLA",
+      mode: "polygon_split_adjusted",
+    });
+    // Populate-then-use: not a lane while the backfill runs.
+    expect(screen.queryByRole("button", { name: "TSLA (remove)" })).toBeNull();
+
+    // The fake resolves `ready` immediately; flush the gate's promise chain.
+    await Promise.resolve();
+    await Promise.resolve();
     await view.fixture.whenStable();
 
-    expect(screen.queryByRole("button", { name: "Remove AAPL" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Remove SPY" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "TSLA (remove)" })).not.toBeNull();
   });
 
   it("refuses a fractional custom-month window", async () => {
@@ -124,8 +186,7 @@ describe("RecencyLaunchConfigComponent", () => {
   it("computes the pre-launch run count from symbols and selected strategy ranges", async () => {
     const { view } = await renderConfig([makeStrategy()]);
 
-    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY, AAPL" } });
-    await view.fixture.whenStable();
+    await addSymbol(view, "AAPL");
 
     // default seeding: each numeric param starts as a single-value list -> 1 combo per symbol
     expect(screen.getByText(/2 runs?/i)).not.toBeNull();
@@ -135,7 +196,7 @@ describe("RecencyLaunchConfigComponent", () => {
     const startJob = vi.fn(async () => "job-1");
     const { view } = await renderConfig([makeStrategy()], startJob);
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove SPY" }));
+    fireEvent.click(screen.getByRole("button", { name: "SPY (remove)" }));
     fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
     await view.fixture.whenStable();
 
@@ -148,7 +209,6 @@ describe("RecencyLaunchConfigComponent", () => {
     const startJob = vi.fn(async () => "job-1");
     const { view } = await renderConfig([makeStrategy()], startJob);
 
-    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
     const gapField = within(screen.getByRole("group", { name: "Crossover gap (bps)" })).getByLabelText(/values/i);
     fireEvent.input(gapField, { target: { value: "2,.3..4" } });
     await view.fixture.whenStable();
@@ -168,7 +228,6 @@ describe("RecencyLaunchConfigComponent", () => {
     const other = makeStrategy({ name: "sma_crossover", display_name: "SMA Crossover", params_schema: { properties: { symbol: { type: "string", default: "SPY" }, window: { type: "number", default: 20, title: "Window" } } } });
     const { view } = await renderConfig([makeStrategy(), other], startJob);
 
-    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
     fireEvent.click(screen.getByRole("checkbox", { name: /sma crossover/i }));
     await view.fixture.whenStable();
     const gapField = within(screen.getByRole("group", { name: "Crossover gap (bps)" })).getByLabelText(/values/i);
@@ -184,7 +243,6 @@ describe("RecencyLaunchConfigComponent", () => {
   it("launches a recency_chart job with the selected symbols and strategy ranges", async () => {
     const { view, startJob } = await renderConfig([makeStrategy()]);
 
-    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await view.fixture.whenStable();
 
@@ -208,7 +266,6 @@ describe("RecencyLaunchConfigComponent", () => {
     const onCompleted = vi.fn();
     view.fixture.componentInstance.launchCompleted.subscribe(onCompleted);
 
-    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await view.fixture.whenStable();
 

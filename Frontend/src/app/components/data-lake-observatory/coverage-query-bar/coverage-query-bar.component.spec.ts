@@ -6,6 +6,16 @@ import {
   CoverageQueryBarComponent,
   type ObservatoryQuery,
 } from './coverage-query-bar.component';
+import {
+  fakeEnsureCoverage,
+  fakeVendorCatalog,
+  provideFakeEnsureCoverage,
+  provideFakeVendorCatalog,
+} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
 
 const INITIAL: ObservatoryQuery = {
   symbolsText: 'SPY',
@@ -14,6 +24,12 @@ const INITIAL: ObservatoryQuery = {
   dataType: 'trade',
   priceAdjustmentMode: 'raw',
 };
+
+/** Held lake rows for the joined catalog the card adapts. */
+const PICKER_POOL = [
+  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
+  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
+];
 
 async function renderBar(
   initial: ObservatoryQuery = INITIAL,
@@ -26,28 +42,45 @@ async function renderBar(
       maxSymbolLength: 20,
       maxTradingRangeDays: options.maxTradingRangeDays ?? 1830,
     },
+    providers: [
+      provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
+      provideFakeVendorCatalog(fakeVendorCatalog()),
+      provideFakeEnsureCoverage(fakeEnsureCoverage()),
+    ],
   });
   view.fixture.componentInstance.applied.subscribe(applied);
   return { ...view, applied };
 }
 
+/** Adds a symbol through the card's search, as an operator does. */
+async function addSymbol(view: { fixture: { detectChanges: () => void } }, query: string): Promise<void> {
+  fireEvent.input(screen.getByLabelText('Search to add a ticker'), { target: { value: query } });
+  const option = await screen.findByRole('option', { name: new RegExp(query, 'i') });
+  fireEvent.click(option);
+  view.fixture.detectChanges();
+}
+
 describe('CoverageQueryBarComponent', () => {
-  it('does not re-query while the operator is still typing', async () => {
-    const { applied } = await renderBar();
+  it('does not re-query while the operator is still searching — a chip is not a query', async () => {
+    const view = await renderBar();
 
-    fireEvent.input(screen.getByLabelText('Symbols'), { target: { value: 'AAP' } });
+    fireEvent.input(screen.getByLabelText('Search to add a ticker'), { target: { value: 'AAP' } });
 
-    expect(applied).not.toHaveBeenCalled();
+    expect(view.applied).not.toHaveBeenCalled();
   });
 
-  it('emits the canonical symbol list once applied', async () => {
-    const { applied } = await renderBar();
+  it('emits the chip list once applied — the free-text symbols input is gone', async () => {
+    const { applied, fixture } = await renderBar();
 
-    fireEvent.input(screen.getByLabelText('Symbols'), { target: { value: 'aapl, spy aapl' } });
+    // No free-text symbols field survives the conversion; chips are the
+    // editable form of the query's symbolsText.
+    expect(screen.queryByLabelText('Symbols')).toBeNull();
+
+    await addSymbol({ fixture }, 'AAPL');
     fireEvent.click(screen.getByRole('button', { name: 'Load coverage' }));
 
     expect(applied).toHaveBeenCalledWith(
-      expect.objectContaining({ symbolsText: 'AAPL, SPY', startTradingDate: '2026-05-18' }),
+      expect.objectContaining({ symbolsText: 'SPY, AAPL', startTradingDate: '2026-05-18' }),
     );
   });
 
@@ -98,10 +131,10 @@ describe('CoverageQueryBarComponent', () => {
     expect(screen.getByRole('option', { name: 'Polygon Split Adjusted' })).toBeTruthy();
   });
 
-  it('names an unstorable symbol instead of sending it', async () => {
-    const { applied } = await renderBar();
-
-    fireEvent.input(screen.getByLabelText('Symbols'), { target: { value: '9x' } });
+  it('names an unstorable seed symbol instead of sending it', async () => {
+    // The card cannot mint junk; only a hand-edited URL query can — the
+    // boundary the invalid note now guards.
+    const { applied } = await renderBar({ ...INITIAL, symbolsText: '9x' });
 
     expect(screen.getByText('Not a storable symbol: 9x')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Load coverage' }) as HTMLButtonElement).disabled).toBe(

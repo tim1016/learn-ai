@@ -61,7 +61,7 @@
       @if (open()) {
         <app-instrument-dropdown
           [view]="dropdownView()"
-          [gate]="gateState()"
+          [gate]="gate.state()"
           (pick)="pickTicker($event)"
           (retryLake)="retryCatalog()"
           (retryVendor)="retryVendorCatalog()"

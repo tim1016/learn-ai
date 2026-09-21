@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 import { InputTextModule } from 'primeng/inputtext';
 import { TooltipModule } from 'primeng/tooltip';
 
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
+
 import type {
   DeployExecutionMode,
   DeploySizingOption,
@@ -21,7 +23,7 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 @Component({
   selector: 'app-deploy-execution-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [InputTextModule, TooltipModule],
+  imports: [InputTextModule, TooltipModule, SymbolPickerComponent],
   templateUrl: './deploy-execution-section.component.html',
   styleUrl: './deploy-execution-section.component.scss',
 })
@@ -57,7 +59,6 @@ export class DeployExecutionSectionComponent {
   readonly carryoverAllowed = input.required<boolean>();
 
   readonly symbolChange = output<string>();
-  readonly symbolBlur = output();
   readonly sizingPresetChange = output<DeploySizingPreset>();
   readonly quantityChange = output<number>();
   readonly quantityBlur = output();
@@ -92,10 +93,14 @@ export class DeployExecutionSectionComponent {
     return deploySizingLabel(preset);
   }
 
-  protected changeSymbol(event: Event): void {
-    if (event.target instanceof HTMLInputElement) {
-      this.symbolChange.emit(event.target.value);
-    }
+  /**
+   * The shared picker owns symbol selection (ADR 0066): every listed symbol
+   * offered, unheld picks gated on their backfill. The parent's normalization
+   * and Signal Forms rules stay — a strategy change can still set the symbol
+   * programmatically, outside the picker.
+   */
+  protected onSymbolPicked(symbol: string): void {
+    this.symbolChange.emit(symbol);
   }
 
   protected changeExecutionMode(event: Event): void {

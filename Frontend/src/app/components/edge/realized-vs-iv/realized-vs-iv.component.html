@@ -116,16 +116,13 @@
 
   <!-- Form row -->
   <div class="form-card">
-    <label class="field">
+    <div class="field">
       <span class="field-label">Symbol</span>
-      <select class="field-input mono"
-              [value]="symbol()"
-              (change)="symbol.set($any($event.target).value)">
-        @for (s of ['SPY','QQQ','IWM','AAPL','NVDA']; track s) {
-          <option [value]="s">{{ s }}</option>
-        }
-      </select>
-    </label>
+      <app-symbol-picker
+        [symbol]="symbol()"
+        (symbolChange)="symbol.set($event)"
+      />
+    </div>
     <label class="field">
       <span class="field-label">Bar size</span>
       <select class="field-input mono"

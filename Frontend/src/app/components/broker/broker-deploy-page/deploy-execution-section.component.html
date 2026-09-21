@@ -46,18 +46,11 @@
           [attr.aria-label]="'About the trading symbol: ' + actionPlanExplanation()"
         >i</button>
       </div>
-      <input
-        pInputText
+      <app-symbol-picker
         id="deploy-symbol"
-        type="text"
-        [value]="symbol()"
-        placeholder="SPY"
-        autocomplete="off"
-        spellcheck="false"
         class="w-full"
-        [attr.aria-invalid]="symbolError() !== null"
-        (input)="changeSymbol($event)"
-        (blur)="symbolBlur.emit()"
+        [symbol]="symbol()"
+        (symbolChange)="onSymbolPicked($event)"
       />
       @if (symbolError(); as error) { <em role="alert" class="text-[length:var(--fs-xs)] not-italic text-[var(--bear)]">{{ error }}</em> }
     </div>

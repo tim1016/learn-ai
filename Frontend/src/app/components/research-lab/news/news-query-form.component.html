@@ -1,7 +1,14 @@
 <form class="news-form" (submit)="$event.preventDefault(); submit()">
   <fieldset class="news-form__group">
     <legend>Ticker</legend>
-    @for (spec of tickerFields; track spec.field) {
+    <div class="news-form__field">
+      <span>Ticker</span>
+      <app-symbol-picker
+        [symbol]="valueOf('ticker')"
+        (symbolChange)="setTicker($event)"
+      />
+    </div>
+    @for (spec of tickerCursorFields; track spec.field) {
       <label class="news-form__field">
         <span>{{ spec.label }}</span>
         <input type="text" [value]="valueOf(spec.field)" [placeholder]="spec.placeholder" (input)="setField(spec.field, inputValue($event))" />

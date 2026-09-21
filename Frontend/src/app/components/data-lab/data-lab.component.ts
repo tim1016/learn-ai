@@ -12,6 +12,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
 import {
   RUN_DOCK_SOURCE,
@@ -173,6 +174,7 @@ export function parseYmdMsUtc(s: string): number | null {
     PageHeaderComponent,
     AssetIdentityComponent,
     RunDockComponent,
+    SymbolPickerComponent,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
@@ -319,8 +321,8 @@ export class DataLabComponent {
     return `${ticker} · ${utcMsToIsoDate(window.startMsUtc)} → ${utcMsToIsoDate(window.endMsUtc)} · ${tf} · ${this.store.draft().session}`;
   });
 
-  onTickerInput(event: Event): void {
-    this.store.patchDraft({ ticker: (event.target as HTMLInputElement).value });
+  onTickerPicked(ticker: string): void {
+    this.store.patchDraft({ ticker });
   }
 
   onFromInput(event: Event): void {

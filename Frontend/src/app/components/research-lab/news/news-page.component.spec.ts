@@ -8,6 +8,20 @@ import { describe, expect, it } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { NewsPageComponent } from './news-page.component';
+import { By } from '@angular/platform-browser';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
+import {
+  fakeEnsureCoverage,
+  fakeVendorCatalog,
+  provideFakeEnsureCoverage,
+  provideFakeVendorCatalog,
+} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
+
+const PICKER_POOL = [
+  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
+  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
+];
 
 const NEWS_URL = `${environment.pythonServiceUrl}/api/news`;
 
@@ -40,7 +54,15 @@ function responseBody(overrides: Record<string, unknown> = {}) {
 
 async function renderPage() {
   const rendered = await render(NewsPageComponent, {
-    providers: [provideZonelessChangeDetection(), provideHttpClient(), provideHttpClientTesting()],
+    providers: [
+      provideZonelessChangeDetection(),
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      // The ticker filter's picker must not issue real catalog reads.
+      provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
+      provideFakeVendorCatalog(fakeVendorCatalog()),
+      provideFakeEnsureCoverage(fakeEnsureCoverage()),
+    ],
   });
   const http = TestBed.inject(HttpTestingController);
   return { ...rendered, http };
@@ -91,14 +113,19 @@ describe('NewsPageComponent', () => {
   });
 
   it('does not refetch while the user edits — only on submit', async () => {
-    const { http } = await renderPage();
+    const { http, fixture } = await renderPage();
     http.expectOne((r) => r.url === NEWS_URL).flush(responseBody());
+    await fixture.whenStable();
+    fixture.detectChanges();
 
-    const tickerInput = screen.getByLabelText('Ticker');
-    await userEvent.clear(tickerInput);
-    await userEvent.type(tickerInput, 'NVDA');
+    // The ticker field is the shared picker now: an edit is a pick, and it
+    // must land in the draft without spending the 5-per-minute budget.
+    const picker = fixture.debugElement.query(
+      By.directive(SymbolPickerComponent),
+    ).componentInstance as SymbolPickerComponent;
+    picker.symbol.set('NVDA');
+    fixture.detectChanges();
 
-    // Typing must not spend the 5-per-minute upstream budget.
     http.verify();
 
     await userEvent.click(screen.getByRole('button', { name: /fetch news/i }));

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +7,8 @@ import {
   type DeployBotView,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
+import { By } from '@angular/platform-browser';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
 import { resourceTarget, withAccount } from '../../../fleet/resource-target';
@@ -81,6 +83,8 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
   };
 }
 
+let lastView: RenderResult<AlpacaDeployWorkflowComponent>;
+
 async function renderWorkflow(service = mockService()) {
   const rendered = await render(AlpacaDeployWorkflowComponent, {
     providers: [
@@ -91,7 +95,29 @@ async function renderWorkflow(service = mockService()) {
     componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
   });
   await screen.findByRole('heading', { name: 'Bot binding' });
+  lastView = rendered;
   return rendered;
+}
+
+/** The workflow's symbol picker — the one editing surface for the symbol. */
+function symbolPicker(): SymbolPickerComponent {
+  const picker = lastView.fixture.debugElement.query(By.directive(SymbolPickerComponent));
+  return picker.componentInstance as SymbolPickerComponent;
+}
+
+/**
+ * A trader symbol edit is a pick now (ADR 0066): set the picker's model and
+ * let its output drive `setSymbol`. Raw strings still flow through so the
+ * scoping rules (`!!` is not a valid ticker) stay exercised.
+ */
+async function typeSymbol(value: string): Promise<void> {
+  symbolPicker().symbol.set(value);
+  lastView.fixture.detectChanges();
+}
+
+/** The symbol the ticket currently holds. */
+function ticketSymbol(): string {
+  return symbolPicker().symbol();
 }
 
 /**
@@ -110,10 +136,6 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
   // on it would re-fetch forever and strand the pane on its loading state.
 
   const SYMBOL_DEBOUNCE_MS = 400;
-
-  async function typeSymbol(value: string): Promise<void> {
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value } });
-  }
 
   function deployButton(): HTMLElement {
     return screen.getByRole('button', { name: /^Deploy / });
@@ -148,7 +170,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     try {
       const service = mockService();
       await renderWorkflow(service);
-      expect((screen.getByPlaceholderText('SPY') as HTMLInputElement).value).toBe('SPY');
+      expect(ticketSymbol()).toBe('SPY');
       service.getDeployView.mockClear();
 
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
@@ -178,7 +200,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       });
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('QQQ');
+      expect(ticketSymbol()).toBe('QQQ');
       expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ');
     } finally {
       vi.useRealTimers();
@@ -222,7 +244,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await renderWorkflow(service);
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
-      expect((screen.getByPlaceholderText<HTMLInputElement>('SPY')).value).toBe('TSLA');
+      expect(ticketSymbol()).toBe('TSLA');
       expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
       await typeSymbol('SPY');

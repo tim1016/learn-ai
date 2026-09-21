@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output } from '@angular/core';
 
 import type { NewsQuery } from '../../../services/news.service';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 /** Text fields on the form. Keys are the wire parameter names. */
 export type NewsQueryField = Exclude<keyof NewsQuery, 'limit' | 'order'>;
@@ -11,8 +12,13 @@ interface FieldSpec {
   readonly placeholder: string;
 }
 
-const TICKER_FIELDS: readonly FieldSpec[] = [
-  { field: 'ticker', label: 'Ticker', placeholder: 'SPY' },
+/**
+ * The ordering cursors — `≥ A`, `< Z` — page through the vendor's ticker
+ * space lexicographically; they are cursors, not instrument picks, so they
+ * stay text. The exact-match ticker is an instrument pick and uses the
+ * shared picker family (ADR 0066).
+ */
+const TICKER_CURSOR_FIELDS: readonly FieldSpec[] = [
   { field: 'ticker_gte', label: 'Ticker ≥', placeholder: 'A' },
   { field: 'ticker_gt', label: 'Ticker >', placeholder: 'A' },
   { field: 'ticker_lte', label: 'Ticker ≤', placeholder: 'Z' },
@@ -34,6 +40,7 @@ const DATE_FIELDS: readonly FieldSpec[] = [
 @Component({
   selector: 'app-news-query-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [SymbolPickerComponent],
   templateUrl: './news-query-form.component.html',
   styleUrl: './news-query-form.component.scss',
 })
@@ -44,7 +51,7 @@ export class NewsQueryFormComponent {
   readonly submitted = output<NewsQuery>();
   readonly cleared = output();
 
-  readonly tickerFields = TICKER_FIELDS;
+  readonly tickerCursorFields = TICKER_CURSOR_FIELDS;
   readonly dateFields = DATE_FIELDS;
 
   /** Local edits, reset whenever the page hands down a new starting query. */
@@ -66,6 +73,10 @@ export class NewsQueryFormComponent {
 
   setField(field: NewsQueryField, value: string): void {
     this.draft.update((q) => ({ ...q, [field]: value }));
+  }
+
+  setTicker(symbol: string): void {
+    this.setField('ticker', symbol);
   }
 
   setSort(value: string): void {

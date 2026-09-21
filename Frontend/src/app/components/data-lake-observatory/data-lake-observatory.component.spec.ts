@@ -1,11 +1,19 @@
 import { signal } from '@angular/core';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
+import { By } from '@angular/platform-browser';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../services/jobs.service';
 import { DataLakeObservatoryComponent } from './data-lake-observatory.component';
 import { ArtifactDetail, BackfillDefaults, CoverageResponse, CoverageStatus, DataLakeRead, DataLakeService, StorageSummaryResponse } from '../../shared/data-lake';
+import { MultiInstrumentCardComponent } from '../../shared/multi-ticker-range-picker/multi-instrument-card.component';
+import {
+  fakeEnsureCoverage,
+  fakeVendorCatalog,
+  provideFakeEnsureCoverage,
+  provideFakeVendorCatalog,
+} from '../../shared/symbol-catalog/testing/fake-symbol-catalog';
 
 /** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */
 function sessionOpenMs(day: number): number {
@@ -110,14 +118,35 @@ async function renderObservatory(stubs: LakeStubs = {}) {
         // in these tests, so that panel stays idle.
         useValue: { startJob: vi.fn(), cancelJob: vi.fn(), jobs: signal([]) },
       },
+      // The query bar and backfill panel pick symbols through the shared
+      // multi card; keep its vendor catalog and coverage gate fake.
+      provideFakeVendorCatalog(fakeVendorCatalog()),
+      provideFakeEnsureCoverage(fakeEnsureCoverage()),
     ],
   });
+  lastView = view;
   return { ...view, lake };
 }
 
-/** Fill the symbol box and press Load coverage. */
+let lastView: RenderResult<DataLakeObservatoryComponent> | null = null;
+
+/**
+ * Press the query bar's chips into place and load coverage. Chips are the
+ * editable form of the query's symbols now (ADR 0066): setting the multi
+ * card's model drives the same symbolsChange the card itself emits.
+ */
 async function loadSymbols(symbols = 'SPY'): Promise<void> {
-  fireEvent.input(screen.getByLabelText('Symbols'), { target: { value: symbols } });
+  const chips = symbols
+    .split(',')
+    .map((symbol) => symbol.trim().toUpperCase())
+    .filter((symbol) => symbol.length > 0);
+  const view = lastView;
+  if (view === null) throw new Error('renderObservatory must run before loadSymbols');
+  const card = view.fixture.debugElement.query(
+    By.directive(MultiInstrumentCardComponent),
+  ).componentInstance as MultiInstrumentCardComponent;
+  card.symbols.set(chips);
+  view.fixture.detectChanges();
   fireEvent.click(screen.getByRole('button', { name: 'Load coverage' }));
 }
 

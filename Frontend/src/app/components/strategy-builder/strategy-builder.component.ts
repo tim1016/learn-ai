@@ -6,7 +6,6 @@ import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
 import { firstValueFrom } from 'rxjs';
 import { Drawer } from 'primeng/drawer';
-import { InputText } from 'primeng/inputtext';
 import { Button } from 'primeng/button';
 import { Tooltip } from 'primeng/tooltip';
 import { Skeleton } from 'primeng/skeleton';
@@ -27,6 +26,7 @@ import { CandlestickChartComponent } from '../../shared/charts/candlestick-chart
 import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-chart.component';
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 
 interface BuilderChainRow {
   strike: number;
@@ -120,10 +120,11 @@ function formatPayoffExtremum(value: number | null): string {
   standalone: true,
   imports: [
     FormsModule, DecimalPipe,
-    Drawer, InputText, Button, Tooltip, Skeleton,
+    Drawer, Button, Tooltip, Skeleton,
     ExpirationRibbonComponent, PayoffChartComponent,
     CandlestickChartComponent, VolumeChartComponent,
     PageHeaderComponent,
+    SymbolPickerComponent,
   ],
   templateUrl: './strategy-builder.component.html',
   styleUrls: ['./strategy-builder.component.scss'],
@@ -134,6 +135,13 @@ export class StrategyBuilderComponent implements OnDestroy {
 
   // ── Input & Loading ───────────────────────────────────────
   ticker = signal('SPY');
+
+  /** A pick is one deliberate act — load its expirations immediately. */
+  onTickerPicked(ticker: string): void {
+    this.ticker.set(ticker);
+    void this.fetchExpirations();
+  }
+
   expirationsLoading = signal(false);
   chainLoading = signal(false);
   analyzing = signal(false);

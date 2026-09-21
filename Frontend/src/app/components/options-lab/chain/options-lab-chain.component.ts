@@ -18,6 +18,7 @@ import {
 } from '../../../graphql/types';
 import { ExpirationRibbonComponent } from '../../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 interface ChainRow {
   strike: number;
@@ -62,7 +63,8 @@ const EM_DASH = '—';
 @Component({
   selector: 'app-options-lab-chain',
   standalone: true,
-  imports: [ExpirationRibbonComponent, DecimalPipe, AssetIdentityComponent],
+  imports: [ExpirationRibbonComponent, DecimalPipe, AssetIdentityComponent,
+    SymbolPickerComponent,],
   templateUrl: './options-lab-chain.component.html',
   styleUrls: ['./options-lab-chain.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -72,6 +74,13 @@ export class OptionsLabChainComponent implements OnInit {
   private destroyRef = inject(DestroyRef);
 
   ticker = signal('SPY');
+
+  /** A pick is one deliberate act — load its expirations immediately. */
+  onTickerPicked(ticker: string): void {
+    this.ticker.set(ticker);
+    void this.fetchExpirations();
+  }
+
   expirationsLoading = signal(false);
   chainLoading = signal(false);
   initialLoad = signal(true);

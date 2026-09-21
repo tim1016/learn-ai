@@ -3,6 +3,18 @@ import { Component } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { DashboardComponent } from './dashboard.component';
+import {
+  fakeEnsureCoverage,
+  fakeVendorCatalog,
+  provideFakeEnsureCoverage,
+  provideFakeVendorCatalog,
+} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+import { fakeTickerCatalog, provideFakeTickerCatalog } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
+
+const PICKER_POOL = [
+  { symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
+  { symbol: 'AAPL', name: 'Apple Inc.', firstHeld: '2024-01-02', lastHeld: '2026-09-18' },
+];
 import { environment } from '../../../../environments/environment';
 import { PortfolioState, PortfolioMetrics } from '../../../graphql/portfolio-types';
 
@@ -69,7 +81,14 @@ describe('DashboardComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [TestHostComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        // The trade form's symbol picker must not issue real catalog reads.
+        provideFakeTickerCatalog(fakeTickerCatalog(PICKER_POOL)),
+        provideFakeVendorCatalog(fakeVendorCatalog()),
+        provideFakeEnsureCoverage(fakeEnsureCoverage()),
+      ],
     }).compileComponents();
 
     hostFixture = TestBed.createComponent(TestHostComponent);
@@ -244,7 +263,9 @@ describe('DashboardComponent', () => {
     expect(secondRow).toContain('SELL');
     expect(rows[1].querySelector('td.sell')).not.toBeNull();
 
-    const identities = el.querySelectorAll('app-asset-identity');
+    // Scoped to the trades table: the trade form's symbol picker also
+    // renders an asset identity, and it is not this table's subject.
+    const identities = el.querySelectorAll('table app-asset-identity');
     expect(identities).toHaveLength(2);
     expect(identities[0].textContent).toContain('AAPL');
     expect(identities[1].textContent).toContain('MSFT');
@@ -260,7 +281,9 @@ describe('DashboardComponent', () => {
 
     const el = getDashboardEl();
     expect(el.textContent).toContain('ID:1');
-    expect(el.querySelector('app-asset-identity')).toBeNull();
+    // Scoped to the trades table — the trade form's picker renders its own
+    // identity for the (empty) symbol being composed.
+    expect(el.querySelector('table app-asset-identity')).toBeNull();
   });
 
   it('should render trade table headers', () => {

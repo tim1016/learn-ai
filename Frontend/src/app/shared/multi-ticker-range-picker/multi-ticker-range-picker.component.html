@@ -21,7 +21,10 @@
       [options]="options()"
       [loading]="catalogLoading()"
       [unavailable]="catalogUnavailable()"
+      [degraded]="vendorUnavailable()"
+      [adjustmentMode]="adjustmentMode()"
       (retry)="retryCatalog()"
+      (retryVendor)="retryVendorCatalog()"
     />
 
     <app-time-window-card

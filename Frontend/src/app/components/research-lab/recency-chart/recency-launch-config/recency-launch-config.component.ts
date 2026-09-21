@@ -1,13 +1,14 @@
 import { HttpClient } from "@angular/common/http";
-import { ChangeDetectionStrategy, Component, computed, effect, inject, output, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, effect, inject, output, signal, untracked } from "@angular/core";
 import { ButtonModule } from "primeng/button";
-import { InputText } from "primeng/inputtext";
 import { firstValueFrom } from "rxjs";
 
 import { environment } from "../../../../../environments/environment";
 import { JobsService } from "../../../../services/jobs.service";
 import type { StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
-import { AssetIdentityComponent } from "../../../../shared/asset-identity";
+import { DEFAULT_ADJUSTMENT_MODE } from "../../../../shared/ticker-catalog";
+import { SymbolCatalogService } from "../../../../shared/symbol-catalog/symbol-catalog.service";
+import { MultiInstrumentCardComponent } from "../../../../shared/multi-ticker-range-picker/multi-instrument-card.component";
 import { RecencyDurationInputComponent, type DurationPreset } from "./recency-duration-input.component";
 import { RecencyStrategySelectionComponent } from "./recency-strategy-selection.component";
 import { computeGridSize, defaultRangeForParameter, numericStrategyParams, type ParamRange, type StrategyRangeConfig, rangeProblem } from "../../../../shared/param-range/param-range";
@@ -16,17 +17,6 @@ const PRESET_MONTHS: Record<Exclude<DurationPreset, "custom">, number> = { "3m":
 const MAX_MONTHS = 24;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_SYMBOLS: readonly string[] = ["SPY"];
-
-function parseSymbols(raw: string): string[] {
-  return raw
-    .split(",")
-    .map((symbol) => symbol.trim().toUpperCase())
-    .filter((symbol) => symbol.length > 0);
-}
-
-function uniqueSymbols(symbols: readonly string[]): string[] {
-  return Array.from(new Set(symbols));
-}
 
 /**
  * Recency Chart launch configuration surface (design spec D1, D4).
@@ -38,8 +28,7 @@ function uniqueSymbols(symbols: readonly string[]): string[] {
   selector: "app-recency-launch-config",
   imports: [
     ButtonModule,
-    InputText,
-    AssetIdentityComponent,
+    MultiInstrumentCardComponent,
     RecencyDurationInputComponent,
     RecencyStrategySelectionComponent,
   ],
@@ -54,9 +43,30 @@ export class RecencyLaunchConfigComponent {
   readonly allStrategies = signal<StrategyInfo[]>([]);
   readonly eligibleStrategies = computed(() => this.allStrategies().filter((s) => s.recency_supported === true));
 
-  readonly symbolDraft = signal("");
-  readonly committedSymbols = signal<string[]>([...DEFAULT_SYMBOLS]);
-  readonly symbols = computed<string[]>(() => uniqueSymbols([...this.committedSymbols(), ...parseSymbols(this.symbolDraft())]));
+  /**
+   * The timeline's universe, picked from the shared multi card over the
+   * joined catalog: every listed symbol offered, unheld picks gated on
+   * their backfill (the timelines read the lake's split-adjusted minute
+   * bars, so an ungated pick would strand lanes with no data).
+   */
+  readonly symbols = signal<string[]>([...DEFAULT_SYMBOLS]);
+  /** The tree the recency job reads — its data policy is split-adjusted minute bars. */
+  readonly pickerAdjustmentMode = DEFAULT_ADJUSTMENT_MODE;
+  private readonly catalog = inject(SymbolCatalogService);
+  private readonly catalogView = computed(() =>
+    // `viewFor` installs a resource — step outside tracking (NG0602).
+    untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)),
+  );
+  readonly pickerOptions = computed(() => this.catalogView().pool());
+  readonly pickerLoading = computed(() => this.catalogView().status().kind === "loading");
+  readonly pickerUnavailable = computed(() => {
+    const status = this.catalogView().status();
+    return status.kind === "unavailable" ? status.message : null;
+  });
+  readonly pickerDegraded = computed(() => {
+    const status = this.catalogView().status();
+    return status.kind === "degraded" ? status.message : null;
+  });
   readonly attemptedLaunch = signal(false);
   readonly customMonthsError = signal<string | null>(null);
   readonly strategyValidationMessage = computed(() =>
@@ -178,28 +188,12 @@ export class RecencyLaunchConfigComponent {
     }));
   }
 
-  onSymbolsInput(event: Event): void {
-    if (event.target instanceof HTMLInputElement) {
-      this.symbolDraft.set(event.target.value);
-    }
+  retryCoverage(): void {
+    this.catalogView().reload();
   }
 
-  onSymbolsKeydown(event: KeyboardEvent): void {
-    if (event.key === "Enter" || event.key === ",") {
-      event.preventDefault();
-      this.commitSymbolDraft();
-    }
-  }
-
-  commitSymbolDraft(): void {
-    const additions = parseSymbols(this.symbolDraft());
-    if (additions.length === 0) return;
-    this.committedSymbols.update((symbols) => uniqueSymbols([...symbols, ...additions]));
-    this.symbolDraft.set("");
-  }
-
-  removeSymbol(symbol: string): void {
-    this.committedSymbols.update((symbols) => symbols.filter((candidate) => candidate !== symbol));
+  retryVendorCatalog(): void {
+    this.catalogView().retryVendor();
   }
 
   setDurationPreset(preset: DurationPreset): void {
@@ -227,7 +221,6 @@ export class RecencyLaunchConfigComponent {
 
   async launch(): Promise<void> {
     this.attemptedLaunch.set(true);
-    this.commitSymbolDraft();
     if (this.symbols().length === 0) return;
     // Deselecting the last strategy previously launched a job with an empty
     // strategy list and no local error.

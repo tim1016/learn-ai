@@ -1,15 +1,15 @@
 <div class="leg-number" aria-hidden="true">{{ position() + 1 }}</div>
 
-<label class="order-field order-field--symbol">
+<div class="order-field order-field--symbol">
   <span>Symbol</span>
-  <input
-    pInputText
-    [formField]="legForm().symbol"
-    placeholder="e.g. SPY"
-    [attr.aria-label]="'Leg ' + (position() + 1) + ' symbol'"
+  <app-symbol-picker
     class="order-input order-input--symbol"
+    appearance="flat"
+    [symbol]="legForm().symbol().value()"
+    (symbolChange)="onSymbolPicked($event)"
+    [attr.aria-label]="'Leg ' + (position() + 1) + ' symbol'"
   />
-</label>
+</div>
 @if (manualMarketOnly()) {
   <label class="order-field">
     <span>Side</span>

@@ -1,5 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { By } from '@angular/platform-browser';
+import type { ComponentFixture } from '@angular/core/testing';
 import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { BehaviorSubject, of } from 'rxjs';
@@ -13,6 +15,7 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import {
   DEPLOY_VIEW,
   EMA_STRATEGY,
@@ -164,6 +167,24 @@ async function renderWorkflow(service = mockService()) {
   return rendered;
 }
 
+/**
+ * The trading symbol is the shared picker now (ADR 0066), so a trader edit
+ * is a pick: set the picker's model and let its output drive the workflow's
+ * `setSymbol`, exactly as a real pick does. Raw strings (like `' brk.b '`)
+ * still flow through, because `setSymbol`'s normalization is what these
+ * tests exercise.
+ */
+function pickSymbol(
+  fixture: ComponentFixture<AlpacaDeployWorkflowComponent>,
+  value: string,
+): SymbolPickerComponent {
+  const picker = fixture.debugElement.query(By.directive(SymbolPickerComponent));
+  const component = picker.componentInstance as SymbolPickerComponent;
+  component.symbol.set(value);
+  fixture.detectChanges();
+  return component;
+}
+
 describe('AlpacaDeployWorkflowComponent', () => {
   it('defaults to a concise trader view without duplicating strategy provenance', async () => {
     await renderWorkflow();
@@ -303,13 +324,18 @@ describe('AlpacaDeployWorkflowComponent', () => {
       ...DEPLOY_VIEW,
       strategies: [GOLDEN_TSLA_STRATEGY],
     });
-    await renderWorkflow(service);
+    const view = await renderWorkflow(service);
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'golden-tsla-01' },
     });
 
-    expect(screen.getByPlaceholderText<HTMLInputElement>('SPY').value).toBe('TSLA');
+    // The Golden scope seeds the picker's symbol — read it from the picker,
+    // which is the symbol's only editing surface now.
+    const seeded = view.fixture.debugElement.query(
+      By.directive(SymbolPickerComponent),
+    ).componentInstance as SymbolPickerComponent;
+    expect(seeded.symbol()).toBe('TSLA');
     expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
@@ -679,16 +705,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
   });
 
   it('preserves a trader-edited symbol when the validated strategy changes', async () => {
-    await renderWorkflow();
+    const view = await renderWorkflow();
 
-    fireEvent.input(screen.getByPlaceholderText('SPY'), {
-      target: { value: 'QQQ' },
-    });
+    const picker = pickSymbol(view.fixture, 'QQQ');
     fireEvent.change(screen.getByLabelText('Deployment strategy'), {
       target: { value: 'ema_crossover_signal' },
     });
 
-    expect((screen.getByPlaceholderText('SPY') as HTMLInputElement).value).toBe('QQQ');
+    expect(picker.symbol()).toBe('QQQ');
   });
 
   it('submits only the closed paper canary command and renders its durable receipt', async () => {
@@ -933,8 +957,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await component['submit']();
     fixture.detectChanges();
 
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
-    fixture.detectChanges();
+    pickSymbol(fixture, 'QQQ');
 
     expect(screen.queryByText('Start blocked')).toBeNull();
   });
@@ -951,7 +974,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     const submission = component['submit']();
     await vi.waitFor(() => expect(service.previewStartAdmission).toHaveBeenCalledOnce());
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
+    pickSymbol(fixture, 'QQQ');
     resolvePreview(ADMISSION);
     await submission;
     fixture.detectChanges();
@@ -1011,10 +1034,9 @@ describe('AlpacaDeployWorkflowComponent', () => {
    * admission timestamp must not be presented as a per-edit recheck.
    */
   it('does not claim admission is re-checked on every edit', async () => {
-    const { fixture } = await renderWorkflow();
+    const view = await renderWorkflow();
 
-    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
-    fixture.detectChanges();
+    pickSymbol(view.fixture, 'QQQ');
 
     expect(screen.queryByText(/on every edit/)).toBeNull();
     expect(screen.getByText(/Account evaluated/)).toBeTruthy();
@@ -1027,9 +1049,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByPlaceholderText('alpaca-spy-01'), {
       target: { value: ' spy-validation-01 ' },
     });
-    fireEvent.input(screen.getByPlaceholderText('SPY'), {
-      target: { value: ' brk.b ' },
-    });
+    pickSymbol(fixture, ' brk.b ');
     component['ticketForm'].instanceId().markAsTouched();
     component['ticketForm'].symbol().markAsTouched();
     fixture.detectChanges();
