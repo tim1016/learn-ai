@@ -23,8 +23,8 @@ import {
   provideFakeTickerCatalog,
 } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import {
-  fakeAlpacaAssetCatalog,
-  provideFakeAlpacaAssetCatalog,
+  fakeVendorCatalog,
+  provideFakeVendorCatalog,
 } from "../../shared/symbol-catalog/testing/fake-symbol-catalog";
 import { StrategyLabComponent } from "./strategy-lab.component";
 import { inputsFromBacktestJob, inputsFromSavedRun } from "./strategy-lab.models";
@@ -224,7 +224,7 @@ async function createLab(
       // The joined picker universe reads the vendor catalog over HTTP; this
       // spec drives every request through `HttpTestingController` and
       // verifies none is left open, so the catalog is stubbed, not served.
-      provideFakeAlpacaAssetCatalog(fakeAlpacaAssetCatalog([])),
+      provideFakeVendorCatalog(fakeVendorCatalog([])),
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);

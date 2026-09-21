@@ -38,8 +38,9 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
   ticker input, a suggestion list, or a membership map — `TICKER_LABELS` is display
   metadata, never membership.
 - The default universe is the joined catalog (`SymbolCatalogService`): every listed
-  US-equity symbol, with per-row lake coverage (held span / "not held" / "delisted"). Rows
-  render through `app-asset-identity`.
+  US-equity symbol from the data-plane's Polygon reference catalog (`GET /api/tickers/catalog`),
+  with per-row lake coverage (held span / "not held" / "delisted"). Rows render through
+  `app-asset-identity`.
 - An unheld pick is gated on its lake backfill inside the card (`EnsureCoverageService`);
   the selection emits only after the lake — re-read, not the job's word — confirms the
   bars landed. Hosts never implement their own backfill gating.

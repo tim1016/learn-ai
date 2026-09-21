@@ -5,21 +5,21 @@ import { fakeTickerCatalog, provideFakeTickerCatalog } from '../ticker-catalog/t
 import type { FakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
 import {
-  fakeAlpacaAssetCatalog,
-  provideFakeAlpacaAssetCatalog,
-  type FakeAlpacaAssetCatalog,
+  fakeVendorCatalog,
+  provideFakeVendorCatalog,
+  type FakeVendorCatalog,
 } from './testing/fake-symbol-catalog';
 import { joinCatalog, SymbolCatalogService } from './symbol-catalog.service';
-import type { AlpacaSymbolEntry } from './alpaca-asset-catalog.service';
+import type { VendorSymbolEntry } from './vendor-catalog.service';
 
-function vendor(overrides: Partial<AlpacaSymbolEntry> = {}): AlpacaSymbolEntry {
+function vendor(overrides: Partial<VendorSymbolEntry> = {}): VendorSymbolEntry {
   return {
     symbol: 'AAPL',
     name: 'Apple Inc.',
     asset_class: 'us_equity',
     exchange: 'NASDAQ',
     status: 'active',
-    tradable: true,
+   
     ...overrides,
   };
 }
@@ -47,16 +47,27 @@ describe('joinCatalog', () => {
   it('badges a held symbol the vendor has delisted instead of dropping it', () => {
     const joined = joinCatalog(
       [{ symbol: 'OLD', name: 'Old Corp', lastHeld: '2020-01-31' }],
-      [vendor({ symbol: 'OLD', status: 'inactive', tradable: false })],
+      [vendor({ symbol: 'OLD', status: 'inactive', })],
     );
 
     expect(joined[0]).toMatchObject({ symbol: 'OLD', lastHeld: '2020-01-31', delisted: true });
   });
 
+  it('drops a lake row the vendor classifies outside the backfillable universe', () => {
+    // A legacy import the lake holds but Polygon marks as a crypto pair can
+    // never be covered by the gate — bars or no bars, it is not offerable.
+    const joined = joinCatalog(
+      [{ symbol: 'BTCUSD', name: 'Bitcoin', lastHeld: '2026-01-31' }, SPY],
+      [vendor({ symbol: 'BTCUSD', asset_class: 'crypto', exchange: null })],
+    );
+
+    expect(joined.map((row) => row.symbol)).toEqual(['SPY']);
+  });
+
   it('never offers a delisted vendor row the lake does not hold', () => {
     const joined = joinCatalog(
       [SPY],
-      [vendor({ symbol: 'OLD', status: 'inactive', tradable: false })],
+      [vendor({ symbol: 'OLD', status: 'inactive', })],
     );
 
     expect(joined.map((row) => row.symbol)).toEqual(['SPY']);
@@ -86,14 +97,14 @@ describe('joinCatalog', () => {
 
 describe('SymbolCatalogService', () => {
   let catalog: FakeTickerCatalog;
-  let alpaca: FakeAlpacaAssetCatalog;
+  let alpaca: FakeVendorCatalog;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     catalog = fakeTickerCatalog([SPY]);
-    alpaca = fakeAlpacaAssetCatalog();
+    alpaca = fakeVendorCatalog();
     TestBed.configureTestingModule({
-      providers: [provideFakeTickerCatalog(catalog), provideFakeAlpacaAssetCatalog(alpaca)],
+      providers: [provideFakeTickerCatalog(catalog), provideFakeVendorCatalog(alpaca)],
     });
   });
 

@@ -9,8 +9,8 @@ import {
   provideFakeTickerCatalog,
 } from '../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import {
-  fakeAlpacaAssetCatalog,
-  provideFakeAlpacaAssetCatalog,
+  fakeVendorCatalog,
+  provideFakeVendorCatalog,
 } from '../../shared/symbol-catalog/testing/fake-symbol-catalog';
 import { JobsService } from '../../services/jobs.service';
 import { environment } from '../../../environments/environment';
@@ -37,7 +37,7 @@ describe('TickerExplorerComponent', () => {
         ),
         // Same for the joined picker universe's vendor catalog and the gate's
         // job registry — neither is this spec's subject.
-        provideFakeAlpacaAssetCatalog(fakeAlpacaAssetCatalog([])),
+        provideFakeVendorCatalog(fakeVendorCatalog([])),
         {
           provide: JobsService,
           useValue: {

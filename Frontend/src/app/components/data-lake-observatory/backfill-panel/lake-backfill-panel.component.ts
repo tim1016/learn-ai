@@ -18,9 +18,9 @@ import { MultiInstrumentCardComponent } from '../../../shared/multi-ticker-range
 import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
 import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import {
-  AlpacaAssetCatalogService,
+  VendorCatalogService,
   LAKE_BACKFILLABLE_ASSET_CLASS,
-} from '../../../shared/symbol-catalog/alpaca-asset-catalog.service';
+} from '../../../shared/symbol-catalog/vendor-catalog.service';
 import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 import { parseSymbols } from '../lib/coverage-board';
@@ -61,7 +61,7 @@ function inputValue(event: Event): string {
 export class LakeBackfillPanelComponent implements OnInit {
   protected readonly store = inject(DataLakeBackfillStore);
   private readonly jobs = inject(JobsService);
-  private readonly alpaca = inject(AlpacaAssetCatalogService);
+  private readonly alpaca = inject(VendorCatalogService);
 
   /** Null while the defaults read is in flight or the lake is dark. */
   readonly defaults = input<BackfillDefaults | null>(null);
@@ -140,6 +140,27 @@ export class LakeBackfillPanelComponent implements OnInit {
       }));
   });
 
+  /**
+   * Selected symbols the vendor catalog cannot vouch for — a coverage-board
+   * seed that is a typo, crypto, or inactive with the toggle off. Seeds are
+   * lake-held names, but lake membership alone has never made something
+   * backfillable; when the vendor has answered, an unvouched pick blocks
+   * submission by name instead of shipping a spec the pipeline refuses.
+   * When the vendor is dark no verdict is possible, so nothing blocks —
+   * an outage may not silently disable the Observatory's primary flow.
+   */
+  protected readonly ineligibleSelections = computed<readonly string[]>(() => {
+    const entries = this.alpaca.entries();
+    if (entries === null) return [];
+    const offerable = new Set(
+      entries
+        .filter((entry) => entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS)
+        .filter((entry) => this.includeDelisted() || entry.status === 'active')
+        .map((entry) => entry.symbol),
+    );
+    return this.selected().symbols.filter((symbol) => !offerable.has(symbol));
+  });
+
   protected readonly catalogLoading = computed(() => this.alpaca.loading());
   protected readonly catalogUnavailable = computed(() => this.alpaca.unavailable());
 
@@ -171,6 +192,9 @@ export class LakeBackfillPanelComponent implements OnInit {
     if (this.backfillableMode() === null) {
       const mode = this.priceAdjustmentMode();
       return `Nothing derives the ${formatReceiptLabel(mode)} view, so a backfill cannot fill it — those rows arrive by import. Switch the view to Raw or Polygon Split Adjusted to backfill.`;
+    }
+    if (this.ineligibleSelections().length > 0) {
+      return `Not in the listing catalog (a typo, a delisted symbol, or not a US stock): ${this.ineligibleSelections().join(', ')}. Clear them, or include delisted symbols.`;
     }
     if (this.selected().symbols.length === 0) return 'Pick at least one symbol.';
     return tradingRangeRejection(
@@ -224,6 +248,26 @@ export class LakeBackfillPanelComponent implements OnInit {
       const previous = this.lastSeenPhase;
       this.lastSeenPhase = phase;
       if (phase !== previous && TERMINAL_REREAD_PHASES.has(phase)) this.runFinished.emit();
+    });
+
+    // Clearing the delisted toggle is a statement about the universe, so the
+    // delisted selections it made possible must not survive it — otherwise
+    // the form submits delisted data while its own control says not to
+    // include it. Merely unvouched selections stay: they are the block
+    // message's job to name, not silent deletions to hide.
+    effect(() => {
+      if (this.includeDelisted()) return;
+      const delisted = new Set(
+        this.alpaca
+          .entries()
+          ?.filter((entry) => entry.status === 'inactive')
+          .map((entry) => entry.symbol) ?? [],
+      );
+      const current = this.selected().symbols;
+      const kept = current.filter((symbol) => !delisted.has(symbol));
+      if (kept.length !== current.length) {
+        this.selected.set({ ...this.selected(), symbols: kept });
+      }
     });
   }
 

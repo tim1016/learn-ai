@@ -292,6 +292,14 @@ export class InstrumentCardComponent {
     }
 
     this.pendingSymbol.set(t.symbol);
+    // No gate may run on an unknown coverage verdict: with the lake dark,
+    // every row reads as unheld and even a held-looking pick would start a
+    // full-history backfill on a guess. The lake's own reason is shown.
+    const lakeReason = this.catalogUnavailable();
+    if (lakeReason !== null) {
+      this.coverage.refuse(t.symbol, 'coverage_unknown', lakeReason);
+      return;
+    }
     const mode = this.backfillableMode();
     if (mode === null) {
       this.coverage.refuse(

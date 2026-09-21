@@ -4,10 +4,10 @@ import { TickerCatalogService } from '../ticker-catalog';
 import type { PriceAdjustmentMode } from '../data-lake';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
 import {
-  AlpacaAssetCatalogService,
+  VendorCatalogService,
   LAKE_BACKFILLABLE_ASSET_CLASS,
-  type AlpacaSymbolEntry,
-} from './alpaca-asset-catalog.service';
+  type VendorSymbolEntry,
+} from './vendor-catalog.service';
 import type { PickerSymbol } from './symbol-catalog.types';
 
 /**
@@ -48,8 +48,8 @@ export interface SymbolCatalogView {
 
 /** The vendor rows a picker offers: US-equity actives only. */
 export function offerableVendorRows(
-  entries: readonly AlpacaSymbolEntry[],
-): readonly AlpacaSymbolEntry[] {
+  entries: readonly VendorSymbolEntry[],
+): readonly VendorSymbolEntry[] {
   return entries.filter(
     (entry) =>
       entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS && entry.status === 'active',
@@ -63,7 +63,7 @@ export function offerableVendorRows(
  */
 export function joinCatalog(
   lakePool: readonly TickerOption[],
-  vendorEntries: readonly AlpacaSymbolEntry[] | null,
+  vendorEntries: readonly VendorSymbolEntry[] | null,
 ): readonly PickerSymbol[] {
   if (vendorEntries === null) {
     return lakePool.map((option) => ({ ...option, delisted: false }));
@@ -74,9 +74,13 @@ export function joinCatalog(
   const vendorBySymbol = new Map(
     vendorEntries.map((entry) => [entry.symbol, entry]),
   );
-  const lakeRows: readonly PickerSymbol[] = lakePool.map((option) => {
+  const lakeRows: readonly PickerSymbol[] = lakePool.flatMap((option) => {
     const vendor = vendorBySymbol.get(option.symbol);
-    return { ...option, delisted: vendor?.status === 'inactive' };
+    // A lake row the vendor classifies outside the backfillable universe
+    // (a legacy import, say) can never be covered by the gate — it must
+    // not be offered just because bars exist.
+    if (vendor && vendor.asset_class !== LAKE_BACKFILLABLE_ASSET_CLASS) return [];
+    return [{ ...option, delisted: vendor?.status === 'inactive' }];
   });
 
   const held = new Set(lakePool.map((option) => option.symbol));
@@ -87,7 +91,7 @@ export function joinCatalog(
   return [...lakeRows, ...vendorOnly];
 }
 
-function toVendorOnlyRow(entry: AlpacaSymbolEntry): PickerSymbol {
+function toVendorOnlyRow(entry: VendorSymbolEntry): PickerSymbol {
   return {
     symbol: entry.symbol,
     // Same fallback rule the lake pool uses: a row is never blank just
@@ -102,7 +106,7 @@ function toVendorOnlyRow(entry: AlpacaSymbolEntry): PickerSymbol {
 
 @Injectable({ providedIn: 'root' })
 export class SymbolCatalogService {
-  private readonly alpaca = inject(AlpacaAssetCatalogService);
+  private readonly vendor = inject(VendorCatalogService);
   private readonly lake = inject(TickerCatalogService);
   private readonly views = new Map<PriceAdjustmentMode, SymbolCatalogView>();
 
@@ -120,9 +124,9 @@ export class SymbolCatalogService {
     const lakeView = this.lake.viewFor(mode);
 
     const view: SymbolCatalogView = {
-      pool: computed(() => joinCatalog(lakeView.pool(), this.alpaca.entries())),
+      pool: computed(() => joinCatalog(lakeView.pool(), this.vendor.entries())),
       recent: lakeView.recent,
-      loading: computed(() => lakeView.loading() || this.alpaca.loading()),
+      loading: computed(() => lakeView.loading() || this.vendor.loading()),
       unavailable: computed(() => {
         const lakeReason = lakeView.unavailable();
         // The vendor being dark is the degraded banner's job, not the
@@ -130,10 +134,10 @@ export class SymbolCatalogService {
         // because lake rows are the ones a run can actually read today.
         return lakeReason;
       }),
-      degraded: computed(() => this.alpaca.unavailable() !== null),
+      degraded: computed(() => this.vendor.unavailable() !== null),
       reload: () => {
         lakeView.reload();
-        this.alpaca.reload();
+        this.vendor.reload();
       },
     };
     this.views.set(mode, view);

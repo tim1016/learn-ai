@@ -8,11 +8,11 @@ import { JobsService, type JobState } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
 import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../../../shared/data-lake';
 import {
-  fakeAlpacaAssetCatalog,
-  provideFakeAlpacaAssetCatalog,
-  type FakeAlpacaAssetCatalog,
+  fakeVendorCatalog,
+  provideFakeVendorCatalog,
+  type FakeVendorCatalog,
 } from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
-import type { AlpacaSymbolEntry } from '../../../shared/symbol-catalog/alpaca-asset-catalog.service';
+import type { VendorSymbolEntry } from '../../../shared/symbol-catalog/vendor-catalog.service';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
@@ -25,14 +25,14 @@ const DEFAULTS: BackfillDefaults = {
   max_symbol_length: 20,
 };
 
-function vendorEntry(overrides: Partial<AlpacaSymbolEntry> = {}): AlpacaSymbolEntry {
+function vendorEntry(overrides: Partial<VendorSymbolEntry> = {}): VendorSymbolEntry {
   return {
     symbol: 'SPY',
     name: 'SPDR S&P 500 ETF',
     asset_class: 'us_equity',
     exchange: 'ARCA',
     status: 'active',
-    tradable: true,
+   
     ...overrides,
   };
 }
@@ -58,7 +58,7 @@ interface PanelOptions {
   /** What `JobsService.jobs()` already holds when the panel mounts. */
   liveJobs?: readonly Partial<JobState>[];
   /** The vendor catalog rows the fake asset catalog serves. */
-  vendorEntries?: readonly AlpacaSymbolEntry[];
+  vendorEntries?: readonly VendorSymbolEntry[];
 }
 
 async function renderPanel(options: PanelOptions = {}) {
@@ -68,7 +68,7 @@ async function renderPanel(options: PanelOptions = {}) {
   // opening its own EventSource — start() registers a listener through it.
   const onEvent = vi.fn().mockReturnValue(vi.fn());
   const jobs = signal(options.liveJobs ?? []);
-  const alpaca: FakeAlpacaAssetCatalog = fakeAlpacaAssetCatalog(
+  const alpaca: FakeVendorCatalog = fakeVendorCatalog(
     options.vendorEntries ?? [
       vendorEntry({ symbol: 'SPY' }),
       vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' }),
@@ -77,7 +77,7 @@ async function renderPanel(options: PanelOptions = {}) {
   const view = await render(LakeBackfillPanelComponent, {
     providers: [
       { provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } },
-      provideFakeAlpacaAssetCatalog(alpaca),
+      provideFakeVendorCatalog(alpaca),
     ],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
@@ -138,7 +138,7 @@ describe('LakeBackfillPanelComponent', () => {
     const { alpaca } = await renderPanel({
       vendorEntries: [
         vendorEntry({ symbol: 'SPY' }),
-        vendorEntry({ symbol: 'OLD', name: 'Delisted Corp', status: 'inactive', tradable: false }),
+        vendorEntry({ symbol: 'OLD', name: 'Delisted Corp', status: 'inactive', }),
       ],
     });
     const user = userEvent.setup();
@@ -152,6 +152,50 @@ describe('LakeBackfillPanelComponent', () => {
     await user.type(addBox, 'OLD');
     expect(screen.getByRole('option', { name: /OLD/ })).toBeTruthy();
     expect(alpaca.entries()?.length).toBe(2);
+  });
+
+  it('drops delisted selections when the toggle is cleared', async () => {
+    const { detectChanges } = await renderPanel({
+      vendorEntries: [
+        vendorEntry({ symbol: 'SPY' }),
+        vendorEntry({ symbol: 'OLD', name: 'Delisted Corp', status: 'inactive' }),
+      ],
+    });
+    const user = userEvent.setup();
+    const addBox = screen.getByLabelText('Search to add a ticker');
+
+    fireEvent.click(screen.getByLabelText('Include delisted symbols'));
+    await user.type(addBox, 'OLD');
+    fireEvent.click(screen.getByRole('option', { name: /OLD/ }));
+    detectChanges();
+    expect(screen.getByRole('button', { name: 'OLD (remove)' })).toBeTruthy();
+
+    // Clearing the toggle is a statement about the universe: the selection
+    // it made possible must not survive into the submitted spec.
+    fireEvent.click(screen.getByLabelText('Include delisted symbols'));
+    detectChanges();
+
+    expect(screen.queryByRole('button', { name: 'OLD (remove)' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
+  });
+
+  it('blocks a seed the vendor catalog cannot vouch for, by name', async () => {
+    // Seeds arrive from the coverage board's free text; lake membership made
+    // them visible but never made them backfillable. With the vendor having
+    // answered, an unvouched pick blocks submission and names itself.
+    // The vendor catalog answers without SPY: the seeded pick is unvouched.
+    await renderPanel({
+      vendorEntries: [vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' })],
+    });
+
+    expect(
+      screen.getByText(
+        'Not in the listing catalog (a typo, a delisted symbol, or not a US stock): SPY. Clear them, or include delisted symbols.',
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('names a dark vendor catalog and offers a retry instead of an empty picker', async () => {

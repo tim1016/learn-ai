@@ -8,11 +8,11 @@ import {
   type FakeTickerCatalog,
 } from '../../ticker-catalog/testing/fake-ticker-catalog';
 import {
-  fakeAlpacaAssetCatalog,
+  fakeVendorCatalog,
   fakeEnsureCoverage,
-  provideFakeAlpacaAssetCatalog,
+  provideFakeVendorCatalog,
   provideFakeEnsureCoverage,
-  type FakeAlpacaAssetCatalog,
+  type FakeVendorCatalog,
   type FakeEnsureCoverage,
 } from '../../symbol-catalog/testing/fake-symbol-catalog';
 import type {
@@ -47,20 +47,20 @@ describe('InstrumentCardComponent', () => {
   let fixture: ComponentFixture<InstrumentCardComponent>;
   let component: InstrumentCardComponent;
   let catalog: FakeTickerCatalog;
-  let alpaca: FakeAlpacaAssetCatalog;
+  let alpaca: FakeVendorCatalog;
   let coverage: FakeEnsureCoverage;
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
     catalog = fakeTickerCatalog(pool);
-    alpaca = fakeAlpacaAssetCatalog();
+    alpaca = fakeVendorCatalog();
     coverage = fakeEnsureCoverage();
     await TestBed.configureTestingModule({
       imports: [InstrumentCardComponent],
       providers: [
         provideRouter([]),
         provideFakeTickerCatalog(catalog),
-        provideFakeAlpacaAssetCatalog(alpaca),
+        provideFakeVendorCatalog(alpaca),
         provideFakeEnsureCoverage(coverage),
       ],
     }).compileComponents();
@@ -134,7 +134,7 @@ describe('InstrumentCardComponent', () => {
   // lake has never held them — that is what makes any symbol reachable.
   it('appends listed-but-unheld symbols after the lake holdings', () => {
     alpaca.entries.set([
-      { symbol: 'TSLA', name: 'Tesla, Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', tradable: true },
+      { symbol: 'TSLA', name: 'Tesla, Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', },
     ]);
     fixture.detectChanges();
     openDropdown();
@@ -159,8 +159,8 @@ describe('InstrumentCardComponent', () => {
 
   it('never offers a delisted symbol the lake does not already hold', () => {
     alpaca.entries.set([
-      { symbol: 'AAPL', name: 'Apple Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', tradable: true },
-      { symbol: 'OLD', name: 'Delisted Corp', asset_class: 'us_equity', exchange: 'NYSE', status: 'inactive', tradable: false },
+      { symbol: 'AAPL', name: 'Apple Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', },
+      { symbol: 'OLD', name: 'Delisted Corp', asset_class: 'us_equity', exchange: 'NYSE', status: 'inactive', },
     ]);
     fixture.detectChanges();
     openDropdown();
@@ -175,7 +175,7 @@ describe('InstrumentCardComponent', () => {
       { symbol: 'OLD', name: 'Delisted Corp', exchange: 'NYSE', firstHeld: '2019-01-02', lastHeld: '2020-01-31' },
     ]);
     alpaca.entries.set([
-      { symbol: 'OLD', name: 'Delisted Corp', asset_class: 'us_equity', exchange: 'NYSE', status: 'inactive', tradable: false },
+      { symbol: 'OLD', name: 'Delisted Corp', asset_class: 'us_equity', exchange: 'NYSE', status: 'inactive', },
     ]);
     fixture.detectChanges();
     openDropdown();
@@ -431,7 +431,7 @@ describe('InstrumentCardComponent', () => {
   // with no gate: the host decides what its symbols mean.
   it('offers a host-supplied universe instead of the joined catalog when given one', () => {
     alpaca.entries.set([
-      { symbol: 'TSLA', name: 'Tesla, Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', tradable: true },
+      { symbol: 'TSLA', name: 'Tesla, Inc.', asset_class: 'us_equity', exchange: 'NASDAQ', status: 'active', },
     ]);
     fixture.componentRef.setInput('universe', [
       { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
@@ -518,7 +518,7 @@ describe('InstrumentCardComponent', () => {
       asset_class: 'us_equity',
       exchange: 'NASDAQ',
       status: 'active',
-      tradable: true,
+     
     }));
     alpaca.entries.set(many);
     fixture.detectChanges();
@@ -531,6 +531,29 @@ describe('InstrumentCardComponent', () => {
     expect(rows.length).toBe(50);
     // The header count stays honest about what the search covers.
     expect(fixture.nativeElement.textContent).toContain('80 matches');
+  });
+
+  // With the lake dark, coverage is unknown — every row reads unheld and a
+  // gate would backfill on a guess. The pick is refused with the lake's own
+  // reason instead.
+  it('refuses the gate while the lake coverage verdict is unknown', async () => {
+    catalog.view.unavailable.set('The data lake is unreachable.');
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+
+    expect(coverage.ensureCalls).toEqual([]);
+    expect(coverage.refusals).toEqual([
+      {
+        symbol: 'NVDA',
+        reason: 'coverage_unknown',
+        message: 'The data lake is unreachable.',
+      },
+    ]);
+    expect(component.value().symbol).toBe('SPY');
   });
 
   it('offers no Retry for a refusal retrying cannot fix', async () => {

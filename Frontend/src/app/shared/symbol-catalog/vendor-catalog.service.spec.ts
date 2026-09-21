@@ -3,16 +3,16 @@ import { HttpClient } from '@angular/common/http';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { of, throwError, NEVER, type Observable } from 'rxjs';
 
-import { AlpacaAssetCatalogService, type AlpacaSymbolEntry } from './alpaca-asset-catalog.service';
+import { VendorCatalogService, type VendorSymbolEntry } from './vendor-catalog.service';
 
-function entry(overrides: Partial<AlpacaSymbolEntry> = {}): AlpacaSymbolEntry {
+function entry(overrides: Partial<VendorSymbolEntry> = {}): VendorSymbolEntry {
   return {
     symbol: 'AAPL',
     name: 'Apple Inc.',
     asset_class: 'us_equity',
     exchange: 'NASDAQ',
     status: 'active',
-    tradable: true,
+   
     ...overrides,
   };
 }
@@ -22,12 +22,12 @@ interface HttpGetStub {
   get(url: string): Observable<unknown>;
 }
 
-async function catalogFor(http: HttpGetStub): Promise<AlpacaAssetCatalogService> {
+async function catalogFor(http: HttpGetStub): Promise<VendorCatalogService> {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [{ provide: HttpClient, useValue: http }],
   });
-  const service = TestBed.inject(AlpacaAssetCatalogService);
+  const service = TestBed.inject(VendorCatalogService);
   // Reading the signal registers the resource; `tick` runs the effect that
   // starts the loader, and the stub resolves on the next macrotask.
   service.entries();
@@ -37,11 +37,11 @@ async function catalogFor(http: HttpGetStub): Promise<AlpacaAssetCatalogService>
   return service;
 }
 
-describe('AlpacaAssetCatalogService', () => {
+describe('VendorCatalogService', () => {
   beforeEach(() => TestBed.resetTestingModule());
 
   it('fetches the whole trimmed catalog once and exposes it', async () => {
-    const rows = [entry(), entry({ symbol: 'OLD', status: 'inactive', tradable: false })];
+    const rows = [entry(), entry({ symbol: 'OLD', status: 'inactive', })];
     let calls = 0;
     const service = await catalogFor({
       get: () => {
@@ -69,7 +69,7 @@ describe('AlpacaAssetCatalogService', () => {
     TestBed.configureTestingModule({
       providers: [{ provide: HttpClient, useValue: { get: () => NEVER } }],
     });
-    const service = TestBed.inject(AlpacaAssetCatalogService);
+    const service = TestBed.inject(VendorCatalogService);
     service.entries();
     TestBed.tick();
     await new Promise((resolve) => setTimeout(resolve, 0));

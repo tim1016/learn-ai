@@ -1,4 +1,4 @@
-# ADR 0066: The Symbol Picker Offers the Alpaca Listing Universe and Populates the Lake on Selection
+# ADR 0066: The Symbol Picker Offers the Listing Universe and Populates the Lake on Selection
 
 Date: 2026-09-20
 
@@ -35,10 +35,19 @@ carries a complete asset catalog read (Alpaca `/v2/assets`, surfaced here as
    through `app-asset-identity`. Free-text ticker inputs and hand-rolled suggestion lists
    are bugs, not shortcuts.
 
-2. **The picker's universe is the vendor's listing catalog joined with lake coverage.**
+2. **The picker's universe is the listing catalog joined with lake coverage.**
    `SymbolCatalogService` offers every listed US-equity symbol, badge in hand: held span,
    "not held", or "delisted". The menu no longer pretends the lake is the world; the badge
    keeps it honest about what the world is.
+
+   **The catalog is a market-reference surface, not a broker surface.** It is served by the
+   data-plane core (`GET /api/tickers/catalog`, coordinator-mounted — the browser's ingress
+   in the split fleet) from a cached Polygon reference-tickers walk. This keeps FR-041
+   intact (the coordinator constructs no provider broker client — an earlier draft sourced
+   the catalog from Alpaca's `/v2/assets` via the broker routers, which live only on private
+   clerk agents and would have 404'd at the coordinator) and matches the owner's vendor
+   boundary: listing membership is market reference data on the data-plane's existing
+   Polygon account; tradability evidence stays with the order path.
 
 3. **An unheld pick backfills first.** Selecting a not-held symbol runs the ensure-coverage
    gate inside the card: compose the spec from `backfill-defaults`, submit the standard

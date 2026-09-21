@@ -5,6 +5,7 @@ import { DataLakeService, classifyDataLakeError } from '../data-lake';
 import { tradingDateToMs, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
 import type { DataRunSpec, PriceAdjustmentMode } from '../data-lake';
 import { BACKFILL_JOB_TYPE } from '../data-lake/backfill-job-type';
+import { isRunnableSpan } from '../ticker-catalog';
 import { TickerCatalogService } from '../ticker-catalog';
 import { etIsoDate, isoDateAfter } from '../date/et-midnight';
 import { toMostRecentTradingDayIso } from '../date/weekday';
@@ -75,7 +76,10 @@ type TerminalResolution =
 interface ActiveRun {
   readonly token: number;
   readonly symbol: string;
-  run: Promise<boolean>;
+  /** The lake tree this run fills — part of the gate's identity. */
+  readonly mode: BackfillableMode;
+  /** Assigned by `ensure` immediately after `runBackfill` starts. */
+  run: Promise<boolean> | null;
   /** The job's id once the server accepted it — `null` while submitting. */
   jobId: string | null;
   unsubscribe: (() => void) | null;
@@ -125,7 +129,16 @@ export class EnsureCoverageService {
    */
   async ensure(symbol: string, mode: BackfillableMode): Promise<boolean> {
     if (this.isHeld(symbol, mode)) return true;
-    if (this.current?.symbol === symbol) return this.current.run;
+    // Coalesce only on the full gate identity: coverage is per tree, so a
+    // `raw` gate says nothing about whether the same symbol is runnable in
+    // the split-adjusted tree another picker is reading.
+    if (
+      this.current?.symbol === symbol &&
+      this.current.mode === mode &&
+      this.current.run !== null
+    ) {
+      return this.current.run;
+    }
     this.abandonActive();
 
     const token = this.nextToken++;
@@ -139,7 +152,8 @@ export class EnsureCoverageService {
     const entry: ActiveRun = {
       token,
       symbol,
-      run: null!,
+      mode,
+      run: null,
       jobId: null,
       unsubscribe: null,
       disarm: null,
@@ -337,9 +351,12 @@ export class EnsureCoverageService {
   }
 
   /**
-   * A completed job is not a covered symbol until the lake says so — the
-   * reload also refreshes every picker's pool, which is what lets the card
-   * read the fresh held span it needs to size the run window.
+   * A completed job is not a covered symbol until the lake says so — and
+   * the ask is a **fresh** read, not the cached catalog: `reload()` starts
+   * an asynchronous load while the pool still holds the pre-backfill
+   * answer, so judging membership against it would report `backfill_empty`
+   * for bars that just landed. The reload still runs, to refresh every
+   * picker's pool; the verdict comes from the read this gate awaits.
    */
   private async settle(
     symbol: string,
@@ -347,12 +364,16 @@ export class EnsureCoverageService {
     resolution: TerminalResolution,
     entry: ActiveRun,
   ): Promise<boolean> {
-    const view = this.lake.viewFor(mode);
-    view.reload();
+    this.lake.viewFor(mode).reload();
     if (resolution.outcome === 'failed') {
       return this.fail(entry, resolution.reason, resolution.message);
     }
-    if (this.isHeld(symbol, mode)) {
+    const read = await this.dataLake.storageSummary('usa', mode, 'trade');
+    if (!this.live(entry.token)) return false;
+    if (read.kind !== 'ok') {
+      return this.fail(entry, 'coverage_unknown', read.message);
+    }
+    if (read.value.symbols.some((span) => span.symbol === symbol && isRunnableSpan(span))) {
       this.activeState.set(null);
       return true;
     }

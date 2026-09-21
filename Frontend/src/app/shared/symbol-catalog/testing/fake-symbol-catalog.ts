@@ -1,9 +1,9 @@
 import { signal, type Provider, type WritableSignal } from '@angular/core';
 
 import {
-  AlpacaAssetCatalogService,
-  type AlpacaSymbolEntry,
-} from '../alpaca-asset-catalog.service';
+  VendorCatalogService,
+  type VendorSymbolEntry,
+} from '../vendor-catalog.service';
 import type {
   BackfillableMode,
   CoverageGateState,
@@ -16,17 +16,17 @@ import { EnsureCoverageService } from '../ensure-coverage.service';
  * service exposes, because a `useValue` provider is never checked against the
  * class it replaces.
  */
-export interface FakeAlpacaAssetCatalog {
-  readonly entries: WritableSignal<readonly AlpacaSymbolEntry[] | null>;
+export interface FakeVendorCatalog {
+  readonly entries: WritableSignal<readonly VendorSymbolEntry[] | null>;
   readonly loading: WritableSignal<boolean>;
   readonly unavailable: WritableSignal<string | null>;
   reloadCount: number;
   reload(): void;
 }
 
-export function fakeAlpacaAssetCatalog(
-  entries: readonly AlpacaSymbolEntry[] = [],
-): FakeAlpacaAssetCatalog {
+export function fakeVendorCatalog(
+  entries: readonly VendorSymbolEntry[] = [],
+): FakeVendorCatalog {
   return {
     entries: signal(entries),
     loading: signal(false),
@@ -38,8 +38,8 @@ export function fakeAlpacaAssetCatalog(
   };
 }
 
-export function provideFakeAlpacaAssetCatalog(catalog: FakeAlpacaAssetCatalog): Provider {
-  return { provide: AlpacaAssetCatalogService, useValue: catalog };
+export function provideFakeVendorCatalog(catalog: FakeVendorCatalog): Provider {
+  return { provide: VendorCatalogService, useValue: catalog };
 }
 
 export interface FakeEnsureCoverage {

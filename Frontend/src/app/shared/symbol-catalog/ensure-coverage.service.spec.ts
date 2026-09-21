@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, it, expect } from 'vitest';
 
+import type { SymbolCoverageSpan } from '../data-lake';
 import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
 import { DataLakeService, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
 import type { BackfillDefaults, DataLakeRead } from '../data-lake';
@@ -17,6 +18,10 @@ const DEFAULTS: BackfillDefaults = {
   max_symbol_length: 20,
 };
 
+/** 2024-08-06 and 2026-09-04, both 09:30 ET — the anchor a trading date carries. */
+const AUG_2024 = 1722951000000;
+const SEP_2026 = 1788528600000;
+
 const SPY: TickerOption = {
   symbol: 'SPY',
   name: 'SPDR S&P 500 ETF',
@@ -24,6 +29,9 @@ const SPY: TickerOption = {
   firstHeld: '2024-05-20',
   lastHeld: '2026-09-04',
 };
+
+/** When set, every fresh lake read fails with this message. */
+let storageFailure: string | null = null;
 
 interface FakeJobs {
   readonly started: { type: string; payload: Record<string, unknown> }[];
@@ -36,7 +44,13 @@ interface FakeJobs {
 
 function configureService(
   options: { defaults?: DataLakeRead<BackfillDefaults> } = {},
-): { service: EnsureCoverageService; jobs: FakeJobs; catalog: FakeTickerCatalog } {
+): {
+  service: EnsureCoverageService;
+  jobs: FakeJobs;
+  catalog: FakeTickerCatalog;
+  /** The fresh lake read the gate's verdict comes from. Tests mutate it. */
+  freshCoverage: { symbols: SymbolCoverageSpan[] };
+} {
   const started: FakeJobs['started'] = [];
   const cancelled: string[] = [];
   // The gate registers its fold through onEvent after startJob resolves, so
@@ -51,7 +65,17 @@ function configureService(
       handlers.get(jobId)?.(event);
     },
   };
+  // When non-null, the fresh lake read fails with this message — the lake
+  // going dark between job submission and completion.
+  storageFailure = null;
   const catalog = fakeTickerCatalog([SPY]);
+  // The lake's cached pool still answers with only SPY — what a fresh read
+  // returns is this knob's business, not the pool's.
+  const freshCoverage: { symbols: SymbolCoverageSpan[] } = {
+    symbols: [
+      { symbol: 'SPY', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 2290 },
+    ],
+  };
   let startSeq = 0;
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -82,11 +106,18 @@ function configureService(
         provide: DataLakeService,
         useValue: {
           backfillDefaults: async () => options.defaults ?? { kind: 'ok', value: DEFAULTS },
+          storageSummary: async () =>
+            storageFailure !== null
+              ? { kind: 'unavailable' as const, message: storageFailure }
+              : {
+                  kind: 'ok' as const,
+                  value: { market: 'usa' as const, kinds: [], symbols: freshCoverage.symbols },
+                },
         },
       },
     ],
   });
-  return { service: TestBed.inject(EnsureCoverageService), jobs, catalog };
+  return { service: TestBed.inject(EnsureCoverageService), jobs, catalog, freshCoverage };
 }
 
 async function flush(): Promise<void> {
@@ -105,7 +136,7 @@ describe('EnsureCoverageService', () => {
   });
 
   it('backfills an unheld symbol with a full-history trade-bar spec', async () => {
-    const { service, jobs, catalog } = configureService();
+    const { service, jobs, catalog, freshCoverage } = configureService();
 
     const run = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
@@ -131,11 +162,11 @@ describe('EnsureCoverageService', () => {
     // In flight: the gate names the symbol and carries no failure.
     expect(service.active()).toMatchObject({ symbol: 'NVDA', phase: 'backfilling' });
 
-    // The job completes and the lake now holds the symbol.
-    catalog.view.pool.set([
-      ...catalog.view.pool(),
-      { symbol: 'NVDA', name: 'NVIDIA', lastHeld: '2026-09-04' },
-    ]);
+    // The job completes and a fresh lake read now holds the symbol.
+    freshCoverage.symbols = [
+      ...freshCoverage.symbols,
+      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+    ];
     jobs.emit('job-1', { type: 'job.completed' });
     const ready = await run;
 
@@ -146,7 +177,7 @@ describe('EnsureCoverageService', () => {
   });
 
   it('shows progress ticks while the backfill runs', async () => {
-    const { service, jobs, catalog } = configureService();
+    const { service, jobs, catalog, freshCoverage } = configureService();
 
     const run = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
@@ -156,7 +187,10 @@ describe('EnsureCoverageService', () => {
     expect(service.active()).toMatchObject({ phase: 'backfilling', percent: 25 });
 
     jobs.emit('job-1', { type: 'job.completed' });
-    catalog.view.pool.set([...catalog.view.pool(), { symbol: 'NVDA', name: 'NVIDIA' }]);
+    freshCoverage.symbols = [
+      ...freshCoverage.symbols,
+      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+    ];
     await run;
   });
 
@@ -251,18 +285,93 @@ describe('EnsureCoverageService', () => {
   });
 
   it('coalesces a repeated pick of the symbol already being ensured', async () => {
-    const { service, jobs, catalog } = configureService();
+    const { service, jobs, catalog, freshCoverage } = configureService();
 
     const first = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     const second = service.ensure('NVDA', 'polygon_split_adjusted');
 
     expect(jobs.started).toHaveLength(1);
-    catalog.view.pool.set([...catalog.view.pool(), { symbol: 'NVDA', name: 'NVIDIA' }]);
+    freshCoverage.symbols = [
+      ...freshCoverage.symbols,
+      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+    ];
     jobs.emit('job-1', { type: 'job.completed' });
 
     expect(await first).toBe(true);
     expect(await second).toBe(true);
+  });
+
+  // The reviewer's masked regression: judging membership against the cached
+  // pool (which a test can edit) hides the fact that `reload()` is async —
+  // the verdict must come from the fresh read, never the pool.
+  it('judges coverage by a fresh read, not the catalog pool', async () => {
+    const { service, jobs, catalog } = configureService();
+
+    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    // The pool was hand-updated, but the fresh read says otherwise.
+    catalog.view.pool.set([
+      ...catalog.view.pool(),
+      { symbol: 'NVDA', name: 'NVIDIA', lastHeld: '2026-09-04' },
+    ]);
+    jobs.emit('job-1', { type: 'job.completed' });
+    const ready = await run;
+
+    expect(ready).toBe(false);
+    expect(service.active()).toMatchObject({ phase: 'failed', reason: 'backfill_empty' });
+  });
+
+  it('reports coverage_unknown when the fresh read fails', async () => {
+    const { service, jobs, freshCoverage } = configureService();
+
+    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    // The lake goes dark between submission and completion; even the pool
+    // being updated cannot make the verdict when no read answers.
+    freshCoverage.symbols = [
+      ...freshCoverage.symbols,
+      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+    ];
+    storageFailure = 'The data plane did not respond.';
+    jobs.emit('job-1', { type: 'job.completed' });
+    const ready = await run;
+
+    expect(ready).toBe(false);
+    expect(service.active()).toMatchObject({
+      phase: 'failed',
+      reason: 'coverage_unknown',
+      message: 'The data plane did not respond.',
+    });
+  });
+
+  it('keys the in-flight gate by symbol and tree, not symbol alone', async () => {
+    const { service, jobs, freshCoverage } = configureService();
+
+    const raw = service.ensure('NVDA', 'raw');
+    await flush();
+    const adjusted = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+
+    // A raw gate says nothing about the split-adjusted tree: the second
+    // pick must start its own backfill, not inherit the first's promise.
+    expect(jobs.started).toHaveLength(2);
+    expect(jobs.started[1].payload['spec']).toMatchObject({
+      symbols: ['NVDA'],
+      price_adjustment_mode: 'polygon_split_adjusted',
+    });
+
+    freshCoverage.symbols = [
+      ...freshCoverage.symbols,
+      { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+    ];
+    jobs.emit('job-1', { type: 'job.completed' });
+    jobs.emit('job-2', { type: 'job.completed' });
+
+    // The raw gate was superseded by the adjusted one: its promise answers
+    // false by design, while the adjusted run proceeds to its own verdict.
+    expect(await raw).toBe(false);
+    expect(await adjusted).toBe(true);
   });
 
   it('cancels a job accepted after the operator already walked away', async () => {
