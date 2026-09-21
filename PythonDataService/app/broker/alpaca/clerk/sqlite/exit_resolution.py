@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_uncertain,
     order_never_reached_broker,
     submit_absence_grace_ms,
+    trade_port_folds_simulated_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -574,7 +575,12 @@ async def _cancel_and_prove_entry(
             transition_kind="ORDER_CANCEL_UNCERTAIN",
         )
         return False
-    fold_order_evidence(repo, effect_operation_id=effect_operation_id, order=observed)
+    fold_order_evidence(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=observed,
+        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
+    )
     refreshed = repo.order(entry.order_ref)
     assert refreshed is not None
     if not _is_terminal(refreshed.broker_state):
@@ -695,7 +701,12 @@ async def _refresh_terminal_entries(
                 transition_kind="ORDER_CANCEL_UNCERTAIN",
             )
             return False
-        fold_order_evidence(repo, effect_operation_id=effect_operation_id, order=observed)
+        fold_order_evidence(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=observed,
+        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
+    )
         current = repo.order(entry.order_ref)
         assert current is not None
         if not _is_terminal(current.broker_state):
@@ -818,7 +829,12 @@ async def _refresh_or_resume_reducing_order(
         )
         return
     if observed is not None:
-        fold_order_evidence(repo, effect_operation_id=effect_operation_id, order=observed)
+        fold_order_evidence(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=observed,
+        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
+    )
         return
     if reducing.broker_order_id is not None or not _absence_grace_elapsed(repo, reducing.order_ref):
         fold_uncertain(

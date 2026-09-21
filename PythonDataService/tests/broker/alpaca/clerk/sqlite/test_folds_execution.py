@@ -619,6 +619,288 @@ def test_cumulative_recovery_fill_is_explicitly_tagged(tmp_path: Path) -> None:
         repo.close()
 
 
+def _simulated_aggregate(
+    accepted: EnterSubmission,
+    *,
+    broker: str,
+    id_prefix: str,
+    quantity: float,
+    price: float,
+    occurred_at_ms: int,
+    carry_execution_id: bool,
+) -> BrokerOrder:
+    """One deterministic no-submit adapter's submit/observation response.
+
+    ``shape_immediate_order`` and the shadow resting settlement both shape the
+    aggregate with a single fill event whose ``execution_id`` is
+    ``<prefix>-execution:<client_order_id>``. ``carry_execution_id=False``
+    reproduces the real REST adapter's synthesized fill event, which never
+    carries an execution identity (``adapter._order_events``).
+    """
+    order_ref = accepted.order_ref or ""
+    return BrokerOrder(
+        broker=broker,
+        order_id=f"{id_prefix}-order:{order_ref}",
+        client_order_id=order_ref,
+        symbol="SPY",
+        asset_class="us_equity",
+        side="buy",
+        order_type="market",
+        time_in_force="day",
+        quantity=quantity,
+        filled_quantity=quantity,
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=price,
+        status="filled",
+        submitted_at_ms=occurred_at_ms - 1,
+        created_at_ms=occurred_at_ms - 1,
+        updated_at_ms=occurred_at_ms,
+        filled_at_ms=occurred_at_ms,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        observed_at_ms=occurred_at_ms,
+        events=[
+            {
+                "event_type": "fill",
+                "occurred_at_ms": occurred_at_ms,
+                "price": price,
+                "quantity": quantity,
+                **({"execution_id": f"{id_prefix}-execution:{order_ref}"} if carry_execution_id else {}),
+            }
+        ],
+    )
+
+
+def test_authoritative_simulated_fill_retains_its_exact_execution_identity(
+    tmp_path: Path,
+) -> None:
+    """#2178: a no-submit adapter's aggregate carries its fill's exact
+    execution identity, so the fold must retain that identity as exact
+    simulated execution evidence — never as cumulative recovery."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="simulated-evidence-bot",
+        symbol="SPY",
+    )
+    try:
+        order_ref = accepted.order_ref or ""
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.effect_operation_id or "",
+            order=_simulated_aggregate(
+                accepted,
+                broker="shadow",
+                id_prefix="shadow",
+                quantity=10.0,
+                price=100.25,
+                occurred_at_ms=1_786_368_000_401,
+                carry_execution_id=True,
+            ),
+            simulated_authority=True,
+        )
+
+        fills = repo.fills_for_order(order_ref)
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] == f"shadow-execution:{order_ref}"
+        assert fills[0]["evidence_source"] == "simulated_execution"
+        assert fills[0]["qty"] == pytest.approx(10.0, abs=_ATOL, rel=0)
+        assert fills[0]["price"] == pytest.approx(100.25, abs=_ATOL, rel=0)
+        assert repo.position("simulated-evidence-bot", "SPY") == pytest.approx(
+            10.0, abs=_ATOL, rel=0
+        )
+    finally:
+        repo.close()
+
+
+def test_a_real_rest_aggregate_never_gains_an_exact_execution_classification(
+    tmp_path: Path,
+) -> None:
+    """The routing claim's safety half: a real broker aggregate's synthesized
+    fill event carries no execution identity (``adapter._order_events``), so
+    REST recovery folded through the same seam must stay cumulative
+    recovery — never an exact execution (#2178 safety constraint)."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="rest-recovery-bot",
+        symbol="SPY",
+    )
+    try:
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.effect_operation_id or "",
+            order=_simulated_aggregate(
+                accepted,
+                broker="alpaca",
+                id_prefix="broker",
+                quantity=10.0,
+                price=100.25,
+                occurred_at_ms=1_786_368_000_411,
+                carry_execution_id=False,
+            ),
+        )
+
+        fills = repo.fills_for_order(accepted.order_ref or "")
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] is None
+        assert fills[0]["evidence_source"] == "cumulative_recovery"
+    finally:
+        repo.close()
+
+
+def test_a_simulated_identity_on_broker_authority_stays_cumulative(
+    tmp_path: Path,
+) -> None:
+    """Review repro (#2178): a ``broker=\"alpaca\"`` aggregate wearing a
+    ``shadow-execution:`` id is untrusted spelling. The prefix is validation
+    for a trusted source, never an authority claim, so broker authority
+    folds it cumulative — never as simulated execution."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="spoofed-identity-bot",
+        symbol="SPY",
+    )
+    try:
+        aggregate = _simulated_aggregate(
+            accepted,
+            broker="alpaca",
+            id_prefix="shadow",
+            quantity=10.0,
+            price=100.25,
+            occurred_at_ms=1_786_368_000_431,
+            carry_execution_id=True,
+        )
+        assert aggregate.events[0].execution_id is not None
+        assert aggregate.events[0].execution_id.startswith("shadow-execution:")
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.effect_operation_id or "",
+            order=aggregate,
+        )
+
+        fills = repo.fills_for_order(accepted.order_ref or "")
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] is None
+        assert fills[0]["evidence_source"] == "cumulative_recovery"
+    finally:
+        repo.close()
+
+
+def test_simulated_authority_fails_closed_on_an_unregistered_execution_identity(
+    tmp_path: Path,
+) -> None:
+    """A trusted no-submit port that mints an identity outside the registered
+    namespaces is a contract violation: the fold refuses rather than
+    degrading the observation to cumulative recovery."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="unregistered-identity-bot",
+        symbol="SPY",
+    )
+    try:
+        with pytest.raises(ValueError, match="registered execution identities"):
+            fold_order_evidence(
+                repo,
+                effect_operation_id=accepted.effect_operation_id or "",
+                order=_simulated_aggregate(
+                    accepted,
+                    broker="shadow",
+                    id_prefix="broker",
+                    quantity=10.0,
+                    price=100.25,
+                    occurred_at_ms=1_786_368_000_441,
+                    carry_execution_id=True,
+                ),
+                simulated_authority=True,
+            )
+    finally:
+        repo.close()
+
+
+def test_simulated_authority_requires_its_filled_aggregates_exact_event(
+    tmp_path: Path,
+) -> None:
+    """An authoritative adapter that reports fills without its exact execution
+    event owes evidence it cannot provide; folding that as cumulative
+    recovery would recreate the false-attention bug, so it fails closed."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="identityless-bot",
+        symbol="SPY",
+    )
+    try:
+        with pytest.raises(ValueError, match="must carry its exact execution event"):
+            fold_order_evidence(
+                repo,
+                effect_operation_id=accepted.effect_operation_id or "",
+                order=_simulated_aggregate(
+                    accepted,
+                    broker="shadow",
+                    id_prefix="shadow",
+                    quantity=10.0,
+                    price=100.25,
+                    occurred_at_ms=1_786_368_000_451,
+                    carry_execution_id=True,
+                ).model_copy(update={"events": []}),
+                simulated_authority=True,
+            )
+    finally:
+        repo.close()
+
+
+def test_simulated_exact_evidence_supersedes_a_legacy_cumulative_row_without_double_counting(
+    tmp_path: Path,
+) -> None:
+    """A pre-fix simulated fill landed as cumulative recovery. Re-observing
+    the same order post-fix must replace that row with the exact identity via
+    the existing auto-supersession proof — one effective fill, one position
+    delta, coverage that can complete."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="legacy-simulated-bot",
+        symbol="SPY",
+    )
+    try:
+        order_ref = accepted.order_ref or ""
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=10.0,
+            average_price=100.25,
+            source_event_at_ms=1_786_368_000_421,
+        )
+        assert repo.position("legacy-simulated-bot", "SPY") == pytest.approx(
+            10.0, abs=_ATOL, rel=0
+        )
+
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.effect_operation_id or "",
+            order=_simulated_aggregate(
+                accepted,
+                broker="shadow",
+                id_prefix="shadow",
+                quantity=10.0,
+                price=100.25,
+                occurred_at_ms=1_786_368_000_422,
+                carry_execution_id=True,
+            ),
+            simulated_authority=True,
+        )
+
+        fills = repo.fills_for_order(order_ref)
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] == f"shadow-execution:{order_ref}"
+        assert fills[0]["evidence_source"] == "simulated_execution"
+        # The cumulative delta already owned the position; the replacement is
+        # a representation swap, so exposure must not double.
+        assert repo.position("legacy-simulated-bot", "SPY") == pytest.approx(
+            10.0, abs=_ATOL, rel=0
+        )
+    finally:
+        repo.close()
+
+
 def test_late_exact_execution_after_cumulative_recovery_auto_supersedes_coverage(
     tmp_path: Path,
 ) -> None:

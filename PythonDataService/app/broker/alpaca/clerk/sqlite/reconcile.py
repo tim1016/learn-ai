@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     resolve_order_submission,
+    trade_port_folds_simulated_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -670,7 +671,10 @@ def _record_operator_reconciliation_receipt(
 
 
 def _fold_snapshot_evidence(
-    repo: ClerkSqliteRepository, broker_orders: list[BrokerOrder]
+    repo: ClerkSqliteRepository,
+    broker_orders: list[BrokerOrder],
+    *,
+    simulated_authority: bool = False,
 ) -> None:
     for broker_order in broker_orders:
         if broker_order.client_order_id is None:
@@ -689,6 +693,7 @@ def _fold_snapshot_evidence(
             repo,
             effect_operation_id=owner.effect_operation_id,
             order=broker_order,
+            simulated_authority=simulated_authority,
         )
 
 
@@ -697,15 +702,24 @@ async def _fold_snapshot_evidence_under_intake(
     *,
     broker_orders: list[BrokerOrder],
     intake: ReentrantAsyncLock,
+    simulated_authority: bool = False,
 ) -> None:
     """Fold each snapshot unit separately so websocket evidence can interleave."""
     for broker_order in broker_orders:
-        await _under_intake(intake, _fold_one_snapshot_order, repo, broker_order)
+        await _under_intake(
+            intake, _fold_one_snapshot_order, repo, broker_order,
+            simulated_authority=simulated_authority,
+        )
         await asyncio.sleep(0)
 
 
-def _fold_one_snapshot_order(repo: ClerkSqliteRepository, broker_order: BrokerOrder) -> None:
-    _fold_snapshot_evidence(repo, [broker_order])
+def _fold_one_snapshot_order(
+    repo: ClerkSqliteRepository,
+    broker_order: BrokerOrder,
+    *,
+    simulated_authority: bool = False,
+) -> None:
+    _fold_snapshot_evidence(repo, [broker_order], simulated_authority=simulated_authority)
 
 
 async def _reconcile_account_serialized(
@@ -732,7 +746,15 @@ async def _reconcile_account_serialized(
     )
 
     # Capture every local identity before recovery can terminalize an effect.
-    await _fold_snapshot_evidence_under_intake(repo, broker_orders=broker_orders, intake=intake)
+    # The trade port's capability — not the snapshot's spelling — decides
+    # whether these aggregates are a no-submit adapter's own observations.
+    simulated_authority = trade_port_folds_simulated_evidence(trade)
+    await _fold_snapshot_evidence_under_intake(
+        repo,
+        broker_orders=broker_orders,
+        intake=intake,
+        simulated_authority=simulated_authority,
+    )
 
     resolved_count = await _recover_operations(
         repo,
@@ -767,6 +789,7 @@ async def _reconcile_account_serialized(
             resolved_count=resolved_count,
             trigger=trigger,
             expected_control_revision=verdict_base_revision,
+            simulated_authority=simulated_authority,
         )
         if finalized is not None:
             return finalized
@@ -793,11 +816,12 @@ def _finalize_reconciliation_verdict(
     resolved_count: int,
     trigger: Trigger,
     expected_control_revision: int,
+    simulated_authority: bool = False,
 ) -> AccountReconciliationResult | None:
     """Atomically bind a final broker snapshot, verdict, and operator receipt."""
     if repo.control_meta_snapshot().control_revision != expected_control_revision:
         return None
-    _fold_snapshot_evidence(repo, broker_orders)
+    _fold_snapshot_evidence(repo, broker_orders, simulated_authority=simulated_authority)
     instances = repo.strategy_instances()
     plan = plan_account_reconciliation(
         namespaces=frozenset(

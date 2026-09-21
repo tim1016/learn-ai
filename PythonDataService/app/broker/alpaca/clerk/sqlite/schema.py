@@ -34,9 +34,10 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
 from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
+from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -663,6 +664,10 @@ _V11_TO_V12_STATEMENTS: tuple[str, ...] = (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
 
+# v13 -> v14 lives in ``simulated_execution_schema`` with the rest of that
+# cohesive fragment (the fills replacement, the shadow-only re-tag, and the
+# rebuild's reuse of it). Same statements as ``SCHEMA_MIGRATIONS[13]``.
+
 SCHEMA_V12_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
     for statement in _V11_TO_V12_STATEMENTS
@@ -677,6 +682,10 @@ SCHEMA_V13_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
     for statement in SCHEMA_V13_STATEMENTS
 )
+SCHEMA_V14_DDL = "\n".join(
+    statement if statement.endswith(";") or "\n" in statement else f"{statement};"
+    for statement in SCHEMA_V14_STATEMENTS
+)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -687,6 +696,8 @@ SCHEMA_DDL = (
     + SCHEMA_V12_DDL
     + "\n\n"
     + SCHEMA_V13_DDL
+    + "\n\n"
+    + SCHEMA_V14_DDL
 ).rstrip("\n")
 
 
@@ -902,6 +913,11 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # v12 -> v13: the cash an accepted ENTER claims becomes durable (ADR 0059
     # D4). Same statements as the fresh v13 block above.
     12: SCHEMA_V13_STATEMENTS,
+    # v13 -> v14: simulated fills keep their exact execution identity (#2178).
+    # Same statements as the fresh v14 block above, including the shadow-only
+    # re-tag of persisted cumulative rows; ``simulated_execution_schema`` owns
+    # the fragment and its rebuild reuse.
+    13: SCHEMA_V14_STATEMENTS,
 }
 
 

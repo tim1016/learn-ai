@@ -75,6 +75,24 @@
   stored text fixed at the version that created it, and only re-rendering it
   from `HOLD_REASON_CODES` makes an upgraded file project the new
   loss-hold cause exactly as a fresh one does.
+- Schema-v14 admits `simulated_execution` into the `fills.evidence_source`
+  vocabulary (#2178). A deterministic no-submit adapter (the Shadow and
+  Dry-Run worlds) executes entirely inside `submit` and shapes each fill
+  event with its own durable execution identity, so its authoritative
+  submission response folds as exact execution slices — not through the
+  generic cumulative-recovery delta that read every simulated fill as
+  incomplete coverage and raised a false `needs_attention` flag on healthy
+  Shadow bots. SQLite cannot ALTER a CHECK constraint, so the registered
+  v13 → v14 migration replaces the table (the v11 → v12 holds replacement
+  is the precedent) and backfills only persisted rows whose own durable
+  evidence proves they were Shadow-synthesized: the order's
+  `broker_order_id` is the synthesized `shadow-order:<client_order_id>`
+  identity and the order owns exactly one cumulative fill. Real Paper/Live
+  cumulative recovery rows are untouched by construction — the re-derived
+  `shadow-execution:` identity is the Shadow world's own namespace, never a
+  fabricated broker receipt. The Dry-Run world's legacy rows are not
+  re-tagged by the migration; they convert lazily through the
+  auto-supersession proof when their order is next observed.
 - Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
   captured *every* same-strategy/symbol sibling entry; it now captures every
   sibling that is still **cancel-provable**, excluding one already carrying
@@ -1108,6 +1126,35 @@ SELECT
     evidence_refs_json                                          AS evidence_refs_json
 FROM uncertainties
 WHERE reason_code IN ('LIVE_ENVELOPE_LOSS_HOLD', 'STREAM_HEALTH_HOLD', 'UNEXPLAINED_ORDER_HOLD');
+
+
+DROP INDEX IF EXISTS ux_fills_execution_id;
+ALTER TABLE fills RENAME TO fills_v13_legacy;
+CREATE TABLE fills (
+    fill_id                  TEXT PRIMARY KEY,       -- Alpaca execution id (idempotent identity, §9.4)
+    order_ref                TEXT NOT NULL REFERENCES orders(order_ref),
+    qty                      REAL NOT NULL,
+    price                    REAL NOT NULL,
+    side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+    is_correction             INTEGER NOT NULL DEFAULT 0,  -- 1 = broker-issued correction, not erasure of prior fact
+    execution_id             TEXT,                   -- Alpaca execution id; null only for cumulative recovery
+    evidence_source          TEXT NOT NULL DEFAULT 'cumulative_recovery'
+                              CHECK (evidence_source IN ('websocket','activity_recovery','cumulative_recovery','simulated_execution')),
+    event_kind               TEXT NOT NULL DEFAULT 'fill'
+                              CHECK (event_kind IN ('fill','correction')),
+    superseded_execution_ref TEXT,                   -- correction target; original execution remains auditable
+    fee                      REAL,
+    fee_fidelity             TEXT NOT NULL DEFAULT 'not_reported'
+                              CHECK (fee_fidelity IN ('reported','not_reported')),
+    source_event_at_ms       INTEGER,                 -- Alpaca's fill timestamp, when supplied
+    clerk_observed_at_ms     INTEGER NOT NULL,
+    recorded_at_ms           INTEGER NOT NULL,
+    recorded_transition_sequence INTEGER NOT NULL REFERENCES custody_transitions(sequence)
+);
+INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) SELECT fill_id, order_ref, qty, price, side, is_correction, execution_id, evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence FROM fills_v13_legacy;
+UPDATE fills SET execution_id = 'shadow-execution:' || fills.order_ref, evidence_source = 'simulated_execution' WHERE fills.evidence_source = 'cumulative_recovery' AND fills.execution_id IS NULL AND (SELECT COUNT(*) FROM fills other WHERE other.order_ref = fills.order_ref AND other.evidence_source = 'cumulative_recovery') = 1 AND EXISTS (SELECT 1 FROM orders o WHERE o.order_ref = fills.order_ref AND o.client_order_id = o.order_ref AND o.broker_order_id = 'shadow-order:' || o.order_ref);
+DROP TABLE fills_v13_legacy;
+CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id) WHERE execution_id IS NOT NULL;
 ```
 
 The `holds` view appears **twice** on purpose: v12 creates it, and the v13

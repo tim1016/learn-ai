@@ -57,13 +57,10 @@ FACADE_WORKFLOW_METHODS = frozenset({"reconcile_account"})
 FACADE_WORKFLOW_HELPERS = frozenset({"execute_recovery_action"})
 
 EXTERNAL_REPOSITORY_WRITER_CENSUS = (
-    ExternalRepositoryWriter(
-        path="app/broker/alpaca/clerk/trade_evidence.py",
-        owner="SqliteTradeUpdateEvidenceSink.record_lifecycle_event",
-        call="append_execution_slice_if_absent",
-        classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="The active-authority evidence ingress holds intake for its bounded local read-decide-fold segment.",
-    ),
+    # The websocket sink's exact-slice append moved inside the package
+    # (``exact_execution_evidence.append_exact_execution_slice``, shared with
+    # the no-submit adapters' simulated evidence, #2178), so it is no longer
+    # an external writer entrance.
     ExternalRepositoryWriter(
         path="app/broker/alpaca/clerk/trade_evidence.py",
         owner="SqliteTradeUpdateEvidenceSink.record_lifecycle_event",

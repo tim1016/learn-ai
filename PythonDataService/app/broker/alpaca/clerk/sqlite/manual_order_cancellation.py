@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_submit_absence_void,
     fold_uncertain,
     order_never_reached_broker,
+    trade_port_folds_simulated_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -383,7 +384,12 @@ async def _resolve_claimed_manual_order_cancellation(
             transition_kind="ORDER_CANCEL_UNCERTAIN",
         )
         return
-    fold_order_evidence(repo, effect_operation_id=source_effect.effect_operation_id, order=observed)
+    fold_order_evidence(
+        repo,
+        effect_operation_id=source_effect.effect_operation_id,
+        order=observed,
+        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
+    )
     target = repo.order(target.order_ref)
     source_effect = repo.effect_operation(source_effect.effect_operation_id)
     assert target is not None and source_effect is not None
@@ -463,7 +469,12 @@ async def _resolve_claimed_manual_order_cancellation(
             transition_kind="ORDER_CANCEL_UNCERTAIN",
         )
         return
-    fold_order_evidence(repo, effect_operation_id=source_effect.effect_operation_id, order=observed_after)
+    fold_order_evidence(
+        repo,
+        effect_operation_id=source_effect.effect_operation_id,
+        order=observed_after,
+        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
+    )
     target_after = repo.order(target.order_ref)
     source_after = repo.effect_operation(source_effect.effect_operation_id)
     assert target_after is not None and source_after is not None
