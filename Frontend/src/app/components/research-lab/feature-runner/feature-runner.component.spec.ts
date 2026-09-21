@@ -12,6 +12,11 @@ import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
 } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
+import {
+  fakeVendorCatalog,
+  provideFakeVendorCatalog,
+} from '../../../shared/symbol-catalog/testing/fake-symbol-catalog';
+
 import { FeatureRunnerComponent } from './feature-runner.component';
 import { JobsService, type JobState } from '../../../services/jobs.service';
 
@@ -81,6 +86,10 @@ describe('FeatureRunnerComponent', () => {
         provideFakeTickerCatalog(
           fakeTickerCatalog([{ symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' }]),
         ),
+        // The joined picker universe also reads the vendor catalog; this spec
+        // drives every request through HttpTestingController, so stub it to
+        // keep `whenStable()` from hanging on an unflushed request.
+        provideFakeVendorCatalog(fakeVendorCatalog([])),
       ],
     }).compileComponents();
 
