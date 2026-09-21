@@ -1343,39 +1343,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/alpaca/symbols": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Alpaca Symbols
-         * @description The complete trimmed asset catalog for the shared symbol picker.
-         *
-         *     Serves every listed asset — active and inactive — in the picker-row
-         *     projection: the client applies its surface's membership policy (the
-         *     shared picker offers US-equity actives; the lake backfill panel also
-         *     offers delisted symbols, so a survivorship-biased universe stays a
-         *     visible choice rather than an accident of a server-side filter).
-         *     Unbounded on purpose — the picker must be able to offer any listed
-         *     symbol, which the bounded ``/{broker}/assets`` read cannot serve.
-         *
-         *     Staleness is bounded by the TTL below, which also bounds how stale a
-         *     symbol's ``status``/``tradable`` flags can be. That is acceptable for a
-         *     menu; nothing here claims a symbol is currently tradable — order-time
-         *     eligibility checks stay with the order path.
-         */
-        get: operations["list_alpaca_symbols_api_brokers_alpaca_symbols_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/account": {
         parameters: {
             query?: never;
@@ -6900,6 +6867,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickers/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticker Catalog
+         * @description The complete US-stock reference catalog for the shared symbol picker.
+         *
+         *     Serves every listed symbol — active and inactive — in the picker-row
+         *     projection (ADR 0066): the client applies its surface's membership
+         *     policy, with delisted symbols behind the backfill panel's explicit
+         *     toggle so a survivorship-biased universe stays a visible choice. The
+         *     walk is ``market="stocks"`` because the lake backfill pipeline can only
+         *     cover stocks; nothing else is offered, so the ensure-coverage gate can
+         *     never be handed a symbol it cannot fill.
+         *
+         *     Served from the data-plane core (this router runs on the coordinator in
+         *     the split fleet, the browser's ingress) rather than the broker surface:
+         *     the coordinator must construct no provider broker client (FR-041), and
+         *     a listing universe is market reference data — the Polygon account this
+         *     process already owns — not broker-operator evidence.
+         */
+        get: operations["ticker_catalog_api_tickers_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickers/details": {
         parameters: {
             query?: never;
@@ -9695,31 +9696,6 @@ export interface components {
             unrealized_pl: number;
             /** Unrealized Plpc */
             unrealized_plpc: number | null;
-        };
-        /**
-         * BrokerSymbol
-         * @description Trimmed asset-catalog row for symbol pickers.
-         *
-         *     The browser fetches the whole catalog once per session (ADR — symbol
-         *     picker, 2026-09-20), so the projection keeps only the fields a picker row
-         *     renders and drops the eligibility flags (``fractionable`` and friends)
-         *     that belong to order-time checks. Membership policy — which asset classes
-         *     and statuses a given picker offers — is the picker's decision, not this
-         *     endpoint's, so every row is served and the client filters.
-         */
-        BrokerSymbol: {
-            /** Asset Class */
-            asset_class: string;
-            /** Exchange */
-            exchange: string | null;
-            /** Name */
-            name: string | null;
-            /** Status */
-            status: string;
-            /** Symbol */
-            symbol: string;
-            /** Tradable */
-            tradable: boolean;
         };
         /**
          * BuildFromCsvRequest
@@ -24653,6 +24629,29 @@ export interface components {
             /** Reason Codes */
             reason_codes?: string[];
         };
+        /**
+         * SymbolCatalogEntry
+         * @description One row of the shared symbol picker's catalog (GET /api/tickers/catalog).
+         *
+         *     The membership projection for pickers: a Polygon reference-tickers walk
+         *     projected onto the fields a picker row renders. ``asset_class`` is
+         *     ``us_equity`` for every row the catalog serves — the walk is
+         *     ``market="stocks"`` — and ``status`` carries the vendor's active flag so
+         *     a picker may offer delisted symbols deliberately (the lake backfill
+         *     panel's toggle) without this endpoint deciding membership for it.
+         */
+        SymbolCatalogEntry: {
+            /** Asset Class */
+            asset_class: string;
+            /** Exchange */
+            exchange: string | null;
+            /** Name */
+            name: string | null;
+            /** Status */
+            status: string;
+            /** Symbol */
+            symbol: string;
+        };
         /** SymbolCoverageSpan */
         SymbolCoverageSpan: {
             /** Artifact Count */
@@ -29004,37 +29003,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketStatusSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_alpaca_symbols_api_brokers_alpaca_symbols_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerSymbol"][];
                 };
             };
             /** @description Validation Error */
@@ -38628,6 +38596,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ticker_catalog_api_tickers_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SymbolCatalogEntry"][];
                 };
             };
         };

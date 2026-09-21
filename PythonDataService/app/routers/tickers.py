@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from time import monotonic
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.requests import RelatedTickersRequest, TickerDetailRequest, TickerListRequest
 from app.models.responses import (
     RelatedTickersResponse,
+    SymbolCatalogEntry,
     TickerAddress,
     TickerDetailResponse,
     TickerInfo,
@@ -98,3 +101,77 @@ async def get_related_tickers(request: RelatedTickersRequest) -> RelatedTickersR
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch related tickers: {e!s}",
         )
+
+
+# The catalog is one paginated vendor walk (~30k reference rows) serving
+# every symbol picker in the browser, cached here so a dropdown-open burst
+# never re-walks it. The cache holds the in-flight task, not a materialized
+# list: concurrent misses single-flight onto one walk, and a failed walk
+# drops its entry so the picker's Retry reaches the vendor instead of a
+# sticky error. The TTL is long because reference data moves on listing/
+# delisting cadence, not per request.
+_CATALOG_CACHE_TTL_S = 3600.0
+_catalog_entry: tuple[float, asyncio.Task[list[SymbolCatalogEntry]]] | None = None
+
+
+def clear_ticker_catalog_cache_for_testing() -> None:
+    """Drop the cached catalog so a test's stubbed client is consulted."""
+    global _catalog_entry
+    _catalog_entry = None
+
+
+async def _load_catalog() -> list[SymbolCatalogEntry]:
+    entries = await asyncio.to_thread(polygon_client.list_catalog_tickers)
+    return [SymbolCatalogEntry(**entry) for entry in entries]
+
+
+async def _await_catalog(
+    entry: tuple[float, asyncio.Task[list[SymbolCatalogEntry]]],
+) -> list[SymbolCatalogEntry]:
+    global _catalog_entry
+    try:
+        return await entry[1]
+    except BaseException:
+        # A failed walk is not cached: the next caller re-loads instead of
+        # every picker on the page staring at a sticky error.
+        if _catalog_entry is entry:
+            _catalog_entry = None
+        raise
+
+
+@router.get("/catalog", response_model=list[SymbolCatalogEntry])
+async def ticker_catalog() -> list[SymbolCatalogEntry]:
+    """The complete US-stock reference catalog for the shared symbol picker.
+
+    Serves every listed symbol — active and inactive — in the picker-row
+    projection (ADR 0066): the client applies its surface's membership
+    policy, with delisted symbols behind the backfill panel's explicit
+    toggle so a survivorship-biased universe stays a visible choice. The
+    walk is ``market="stocks"`` because the lake backfill pipeline can only
+    cover stocks; nothing else is offered, so the ensure-coverage gate can
+    never be handed a symbol it cannot fill.
+
+    Served from the data-plane core (this router runs on the coordinator in
+    the split fleet, the browser's ingress) rather than the broker surface:
+    the coordinator must construct no provider broker client (FR-041), and
+    a listing universe is market reference data — the Polygon account this
+    process already owns — not broker-operator evidence.
+    """
+    global _catalog_entry
+    entry = _catalog_entry
+    if entry is not None:
+        loaded_at, task = entry
+        if not task.done() or monotonic() - loaded_at < _CATALOG_CACHE_TTL_S:
+            return await _await_catalog(entry)
+    entry = (monotonic(), asyncio.ensure_future(_load_catalog()))
+    _catalog_entry = entry
+    try:
+        return await _await_catalog(entry)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Tickers] Error fetching the symbol catalog: {e!s}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Symbol catalog is unavailable: {e!s}",
+        ) from e

@@ -580,3 +580,21 @@ class LeanStatisticsResponse(BaseModel):
     portfolio: LeanPortfolioStatsResponse = Field(default_factory=LeanPortfolioStatsResponse)
     trade: LeanTradeStatsResponse = Field(default_factory=LeanTradeStatsResponse)
     runtime: LeanRuntimeStatsResponse = Field(default_factory=LeanRuntimeStatsResponse)
+
+
+class SymbolCatalogEntry(BaseModel):
+    """One row of the shared symbol picker's catalog (GET /api/tickers/catalog).
+
+    The membership projection for pickers: a Polygon reference-tickers walk
+    projected onto the fields a picker row renders. ``asset_class`` is
+    ``us_equity`` for every row the catalog serves — the walk is
+    ``market="stocks"`` — and ``status`` carries the vendor's active flag so
+    a picker may offer delisted symbols deliberately (the lake backfill
+    panel's toggle) without this endpoint deciding membership for it.
+    """
+
+    symbol: str
+    name: str | None
+    asset_class: str
+    exchange: str | None
+    status: str

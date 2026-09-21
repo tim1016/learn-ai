@@ -7,7 +7,6 @@ translation — not any vendor. Grows one endpoint block per read-path slice.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Generator
 from datetime import date
 from typing import Any
@@ -32,7 +31,6 @@ from app.broker.contract.registry import (
 )
 from app.config import settings
 from app.main import app
-from app.routers.brokers import clear_symbol_catalog_cache_for_testing
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
@@ -45,10 +43,8 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 def _clean_registry() -> Generator[None, None, None]:
     reset_broker_registry_for_testing()
     clear_broker_account_snapshot_cache_for_testing()
-    clear_symbol_catalog_cache_for_testing()
     yield
     clear_broker_account_snapshot_cache_for_testing()
-    clear_symbol_catalog_cache_for_testing()
     reset_broker_registry_for_testing()
 
 
@@ -585,89 +581,6 @@ async def test_assets_endpoint_rejects_invalid_status() -> None:
 
     assert response.status_code == 422
 
-
-async def test_symbols_endpoint_serves_full_trimmed_catalog() -> None:
-    port = _FakePort(
-        assets=[
-            _asset(symbol="MSFT"),
-            _asset(symbol="OLD", status="inactive", tradable=False, asset_id="a-2"),
-        ],
-    )
-    get_broker_registry().register(port)
-
-    response = await _get("/api/brokers/alpaca/symbols")
-
-    assert response.status_code == 200
-    body = response.json()
-    # Inactive rows ship too: offering delisted symbols is the client's
-    # choice (backfill panel), not the endpoint's filter to make.
-    assert [row["symbol"] for row in body] == ["MSFT", "OLD"]
-    # The picker-row projection ships no eligibility flags.
-    assert set(body[0]) == {"symbol", "name", "asset_class", "exchange", "status", "tradable"}
-    assert body[1]["status"] == "inactive"
-    # Unbounded on purpose: the picker must reach the whole catalog, which
-    # the bounded /assets read cannot serve.
-    assert port.assets_call == {"status": None, "limit": None}
-
-
-async def test_symbols_endpoint_serves_cached_catalog_within_ttl() -> None:
-    get_broker_registry().register(_FakePort(assets=[_asset(symbol="MSFT")]))
-    first = await _get("/api/brokers/alpaca/symbols")
-    assert first.status_code == 200
-
-    # A replacement port answers nothing; within the TTL the cached catalog
-    # must come back without consulting it.
-    replacement = _FakePort(assets=[])
-    get_broker_registry().register(replacement)
-    second = await _get("/api/brokers/alpaca/symbols")
-
-    assert second.status_code == 200
-    assert second.json() == first.json()
-    assert replacement.assets_call is None
-
-
-async def test_symbols_endpoint_single_flights_concurrent_loads() -> None:
-    class _CountingPort(_FakePort):
-        load_calls = 0
-
-        async def list_assets(self, *, status=None, limit=100):
-            type(self).load_calls += 1
-            # Yield so a concurrent request can interleave: single-flight
-            # means it must find the in-flight task instead of loading again.
-            await asyncio.sleep(0)
-            return self._assets
-
-    port = _CountingPort(assets=[_asset(symbol="MSFT")])
-    get_broker_registry().register(port)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        responses = await asyncio.gather(
-            *(
-                client.get("/api/brokers/alpaca/symbols", headers=_control_headers())
-                for _ in range(3)
-            )
-        )
-
-    assert all(response.status_code == 200 for response in responses)
-    assert [row["symbol"] for row in responses[0].json()] == ["MSFT"]
-    assert _CountingPort.load_calls == 1
-
-
-async def test_symbols_endpoint_failure_is_not_cached() -> None:
-    get_broker_registry().register(
-        _FakePort(error=BrokerRateLimited("Throttled.", broker="alpaca", retry_after_ms=2000))
-    )
-    first = await _get("/api/brokers/alpaca/symbols")
-    assert first.status_code == 503
-
-    # A failed read is not sticky: the picker's Retry must reach the vendor
-    # again, not a cached 300 s error.
-    replacement = _FakePort(assets=[_asset(symbol="MSFT")])
-    get_broker_registry().register(replacement)
-    second = await _get("/api/brokers/alpaca/symbols")
-
-    assert second.status_code == 200
-    assert second.json()[0]["symbol"] == "MSFT"
 
 
 async def test_clock_endpoint_returns_vendor_evidence() -> None:

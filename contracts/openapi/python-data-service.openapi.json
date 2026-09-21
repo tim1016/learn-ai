@@ -6080,60 +6080,6 @@
         "title": "BrokerPosition",
         "type": "object"
       },
-      "BrokerSymbol": {
-        "additionalProperties": false,
-        "description": "Trimmed asset-catalog row for symbol pickers.\n\nThe browser fetches the whole catalog once per session (ADR \u2014 symbol\npicker, 2026-09-20), so the projection keeps only the fields a picker row\nrenders and drops the eligibility flags (``fractionable`` and friends)\nthat belong to order-time checks. Membership policy \u2014 which asset classes\nand statuses a given picker offers \u2014 is the picker's decision, not this\nendpoint's, so every row is served and the client filters.",
-        "properties": {
-          "asset_class": {
-            "title": "Asset Class",
-            "type": "string"
-          },
-          "exchange": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exchange"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
-          "tradable": {
-            "title": "Tradable",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "symbol",
-          "name",
-          "asset_class",
-          "exchange",
-          "status",
-          "tradable"
-        ],
-        "title": "BrokerSymbol",
-        "type": "object"
-      },
       "BuildFromCsvRequest": {
         "description": "Request to build IV surface from raw CSV data.",
         "properties": {
@@ -39902,6 +39848,54 @@
         "title": "SweepEligibilityInfo",
         "type": "object"
       },
+      "SymbolCatalogEntry": {
+        "description": "One row of the shared symbol picker's catalog (GET /api/tickers/catalog).\n\nThe membership projection for pickers: a Polygon reference-tickers walk\nprojected onto the fields a picker row renders. ``asset_class`` is\n``us_equity`` for every row the catalog serves \u2014 the walk is\n``market=\"stocks\"`` \u2014 and ``status`` carries the vendor's active flag so\na picker may offer delisted symbols deliberately (the lake backfill\npanel's toggle) without this endpoint deciding membership for it.",
+        "properties": {
+          "asset_class": {
+            "title": "Asset Class",
+            "type": "string"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "name",
+          "asset_class",
+          "exchange",
+          "status"
+        ],
+        "title": "SymbolCatalogEntry",
+        "type": "object"
+      },
       "SymbolCoverageSpan": {
         "properties": {
           "artifact_count": {
@@ -49289,60 +49283,6 @@
           }
         },
         "summary": "Get Market Status Snapshot",
-        "tags": [
-          "brokers-v2"
-        ]
-      }
-    },
-    "/api/brokers/alpaca/symbols": {
-      "get": {
-        "description": "The complete trimmed asset catalog for the shared symbol picker.\n\nServes every listed asset \u2014 active and inactive \u2014 in the picker-row\nprojection: the client applies its surface's membership policy (the\nshared picker offers US-equity actives; the lake backfill panel also\noffers delisted symbols, so a survivorship-biased universe stays a\nvisible choice rather than an accident of a server-side filter).\nUnbounded on purpose \u2014 the picker must be able to offer any listed\nsymbol, which the bounded ``/{broker}/assets`` read cannot serve.\n\nStaleness is bounded by the TTL below, which also bounds how stale a\nsymbol's ``status``/``tradable`` flags can be. That is acceptable for a\nmenu; nothing here claims a symbol is currently tradable \u2014 order-time\neligibility checks stay with the order path.",
-        "operationId": "list_alpaca_symbols_api_brokers_alpaca_symbols_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/BrokerSymbol"
-                  },
-                  "title": "Response List Alpaca Symbols Api Brokers Alpaca Symbols Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Alpaca Symbols",
         "tags": [
           "brokers-v2"
         ]
@@ -67622,6 +67562,32 @@
         "summary": "Analyze Options Strategy",
         "tags": [
           "strategy"
+        ]
+      }
+    },
+    "/api/tickers/catalog": {
+      "get": {
+        "description": "The complete US-stock reference catalog for the shared symbol picker.\n\nServes every listed symbol \u2014 active and inactive \u2014 in the picker-row\nprojection (ADR 0066): the client applies its surface's membership\npolicy, with delisted symbols behind the backfill panel's explicit\ntoggle so a survivorship-biased universe stays a visible choice. The\nwalk is ``market=\"stocks\"`` because the lake backfill pipeline can only\ncover stocks; nothing else is offered, so the ensure-coverage gate can\nnever be handed a symbol it cannot fill.\n\nServed from the data-plane core (this router runs on the coordinator in\nthe split fleet, the browser's ingress) rather than the broker surface:\nthe coordinator must construct no provider broker client (FR-041), and\na listing universe is market reference data \u2014 the Polygon account this\nprocess already owns \u2014 not broker-operator evidence.",
+        "operationId": "ticker_catalog_api_tickers_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SymbolCatalogEntry"
+                  },
+                  "title": "Response Ticker Catalog Api Tickers Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ticker Catalog",
+        "tags": [
+          "tickers"
         ]
       }
     },
