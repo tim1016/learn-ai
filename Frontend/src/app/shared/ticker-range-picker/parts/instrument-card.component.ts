@@ -67,6 +67,9 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
   },
 })
 export class InstrumentCardComponent {
+  /** Rows rendered per dropdown open — past this, search is the scaler. */
+  private static readonly MAX_VISIBLE_ROWS = 50;
+
   readonly value = model.required<TickerRange>();
   readonly appearance = input<'card' | 'flat'>('card');
 
@@ -178,6 +181,17 @@ export class InstrumentCardComponent {
     );
   });
 
+  /**
+   * The rows the dropdown actually renders. The joined universe runs to
+   * ~11k vendor symbols; rendering all of them (each an identity component)
+   * on every host is the difference between a dropdown and a freeze. The
+   * match count stays honest — the header reads `filteredTickers()` — and
+   * the search box is how an operator reaches anything past the cap.
+   */
+  readonly visibleTickers = computed<readonly PickerSymbol[]>(() =>
+    this.filteredTickers().slice(0, InstrumentCardComponent.MAX_VISIBLE_ROWS),
+  );
+
   readonly recentTickers = computed<readonly PickerSymbol[]>(() => {
     const recent = this.recent();
     if (recent.length === 0) return [];
@@ -288,8 +302,10 @@ export class InstrumentCardComponent {
       return;
     }
     void this.coverage.ensure(t.symbol, mode).then((ready) => {
-      // A failure leaves the dropdown open with the gate strip carrying the
-      // reason and the retry; nothing is selected on a false answer.
+      // The operator may have picked another instrument — or dismissed the
+      // gate — while this backfill ran. Only the gate that is still the
+      // pending pick may speak for `value()`.
+      if (this.pendingSymbol() !== t.symbol) return;
       if (!ready) return;
       const fresh = this.tickerPool().find((p) => p.symbol === t.symbol);
       this.pendingSymbol.set(null);
@@ -298,28 +314,51 @@ export class InstrumentCardComponent {
   }
 
   protected async cancelGate(): Promise<void> {
+    const pending = this.pendingSymbol();
     this.pendingSymbol.set(null);
-    await this.coverage.cancel();
+    if (pending !== null) await this.coverage.cancel();
+    this.refocusSearch();
   }
 
   protected async retryGate(): Promise<void> {
     const mode = this.backfillableMode();
-    if (mode === null) return;
+    const symbol = this.pendingSymbol();
+    if (mode === null || symbol === null) return;
     const ready = await this.coverage.retry(mode);
-    if (!ready) return;
-    const fresh = this.tickerPool().find(
-      (p) => p.symbol === this.pendingSymbol(),
-    );
+    if (!ready || this.pendingSymbol() !== symbol) return;
+    const fresh = this.tickerPool().find((p) => p.symbol === symbol);
     this.pendingSymbol.set(null);
-    if (fresh !== undefined) this.applyPick(fresh);
+    // Mirror pickTicker's fallback: the pick survives even when the fresh
+    // pool read has not caught up with the coverage it just verified.
+    this.applyPick(fresh ?? { symbol, name: symbol });
   }
 
   protected async dismissGate(): Promise<void> {
+    const pending = this.pendingSymbol();
     this.pendingSymbol.set(null);
-    await this.coverage.cancel();
+    if (pending !== null) await this.coverage.cancel();
+    this.refocusSearch();
+  }
+
+  /**
+   * Every exit from a pending gate funnels through here — a held pick made
+   * while a gate is in flight included — so a finished backfill can never
+   * overwrite a selection the operator made afterwards.
+   */
+  private abandonGate(): void {
+    if (this.pendingSymbol() === null) return;
+    this.pendingSymbol.set(null);
+    void this.coverage.cancel();
+  }
+
+  /** The gate strip's buttons unmount on dismissal; keep focus in the box. */
+  private refocusSearch(): void {
+    if (!this.open()) return;
+    queueMicrotask(() => this.searchInput()?.nativeElement.focus());
   }
 
   private applyPick(t: TickerOption): void {
+    this.abandonGate();
     const current = this.value();
     const patch: Partial<TickerRange> = { symbol: t.symbol };
     // Only move the window when the one on screen could not be run against

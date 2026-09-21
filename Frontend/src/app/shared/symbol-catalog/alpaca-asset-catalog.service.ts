@@ -3,22 +3,18 @@ import { Injectable, Injector, computed, inject, resource } from '@angular/core'
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../environments/environment';
+import type { components } from '../../api/broker.types';
 import { classifyDataLakeError } from '../data-lake';
 import type { DataLakeRead } from '../data-lake';
 
 /**
  * One row of `GET /api/brokers/alpaca/symbols` — the trimmed picker
  * projection the broker router serves from its TTL-cached vendor read.
- * Wire fields stay snake_case; nothing here is recomputed, only filtered.
+ * Aliased to the generated contract type so a backend field rename breaks
+ * compilation here instead of drifting silently at runtime; the wire stays
+ * snake_case and nothing is recomputed, only filtered.
  */
-export interface AlpacaSymbolEntry {
-  readonly symbol: string;
-  readonly name: string | null;
-  readonly asset_class: string;
-  readonly exchange: string | null;
-  readonly status: string;
-  readonly tradable: boolean;
-}
+export type AlpacaSymbolEntry = components['schemas']['BrokerSymbol'];
 
 /**
  * The only asset class the lake can backfill: `market='usa'` equities.

@@ -488,4 +488,64 @@ describe('InstrumentCardComponent', () => {
     expect(catalog.view.reloadCount).toBe(before);
     expect(alpaca.reloadCount).toBe(before);
   });
+
+  // A gate in flight must not speak for value() after the operator has
+  // moved on: the held pick wins immediately, the superseded gate is
+  // abandoned, and its eventual completion changes nothing.
+  it('a held pick made while a gate is in flight wins over the finished gate', async () => {
+    coverage.holdNext = true;
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+    component.pickTicker(pool[0]);
+    fixture.detectChanges();
+
+    expect(component.value().symbol).toBe('SPY');
+    expect(coverage.cancelCount).toBe(1);
+
+    coverage.held[0](true);
+    await flushGate();
+    expect(component.value().symbol).toBe('SPY');
+  });
+
+  it('caps the rendered rows and lets the search reach the rest', () => {
+    const many = Array.from({ length: 80 }, (_, i) => ({
+      symbol: `SYM${i}`,
+      name: `Symbol ${i}`,
+      asset_class: 'us_equity',
+      exchange: 'NASDAQ',
+      status: 'active',
+      tradable: true,
+    }));
+    alpaca.entries.set(many);
+    fixture.detectChanges();
+    openDropdown();
+    component.onSearchInput('SYM');
+    fixture.detectChanges();
+
+    // 80 vendor matches, 50 rendered: the search is the scaler past the cap.
+    const rows = fixture.nativeElement.querySelectorAll('.dropdown__scroll .row');
+    expect(rows.length).toBe(50);
+    // The header count stays honest about what the search covers.
+    expect(fixture.nativeElement.textContent).toContain('80 matches');
+  });
+
+  it('offers no Retry for a refusal retrying cannot fix', async () => {
+    fixture.componentRef.setInput('adjustmentMode', 'lean_adjusted');
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'NVDA', name: 'NVIDIA', exchange: 'NASDAQ' });
+    await flushGate();
+
+    const labels = Array.from(
+      fixture.nativeElement.querySelectorAll('.dropdown__gate button'),
+    ).map((b) => (b as HTMLButtonElement).textContent?.trim());
+    expect(labels).toContain('Dismiss');
+    expect(labels).not.toContain('Retry');
+  });
 });

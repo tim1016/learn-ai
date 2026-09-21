@@ -65,11 +65,19 @@ export function joinCatalog(
   lakePool: readonly TickerOption[],
   vendorEntries: readonly AlpacaSymbolEntry[] | null,
 ): readonly PickerSymbol[] {
+  if (vendorEntries === null) {
+    return lakePool.map((option) => ({ ...option, delisted: false }));
+  }
+
+  // The lake pool re-joins on every catalog reload, so the vendor lookup
+  // is a Map — a linear .find per lake row multiplied by backfill reloads.
+  const vendorBySymbol = new Map(
+    vendorEntries.map((entry) => [entry.symbol, entry]),
+  );
   const lakeRows: readonly PickerSymbol[] = lakePool.map((option) => {
-    const vendor = vendorEntries?.find((entry) => entry.symbol === option.symbol);
+    const vendor = vendorBySymbol.get(option.symbol);
     return { ...option, delisted: vendor?.status === 'inactive' };
   });
-  if (vendorEntries === null) return lakeRows;
 
   const held = new Set(lakePool.map((option) => option.symbol));
   const vendorOnly = offerableVendorRows(vendorEntries)

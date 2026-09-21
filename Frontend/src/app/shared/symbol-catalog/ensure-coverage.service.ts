@@ -1,16 +1,47 @@
 import { Injectable, inject, signal } from '@angular/core';
 
-import { JobsService } from '../../services/jobs.service';
+import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
 import { DataLakeService, classifyDataLakeError } from '../data-lake';
-import { MAX_TRADING_RANGE_DAYS, tradingDateToMs } from '../data-lake';
+import { tradingDateToMs, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
 import type { DataRunSpec, PriceAdjustmentMode } from '../data-lake';
 import { BACKFILL_JOB_TYPE } from '../data-lake/backfill-job-type';
 import { TickerCatalogService } from '../ticker-catalog';
-import { etIsoDate } from '../date/et-midnight';
+import { etIsoDate, isoDateAfter } from '../date/et-midnight';
 import { toMostRecentTradingDayIso } from '../date/weekday';
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+/**
+ * The widest backfill window that fits the data plane's **inclusive** range
+ * cap, ending at the most recent trading day on or before `todayIso`.
+ *
+ * A naive `today - cap` start is wrong twice over: the cap counts the window
+ * inclusively (`(end - start).days + 1`), and the weekday walk-back on the
+ * endpoints can add up to three more days (1830 is not a whole number of
+ * weeks), which is how a window composed on a Monday lands on a 422 while
+ * the same code passes on a Saturday. The start therefore begins four days
+ * inside the cap and steps forward — a step that keeps both endpoints on
+ * weekdays — until the inclusive span fits, and the caller still runs the
+ * result through `tradingRangeRejection` so a cap the data plane lowered
+ * fails loudly instead of shipping an oversized spec.
+ */
+export function fitBackfillWindow(
+  todayIso: string,
+  capDays: number,
+): { start: string; end: string } {
+  const end = toMostRecentTradingDayIso(todayIso);
+  let start = toMostRecentTradingDayIso(end, -(capDays - 4));
+  let guard = 0;
+  while (
+    guard <= 7 &&
+    (tradingRangeSpanDays(start, end) ?? capDays + 1) > capDays
+  ) {
+    start = isoDateAfter(start);
+    guard++;
+  }
+  return { start, end };
 }
 
 /**
@@ -33,6 +64,24 @@ export interface CoverageGateState {
 type TerminalResolution =
   | { outcome: 'ready' }
   | { outcome: 'failed'; reason: string; message: string };
+
+/**
+ * The one in-flight gate. It used to be five loose fields, and a cancel
+ * landing while `startJob` was still in flight fell through all of them —
+ * the job id was written back after the cancel, and the dismissed strip
+ * re-opened. Every late asynchronous continuation now carries the entry's
+ * token and re-checks `live(token)` before it may touch state.
+ */
+interface ActiveRun {
+  readonly token: number;
+  readonly symbol: string;
+  run: Promise<boolean>;
+  /** The job's id once the server accepted it — `null` while submitting. */
+  jobId: string | null;
+  unsubscribe: (() => void) | null;
+  /** Resolves the run `false` when the gate is torn down mid-flight. */
+  disarm: (() => void) | null;
+}
 
 /**
  * Turns "the picker offered a symbol the lake doesn't hold" into "the lake
@@ -58,12 +107,8 @@ export class EnsureCoverageService {
   /** The gate the picker card renders, if one is open. */
   readonly active = this.activeState.asReadonly();
 
-  private inFlightSymbol: string | null = null;
-  private inFlight: Promise<boolean> | null = null;
-  private inFlightJobId: string | null = null;
-  private unsubscribeEvents: (() => void) | null = null;
-  /** Resolves the in-flight gate's promise when the run is abandoned. */
-  private inFlightDisarm: (() => void) | null = null;
+  private current: ActiveRun | null = null;
+  private nextToken = 1;
 
   /** True when the lake already holds runnable trade bars for `symbol`. */
   isHeld(symbol: string, mode: PriceAdjustmentMode): boolean {
@@ -80,12 +125,10 @@ export class EnsureCoverageService {
    */
   async ensure(symbol: string, mode: BackfillableMode): Promise<boolean> {
     if (this.isHeld(symbol, mode)) return true;
-    if (this.inFlightSymbol === symbol && this.inFlight !== null) {
-      return this.inFlight;
-    }
-    if (this.inFlight !== null) await this.abandonActive();
+    if (this.current?.symbol === symbol) return this.current.run;
+    this.abandonActive();
 
-    this.inFlightSymbol = symbol;
+    const token = this.nextToken++;
     this.activeState.set({
       symbol,
       phase: 'backfilling',
@@ -93,34 +136,41 @@ export class EnsureCoverageService {
       reason: null,
       message: null,
     });
-    const run = this.runBackfill(symbol, mode).finally(() => {
-      if (this.inFlightSymbol === symbol) {
-        this.inFlightSymbol = null;
-        this.inFlight = null;
-        this.inFlightJobId = null;
-      }
+    const entry: ActiveRun = {
+      token,
+      symbol,
+      run: null!,
+      jobId: null,
+      unsubscribe: null,
+      disarm: null,
+    };
+    this.current = entry;
+    const run = this.runBackfill(symbol, mode, entry);
+    entry.run = run;
+    // A settled run — covered, failed, cancelled or superseded — releases
+    // the gate slot immediately, so the same symbol is freely re-ensurable
+    // while the failed strip it left behind stays on screen until retry or
+    // dismissal.
+    void run.then(() => {
+      if (this.current === entry) this.current = null;
     });
-    this.inFlight = run;
     return run;
   }
 
   /**
-   * Stop waiting on the active gate. The server job is cancelled best-effort
-   * — a refusal to cancel surfaces as a rejected promise to the caller
-   * (the card dismisses the strip regardless), and a job that survives
-   * simply finishes writing in the background.
+   * Tear the gate down on the operator's behalf: stop observing, resolve
+   * the waiter, and cancel the server job once its id is known. A refusal
+   * to cancel propagates to the caller; a job that survives simply
+   * finishes writing in the background.
    */
   async cancel(): Promise<void> {
-    const jobId = this.inFlightJobId;
-    this.inFlightSymbol = null;
-    this.inFlight = null;
-    this.inFlightJobId = null;
+    const entry = this.current;
+    this.current = null;
     this.activeState.set(null);
-    this.closeStream();
-    const disarm = this.inFlightDisarm;
-    this.inFlightDisarm = null;
-    disarm?.();
-    if (jobId !== null) await this.jobs.cancelJob(jobId);
+    if (entry === null) return;
+    entry.unsubscribe?.();
+    entry.disarm?.();
+    if (entry.jobId !== null) await this.jobs.cancelJob(entry.jobId);
   }
 
   /** Retry the gate's most recent failed symbol. */
@@ -137,37 +187,47 @@ export class EnsureCoverageService {
    * covered".
    */
   refuse(symbol: string, reason: string, message: string): void {
-    this.fail(symbol, reason, message);
+    this.abandonActive();
+    this.activeState.set({
+      symbol,
+      phase: 'failed',
+      percent: null,
+      reason,
+      message,
+    });
   }
 
-  private async abandonActive(): Promise<void> {
-    // A superseded gate's job keeps running server-side — see the class
-    // docstring — so only the observation is torn down here. Its promise
-    // resolves false rather than hanging on a stream nobody follows.
-    this.inFlightSymbol = null;
-    this.inFlight = null;
-    this.inFlightJobId = null;
+  /**
+   * The superseded gate's job keeps running server-side — see the class
+   * docstring — so only the observation is torn down here.
+   */
+  private abandonActive(): void {
+    const entry = this.current;
+    this.current = null;
+    if (entry === null) return;
     this.activeState.set(null);
-    this.closeStream();
-    const disarm = this.inFlightDisarm;
-    this.inFlightDisarm = null;
-    disarm?.();
+    entry.unsubscribe?.();
+    entry.disarm?.();
   }
 
-  private closeStream(): void {
-    this.unsubscribeEvents?.();
-    this.unsubscribeEvents = null;
+  private live(token: number): boolean {
+    return this.current?.token === token;
   }
 
-  private async runBackfill(symbol: string, mode: BackfillableMode): Promise<boolean> {
+  private async runBackfill(
+    symbol: string,
+    mode: BackfillableMode,
+    entry: ActiveRun,
+  ): Promise<boolean> {
     const defaults = await this.dataLake.backfillDefaults();
+    if (!this.live(entry.token)) return false;
     if (defaults.kind !== 'ok') {
-      return this.fail(symbol, 'backfill_defaults_unavailable', defaults.message);
+      return this.fail(entry, 'backfill_defaults_unavailable', defaults.message);
     }
     const digest = defaults.value.lean_image_digest;
     if (digest === null) {
       return this.fail(
-        symbol,
+        entry,
         'backfill_digest_missing',
         'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.',
       );
@@ -176,18 +236,20 @@ export class EnsureCoverageService {
     // Full allowed history, ending at the most recent trading day: the
     // picker's gate does not know the run window a sibling card may later
     // hold, and a maximally covered symbol cannot strand a narrower window.
-    // Composed like the Observatory panel's form — checked, not asserted,
-    // so a date-helper change fails safe instead of sending NaN.
     const todayIso = etIsoDate(Date.now());
-    const startMs = tradingDateToMs(
-      toMostRecentTradingDayIso(todayIso, -MAX_TRADING_RANGE_DAYS),
+    const { start, end } = fitBackfillWindow(todayIso, defaults.value.max_trading_range_days);
+    const rejection = tradingRangeRejection(
+      start,
+      end,
+      defaults.value.max_trading_range_days,
     );
-    const endMs = tradingDateToMs(toMostRecentTradingDayIso(todayIso));
-    if (startMs === null || endMs === null) {
+    const startMs = tradingDateToMs(start);
+    const endMs = tradingDateToMs(end);
+    if (rejection !== null || startMs === null || endMs === null) {
       return this.fail(
-        symbol,
+        entry,
         'backfill_window_invalid',
-        'The backfill window could not be composed from the trading calendar.',
+        rejection ?? 'The backfill window could not be composed from the trading calendar.',
       );
     }
 
@@ -208,10 +270,16 @@ export class EnsureCoverageService {
       jobId = await this.jobs.startJob(BACKFILL_JOB_TYPE, { spec });
     } catch (error) {
       const classified = classifyDataLakeError(error);
-      return this.fail(symbol, 'backfill_submission_failed', classified.message);
+      return this.fail(entry, 'backfill_submission_failed', classified.message);
     }
-    this.inFlightJobId = jobId;
-    return await this.awaitTerminal(jobId, symbol, mode);
+    // The operator cancelled or moved on while submission was in flight:
+    // the job id only exists now, so stop the just-accepted job here.
+    if (!this.live(entry.token)) {
+      await this.jobs.cancelJob(jobId);
+      return false;
+    }
+    entry.jobId = jobId;
+    return await this.awaitTerminal(jobId, symbol, mode, entry);
   }
 
   /** Folds the job's SSE stream to a verdict, mirroring the panel store's fold. */
@@ -219,22 +287,20 @@ export class EnsureCoverageService {
     jobId: string,
     symbol: string,
     mode: BackfillableMode,
+    entry: ActiveRun,
   ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       const done = (resolution: TerminalResolution) => {
-        // A gate cancelled or superseded mid-flight is disarmed: its stream
-        // is closed, but a frame already in the pipe must not re-open the
-        // strip or settle a promise nobody is waiting on.
-        if (this.inFlightJobId !== jobId) {
+        if (!this.live(entry.token)) {
           resolve(false);
           return;
         }
-        this.inFlightDisarm = null;
-        this.closeStream();
-        void this.settle(symbol, mode, resolution).then(resolve);
+        entry.unsubscribe?.();
+        void this.settle(symbol, mode, resolution, entry).then(resolve);
       };
-      this.inFlightDisarm = () => resolve(false);
-      this.unsubscribeEvents = this.jobs.onEvent(jobId, (event) => {
+      entry.disarm = () => resolve(false);
+      entry.unsubscribe = this.jobs.onEvent(jobId, (event) => {
+        if (!this.live(entry.token)) return;
         switch (event.type) {
           case 'job.progress': {
             const current = event['current'];
@@ -279,31 +345,34 @@ export class EnsureCoverageService {
     symbol: string,
     mode: BackfillableMode,
     resolution: TerminalResolution,
+    entry: ActiveRun,
   ): Promise<boolean> {
     const view = this.lake.viewFor(mode);
     view.reload();
     if (resolution.outcome === 'failed') {
-      return this.fail(symbol, resolution.reason, resolution.message);
+      return this.fail(entry, resolution.reason, resolution.message);
     }
     if (this.isHeld(symbol, mode)) {
       this.activeState.set(null);
       return true;
     }
     return this.fail(
-      symbol,
+      entry,
       'backfill_empty',
       'The backfill finished, but the lake still holds no bars for this symbol.',
     );
   }
 
-  private fail(symbol: string, reason: string, message: string): false {
-    this.activeState.set({
-      symbol,
-      phase: 'failed',
-      percent: null,
-      reason,
-      message,
-    });
+  private fail(entry: ActiveRun, reason: string, message: string): false {
+    if (this.live(entry.token)) {
+      this.activeState.set({
+        symbol: entry.symbol,
+        phase: 'failed',
+        percent: null,
+        reason,
+        message,
+      });
+    }
     return false;
   }
 }

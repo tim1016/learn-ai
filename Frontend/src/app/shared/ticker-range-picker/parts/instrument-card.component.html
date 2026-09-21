@@ -82,7 +82,7 @@
                   />
                   <span class="row__name">{{ t.name }}</span>
                   <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                  <span class="row__held mono" [class.row__held--unheld]="t.lastHeld === null">{{ heldCopy(t) }}</span>
+                  <span class="row__held mono" [class.row__held--unheld]="!t.lastHeld">{{ heldCopy(t) }}</span>
                 </button>
               }
             }
@@ -95,7 +95,7 @@
                 }}
               }
             </div>
-            @for (t of filteredTickers(); track trackBySymbol($index, t)) {
+            @for (t of visibleTickers(); track trackBySymbol($index, t)) {
               <button
                 type="button"
                 class="row"
@@ -112,7 +112,7 @@
                 />
                 <span class="row__name">{{ t.name }}</span>
                 <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                <span class="row__held mono" [class.row__held--unheld]="t.lastHeld === null">{{ heldCopy(t) }}</span>
+                <span class="row__held mono" [class.row__held--unheld]="!t.lastHeld">{{ heldCopy(t) }}</span>
               </button>
             }
           </div>
@@ -134,9 +134,11 @@
                 <span class="dropdown__gate-msg">
                   <span class="mono">{{ gate.reason | receiptLabel }}</span> — {{ gate.message }}
                 </span>
-                <button type="button" class="dropdown__retry" (click)="retryGate()">
-                  Retry
-                </button>
+                @if (gate.reason !== 'view_not_backfillable') {
+                  <button type="button" class="dropdown__retry" (click)="retryGate()">
+                    Retry
+                  </button>
+                }
                 <button type="button" class="dropdown__retry" (click)="dismissGate()">
                   Dismiss
                 </button>

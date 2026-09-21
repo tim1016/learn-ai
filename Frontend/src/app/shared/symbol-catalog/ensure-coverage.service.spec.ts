@@ -2,12 +2,13 @@ import { TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
-import { DataLakeService } from '../data-lake';
+import { DataLakeService, tradingRangeRejection, tradingRangeSpanDays } from '../data-lake';
 import type { BackfillDefaults, DataLakeRead } from '../data-lake';
+import { EnsureCoverageService, fitBackfillWindow } from './ensure-coverage.service';
+import { etIsoDate } from '../date/et-midnight';
 import { fakeTickerCatalog, provideFakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { FakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
-import { EnsureCoverageService } from './ensure-coverage.service';
 
 const DEFAULTS: BackfillDefaults = {
   market: 'usa',
@@ -28,6 +29,8 @@ interface FakeJobs {
   readonly started: { type: string; payload: Record<string, unknown> }[];
   readonly cancelled: string[];
   startError: Error | null;
+  /** When set, `startJob` awaits this instead of resolving immediately. */
+  holdStart: Promise<string> | null;
   emit(jobId: string, event: JobStreamEvent): void;
 }
 
@@ -43,11 +46,13 @@ function configureService(
     started,
     cancelled,
     startError: null,
+    holdStart: null,
     emit(jobId, event) {
       handlers.get(jobId)?.(event);
     },
   };
   const catalog = fakeTickerCatalog([SPY]);
+  let startSeq = 0;
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [
@@ -57,8 +62,12 @@ function configureService(
         useValue: {
           startJob: async (type: string, payload: Record<string, unknown>) => {
             if (jobs.startError !== null) throw jobs.startError;
+            if (jobs.holdStart !== null) await jobs.holdStart;
             started.push({ type, payload });
-            return `job-${started.length}`;
+            startSeq += 1;
+            const id = `job-${startSeq}`;
+            handlers.set(id, () => undefined);
+            return id;
           },
           onEvent: (id: string, handler: (event: JobStreamEvent) => void) => {
             handlers.set(id, handler);
@@ -110,6 +119,15 @@ describe('EnsureCoverageService', () => {
     expect(spec['market']).toBe('usa');
     expect(typeof spec['lean_image_digest']).toBe('string');
     expect(spec['start_trading_date_ms']).toBeLessThan(spec['end_trading_date_ms'] as number);
+    // The composed window must fit the cap the data plane enforces — the
+    // reviewer's bug had a naive `today - cap` start land on a 422 every
+    // weekday, because the inclusive span plus weekday walk-backs reached
+    // 1831–1833 days. Assert the same invariant the backend applies.
+    const startIso = etIsoDate(spec['start_trading_date_ms'] as number);
+    const endIso = etIsoDate(spec['end_trading_date_ms'] as number);
+    expect(
+      tradingRangeRejection(startIso, endIso, DEFAULTS.max_trading_range_days),
+    ).toBeNull();
     // In flight: the gate names the symbol and carries no failure.
     expect(service.active()).toMatchObject({ symbol: 'NVDA', phase: 'backfilling' });
 
@@ -245,5 +263,57 @@ describe('EnsureCoverageService', () => {
 
     expect(await first).toBe(true);
     expect(await second).toBe(true);
+  });
+
+  it('cancels a job accepted after the operator already walked away', async () => {
+    const { service, jobs, catalog } = configureService();
+
+    // Hold startJob so the gate is stuck mid-submission — the exact window
+    // where no job id exists yet and the old field-based state lost it.
+    let release!: (id: string) => void;
+    jobs.holdStart = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+
+    const run = service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    const cancelling = service.cancel();
+    await flush();
+    release('job-1');
+    await flush();
+    await cancelling;
+
+    // Submission then resolves into a disarmed gate: the just-accepted job
+    // is cancelled, the run answers false, and nothing re-opens the strip.
+    expect(jobs.cancelled).toEqual(['job-1']);
+    expect(await run).toBe(false);
+    expect(service.active()).toBeNull();
+    expect(catalog.view.reloadCount).toBe(0);
+  });
+});
+
+describe('fitBackfillWindow', () => {
+  // One table row per weekday of a real week: the original bug was
+  // weekday-dependent (Mon–Thu composed 1831–1833 inclusive days against
+  // the 1830 cap; only a Saturday pass survived), so the fixture has to
+  // walk a full week, not use whatever day CI happens to run on.
+  const DAYS = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20'];
+
+  it.each(DAYS)('fits an inclusive window under the cap from %s', (todayIso) => {
+    const { start, end } = fitBackfillWindow(todayIso, DEFAULTS.max_trading_range_days);
+
+    expect(tradingRangeSpanDays(start, end)).toBeLessThanOrEqual(
+      DEFAULTS.max_trading_range_days,
+    );
+    expect(tradingRangeRejection(start, end, DEFAULTS.max_trading_range_days)).toBeNull();
+  });
+
+  it('ends at a trading day, never a weekend', () => {
+    for (const todayIso of DAYS) {
+      const { end } = fitBackfillWindow(todayIso, DEFAULTS.max_trading_range_days);
+      const weekday = new Date(`${end}T00:00:00Z`).getUTCDay();
+      expect(weekday).toBeGreaterThanOrEqual(1);
+      expect(weekday).toBeLessThanOrEqual(5);
+    }
   });
 });

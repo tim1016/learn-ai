@@ -115,6 +115,22 @@ describe('LakeBackfillPanelComponent', () => {
     expect(payload.spec.symbols).toEqual(['SPY', 'QQQ']);
   });
 
+  it("keeps the operator's picks when the host rebinds the seed window", async () => {
+    // The host binds the seeds from the URL query; a reactive seed would
+    // wipe the chips every time the heatmap's window moved.
+    const { fixture, detectChanges } = await renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'SPY (remove)' }));
+    detectChanges();
+    expect(screen.queryByRole('button', { name: /remove/ })).toBeNull();
+
+    fixture.componentRef.setInput('seedSymbols', 'SPY, QQQ, TSLA');
+    fixture.componentRef.setInput('seedStartTradingDate', '2026-06-01');
+    fixture.componentRef.setInput('seedEndTradingDate', '2026-06-30');
+    detectChanges();
+
+    expect(screen.queryByRole('button', { name: /remove/ })).toBeNull();
+  });
+
   it('offers delisted symbols only behind the explicit toggle', async () => {
     // Delisted history is real and backfillable, but a universe of only
     // still-listed names is the survivorship trap: offering it by default

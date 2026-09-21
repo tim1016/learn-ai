@@ -6,6 +6,7 @@ import {
   inject,
   input,
   linkedSignal,
+  OnInit,
   output,
   signal,
 } from '@angular/core';
@@ -78,16 +79,38 @@ export class LakeBackfillPanelComponent {
   /** Fired once a run reaches any terminal phase, so the caller can re-read coverage. */
   readonly runFinished = output();
 
-  protected readonly selected = linkedSignal<MultiTickerRange>(() => ({
-    // Seeds come from the coverage board, which only ever names storable
-    // symbols; the length bound is the same constant the form used to
-    // enforce on hand-typed text. The window mirrors the seeds — the
-    // panel keeps its own date fields as the submit authority.
-    symbols: [...parseSymbols(this.seedSymbols(), 20).symbols],
-    from: this.seedStartTradingDate(),
-    to: this.seedEndTradingDate(),
+  /**
+   * The panel's own date fields are the submit authority — the `from`/`to`
+   * carried here are dead weight the host never reads — and the seeds apply
+   * exactly once, in `ngOnInit` (the first point where the required inputs
+   * are guaranteed bound): the host rebinds `seedSymbols` and the seed
+   * dates from the URL query, so anything reactive here would wipe the
+   * operator's picks every time the heatmap's window moved. Seed
+   * invalidation is a deliberate operator action (reload), not a side
+   * effect of navigation.
+   */
+  protected readonly selected = signal<MultiTickerRange>({
+    symbols: [],
+    from: '',
+    to: '',
     resolution: 'daily',
-  }));
+  });
+
+  ngOnInit(): void {
+    // Coverage-board seeds always name storable symbols; the length bound
+    // is the same one the removed free-text input enforced.
+    this.selected.set({
+      symbols: [
+        ...parseSymbols(
+          this.seedSymbols(),
+          this.defaults()?.max_symbol_length ?? 20,
+        ).symbols,
+      ],
+      from: this.seedStartTradingDate(),
+      to: this.seedEndTradingDate(),
+      resolution: 'daily',
+    });
+  }
   protected readonly startTradingDate = linkedSignal(() => this.seedStartTradingDate());
   protected readonly endTradingDate = linkedSignal(() => this.seedEndTradingDate());
   protected readonly includeQuotes = signal(false);

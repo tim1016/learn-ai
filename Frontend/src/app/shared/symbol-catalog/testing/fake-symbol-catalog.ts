@@ -50,6 +50,9 @@ export interface FakeEnsureCoverage {
   readonly refusals: { symbol: string; reason: string; message: string }[];
   cancelCount: number;
   lastRetryMode: BackfillableMode | null;
+  /** When set, the next ensure() returns a promise the test resolves. */
+  holdNext: boolean;
+  readonly held: ((ready: boolean) => void)[];
   ensure(symbol: string, mode: BackfillableMode): Promise<boolean>;
   refuse(symbol: string, reason: string, message: string): void;
   cancel(): Promise<void>;
@@ -64,12 +67,27 @@ export function fakeEnsureCoverage(): FakeEnsureCoverage {
     refusals: [],
     cancelCount: 0,
     lastRetryMode: null,
+    holdNext: false,
+    held: [],
     ensure(symbol: string, mode: BackfillableMode): Promise<boolean> {
       this.ensureCalls.push({ symbol, mode });
+      if (this.holdNext) {
+        this.holdNext = false;
+        return new Promise<boolean>((resolve) => this.held.push(resolve));
+      }
       return Promise.resolve(this.ensureResults.shift() ?? true);
     },
     refuse(symbol: string, reason: string, message: string): void {
       this.refusals.push({ symbol, reason, message });
+      // The real service renders a refusal through the same failed state as
+      // a job failure — mirror that so strip-visibility tests are honest.
+      this.active.set({
+        symbol,
+        phase: 'failed',
+        percent: null,
+        reason,
+        message,
+      });
     },
     cancel(): Promise<void> {
       this.cancelCount++;
