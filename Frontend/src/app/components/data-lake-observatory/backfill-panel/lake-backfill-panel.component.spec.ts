@@ -4,9 +4,13 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { JobsService, type JobState } from '../../../services/jobs.service';
+import { JobsService, type JobState, type JobStreamEvent } from '../../../services/jobs.service';
 import { DataLakeBackfillStore } from '../lib/data-lake-backfill.store';
-import type { BackfillDefaults, BackfillFailure, PriceAdjustmentMode } from '../../../shared/data-lake';
+import type {
+  BackfillDefaults,
+  BackfillFailure,
+  PriceAdjustmentMode,
+} from '../../../shared/data-lake';
 import {
   fakeVendorCatalog,
   provideFakeVendorCatalog,
@@ -37,7 +41,7 @@ function vendorEntry(overrides: Partial<VendorSymbolEntry> = {}): VendorSymbolEn
     asset_class: 'us_equity',
     exchange: 'ARCA',
     status: 'active',
-   
+
     ...overrides,
   };
 }
@@ -74,7 +78,11 @@ async function renderPanel(options: PanelOptions = {}) {
   // DataLakeBackfillStore rides the shared BackfillJobRunner, which opens
   // the one stream through JobsService.onEvent() — start() registers a
   // listener through it.
-  const onEvent = vi.fn().mockReturnValue(vi.fn());
+  let eventHandler: ((event: JobStreamEvent) => void) | undefined;
+  const onEvent = vi.fn((_jobId: string, handler: (event: JobStreamEvent) => void) => {
+    eventHandler = handler;
+    return vi.fn();
+  });
   const jobs = signal(options.liveJobs ?? []);
   const alpaca: FakeVendorCatalog = fakeVendorCatalog(
     options.vendorEntries ?? [
@@ -85,7 +93,10 @@ async function renderPanel(options: PanelOptions = {}) {
   const lake = fakeTickerCatalog(options.lakePool ?? []);
   const view = await render(LakeBackfillPanelComponent, {
     providers: [
-      { provide: JobsService, useValue: { startJob, cancelJob, onEvent, jobs } },
+      {
+        provide: JobsService,
+        useValue: { startJob, cancelJob, onEvent, jobs },
+      },
       provideFakeVendorCatalog(alpaca),
       provideFakeTickerCatalog(lake),
     ],
@@ -98,7 +109,15 @@ async function renderPanel(options: PanelOptions = {}) {
     },
   });
   const store = view.fixture.debugElement.injector.get(DataLakeBackfillStore);
-  return { ...view, startJob, cancelJob, store, alpaca, lake };
+  return {
+    ...view,
+    startJob,
+    cancelJob,
+    store,
+    alpaca,
+    lake,
+    emitJobEvent: (event: JobStreamEvent) => eventHandler?.(event),
+  };
 }
 
 describe('LakeBackfillPanelComponent', () => {
@@ -148,7 +167,11 @@ describe('LakeBackfillPanelComponent', () => {
     const { alpaca } = await renderPanel({
       vendorEntries: [
         vendorEntry({ symbol: 'SPY' }),
-        vendorEntry({ symbol: 'OLD', name: 'Delisted Corp', status: 'inactive', }),
+        vendorEntry({
+          symbol: 'OLD',
+          name: 'Delisted Corp',
+          status: 'inactive',
+        }),
       ],
     });
     const user = userEvent.setup();
@@ -168,7 +191,11 @@ describe('LakeBackfillPanelComponent', () => {
     const { detectChanges } = await renderPanel({
       vendorEntries: [
         vendorEntry({ symbol: 'SPY' }),
-        vendorEntry({ symbol: 'OLD', name: 'Delisted Corp', status: 'inactive' }),
+        vendorEntry({
+          symbol: 'OLD',
+          name: 'Delisted Corp',
+          status: 'inactive',
+        }),
       ],
     });
     const user = userEvent.setup();
@@ -204,7 +231,11 @@ describe('LakeBackfillPanelComponent', () => {
       ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -265,12 +296,12 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it('renders live progress and each session as it lands', async () => {
-    const { store, detectChanges } = await renderPanel();
+    const { store, detectChanges, emitJobEvent } = await renderPanel();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
 
-    store.ingestEvent({ type: 'job.progress', current: 1, total: 3, unit: 'days' });
+    emitJobEvent({ type: 'job.progress', current: 1, total: 3, unit: 'days' });
     store.ingestEvent({
       type: 'data_lake.backfill_day',
       trading_date_ms: MAY_20_OPEN_MS,
@@ -289,7 +320,7 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it('shows a typed failure reason through the receipt-label pipe', async () => {
-    const { store, detectChanges } = await renderPanel();
+    const { store, detectChanges, emitJobEvent } = await renderPanel();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
@@ -315,7 +346,7 @@ describe('LakeBackfillPanelComponent', () => {
         },
       ],
     });
-    store.ingestEvent({ type: 'job.completed' });
+    emitJobEvent({ type: 'job.completed' });
     detectChanges();
 
     expect(screen.getByText('Provider Entitlement Error')).toBeTruthy();
@@ -329,13 +360,17 @@ describe('LakeBackfillPanelComponent', () => {
       // that the operator stopped — between per-day writes still left
       // completed artifacts on disk. Every terminal phase leaves the
       // heatmap stale, not just the successful one.
-      const { store, fixture, detectChanges } = await renderPanel();
+      const { store, fixture, detectChanges, emitJobEvent } = await renderPanel();
       const finished = vi.fn();
       fixture.componentInstance.runFinished.subscribe(finished);
 
       fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
       await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
-      store.ingestEvent({ type: terminalEvent, code: 'io_error', message: 'disk full' });
+      emitJobEvent({
+        type: terminalEvent,
+        code: 'io_error',
+        message: 'disk full',
+      });
       detectChanges();
 
       expect(finished).toHaveBeenCalledTimes(1);
@@ -352,25 +387,41 @@ describe('LakeBackfillPanelComponent', () => {
         'The data plane has no pinned LEAN image digest, so a backfill spec cannot be composed.',
       ),
     ).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
     expect(startJob).not.toHaveBeenCalled();
   });
 
   it('blocks submission on a browser that cannot mint a durable request id', async () => {
     const realCrypto = globalThis.crypto;
-    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: {},
+    });
     try {
       const { startJob } = await renderPanel();
 
-      expect(screen.getByText('This browser cannot create a durable request identity.')).toBeTruthy();
       expect(
-        (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+        screen.getByText('This browser cannot create a durable request identity.'),
+      ).toBeTruthy();
+      expect(
+        (
+          screen.getByRole('button', {
+            name: 'Run backfill',
+          }) as HTMLButtonElement
+        ).disabled,
       ).toBe(true);
       expect(startJob).not.toHaveBeenCalled();
     } finally {
-      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: realCrypto });
+      Object.defineProperty(globalThis, 'crypto', {
+        configurable: true,
+        value: realCrypto,
+      });
     }
   });
 
@@ -395,7 +446,11 @@ describe('LakeBackfillPanelComponent', () => {
       screen.getByText('That window is 1831 days; the data plane accepts at most 1830.'),
     ).toBeTruthy();
     expect(
-      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     expect(startJob).not.toHaveBeenCalled();
@@ -417,11 +472,17 @@ describe('LakeBackfillPanelComponent', () => {
     // Nothing derives lean_adjusted — it would come from raw bars plus
     // factor files and no producer exists — so the job would succeed and
     // leave the selected view exactly as empty as it started.
-    const { startJob } = await renderPanel({ priceAdjustmentMode: 'lean_adjusted' });
+    const { startJob } = await renderPanel({
+      priceAdjustmentMode: 'lean_adjusted',
+    });
 
     expect(screen.getByText(/Nothing derives/)).toBeTruthy();
     expect(
-      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'Run backfill',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     expect(startJob).not.toHaveBeenCalled();
@@ -491,7 +552,7 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it('adopts a backfill that was already running when the panel mounted', async () => {
-    const { store, fixture, detectChanges } = await renderPanel({
+    const { store, fixture, detectChanges, emitJobEvent } = await renderPanel({
       liveJobs: [{ id: 'job-live', type: 'data_lake_backfill', status: 'running' }],
     });
     const finished = vi.fn();
@@ -500,7 +561,7 @@ describe('LakeBackfillPanelComponent', () => {
     await vi.waitFor(() => expect(store.jobId()).toBe('job-live'));
     expect(screen.getByText(/Reattached to a backfill that was already running/)).toBeTruthy();
 
-    store.ingestEvent({ type: 'job.completed' });
+    emitJobEvent({ type: 'job.completed' });
     detectChanges();
 
     expect(finished).toHaveBeenCalledTimes(1);
@@ -519,11 +580,11 @@ describe('LakeBackfillPanelComponent', () => {
   });
 
   it("names a terminal job failure with the framework's own code", async () => {
-    const { store, detectChanges } = await renderPanel();
+    const { store, detectChanges, emitJobEvent } = await renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
     await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
 
-    store.ingestEvent({
+    emitJobEvent({
       type: 'job.failed',
       code: 'fetch_timeout',
       message: 'Polygon did not answer within 600s.',
@@ -538,7 +599,10 @@ describe('LakeBackfillPanelComponent', () => {
     await renderPanel();
 
     const results = await axe.run(document.body, {
-      rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
     });
 
     expect(results.violations).toEqual([]);

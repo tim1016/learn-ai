@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.models.requests import RelatedTickersRequest, TickerDetailRequest, TickerListRequest
 from app.models.responses import (
@@ -16,7 +17,10 @@ from app.models.responses import (
 )
 from app.schemas.ticker_catalog import SymbolCatalogEntry
 from app.services.polygon_client import PolygonClientService
-from app.services.ticker_catalog_service import TickerCatalogService
+from app.services.ticker_catalog_service import (
+    TickerCatalogService,
+    get_ticker_catalog_service,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -102,14 +106,16 @@ async def get_related_tickers(request: RelatedTickersRequest) -> RelatedTickersR
         )
 
 
-# Transport only: the TTL cache, the single-flight onto one vendor walk and
-# the failure eviction live in TickerCatalogService; this route projects a
-# failed walk onto HTTP and nothing else.
-catalog_service = TickerCatalogService(polygon_client)
+TickerCatalogServiceDep = Annotated[
+    TickerCatalogService,
+    Depends(get_ticker_catalog_service),
+]
 
 
 @router.get("/catalog", response_model=list[SymbolCatalogEntry])
-async def ticker_catalog() -> list[SymbolCatalogEntry]:
+async def ticker_catalog(
+    catalog_service: TickerCatalogServiceDep,
+) -> list[SymbolCatalogEntry]:
     """The complete US-stock reference catalog for the shared symbol picker.
 
     Serves every listed symbol — active and inactive — in the picker-row
@@ -131,7 +137,11 @@ async def ticker_catalog() -> list[SymbolCatalogEntry]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[Tickers] Error fetching the symbol catalog: {e!s}")
+        logger.error(
+            "[Tickers] Error fetching the symbol catalog",
+            extra={"error": str(e)},
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Symbol catalog is unavailable: {e!s}",

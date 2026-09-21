@@ -17,6 +17,16 @@ describe('MultiInstrumentCardComponent', () => {
     fixture.componentRef.setInput('symbols', symbols);
   }
 
+  function search(value: string): HTMLInputElement {
+    const input = fixture.nativeElement.querySelector(
+      '[aria-label="Search to add a ticker"]',
+    ) as HTMLInputElement;
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    return input;
+  }
+
   beforeEach(async () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
@@ -35,12 +45,17 @@ describe('MultiInstrumentCardComponent', () => {
     expect(fixture.nativeElement.querySelectorAll('.chip').length).toBe(2);
   });
 
-  it('add() appends to symbols and clears the query', () => {
+  it('adds a searched symbol and clears the query', () => {
     fixture.detectChanges();
-    component.query.set('Q');
-    component.add('QQQ');
+    const input = search('Q');
+    const option = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')).find(
+      (candidate) => (candidate as HTMLElement).textContent?.includes('QQQ'),
+    ) as HTMLButtonElement | undefined;
+    option?.click();
+    fixture.detectChanges();
+
     expect(component.symbols()).toEqual(['SPY', 'QQQ']);
-    expect(component.query()).toBe('');
+    expect(input.value).toBe('');
   });
 
   it('add() is idempotent — adding an already-selected symbol is a no-op', () => {
@@ -104,15 +119,21 @@ describe('MultiInstrumentCardComponent', () => {
 
     const text: string = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('The lake is unreachable.');
-    const retry = Array.from(
-      fixture.nativeElement.querySelectorAll('button'),
-    ).find((b) => (b as HTMLButtonElement).textContent?.includes('Retry'));
+    const retry = Array.from(fixture.nativeElement.querySelectorAll('button')).find((b) =>
+      (b as HTMLButtonElement).textContent?.includes('Retry'),
+    );
     expect(retry).not.toBeNull();
   });
 
-  it('addable filters out already-selected symbols', () => {
+  it('search results filter out already-selected symbols', () => {
     setInputSymbols(['SPY']);
     fixture.detectChanges();
-    expect(component.addable().map((t) => t.symbol)).toEqual(['QQQ', 'IWM']);
+    search('S');
+
+    const optionsText = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]')).map(
+      (candidate) => (candidate as HTMLElement).textContent ?? '',
+    );
+    expect(optionsText.some((text) => text.includes('SPY'))).toBe(false);
+    expect(optionsText.some((text) => text.includes('IWM'))).toBe(true);
   });
 });

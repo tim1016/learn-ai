@@ -1,6 +1,12 @@
-import { Injectable, computed, inject, signal, type Signal } from '@angular/core';
+import {
+  Injectable,
+  computed,
+  inject,
+  signal,
+  type Signal,
+  type WritableSignal,
+} from '@angular/core';
 
-import { JobsService } from '../../services/jobs.service';
 import { DataLakeService } from '../data-lake';
 import {
   BackfillJobRunner,
@@ -35,10 +41,7 @@ export function fitBackfillWindow(
   const end = toMostRecentTradingDayIso(todayIso);
   let start = toMostRecentTradingDayIso(end, -(capDays - 4));
   let guard = 0;
-  while (
-    guard <= 7 &&
-    (tradingRangeSpanDays(start, end) ?? capDays + 1) > capDays
-  ) {
+  while (guard <= 7 && (tradingRangeSpanDays(start, end) ?? capDays + 1) > capDays) {
     start = isoDateAfter(start);
     guard++;
   }
@@ -91,27 +94,20 @@ export interface CoverageGateSession {
  * holds it now" — the populate-then-use loop behind the shared picker
  * (ADR 0066).
  *
- * One backfill at a time, keyed to the operator's latest pick: selecting
- * another symbol (or another adjustment tree) supersedes the running gate.
- * Submission, the SSE fold and terminal classification are not duplicated
- * here — this service composes `BackfillJobRunner` and adds only the
- * coverage question: completion is verified against a **fresh** lake read
- * (the job said done; the lake is asked whether the bars actually landed)
- * before any session may proceed. A superseded job keeps running
- * server-side — backfills are additive and the Observatory remains their
- * operator-facing ledger.
+ * Concurrent cards own independent sessions. Identical `{symbol, mode}`
+ * asks coalesce onto one run; unrelated asks never supersede one another.
+ * Submission, the SSE fold and terminal classification are owned by
+ * `BackfillJobRunner`; this module adds only the coverage question:
+ * completion is verified against a **fresh** lake read before any session
+ * may proceed.
  */
 @Injectable({ providedIn: 'root' })
 export class EnsureCoverageService {
   private readonly lake = inject(TickerCatalogService);
   private readonly dataLake = inject(DataLakeService);
-  private readonly jobs = inject(JobsService);
   private readonly runner = inject(BackfillJobRunner);
 
-  private readonly activeState = signal<CoverageGateState | null>(null);
-
-  private current: ActiveRun | null = null;
-  private nextToken = 1;
+  private readonly runs = new Map<string, ActiveRun>();
 
   /** True when the lake already holds runnable trade bars for `symbol`. */
   isHeld(symbol: string, mode: PriceAdjustmentMode): boolean {
@@ -134,44 +130,14 @@ export class EnsureCoverageService {
     // Coalesce only on the full gate identity: coverage is per tree, so a
     // `raw` gate says nothing about whether the same symbol is runnable in
     // the split-adjusted tree another picker is reading.
-    const entry = this.current;
-    if (
-      entry !== null &&
-      !entry.settled &&
-      entry.symbol === symbol &&
-      entry.mode === mode
-    ) {
+    const key = gateKey(symbol, mode);
+    const entry = this.runs.get(key);
+    if (entry !== undefined && !entry.settled && entry.symbol === symbol && entry.mode === mode) {
       return this.attach(entry);
     }
-    this.abandonActive();
-
-    const next: ActiveRun = {
-      token: this.nextToken++,
-      symbol,
-      mode,
-      sessions: new Set(),
-      finished: null,
-      jobRun: null,
-      jobId: null,
-      settled: false,
-    };
-    this.activeState.set({
-      symbol,
-      mode,
-      phase: 'backfilling',
-      percent: null,
-      reason: null,
-      message: null,
-    });
-    this.current = next;
-    next.finished = this.runBackfill(symbol, mode, next);
-    void next.finished.then(() => {
-      // A settled run — covered, failed, cancelled or superseded — stops
-      // coalescing, so the same symbol is freely re-ensurable while the
-      // failed strip it left behind stays on screen until retry or
-      // dismissal.
-      next.settled = true;
-    });
+    const next = new ActiveRun(key, symbol, mode, (run) => this.runBackfill(symbol, mode, run));
+    this.runs.set(key, next);
+    void next.finished.then(() => this.finishRun(next));
     return this.attach(next);
   }
 
@@ -202,19 +168,17 @@ export class EnsureCoverageService {
    * run, the run is torn down and its job cancelled; a superseded or
    * already-settled release is a local no-op — never another card's gate.
    */
-  private async releaseSession(session: CoverageGateSessionImpl): Promise<void> {
+  private async releaseSession(entry: ActiveRun, session: CoverageGateSessionImpl): Promise<void> {
     session.detach();
-    const entry = this.current;
-    if (entry === null || !entry.sessions.delete(session)) return;
-    if (entry.sessions.size > 0 || this.current !== entry) return;
-    this.current = null;
-    this.activeState.set(null);
+    if (!entry.sessions.delete(session)) return;
+    if (entry.sessions.size > 0 || entry.settled) return;
     entry.settled = true;
+    if (this.runs.get(entry.key) === entry) this.runs.delete(entry.key);
     entry.jobRun?.detach();
     // The operator cancelled before completion: stop the job once its id is
     // known. A refusal to cancel propagates; a job that survives simply
     // finishes writing in the background.
-    if (entry.jobId !== null) await this.jobs.cancelJob(entry.jobId);
+    if (entry.jobRun !== null) await entry.jobRun.cancel();
   }
 
   /**
@@ -231,15 +195,14 @@ export class EnsureCoverageService {
     let resolveDone: ((ready: boolean) => void) | null = null;
     const done = new Promise<boolean>((resolve) => {
       resolveDone = resolve;
-      void entry.finished?.then((ready) => resolve(detachedFlag() ? false : ready));
+      void entry.finished.then((ready) => resolve(detachedFlag() ? false : ready));
     });
     const state = computed(() => {
       if (detachedFlag()) return null;
-      const base = this.activeState();
-      if (base === null || base.symbol !== entry.symbol || base.mode !== entry.mode) {
-        return null;
-      }
-      const tick = entry.jobRun?.progress() ?? null;
+      const base = entry.state();
+      if (base === null) return null;
+      const lifecycle = entry.jobRun?.state() ?? null;
+      const tick = lifecycle?.kind === 'running' ? lifecycle.progress : null;
       const percent =
         tick !== null && tick.total > 0
           ? Math.min(100, Math.round((tick.current / tick.total) * 100))
@@ -247,7 +210,7 @@ export class EnsureCoverageService {
       return { ...base, percent };
     });
     const session: CoverageGateSessionImpl = new CoverageGateSessionImpl(
-      () => this.releaseSession(session),
+      () => this.releaseSession(entry, session),
       state,
       done,
       () => {
@@ -261,23 +224,13 @@ export class EnsureCoverageService {
     return session;
   }
 
-  /**
-   * The superseded gate's job keeps running server-side — see the class
-   * docstring — so only the observation is torn down here.
-   */
-  private abandonActive(): void {
-    const entry = this.current;
-    this.current = null;
-    if (entry === null) return;
-    this.activeState.set(null);
+  private finishRun(entry: ActiveRun): void {
     entry.settled = true;
-    entry.jobRun?.detach();
-    for (const session of entry.sessions) session.detach();
-    entry.sessions.clear();
+    if (this.runs.get(entry.key) === entry) this.runs.delete(entry.key);
   }
 
-  private live(token: number): boolean {
-    return this.current?.token === token;
+  private live(entry: ActiveRun): boolean {
+    return !entry.settled && this.runs.get(entry.key) === entry;
   }
 
   private async runBackfill(
@@ -286,7 +239,7 @@ export class EnsureCoverageService {
     entry: ActiveRun,
   ): Promise<boolean> {
     const defaults = await this.dataLake.backfillDefaults();
-    if (!this.live(entry.token)) return false;
+    if (!this.live(entry)) return false;
     if (defaults.kind !== 'ok') {
       return this.fail(entry, 'backfill_defaults_unavailable', defaults.message);
     }
@@ -304,11 +257,7 @@ export class EnsureCoverageService {
     // hold, and a maximally covered symbol cannot strand a narrower window.
     const todayIso = etIsoDate(Date.now());
     const { start, end } = fitBackfillWindow(todayIso, defaults.value.max_trading_range_days);
-    const rejection = tradingRangeRejection(
-      start,
-      end,
-      defaults.value.max_trading_range_days,
-    );
+    const rejection = tradingRangeRejection(start, end, defaults.value.max_trading_range_days);
     const startMs = tradingDateToMs(start);
     const endMs = tradingDateToMs(end);
     if (rejection !== null || startMs === null || endMs === null) {
@@ -338,26 +287,21 @@ export class EnsureCoverageService {
       if (!(error instanceof BackfillSubmissionError)) throw error;
       return this.fail(entry, 'backfill_submission_failed', error.message);
     }
-    // The operator cancelled or moved on while submission was in flight:
-    // the job id only exists now, so stop the just-accepted job here.
-    if (!this.live(entry.token)) {
+    // The operator cancelled while submission was in flight: the job handle
+    // only exists now, so stop the just-accepted job here.
+    if (!this.live(entry)) {
       await jobRun.cancel();
       return false;
     }
     entry.jobRun = jobRun;
-    entry.jobId = jobRun.jobId;
 
     const terminal = await jobRun.terminal;
-    if (!this.live(entry.token)) return false;
+    if (!this.live(entry)) return false;
     switch (terminal.kind) {
       case 'failed':
         return this.fail(entry, terminal.code, terminal.message);
       case 'cancelled':
-        return this.fail(
-          entry,
-          'backfill_cancelled',
-          'The backfill was cancelled.',
-        );
+        return this.fail(entry, 'backfill_cancelled', 'The backfill was cancelled.');
       case 'detached':
         return false;
       case 'completed':
@@ -373,19 +317,15 @@ export class EnsureCoverageService {
    * for bars that just landed. The reload still runs, to refresh every
    * picker's pool; the verdict comes from the read this gate awaits.
    */
-  private async settle(
-    symbol: string,
-    mode: BackfillableMode,
-    entry: ActiveRun,
-  ): Promise<boolean> {
+  private async settle(symbol: string, mode: BackfillableMode, entry: ActiveRun): Promise<boolean> {
     this.lake.viewFor(mode).reload();
     const read = await this.dataLake.storageSummary('usa', mode, 'trade');
-    if (!this.live(entry.token)) return false;
+    if (!this.live(entry)) return false;
     if (read.kind !== 'ok') {
       return this.fail(entry, 'coverage_unknown', read.message);
     }
     if (read.value.symbols.some((span) => span.symbol === symbol && isRunnableSpan(span))) {
-      this.activeState.set(null);
+      entry.state.set(null);
       return true;
     }
     return this.fail(
@@ -396,8 +336,8 @@ export class EnsureCoverageService {
   }
 
   private fail(entry: ActiveRun, reason: string, message: string): false {
-    if (this.live(entry.token)) {
-      this.activeState.set({
+    if (this.live(entry)) {
+      entry.state.set({
         symbol: entry.symbol,
         mode: entry.mode,
         phase: 'failed',
@@ -411,25 +351,38 @@ export class EnsureCoverageService {
 }
 
 /**
- * The one in-flight gate's bookkeeping. Every late asynchronous
- * continuation carries the run's token and re-checks `live(token)` before
- * it may touch state, so a teardown landing mid-submission or mid-await
- * never resurrects a dismissed strip or orphans a just-accepted job.
+ * One keyed gate's bookkeeping. Every late asynchronous continuation
+ * re-checks that this exact run still owns its map entry before touching
+ * state, so teardown cannot resurrect a dismissed strip or orphan a newly
+ * accepted job.
  */
-interface ActiveRun {
-  readonly token: number;
-  readonly symbol: string;
-  /** The lake tree this run fills — part of the gate's identity. */
-  readonly mode: BackfillableMode;
-  /** The cards currently rendering (or awaiting) this run's strip. */
-  readonly sessions: Set<CoverageGateSessionImpl>;
-  /** The run's overall verdict — assigned immediately after `runBackfill`. */
-  finished: Promise<boolean> | null;
-  /** The runner's handle once the server accepted the job. */
-  jobRun: BackfillJobRun | null;
-  /** The job's id once accepted — `null` while submitting. */
-  jobId: string | null;
-  settled: boolean;
+function gateKey(symbol: string, mode: BackfillableMode): string {
+  return `${mode}\u0000${symbol}`;
+}
+
+class ActiveRun {
+  readonly sessions = new Set<CoverageGateSessionImpl>();
+  readonly state: WritableSignal<CoverageGateState | null>;
+  readonly finished: Promise<boolean>;
+  jobRun: BackfillJobRun | null = null;
+  settled = false;
+
+  constructor(
+    readonly key: string,
+    readonly symbol: string,
+    readonly mode: BackfillableMode,
+    start: (run: ActiveRun) => Promise<boolean>,
+  ) {
+    this.state = signal({
+      symbol,
+      mode,
+      phase: 'backfilling',
+      percent: null,
+      reason: null,
+      message: null,
+    });
+    this.finished = start(this);
+  }
 }
 
 class CoverageGateSessionImpl implements CoverageGateSession {
@@ -452,11 +405,12 @@ class CoverageGateSessionImpl implements CoverageGateSession {
 
   /** A refusal the gate cannot act on — rendered like any failure. */
   static refused(state: CoverageGateState): CoverageGateSessionImpl {
+    const stateSignal = signal<CoverageGateState | null>(state);
     return new CoverageGateSessionImpl(
-      async () => {},
-      signal<CoverageGateState | null>(state).asReadonly(),
+      async () => stateSignal.set(null),
+      stateSignal.asReadonly(),
       Promise.resolve(false),
-      () => {},
+      () => stateSignal.set(null),
     );
   }
 

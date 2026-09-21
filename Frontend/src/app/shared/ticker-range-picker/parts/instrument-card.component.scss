@@ -41,9 +41,15 @@
     border-radius: 50%;
     background: var(--text-muted);
 
-    &--accent { background: var(--accent); }
-    &--bull   { background: var(--bull); }
-    &--warn   { background: var(--warn); }
+    &--accent {
+      background: var(--accent);
+    }
+    &--bull {
+      background: var(--bull);
+    }
+    &--warn {
+      background: var(--warn);
+    }
   }
 
   &__helper {
@@ -68,7 +74,9 @@
   gap: 6px;
   padding: 0 8px;
   cursor: text;
-  transition: border-color var(--t-ui), box-shadow var(--t-ui);
+  transition:
+    border-color var(--t-ui),
+    box-shadow var(--t-ui);
 
   &--open {
     border-color: var(--accent);
@@ -121,25 +129,5 @@
     font-weight: var(--fw-semi);
     font-size: 14px;
     min-width: 0;
-  }
-}
-
-.instrument-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 10px;
-  color: var(--text-subtle);
-
-  &__label {
-    color: var(--text-muted);
-  }
-
-  &__span {
-    color: var(--text-subtle);
-  }
-
-  &__span-val {
-    color: var(--text-secondary);
   }
 }

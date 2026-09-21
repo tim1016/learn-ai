@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   effect,
   ElementRef,
   inject,
@@ -13,18 +14,20 @@ import {
 } from '@angular/core';
 import { Tooltip } from 'primeng/tooltip';
 
-import {
-  type TickerOption,
-  type TickerRange,
-} from '../ticker-range-picker.types';
+import { type TickerOption, type TickerRange } from '../ticker-range-picker.types';
 import { DEFAULT_ADJUSTMENT_MODE } from '../../ticker-catalog';
 import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.service';
+import type { SymbolCatalogStatus } from '../../symbol-catalog/symbol-catalog.service';
 import {
   EnsureCoverageService,
   type BackfillableMode,
   type CoverageGateSession,
 } from '../../symbol-catalog/ensure-coverage.service';
-import { InstrumentDropdownComponent } from './instrument-dropdown.component';
+import {
+  InstrumentDropdownComponent,
+  type InstrumentDropdownView,
+} from './instrument-dropdown.component';
+import { InstrumentHeldSpanComponent } from './instrument-held-span.component';
 import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import { toPickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { PriceAdjustmentMode } from '../../data-lake';
@@ -62,6 +65,7 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
     Tooltip,
     AssetIdentityComponent,
     InstrumentDropdownComponent,
+    InstrumentHeldSpanComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-card.component.html',
@@ -95,6 +99,7 @@ export class InstrumentCardComponent {
 
   private readonly symbols = inject(SymbolCatalogService);
   private readonly coverage = inject(EnsureCoverageService);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602). Track
@@ -105,41 +110,43 @@ export class InstrumentCardComponent {
 
   readonly tickerPool = computed<readonly PickerSymbol[]>(() => {
     const hostUniverse = this.universe();
-    return hostUniverse === null
-      ? this.view().pool()
-      : hostUniverse.map(toPickerSymbol);
+    return hostUniverse === null ? this.view().pool() : hostUniverse.map(toPickerSymbol);
   });
   readonly recent = computed<readonly string[]>(() =>
     this.universe() === null ? this.view().recent() : [],
   );
-  readonly catalogLoading = computed(() =>
-    this.universe() === null ? this.view().loading() : false,
+  readonly catalogStatus = computed<SymbolCatalogStatus>(() =>
+    this.universe() === null ? this.view().status() : { kind: 'ready' },
   );
-  readonly catalogUnavailable = computed<string | null>(() =>
-    this.universe() === null ? this.view().unavailable() : null,
-  );
-  /** The live catalog is dark but the lake answered — degraded, not empty. */
-  readonly catalogDegraded = computed(() =>
-    this.universe() === null ? this.view().degraded() : false,
-  );
+  readonly catalogUnavailable = computed<string | null>(() => {
+    const state = this.catalogStatus();
+    return state.kind === 'unavailable' ? state.message : null;
+  });
   /** A host-supplied universe is not the joined catalog, so its copy differs. */
   readonly hostUniverse = computed(() => this.universe() !== null);
 
-  private readonly rootEl =
-    viewChild.required<ElementRef<HTMLElement>>('rootEl');
-  private readonly searchInput =
-    viewChild<ElementRef<HTMLInputElement>>('searchInput');
+  private readonly rootEl = viewChild.required<ElementRef<HTMLElement>>('rootEl');
+  private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('searchInput');
 
   readonly open = signal(false);
   readonly query = signal('');
 
   constructor() {
+    let sessionMode = this.adjustmentMode();
+    effect(() => {
+      const nextMode = this.adjustmentMode();
+      if (nextMode !== sessionMode) {
+        sessionMode = nextMode;
+        this.abandonGate();
+      }
+    });
     effect(() => {
       if (this.open()) {
         const input = this.searchInput();
         if (input) queueMicrotask(() => input.nativeElement.focus());
       }
     });
+    this.destroyRef.onDestroy(() => this.abandonGate());
   }
 
   readonly selectedTicker = computed<PickerSymbol | undefined>(() =>
@@ -154,17 +161,7 @@ export class InstrumentCardComponent {
     () => this.selectedTicker()?.lastHeld ?? null,
   );
 
-  /** No source answered with anything at all — distinct from no match. */
-  readonly catalogEmpty = computed(
-    () =>
-      this.tickerPool().length === 0 &&
-      !this.catalogLoading() &&
-      this.catalogUnavailable() === null,
-  );
-
-  readonly selectedExchange = computed(
-    () => this.selectedTicker()?.exchange ?? '—',
-  );
+  readonly selectedExchange = computed(() => this.selectedTicker()?.exchange ?? '—');
 
   readonly selectedExchangeTooltip = computed<string>(() => {
     const code = this.selectedExchange();
@@ -180,9 +177,7 @@ export class InstrumentCardComponent {
     const q = this.query().trim().toUpperCase();
     const pool = this.tickerPool();
     if (!q) return pool;
-    return pool.filter(
-      (t) => t.symbol.includes(q) || t.name.toUpperCase().includes(q),
-    );
+    return pool.filter((t) => t.symbol.includes(q) || t.name.toUpperCase().includes(q));
   });
 
   /**
@@ -213,6 +208,16 @@ export class InstrumentCardComponent {
    */
   readonly pendingSession = signal<CoverageGateSession | null>(null);
   readonly gateState = computed(() => this.pendingSession()?.state() ?? null);
+
+  readonly dropdownView = computed<InstrumentDropdownView>(() => ({
+    visible: this.visibleTickers(),
+    recent: this.recentTickers(),
+    matchCount: this.filteredTickers().length,
+    activeSymbol: this.value().symbol,
+    query: this.query(),
+    catalogStatus: this.catalogStatus(),
+    hostUniverse: this.hostUniverse(),
+  }));
 
   /** The adjustment modes a backfill can actually write, or null. */
   readonly backfillableMode = computed<BackfillableMode | null>(() => {
@@ -301,31 +306,27 @@ export class InstrumentCardComponent {
     // full-history backfill on a guess. The lake's own reason is shown.
     const lakeReason = this.catalogUnavailable();
     if (lakeReason !== null) {
-      this.pendingSession.set(
-        this.coverage.refuse(t.symbol, mode, 'coverage_unknown', lakeReason),
-      );
+      this.showRefusal(t.symbol, mode, 'coverage_unknown', lakeReason);
       return;
     }
     const backfillable = this.backfillableMode();
     if (backfillable === null) {
-      this.pendingSession.set(
-        this.coverage.refuse(
-          t.symbol,
-          mode,
-          'view_not_backfillable',
-          `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
-        ),
+      this.showRefusal(
+        t.symbol,
+        mode,
+        'view_not_backfillable',
+        `Nothing derives the ${formatReceiptLabel(this.adjustmentMode())} view, so this symbol cannot be backfilled into it. Switch the picker to Raw or Polygon Split Adjusted.`,
       );
       return;
     }
-    this.awaitSession(this.coverage.ensure(t.symbol, backfillable), t.symbol);
+    this.startGate(t.symbol, backfillable);
   }
 
   protected retryGate(): void {
     const state = this.gateState();
     const backfillable = this.backfillableMode();
     if (state === null || backfillable === null) return;
-    this.awaitSession(this.coverage.ensure(state.symbol, backfillable), state.symbol);
+    this.startGate(state.symbol, backfillable);
   }
 
   /** Cancel and Dismiss are the same act: this card lets its gate go. */
@@ -341,7 +342,7 @@ export class InstrumentCardComponent {
    *
    * Releasing the session is ownership-safe by construction: the coverage
    * service stops the run only when this session is its last waiter, so a
-   * gate another card superseded cannot be cancelled from here.
+   * run another card still awaits cannot be cancelled from here.
    */
   private abandonGate(): void {
     const session = this.pendingSession();
@@ -350,8 +351,9 @@ export class InstrumentCardComponent {
     void session.cancel();
   }
 
-  private awaitSession(session: CoverageGateSession, symbol: string): void {
+  private startGate(symbol: string, mode: BackfillableMode): void {
     this.abandonGate();
+    const session = this.coverage.ensure(symbol, mode);
     this.pendingSession.set(session);
     void session.done.then((ready) => {
       // The operator may have picked another instrument — or dismissed the
@@ -359,10 +361,24 @@ export class InstrumentCardComponent {
       // pending pick may speak for `value()`.
       if (this.pendingSession() !== session) return;
       if (!ready) return;
+      if (this.adjustmentMode() !== mode) {
+        this.abandonGate();
+        return;
+      }
       const fresh = this.tickerPool().find((p) => p.symbol === symbol);
       this.pendingSession.set(null);
       this.applyPick(fresh ?? { symbol, name: symbol });
     });
+  }
+
+  private showRefusal(
+    symbol: string,
+    mode: PriceAdjustmentMode,
+    reason: string,
+    message: string,
+  ): void {
+    this.abandonGate();
+    this.pendingSession.set(this.coverage.refuse(symbol, mode, reason, message));
   }
 
   /** The gate strip's buttons unmount on dismissal; keep focus in the box. */

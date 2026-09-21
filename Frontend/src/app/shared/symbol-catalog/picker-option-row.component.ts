@@ -15,53 +15,8 @@ import { AssetIdentityComponent } from '../asset-identity';
   selector: 'app-picker-option-row',
   imports: [AssetIdentityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <app-asset-identity
-      class="row__identity"
-      [symbol]="symbol()"
-      size="xs"
-      [showTitle]="false"
-    />
-    <span class="row__name">{{ name() }}</span>
-    <span class="row__meta mono">{{ exchange() ?? '—' }}</span>
-    <span class="row__held mono" [class.row__held--unheld]="!lastHeld()">
-      {{ heldCopy() }}
-    </span>
-  `,
-  styles: `
-    :host {
-      display: contents;
-    }
-
-    .row__identity {
-      min-width: 0;
-    }
-
-    .row__name {
-      font-size: 11px;
-      color: var(--text-subtle);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .row__meta {
-      font-size: 9px;
-      color: var(--text-muted);
-      text-align: right;
-    }
-
-    .row__held {
-      font-size: 10px;
-      color: var(--text-muted);
-      text-align: right;
-    }
-
-    .row__held--unheld {
-      color: var(--text-subtle);
-      font-style: italic;
-    }
-  `,
+  templateUrl: './picker-option-row.component.html',
+  styleUrl: './picker-option-row.component.scss',
 })
 export class PickerOptionRowComponent {
   readonly symbol = input.required<string>();

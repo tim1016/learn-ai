@@ -11,7 +11,10 @@ import {
   type CoverageGateSession,
 } from './ensure-coverage.service';
 import { etIsoDate } from '../date/et-midnight';
-import { fakeTickerCatalog, provideFakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { FakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
 
@@ -46,9 +49,7 @@ interface FakeJobs {
   emit(jobId: string, event: JobStreamEvent): void;
 }
 
-function configureService(
-  options: { defaults?: DataLakeRead<BackfillDefaults> } = {},
-): {
+function configureService(options: { defaults?: DataLakeRead<BackfillDefaults> } = {}): {
   service: EnsureCoverageService;
   jobs: FakeJobs;
   catalog: FakeTickerCatalog;
@@ -77,7 +78,12 @@ function configureService(
   // returns is this knob's business, not the pool's.
   const freshCoverage: { symbols: SymbolCoverageSpan[] } = {
     symbols: [
-      { symbol: 'SPY', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 2290 },
+      {
+        symbol: 'SPY',
+        first_trading_date_ms: AUG_2024,
+        last_trading_date_ms: SEP_2026,
+        artifact_count: 2290,
+      },
     ],
   };
   let startSeq = 0;
@@ -115,13 +121,22 @@ function configureService(
               ? { kind: 'unavailable' as const, message: storageFailure }
               : {
                   kind: 'ok' as const,
-                  value: { market: 'usa' as const, kinds: [], symbols: freshCoverage.symbols },
+                  value: {
+                    market: 'usa' as const,
+                    kinds: [],
+                    symbols: freshCoverage.symbols,
+                  },
                 },
         },
       },
     ],
   });
-  return { service: TestBed.inject(EnsureCoverageService), jobs, catalog, freshCoverage };
+  return {
+    service: TestBed.inject(EnsureCoverageService),
+    jobs,
+    catalog,
+    freshCoverage,
+  };
 }
 
 async function flush(): Promise<void> {
@@ -131,7 +146,12 @@ async function flush(): Promise<void> {
 function markCovered(freshCoverage: { symbols: SymbolCoverageSpan[] }): void {
   freshCoverage.symbols = [
     ...freshCoverage.symbols,
-    { symbol: 'NVDA', first_trading_date_ms: AUG_2024, last_trading_date_ms: SEP_2026, artifact_count: 4 },
+    {
+      symbol: 'NVDA',
+      first_trading_date_ms: AUG_2024,
+      last_trading_date_ms: SEP_2026,
+      artifact_count: 4,
+    },
   ];
 }
 
@@ -167,9 +187,7 @@ describe('EnsureCoverageService', () => {
     // 1831–1833 days. Assert the same invariant the backend applies.
     const startIso = etIsoDate(spec['start_trading_date_ms'] as number);
     const endIso = etIsoDate(spec['end_trading_date_ms'] as number);
-    expect(
-      tradingRangeRejection(startIso, endIso, DEFAULTS.max_trading_range_days),
-    ).toBeNull();
+    expect(tradingRangeRejection(startIso, endIso, DEFAULTS.max_trading_range_days)).toBeNull();
     // In flight: the gate names the symbol and its tree, and no failure.
     expect(session.state()).toMatchObject({
       symbol: 'NVDA',
@@ -196,7 +214,10 @@ describe('EnsureCoverageService', () => {
     jobs.emit('job-1', { type: 'job.progress', current: 250, total: 1000 });
     await flush();
 
-    expect(session.state()).toMatchObject({ phase: 'backfilling', percent: 25 });
+    expect(session.state()).toMatchObject({
+      phase: 'backfilling',
+      percent: 25,
+    });
 
     markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
@@ -244,7 +265,10 @@ describe('EnsureCoverageService', () => {
 
   it('fails when backfill defaults are unreadable, without starting a job', async () => {
     const { service, jobs } = configureService({
-      defaults: { kind: 'unavailable', message: 'The data plane did not answer.' },
+      defaults: {
+        kind: 'unavailable',
+        message: 'The data plane did not answer.',
+      },
     });
 
     const session = service.ensure('NVDA', 'polygon_split_adjusted');
@@ -275,26 +299,38 @@ describe('EnsureCoverageService', () => {
     expect(catalog.view.reloadCount).toBe(0);
   });
 
-  it('supersedes an in-flight gate when another symbol is picked', async () => {
-    const { service, jobs } = configureService();
+  it('keeps unrelated symbol gates independent', async () => {
+    const { service, jobs, freshCoverage } = configureService();
 
     const first = service.ensure('NVDA', 'polygon_split_adjusted');
     await flush();
     const second = service.ensure('AMD', 'polygon_split_adjusted');
     await flush();
 
-    expect(second.state()).toMatchObject({ symbol: 'AMD', phase: 'backfilling' });
-    // The superseded session's strip is gone; its waiter answered false.
-    expect(first.state()).toBeNull();
+    expect(first.state()).toMatchObject({
+      symbol: 'NVDA',
+      phase: 'backfilling',
+    });
+    expect(second.state()).toMatchObject({
+      symbol: 'AMD',
+      phase: 'backfilling',
+    });
+    expect(jobs.started).toHaveLength(2);
 
-    // The abandoned first job completing must not open the AMD gate.
+    markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
-    jobs.emit('job-2', { type: 'job.completed' });
+    expect(await first.done).toBe(true);
+    expect(second.state()).toMatchObject({
+      symbol: 'AMD',
+      phase: 'backfilling',
+    });
 
-    expect(await first.done).toBe(false);
+    jobs.emit('job-2', { type: 'job.completed' });
     expect(await second.done).toBe(false);
-    // AMD's gate is the failure the strip carries — not NVDA's.
-    expect(second.state()).toMatchObject({ symbol: 'AMD', reason: 'backfill_empty' });
+    expect(second.state()).toMatchObject({
+      symbol: 'AMD',
+      reason: 'backfill_empty',
+    });
   });
 
   it('coalesces a repeated pick of the symbol already being ensured', async () => {
@@ -326,7 +362,10 @@ describe('EnsureCoverageService', () => {
     await first.cancel();
     expect(jobs.cancelled).toEqual([]);
     expect(first.state()).toBeNull();
-    expect(second.state()).toMatchObject({ symbol: 'NVDA', phase: 'backfilling' });
+    expect(second.state()).toMatchObject({
+      symbol: 'NVDA',
+      phase: 'backfilling',
+    });
 
     markCovered(freshCoverage);
     jobs.emit('job-1', { type: 'job.completed' });
@@ -352,7 +391,10 @@ describe('EnsureCoverageService', () => {
     const ready = await session.done;
 
     expect(ready).toBe(false);
-    expect(session.state()).toMatchObject({ phase: 'failed', reason: 'backfill_empty' });
+    expect(session.state()).toMatchObject({
+      phase: 'failed',
+      reason: 'backfill_empty',
+    });
   });
 
   it('reports coverage_unknown when the fresh read fails', async () => {
@@ -395,9 +437,8 @@ describe('EnsureCoverageService', () => {
     jobs.emit('job-1', { type: 'job.completed' });
     jobs.emit('job-2', { type: 'job.completed' });
 
-    // The raw gate was superseded by the adjusted one: its promise answers
-    // false by design, while the adjusted run proceeds to its own verdict.
-    expect(await raw.done).toBe(false);
+    // Different trees are independent gates; neither may detach the other.
+    expect(await raw.done).toBe(true);
     expect(await adjusted.done).toBe(true);
   });
 
@@ -449,7 +490,11 @@ describe('EnsureCoverageService', () => {
     });
     // The unrelated in-flight gate is nobody's refusal to cancel.
     await refusal.cancel();
-    expect(running.state()).toMatchObject({ symbol: 'AMD', phase: 'backfilling' });
+    expect(refusal.state()).toBeNull();
+    expect(running.state()).toMatchObject({
+      symbol: 'AMD',
+      phase: 'backfilling',
+    });
     expect(jobs.cancelled).toEqual([]);
   });
 });
@@ -459,14 +504,20 @@ describe('fitBackfillWindow', () => {
   // weekday-dependent (Mon–Thu composed 1831–1833 inclusive days against
   // the 1830 cap; only a Saturday pass survived), so the fixture has to
   // walk a full week, not use whatever day CI happens to run on.
-  const DAYS = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20'];
+  const DAYS = [
+    '2026-09-14',
+    '2026-09-15',
+    '2026-09-16',
+    '2026-09-17',
+    '2026-09-18',
+    '2026-09-19',
+    '2026-09-20',
+  ];
 
   it.each(DAYS)('fits an inclusive window under the cap from %s', (todayIso) => {
     const { start, end } = fitBackfillWindow(todayIso, DEFAULTS.max_trading_range_days);
 
-    expect(tradingRangeSpanDays(start, end)).toBeLessThanOrEqual(
-      DEFAULTS.max_trading_range_days,
-    );
+    expect(tradingRangeSpanDays(start, end)).toBeLessThanOrEqual(DEFAULTS.max_trading_range_days);
     expect(tradingRangeRejection(start, end, DEFAULTS.max_trading_range_days)).toBeNull();
   });
 

@@ -24,12 +24,21 @@ export type BackfillTerminalEvent =
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'detached' };
 
+export type BackfillRunState =
+  | {
+      readonly kind: 'running';
+      readonly started: boolean;
+      readonly progress: BackfillProgressTick | null;
+    }
+  | (BackfillTerminalEvent & {
+      /** The last tick remains visible in the terminal receipt. */
+      readonly progress: BackfillProgressTick | null;
+    });
+
 export interface BackfillJobRun {
   readonly jobId: string;
-  /** Seen a `job.started` frame (including in a reattach's stream replay). */
-  readonly started: Signal<boolean>;
-  /** The latest `job.progress` tick, `null` before the first one lands. */
-  readonly progress: Signal<BackfillProgressTick | null>;
+  /** The one typed projection of this job's lifecycle. */
+  readonly state: Signal<BackfillRunState>;
   /** Resolves exactly once: a terminal frame, or `{kind: 'detached'}`. */
   readonly terminal: Promise<BackfillTerminalEvent>;
   /** Stop observing. A delivered terminal still reaches `terminal`. */
@@ -40,14 +49,11 @@ export interface BackfillJobRun {
 
 export interface BackfillRunHooks {
   /**
-   * Every frame — `job.*` verbs included — is forwarded here after the
-   * runner has folded it, so a consumer projecting richer UI state (the
-   * backfill panel's per-day receipts) sees the same stream this runner
-   * terminates on. A terminal frame is forwarded before the run resolves,
-   * which is why the panel's fold may call `detach()` from inside its own
-   * handler without losing the verdict.
+   * Domain frames only. The runner owns every `job.*` verb; consumers may
+   * project richer state such as the backfill panel's per-day receipts
+   * without growing a second lifecycle state machine.
    */
-  onEvent(event: JobStreamEvent): void;
+  onDomainEvent(event: JobStreamEvent): void;
 }
 
 /** `startJob` refused the spec — classified, so consumers map their own copy. */
@@ -75,11 +81,11 @@ function asNumber(value: unknown): number | null {
  * through `JobsService.startJob`, the `job.*` lifecycle fold over the
  * job's single Redis-backed SSE stream, terminal detection, and teardown.
  *
- * Consumers project their own UI state onto a run — the Observatory panel
- * folds the domain `data_lake.backfill_day` frames for its receipt table,
- * the symbol picker's ensure-coverage gate reads `progress`/`terminal` and
- * nothing else — so there is exactly one submission path, one stream
- * subscription per job, and one definition of "terminal" in the app.
+ * Consumers project their own domain state onto a run — the Observatory
+ * panel folds `data_lake.backfill_day` for its receipt table, while both it
+ * and the symbol picker consume this runner's typed lifecycle. There is one
+ * submission path, one stream subscription per job, and one definition of
+ * progress and terminal state in the app.
  */
 @Injectable({ providedIn: 'root' })
 export class BackfillJobRunner {
@@ -107,8 +113,11 @@ export class BackfillJobRunner {
    * first, so `started`/`progress` rebuild from the run's own frames.
    */
   observe(jobId: string, hooks?: BackfillRunHooks): BackfillJobRun {
-    const startedState = signal(false);
-    const progressState = signal<BackfillProgressTick | null>(null);
+    const state = signal<BackfillRunState>({
+      kind: 'running',
+      started: false,
+      progress: null,
+    });
     let unsubscribe: (() => void) | null = null;
     let settled = false;
     let resolveTerminal!: (terminal: BackfillTerminalEvent) => void;
@@ -119,6 +128,7 @@ export class BackfillJobRunner {
     const finish = (event: BackfillTerminalEvent) => {
       if (settled) return;
       settled = true;
+      state.set({ ...event, progress: state().progress });
       unsubscribe?.();
       unsubscribe = null;
       resolveTerminal(event);
@@ -126,19 +136,29 @@ export class BackfillJobRunner {
 
     unsubscribe = this.jobs.onEvent(jobId, (event) => {
       switch (event.type) {
-        case 'job.started':
-          startedState.set(true);
+        case 'job.started': {
+          const current = state();
+          if (current.kind === 'running') {
+            state.set({ ...current, started: true });
+          }
           break;
+        }
         case 'job.progress': {
           const current = asNumber(event['current']);
           const total = asNumber(event['total']);
           if (current === null || total === null) break;
-          progressState.set({
-            current,
-            total,
-            unit: asString(event['unit']) ?? 'days',
-            message: asString(event['message']),
-          });
+          const lifecycle = state();
+          if (lifecycle.kind === 'running') {
+            state.set({
+              ...lifecycle,
+              progress: {
+                current,
+                total,
+                unit: asString(event['unit']) ?? 'days',
+                message: asString(event['message']),
+              },
+            });
+          }
           break;
         }
         case 'job.completed':
@@ -154,14 +174,14 @@ export class BackfillJobRunner {
         case 'job.cancelled':
           finish({ kind: 'cancelled' });
           break;
+        default:
+          hooks?.onDomainEvent(event);
       }
-      hooks?.onEvent(event);
     });
 
     return {
       jobId,
-      started: startedState.asReadonly(),
-      progress: progressState.asReadonly(),
+      state: state.asReadonly(),
       terminal,
       detach: () => finish({ kind: 'detached' }),
       cancel: () => this.jobs.cancelJob(jobId),

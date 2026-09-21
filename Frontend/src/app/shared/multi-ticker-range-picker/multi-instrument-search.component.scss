@@ -1,0 +1,34 @@
+.add-row {
+  position: relative;
+}
+
+.add-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+}
+
+.add-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 60;
+  max-height: 240px;
+  padding: 4px 0;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}

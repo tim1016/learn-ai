@@ -16,7 +16,10 @@ import { ReceiptLabelPipe, formatReceiptLabel } from '../../../shared/pipes/rece
 import { JobsService } from '../../../services/jobs.service';
 import { BackfillRunLogComponent } from './backfill-run-log.component';
 import { MultiInstrumentCardComponent } from '../../../shared/multi-ticker-range-picker/multi-instrument-card.component';
-import { SymbolCatalogService, delistedVendorRows } from '../../../shared/symbol-catalog/symbol-catalog.service';
+import {
+  SymbolCatalogService,
+  delistedVendorRows,
+} from '../../../shared/symbol-catalog/symbol-catalog.service';
 import type { PickerSymbol } from '../../../shared/symbol-catalog/symbol-catalog.types';
 import {
   VendorCatalogService,
@@ -97,10 +100,7 @@ export class LakeBackfillPanelComponent implements OnInit {
     // Coverage-board seeds always name storable symbols; the length bound
     // is the same one the removed free-text input enforced.
     this.pickedSymbols.set([
-      ...parseSymbols(
-        this.seedSymbols(),
-        this.defaults()?.max_symbol_length ?? 20,
-      ).symbols,
+      ...parseSymbols(this.seedSymbols(), this.defaults()?.max_symbol_length ?? 20).symbols,
     ]);
   }
   protected readonly startTradingDate = linkedSignal(() => this.seedStartTradingDate());
@@ -155,10 +155,18 @@ export class LakeBackfillPanelComponent implements OnInit {
     return this.pickedSymbols().filter((symbol) => !offerable.has(symbol));
   });
 
-  protected readonly catalogLoading = computed(() => this.catalogView().loading());
-  protected readonly catalogUnavailable = computed(() => this.catalogView().unavailable());
+  protected readonly catalogLoading = computed(
+    () => this.catalogView().status().kind === 'loading',
+  );
+  protected readonly catalogUnavailable = computed<string | null>(() => {
+    const status = this.catalogView().status();
+    return status.kind === 'unavailable' ? status.message : null;
+  });
   /** The vendor is dark but the lake answered — degraded, not empty. */
-  protected readonly vendorUnavailable = computed(() => this.vendor.unavailable());
+  protected readonly vendorUnavailable = computed<string | null>(() => {
+    const status = this.catalogView().status();
+    return status.kind === 'degraded' ? status.message : null;
+  });
 
   protected retryVendorCatalog(): void {
     this.vendor.reload();
@@ -259,7 +267,11 @@ export class LakeBackfillPanelComponent implements OnInit {
     // silent deletions to hide.
     effect(() => {
       if (this.includeDelisted()) return;
-      const pool = new Set(this.catalogView().pool().map((row) => row.symbol));
+      const pool = new Set(
+        this.catalogView()
+          .pool()
+          .map((row) => row.symbol),
+      );
       const droppable = new Set(
         (this.vendor.entries() ?? [])
           .filter(

@@ -1,7 +1,10 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { fakeTickerCatalog, provideFakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
+import {
+  fakeTickerCatalog,
+  provideFakeTickerCatalog,
+} from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { FakeTickerCatalog } from '../ticker-catalog/testing/fake-ticker-catalog';
 import type { TickerOption } from '../ticker-range-picker/ticker-range-picker.types';
 import {
@@ -16,9 +19,8 @@ function vendor(
   // `asset_class`/`status` are Literal-typed on the wire; the string-typed
   // override here exists only so boundary tests can hand a row the catalog
   // must refuse.
-  overrides:
-    & Partial<Omit<VendorSymbolEntry, 'asset_class' | 'status'>>
-    & Partial<Record<'asset_class' | 'status', string>> = {},
+  overrides: Partial<Omit<VendorSymbolEntry, 'asset_class' | 'status'>> &
+    Partial<Record<'asset_class' | 'status', string>> = {},
 ): VendorSymbolEntry {
   return {
     symbol: 'AAPL',
@@ -48,16 +50,25 @@ describe('joinCatalog', () => {
 
     expect(joined.map((row) => row.symbol)).toEqual(['SPY', 'QQQ', 'AAPL', 'ZZZ']);
     // Vendor-only rows carry no coverage: the lake has never held them.
-    expect(joined[2]).toMatchObject({ symbol: 'AAPL', firstHeld: null, lastHeld: null, delisted: false });
+    expect(joined[2]).toMatchObject({
+      symbol: 'AAPL',
+      firstHeld: null,
+      lastHeld: null,
+      delisted: false,
+    });
   });
 
   it('badges a held symbol the vendor has delisted instead of dropping it', () => {
     const joined = joinCatalog(
       [{ symbol: 'OLD', name: 'Old Corp', lastHeld: '2020-01-31' }],
-      [vendor({ symbol: 'OLD', status: 'inactive', })],
+      [vendor({ symbol: 'OLD', status: 'inactive' })],
     );
 
-    expect(joined[0]).toMatchObject({ symbol: 'OLD', lastHeld: '2020-01-31', delisted: true });
+    expect(joined[0]).toMatchObject({
+      symbol: 'OLD',
+      lastHeld: '2020-01-31',
+      delisted: true,
+    });
   });
 
   it('drops a lake row the vendor classifies outside the backfillable universe', () => {
@@ -75,10 +86,7 @@ describe('joinCatalog', () => {
   });
 
   it('never offers a delisted vendor row the lake does not hold', () => {
-    const joined = joinCatalog(
-      [SPY],
-      [vendor({ symbol: 'OLD', status: 'inactive', })],
-    );
+    const joined = joinCatalog([SPY], [vendor({ symbol: 'OLD', status: 'inactive' })]);
 
     expect(joined.map((row) => row.symbol)).toEqual(['SPY']);
   });
@@ -134,9 +142,10 @@ describe('SymbolCatalogService', () => {
     const view = service.viewFor('polygon_split_adjusted');
 
     expect(view.pool().map((row) => row.symbol)).toEqual(['SPY']);
-    expect(view.degraded()).toBe(true);
-    // A degraded view is not an unavailable one: the pool is honest.
-    expect(view.unavailable()).toBeNull();
+    expect(view.status()).toEqual({
+      kind: 'degraded',
+      message: 'catalog down',
+    });
   });
 
   it('is unavailable only when the lake itself failed', () => {
@@ -145,8 +154,19 @@ describe('SymbolCatalogService', () => {
     const service = TestBed.inject(SymbolCatalogService);
     const view = service.viewFor('polygon_split_adjusted');
 
-    expect(view.unavailable()).toBe('The data lake is unreachable.');
-    expect(view.degraded()).toBe(true);
+    expect(view.status()).toEqual({
+      kind: 'unavailable',
+      message: 'The data lake is unreachable.',
+    });
+  });
+
+  it('waits for the lake before claiming a vendor-dark view is degraded', () => {
+    catalog.view.loading.set(true);
+    alpaca.entries.set(null);
+    alpaca.unavailable.set('catalog down');
+    const service = TestBed.inject(SymbolCatalogService);
+
+    expect(service.viewFor('polygon_split_adjusted').status()).toEqual({ kind: 'loading' });
   });
 
   it('reloads only the lake on an ordinary refresh; the vendor retries separately', () => {

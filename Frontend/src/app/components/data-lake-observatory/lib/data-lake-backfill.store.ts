@@ -1,15 +1,11 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
-import { JobsService } from '../../../services/jobs.service';
 import {
   BackfillJobRunner,
   BackfillSubmissionError,
+  type BackfillJobRun,
 } from '../../../shared/data-lake/backfill-job-runner';
-import {
-  BackfillDayEvent,
-  BackfillFailure,
-  DataRunSpec,
-} from '../../../shared/data-lake';
+import { BackfillDayEvent, BackfillFailure, DataRunSpec } from '../../../shared/data-lake';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 
 export { BACKFILL_JOB_TYPE };
@@ -79,42 +75,62 @@ function toDayEvent(event: SseEvent): BackfillDayEvent | null {
   };
 }
 
-const TERMINAL_EVENTS = new Set(['job.completed', 'job.failed', 'job.cancelled']);
-
 /**
  * Drives one data-lake backfill from submission to a terminal event.
  *
  * Submission goes through the shared `BackfillJobRunner` — the one
  * submission path and one `JobsService` stream subscription per job in the
- * app (#1856) — and every frame the runner forwards lands in `ingestEvent`
- * here, because the per-day receipts are this panel's domain, not the
- * runner's. `ingestEvent` is public so the fold is unit-testable without
+ * app (#1856) — and every domain frame the runner forwards lands in
+ * `ingestEvent` here. The runner alone owns `job.*`; this store owns only
+ * the per-day receipts. `ingestEvent` is public so the fold is unit-testable without
  * an `EventSource` (jsdom has none); the SSE handler only parses a frame
  * and routes it here.
  */
 @Injectable()
 export class DataLakeBackfillStore {
-  private readonly jobs = inject(JobsService);
   private readonly runner = inject(BackfillJobRunner);
   private readonly destroyRef = inject(DestroyRef);
 
-  private readonly phaseState = signal<BackfillPhase>('idle');
+  private readonly localPhaseState = signal<'idle' | 'submitting' | 'failed'>('idle');
   private readonly jobIdState = signal<string | null>(null);
-  private readonly progressState = signal<BackfillProgress | null>(null);
   private readonly daysState = signal<readonly BackfillDayEvent[]>([]);
-  private readonly errorState = signal<BackfillError | null>(null);
+  private readonly submissionErrorState = signal<BackfillError | null>(null);
   private readonly reattachedState = signal(false);
+  private readonly runState = signal<BackfillJobRun | null>(null);
 
-  readonly phase = this.phaseState.asReadonly();
+  readonly phase = computed<BackfillPhase>(() => {
+    const run = this.runState();
+    if (run === null) return this.localPhaseState();
+    switch (run.state().kind) {
+      case 'running':
+        return 'running';
+      case 'completed':
+        return 'completed';
+      case 'failed':
+        return 'failed';
+      case 'cancelled':
+        return 'cancelled';
+      case 'detached':
+        return 'idle';
+    }
+  });
   readonly jobId = this.jobIdState.asReadonly();
-  readonly progress = this.progressState.asReadonly();
+  readonly progress = computed<BackfillProgress | null>(() => {
+    return this.runState()?.state().progress ?? null;
+  });
   readonly days = this.daysState.asReadonly();
-  readonly error = this.errorState.asReadonly();
+  readonly error = computed<BackfillError | null>(() => {
+    const lifecycle = this.runState()?.state();
+    if (lifecycle?.kind === 'failed') {
+      return { code: lifecycle.code, message: lifecycle.message };
+    }
+    return this.submissionErrorState();
+  });
   /** True when this run was adopted mid-flight rather than started here. */
   readonly reattached = this.reattachedState.asReadonly();
 
   readonly running = computed(() => {
-    const phase = this.phaseState();
+    const phase = this.phase();
     return phase === 'submitting' || phase === 'running';
   });
 
@@ -130,22 +146,22 @@ export class DataLakeBackfillStore {
     this.daysState().reduce((total, day) => total + day.reused_count, 0),
   );
 
-  /** The runner's handle for the currently-open stream, if any. */
-  private run: ReturnType<BackfillJobRunner['observe']> | null = null;
-
   constructor() {
     this.destroyRef.onDestroy(() => this.closeStream());
   }
 
   async start(spec: DataRunSpec): Promise<void> {
     this.reset();
-    this.phaseState.set('submitting');
+    this.localPhaseState.set('submitting');
     try {
-      this.run = await this.runner.start(spec, { onEvent: (event) => this.ingestEvent(event) });
+      const run = await this.runner.start(spec, {
+        onDomainEvent: (event) => this.ingestEvent(event),
+      });
+      this.openStream(run);
     } catch (error) {
       if (!(error instanceof BackfillSubmissionError)) throw error;
-      this.phaseState.set('failed');
-      this.errorState.set({
+      this.localPhaseState.set('failed');
+      this.submissionErrorState.set({
         code:
           error.classifiedKind === 'rejected'
             ? (error.classifiedReason ?? 'submission_failed')
@@ -154,8 +170,7 @@ export class DataLakeBackfillStore {
       });
       return;
     }
-    this.jobIdState.set(this.run.jobId);
-    this.phaseState.set('running');
+    this.jobIdState.set(this.runState()?.jobId ?? null);
   }
 
   /**
@@ -181,86 +196,48 @@ export class DataLakeBackfillStore {
     this.reset();
     this.jobIdState.set(jobId);
     this.reattachedState.set(true);
-    this.phaseState.set('running');
-    this.openStream(this.runner.observe(jobId, { onEvent: (event) => this.ingestEvent(event) }));
+    this.openStream(
+      this.runner.observe(jobId, {
+        onDomainEvent: (event) => this.ingestEvent(event),
+      }),
+    );
   }
 
   async cancel(): Promise<void> {
-    const jobId = this.jobIdState();
-    if (jobId === null) return;
-    await this.jobs.cancelJob(jobId);
+    await this.runState()?.cancel();
   }
 
   reset(): void {
     this.closeStream();
-    this.phaseState.set('idle');
+    this.localPhaseState.set('idle');
     this.jobIdState.set(null);
-    this.progressState.set(null);
     this.daysState.set([]);
-    this.errorState.set(null);
+    this.submissionErrorState.set(null);
     this.reattachedState.set(false);
   }
 
-  /** Folds one already-parsed SSE frame. Unknown event types are ignored. */
+  /** Folds one already-parsed domain frame. Unknown event types are ignored. */
   ingestEvent(event: SseEvent): void {
-    switch (event.type) {
-      case 'job.started':
-        this.phaseState.set('running');
-        break;
-      case 'job.progress': {
-        const current = asNumber(event['current']);
-        const total = asNumber(event['total']);
-        if (current === null || total === null) break;
-        this.progressState.set({
-          current,
-          total,
-          unit: asString(event['unit']) ?? 'days',
-          message: asString(event['message']),
-        });
-        break;
-      }
-      case 'data_lake.backfill_day': {
-        const day = toDayEvent(event);
-        if (day === null) break;
-        // A reconnect replays the stream from the last delivered id, and
-        // the framework may redeliver the frame that straddled the drop.
-        // Key on the day index so a replayed session is corrected in
-        // place instead of appearing twice in the run's own receipt.
-        this.daysState.update((days) => {
-          const existing = days.findIndex((d) => d.day_index === day.day_index);
-          if (existing === -1) return [...days, day];
-          const next = [...days];
-          next[existing] = day;
-          return next;
-        });
-        break;
-      }
-      case 'job.completed':
-        this.phaseState.set('completed');
-        break;
-      case 'job.failed':
-        this.phaseState.set('failed');
-        this.errorState.set({
-          code: asString(event['code']) ?? 'internal_error',
-          message: asString(event['message']) ?? 'The backfill job failed.',
-        });
-        break;
-      case 'job.cancelled':
-        this.phaseState.set('cancelled');
-        break;
-    }
-    if (TERMINAL_EVENTS.has(event.type)) this.closeStream();
+    if (event.type !== 'data_lake.backfill_day') return;
+    const day = toDayEvent(event);
+    if (day === null) return;
+    // A reconnect may redeliver the frame straddling the drop. Key on the
+    // day index so a replayed session is corrected instead of duplicated.
+    this.daysState.update((days) => {
+      const existing = days.findIndex((candidate) => candidate.day_index === day.day_index);
+      if (existing === -1) return [...days, day];
+      const next = [...days];
+      next[existing] = day;
+      return next;
+    });
   }
 
-  private openStream(run: ReturnType<BackfillJobRunner['observe']>): void {
-    this.run = run;
+  private openStream(run: BackfillJobRun): void {
+    this.runState.set(run);
   }
 
   private closeStream(): void {
-    // Detaching stops the frames; a terminal frame that already arrived
-    // still reached the fold, and the runner's terminal promise is settled
-    // either way.
-    this.run?.detach();
-    this.run = null;
+    this.runState()?.detach();
+    this.runState.set(null);
   }
 }

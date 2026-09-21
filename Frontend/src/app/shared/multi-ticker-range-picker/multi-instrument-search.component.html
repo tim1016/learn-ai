@@ -1,0 +1,20 @@
+<div class="add-row">
+  <input
+    type="text"
+    class="add-input mono"
+    placeholder="Add ticker…"
+    [value]="query()"
+    (input)="onQueryInput($event)"
+    aria-label="Search to add a ticker"
+  />
+  @if (query() && addable().length > 0) {
+    <div class="add-suggestions" role="listbox">
+      @for (ticker of addable(); track ticker.symbol) {
+        <app-instrument-option
+          [ticker]="ticker"
+          (picked)="pick($event.symbol)"
+        />
+      }
+    </div>
+  }
+</div>

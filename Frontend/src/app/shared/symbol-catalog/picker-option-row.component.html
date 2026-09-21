@@ -1,0 +1,11 @@
+<app-asset-identity
+  class="row__identity"
+  [symbol]="symbol()"
+  size="xs"
+  [showTitle]="false"
+/>
+<span class="row__name">{{ name() }}</span>
+<span class="row__meta mono">{{ exchange() ?? "—" }}</span>
+<span class="row__held mono" [class.row__held--unheld]="!lastHeld()">{{
+  heldCopy()
+}}</span>

@@ -1,16 +1,7 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  input,
-  model,
-  output,
-  signal,
-} from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, computed, input, model, output } from '@angular/core';
 
 import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
-import { PickerOptionRowComponent } from '../symbol-catalog/picker-option-row.component';
+import { MultiInstrumentSearchComponent } from './multi-instrument-search.component';
 
 /**
  * Multi-symbol selection primitive: chips for the current selection, an
@@ -20,13 +11,13 @@ import { PickerOptionRowComponent } from '../symbol-catalog/picker-option-row.co
  * The host adapts its catalog source (the joined picker universe, the
  * backfill panel's delisted policy) into the typed `options` input and the
  * `loading`/`unavailable`/`retry` status surface, and states its empty-
- * selection policy through `allowEmpty`. Rows render through the shared
- * `app-picker-option-row`, so the suggestion list carries the same
- * identity icons and coverage badges as every other picker.
+ * selection policy through `allowEmpty`. Suggestions render through the
+ * shared `app-instrument-option`, so the list carries the same identity
+ * icons, coverage badges and button semantics as every other picker.
  */
 @Component({
   selector: 'app-multi-instrument-card',
-  imports: [FormsModule, PickerOptionRowComponent],
+  imports: [MultiInstrumentSearchComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './multi-instrument-card.component.html',
   styleUrls: ['./multi-instrument-card.component.scss'],
@@ -56,26 +47,16 @@ export class MultiInstrumentCardComponent {
    */
   readonly selectAllLimit = 12;
   readonly selectAllDisabled = computed(() => this.options().length > this.selectAllLimit);
-
-  readonly query = signal('');
-
-  readonly addable = computed<readonly PickerSymbol[]>(() => {
-    const q = this.query().trim().toUpperCase();
-    const selected = new Set(this.symbols());
-    return this.options()
-      .filter((t) => !selected.has(t.symbol))
-      .filter(
-        (t) =>
-          !q || t.symbol.includes(q) || t.name.toUpperCase().includes(q),
-      )
-      .slice(0, 8);
-  });
+  readonly selectAllTitle = computed(() =>
+    this.selectAllDisabled()
+      ? `The catalog holds more than ${this.selectAllLimit} instruments — add them individually.`
+      : null,
+  );
 
   add(symbol: string): void {
     const selected = this.symbols();
     if (selected.includes(symbol)) return;
     this.symbols.set([...selected, symbol]);
-    this.query.set('');
   }
 
   remove(symbol: string): void {

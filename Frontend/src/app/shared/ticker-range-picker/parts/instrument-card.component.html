@@ -1,4 +1,9 @@
-<section #rootEl class="group" [class.group--flat]="appearance() === 'flat'" aria-label="Instrument">
+<section
+  #rootEl
+  class="group"
+  [class.group--flat]="appearance() === 'flat'"
+  aria-label="Instrument"
+>
   <header class="group__head">
     <span class="group__eyebrow">
       <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
@@ -29,15 +34,16 @@
           size="sm"
           [showTitle]="false"
         />
-        <span class="ticker-box__name">
-          {{ selectedTicker()?.name || '' }}
-        </span>
-        <span class="ticker-box__chip mono"
-              [pTooltip]="selectedExchangeTooltip()"
-              tooltipPosition="top"
-              tabindex="0"
-              role="img"
-              [attr.aria-label]="selectedExchangeTooltip()">{{ selectedExchange() }}</span>
+        <span class="ticker-box__name">{{ selectedTicker()?.name || "" }}</span>
+        <span
+          class="ticker-box__chip mono"
+          [pTooltip]="selectedExchangeTooltip()"
+          tooltipPosition="top"
+          tabindex="0"
+          role="img"
+          [attr.aria-label]="selectedExchangeTooltip()"
+          >{{ selectedExchange() }}</span
+        >
         <i class="pi pi-angle-down ticker-box__chev" aria-hidden="true"></i>
       } @else {
         <input
@@ -54,16 +60,7 @@
 
       @if (open()) {
         <app-instrument-dropdown
-          [visible]="visibleTickers()"
-          [recent]="recentTickers()"
-          [matchCount]="filteredTickers().length"
-          [activeSymbol]="value().symbol"
-          [query]="query()"
-          [loading]="catalogLoading()"
-          [unavailable]="catalogUnavailable()"
-          [degraded]="catalogDegraded()"
-          [empty]="catalogEmpty()"
-          [hostUniverse]="hostUniverse()"
+          [view]="dropdownView()"
           [gate]="gateState()"
           (pick)="pickTicker($event)"
           (retryLake)="retryCatalog()"
@@ -74,19 +71,10 @@
       }
     </div>
   </div>
-
   @if (selectedLastHeld(); as lastHeld) {
-    <div
-      class="instrument-foot mono"
-      title="First and last day the lake holds for this symbol. Days in between may still be missing."
-    >
-      <span class="instrument-foot__label">days held</span>
-      <span class="instrument-foot__span">
-        @if (selectedFirstHeld(); as firstHeld) {
-          <span class="instrument-foot__span-val">{{ firstHeld }}</span> →
-        }
-        <span class="instrument-foot__span-val">{{ lastHeld }}</span>
-      </span>
-    </div>
+    <app-instrument-held-span
+      [firstHeld]="selectedFirstHeld()"
+      [lastHeld]="lastHeld"
+    />
   }
 </section>

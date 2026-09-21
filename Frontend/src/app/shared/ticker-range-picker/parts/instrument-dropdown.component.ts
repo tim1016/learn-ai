@@ -3,8 +3,9 @@ import { RouterLink } from '@angular/router';
 
 import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { CoverageGateState } from '../../symbol-catalog/ensure-coverage.service';
+import type { SymbolCatalogStatus } from '../../symbol-catalog/symbol-catalog.service';
 import { CoverageGateStripComponent } from '../../symbol-catalog/coverage-gate-strip.component';
-import { PickerOptionRowComponent } from '../../symbol-catalog/picker-option-row.component';
+import { InstrumentOptionComponent } from './instrument-option.component';
 
 /**
  * The instrument card's open dropdown: the scrolled option list, the
@@ -12,29 +13,19 @@ import { PickerOptionRowComponent } from '../../symbol-catalog/picker-option-row
  *
  * Pure presentation over values the card computes — every row, banner and
  * button either renders an input or reports intent through an output. The
- * row markup itself lives in `app-picker-option-row`, shared with the
- * multi-symbol card; the gate strip in `app-coverage-gate-strip`.
+ * option button lives in `app-instrument-option`, whose cells come from the
+ * shared `app-picker-option-row`; the gate strip lives in
+ * `app-coverage-gate-strip`.
  */
 @Component({
   selector: 'app-instrument-dropdown',
-  imports: [RouterLink, PickerOptionRowComponent, CoverageGateStripComponent],
+  imports: [RouterLink, InstrumentOptionComponent, CoverageGateStripComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-dropdown.component.html',
   styleUrls: ['./instrument-dropdown.component.scss'],
 })
 export class InstrumentDropdownComponent {
-  readonly visible = input.required<readonly PickerSymbol[]>();
-  readonly recent = input<readonly PickerSymbol[]>([]);
-  readonly matchCount = input.required<number>();
-  readonly activeSymbol = input<string | null>(null);
-  readonly query = input('');
-  readonly loading = input(false);
-  readonly unavailable = input<string | null>(null);
-  /** The live catalog is dark but the lake answered — degraded, not empty. */
-  readonly degraded = input(false);
-  /** No source answered with anything at all — distinct from no match. */
-  readonly empty = input(false);
-  readonly hostUniverse = input(false);
+  readonly view = input.required<InstrumentDropdownView>();
   readonly gate = input<CoverageGateState | null>(null);
 
   readonly pick = output<PickerSymbol>();
@@ -42,8 +33,14 @@ export class InstrumentDropdownComponent {
   readonly retryVendor = output();
   readonly retryGate = output();
   readonly dismiss = output();
+}
 
-  trackBySymbol(_: number, t: PickerSymbol): string {
-    return t.symbol;
-  }
+export interface InstrumentDropdownView {
+  readonly visible: readonly PickerSymbol[];
+  readonly recent: readonly PickerSymbol[];
+  readonly matchCount: number;
+  readonly activeSymbol: string | null;
+  readonly query: string;
+  readonly catalogStatus: SymbolCatalogStatus;
+  readonly hostUniverse: boolean;
 }

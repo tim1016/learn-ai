@@ -1,0 +1,19 @@
+.instrument-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-subtle);
+  font-size: 10px;
+
+  &__label {
+    color: var(--text-muted);
+  }
+
+  &__span {
+    color: var(--text-subtle);
+  }
+
+  &__span-val {
+    color: var(--text-secondary);
+  }
+}

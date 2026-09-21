@@ -34,15 +34,8 @@ import type { PickerSymbol } from './symbol-catalog.types';
 export interface SymbolCatalogView {
   readonly pool: Signal<readonly PickerSymbol[]>;
   readonly recent: Signal<readonly string[]>;
-  readonly loading: Signal<boolean>;
-  /**
-   * Non-null only when *neither* source answered — the picker has no honest
-   * list at all. The vendor being dark alone is a *degraded* view, not an
-   * unavailable one: the lake holdings still stand, visibly.
-   */
-  readonly unavailable: Signal<string | null>;
-  /** The live catalog failed but the lake answered — show the banner. */
-  readonly degraded: Signal<boolean>;
+  /** One exhaustive availability verdict; contradictory flag sets cannot exist. */
+  readonly status: Signal<SymbolCatalogStatus>;
   /**
    * Refresh the lake's coverage — the read a dropdown-open means by
    * "reload". The vendor catalog is deliberately untouched: it is read
@@ -54,13 +47,18 @@ export interface SymbolCatalogView {
   readonly retryVendor: () => void;
 }
 
+export type SymbolCatalogStatus =
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'ready' }
+  | { readonly kind: 'degraded'; readonly message: string }
+  | { readonly kind: 'unavailable'; readonly message: string };
+
 /** The vendor rows a picker offers: US-equity actives only. */
 export function offerableVendorRows(
   entries: readonly VendorSymbolEntry[],
 ): readonly VendorSymbolEntry[] {
   return entries.filter(
-    (entry) =>
-      entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS && entry.status === 'active',
+    (entry) => entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS && entry.status === 'active',
   );
 }
 
@@ -79,9 +77,7 @@ export function joinCatalog(
 
   // The lake pool re-joins on every catalog reload, so the vendor lookup
   // is a Map — a linear .find per lake row multiplied by backfill reloads.
-  const vendorBySymbol = new Map(
-    vendorEntries.map((entry) => [entry.symbol, entry]),
-  );
+  const vendorBySymbol = new Map(vendorEntries.map((entry) => [entry.symbol, entry]));
   const lakeRows: readonly PickerSymbol[] = lakePool.flatMap((option) => {
     const vendor = vendorBySymbol.get(option.symbol);
     // A lake row the vendor classifies outside the backfillable universe
@@ -118,14 +114,10 @@ function toVendorOnlyRow(entry: VendorSymbolEntry): PickerSymbol {
  * "include delisted" toggle, which keeps a survivorship-biased universe an
  * operator's choice (ADR 0066, decision 4).
  */
-export function delistedVendorRows(
-  entries: readonly VendorSymbolEntry[],
-): readonly PickerSymbol[] {
+export function delistedVendorRows(entries: readonly VendorSymbolEntry[]): readonly PickerSymbol[] {
   return entries
     .filter(
-      (entry) =>
-        entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS &&
-        entry.status === 'inactive',
+      (entry) => entry.asset_class === LAKE_BACKFILLABLE_ASSET_CLASS && entry.status === 'inactive',
     )
     .map((entry) => ({
       symbol: entry.symbol,
@@ -160,15 +152,15 @@ export class SymbolCatalogService {
     const view: SymbolCatalogView = {
       pool: computed(() => joinCatalog(lakeView.pool(), this.vendor.entries())),
       recent: lakeView.recent,
-      loading: computed(() => lakeView.loading() || this.vendor.loading()),
-      unavailable: computed(() => {
+      status: computed<SymbolCatalogStatus>(() => {
         const lakeReason = lakeView.unavailable();
-        // The vendor being dark is the degraded banner's job, not the
-        // empty-state's — only a lake failure can empty the pool outright,
-        // because lake rows are the ones a run can actually read today.
-        return lakeReason;
+        if (lakeReason !== null) return { kind: 'unavailable', message: lakeReason };
+        if (lakeView.loading()) return { kind: 'loading' };
+        const vendorReason = this.vendor.unavailable();
+        if (vendorReason !== null) return { kind: 'degraded', message: vendorReason };
+        if (this.vendor.loading()) return { kind: 'loading' };
+        return { kind: 'ready' };
       }),
-      degraded: computed(() => this.vendor.unavailable() !== null),
       reload: () => {
         lakeView.reload();
       },

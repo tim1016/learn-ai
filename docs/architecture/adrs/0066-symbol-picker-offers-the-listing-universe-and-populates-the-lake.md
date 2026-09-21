@@ -56,9 +56,12 @@ trimmed to the picker-row projection and TTL-cached.
    Populate, then use. The gate always requests the full allowed history (5 years, trade
    bars) so a symbol covered today cannot strand a narrower window chosen tomorrow.
 
-4. **Delisted symbols are opt-in.** The shared picker offers actives only; the Observatory
-   backfill panel has an explicit "include delisted" toggle. This keeps a survivorship-biased
-   universe an operator's visible choice rather than a default that accretes by accident.
+4. **Vendor-only delisted symbols are opt-in.** The shared picker offers active listings plus
+   any inactive symbol the lake already holds, because those bars remain real and the row is
+   visibly badged "delisted". The Observatory's explicit "include delisted" toggle adds
+   inactive vendor rows the lake does not yet hold. This keeps expanding a backfill universe
+   with delisted names an operator's visible choice rather than a default that accretes by
+   accident.
 
 5. **A dark vendor catalog degrades visibly.** If the symbol-catalog read fails, pickers fall
    back to lake holdings under a "live catalog unavailable" banner with a retry — never a

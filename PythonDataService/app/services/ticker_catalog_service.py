@@ -11,21 +11,26 @@ not per request.
 from __future__ import annotations
 
 import asyncio
-import logging
+from functools import lru_cache
 from time import monotonic
+from typing import Any, Protocol
 
 from app.schemas.ticker_catalog import SymbolCatalogEntry
 from app.services.polygon_client import PolygonClientService
 
-logger = logging.getLogger(__name__)
-
 _CATALOG_CACHE_TTL_S = 3600.0
+
+
+class TickerCatalogClient(Protocol):
+    """The vendor operation the catalog cache requires."""
+
+    def list_catalog_tickers(self) -> list[dict[str, Any]]: ...
 
 
 class TickerCatalogService:
     """Caches one vendor catalog walk per process, single-flighting misses."""
 
-    def __init__(self, client: PolygonClientService) -> None:
+    def __init__(self, client: TickerCatalogClient) -> None:
         self._client = client
         self._entry: tuple[float, asyncio.Task[list[SymbolCatalogEntry]]] | None = None
 
@@ -38,10 +43,6 @@ class TickerCatalogService:
         entry = (monotonic(), asyncio.ensure_future(self._load()))
         self._entry = entry
         return await self._await(entry)
-
-    def clear_for_testing(self) -> None:
-        """Drop the cached catalog so a test's stubbed client is consulted."""
-        self._entry = None
 
     async def _load(self) -> list[SymbolCatalogEntry]:
         entries = await asyncio.to_thread(self._client.list_catalog_tickers)
@@ -64,3 +65,9 @@ class TickerCatalogService:
             if self._entry is entry:
                 self._entry = None
             raise
+
+
+@lru_cache(maxsize=1)
+def get_ticker_catalog_service() -> TickerCatalogService:
+    """The process-wide catalog cache injected into the transport route."""
+    return TickerCatalogService(PolygonClientService())

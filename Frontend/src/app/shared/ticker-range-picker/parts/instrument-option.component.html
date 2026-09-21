@@ -1,0 +1,16 @@
+<button
+  type="button"
+  class="row"
+  [class.row--active]="active()"
+  role="option"
+  [attr.aria-selected]="active()"
+  (click)="select($event)"
+>
+  <app-picker-option-row
+    [symbol]="ticker().symbol"
+    [name]="ticker().name"
+    [exchange]="ticker().exchange"
+    [lastHeld]="ticker().lastHeld ?? null"
+    [delisted]="ticker().delisted"
+  />
+</button>
