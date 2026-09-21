@@ -7,6 +7,7 @@ translation — not any vendor. Grows one endpoint block per read-path slice.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator
 from datetime import date
 from typing import Any
@@ -623,6 +624,50 @@ async def test_symbols_endpoint_serves_cached_catalog_within_ttl() -> None:
     assert second.status_code == 200
     assert second.json() == first.json()
     assert replacement.assets_call is None
+
+
+async def test_symbols_endpoint_single_flights_concurrent_loads() -> None:
+    class _CountingPort(_FakePort):
+        load_calls = 0
+
+        async def list_assets(self, *, status=None, limit=100):
+            type(self).load_calls += 1
+            # Yield so a concurrent request can interleave: single-flight
+            # means it must find the in-flight task instead of loading again.
+            await asyncio.sleep(0)
+            return self._assets
+
+    port = _CountingPort(assets=[_asset(symbol="MSFT")])
+    get_broker_registry().register(port)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        responses = await asyncio.gather(
+            *(
+                client.get("/api/brokers/alpaca/symbols", headers=_control_headers())
+                for _ in range(3)
+            )
+        )
+
+    assert all(response.status_code == 200 for response in responses)
+    assert [row["symbol"] for row in responses[0].json()] == ["MSFT"]
+    assert _CountingPort.load_calls == 1
+
+
+async def test_symbols_endpoint_failure_is_not_cached() -> None:
+    get_broker_registry().register(
+        _FakePort(error=BrokerRateLimited("Throttled.", broker="alpaca", retry_after_ms=2000))
+    )
+    first = await _get("/api/brokers/alpaca/symbols")
+    assert first.status_code == 503
+
+    # A failed read is not sticky: the picker's Retry must reach the vendor
+    # again, not a cached 300 s error.
+    replacement = _FakePort(assets=[_asset(symbol="MSFT")])
+    get_broker_registry().register(replacement)
+    second = await _get("/api/brokers/alpaca/symbols")
+
+    assert second.status_code == 200
+    assert second.json()[0]["symbol"] == "MSFT"
 
 
 async def test_clock_endpoint_returns_vendor_evidence() -> None:

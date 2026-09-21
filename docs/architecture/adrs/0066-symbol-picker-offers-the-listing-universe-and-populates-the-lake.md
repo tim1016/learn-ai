@@ -70,6 +70,12 @@ carries a complete asset catalog read (Alpaca `/v2/assets`, surfaced here as
   membership.
 - Picker hosts pass `adjustmentMode`; the coverage badge and the gate read the lake tree the
   host's run will actually read.
+- **Open exceptions until the mop-up lands:** batch-runner's multi-symbol card still reads
+  the lake-only catalog (no joined universe, no gate), and the unrouted Ticker Explorer
+  still passes its `TICKER_LABELS` display map as a host universe (#1960). This ADR is the
+  destination; those two surfaces are the documented debt, and the "every symbol input" and
+  "joined universe" claims above bind the rest of the app from the moment this ADR is
+  accepted.
 
 ## Enforcement
 

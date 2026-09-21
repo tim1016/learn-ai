@@ -48,6 +48,9 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
   the delisted toggle.
 - When the vendor catalog is dark, the picker degrades visibly (banner + lake holdings +
   retry). Never substitute a canned symbol list for a failed read.
+- **Current exceptions** (mop-up pending, see ADR 0066 Consequences): batch-runner's
+  multi-symbol card is still lake-only (no joined universe, no gate), and the unrouted
+  Ticker Explorer still passes a `TICKER_LABELS` host universe. Don't copy either pattern.
 
 ## Routing
 

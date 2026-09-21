@@ -390,15 +390,40 @@ async def list_assets(
 # The picker catalog is one vendor read serving every symbol picker in the
 # browser, cached here for the same reason the option-contract reads are: the
 # vendor list moves on corporate-action cadence (new listings, delistings),
-# not per request, and a dropdown-open burst must not re-walk it.
+# not per request, and a dropdown-open burst must not re-walk it. The cache
+# holds the in-flight task, not a materialized list, so concurrent misses
+# single-flight onto one vendor read and a failure is never sticky — the
+# entry drops on error, letting the picker's Retry actually reach the vendor.
+# Port-identity keying (as broker_account_snapshot needs) is unnecessary by
+# construction: this route is Alpaca-only and asset metadata does not vary
+# by credential.
 _SYMBOLS_CACHE_TTL_S = 300.0
-_symbol_catalog_cache: tuple[float, list[BrokerSymbol]] | None = None
+_symbol_catalog_entry: tuple[float, asyncio.Task[list[BrokerSymbol]]] | None = None
+
+
+async def _load_symbol_catalog() -> list[BrokerSymbol]:
+    assets = await _run("alpaca", lambda port: port.list_assets(status=None, limit=None))
+    return [BrokerAsset.to_picker_symbol(asset) for asset in assets]
+
+
+async def _await_symbol_catalog(
+    entry: tuple[float, asyncio.Task[list[BrokerSymbol]]],
+) -> list[BrokerSymbol]:
+    global _symbol_catalog_entry
+    try:
+        return await entry[1]
+    except BaseException:
+        # A failed read is not cached: the next caller re-loads instead of
+        # every picker on the page staring at a sticky 300 s error.
+        if _symbol_catalog_entry is entry:
+            _symbol_catalog_entry = None
+        raise
 
 
 def clear_symbol_catalog_cache_for_testing() -> None:
     """Drop the cached picker catalog so a test's fake port is consulted."""
-    global _symbol_catalog_cache
-    _symbol_catalog_cache = None
+    global _symbol_catalog_entry
+    _symbol_catalog_entry = None
 
 
 @router.get("/alpaca/symbols", response_model=list[BrokerSymbol])
@@ -416,18 +441,19 @@ async def list_alpaca_symbols() -> list[BrokerSymbol]:
     Staleness is bounded by the TTL below, which also bounds how stale a
     symbol's ``status``/``tradable`` flags can be. That is acceptable for a
     menu; nothing here claims a symbol is currently tradable — order-time
-    eligibility checks stay with the order path.
+    eligibility checks stay with the order path. Concurrent callers share
+    the in-flight load task; the miss-to-store window holds no ``await``,
+    so no double load is possible.
     """
-    global _symbol_catalog_cache
-    if (
-        _symbol_catalog_cache is not None
-        and monotonic() - _symbol_catalog_cache[0] < _SYMBOLS_CACHE_TTL_S
-    ):
-        return _symbol_catalog_cache[1]
-    assets = await _run("alpaca", lambda port: port.list_assets(status=None, limit=None))
-    catalog = [BrokerAsset.to_picker_symbol(asset) for asset in assets]
-    _symbol_catalog_cache = (monotonic(), catalog)
-    return catalog
+    global _symbol_catalog_entry
+    entry = _symbol_catalog_entry
+    if entry is not None:
+        loaded_at, task = entry
+        if not task.done() or monotonic() - loaded_at < _SYMBOLS_CACHE_TTL_S:
+            return await _await_symbol_catalog(entry)
+    entry = (monotonic(), asyncio.ensure_future(_load_symbol_catalog()))
+    _symbol_catalog_entry = entry
+    return await _await_symbol_catalog(entry)
 
 
 @router.get("/{broker}/clock", response_model=BrokerClockEvidence)
