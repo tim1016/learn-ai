@@ -1,0 +1,81 @@
+# ADR 0066: The Symbol Picker Offers the Alpaca Listing Universe and Populates the Lake on Selection
+
+Date: 2026-09-20
+Status: Accepted
+Supersedes: none. Refines ADR 0049 (the data lake is the market-data authority) and the
+retained-market-data decision in ADR 0062; it changes what a picker *offers*, not what any
+engine *reads*.
+Contexts: issue #1960 (Ticker Explorer's label-map picker), the retirement of the slow IBKR
+symbol-search proxy (2026-08-27 decommission), and the owner decision of 2026-09-20 that
+pickers may offer any listed symbol provided the lake stays in the loop.
+
+## Context
+
+Every symbol picker used to be backed by the data-lake catalog: the menu offered exactly what
+the lake held, because a backtest can only read bars the lake stores. That made the menu
+honest but closed. A newly listed symbol was unpickable everywhere until an operator went to
+the Data Lake Observatory and typed it into a free-text backfill form, and several surfaces
+had grown bespoke free-text ticker inputs to escape that dead end — each one a place a typo
+or an unlabelled symbol silently degraded the product (issue #1960's root cause was exactly
+such an escape: a display-label map was doing membership duty).
+
+The IBKR symbol-search proxy that once powered live lookups is retired; its 500 ms-pacing
+shaped every workaround that survived it. The broker plumbing that replaced it already
+carries a complete asset catalog read (Alpaca `/v2/assets`, surfaced here as
+`GET /api/brokers/alpaca/symbols`, trimmed and TTL-cached).
+
+## Decision
+
+1. **One picker family, one icon renderer.** Every symbol input in the Frontend uses the
+   shared instrument card (`app-instrument-card` and its picker wrappers) and renders rows
+   through `app-asset-identity`. Free-text ticker inputs and hand-rolled suggestion lists
+   are bugs, not shortcuts.
+
+2. **The picker's universe is the vendor's listing catalog joined with lake coverage.**
+   `SymbolCatalogService` offers every listed US-equity symbol, badge in hand: held span,
+   "not held", or "delisted". The menu no longer pretends the lake is the world; the badge
+   keeps it honest about what the world is.
+
+3. **An unheld pick backfills first.** Selecting a not-held symbol runs the ensure-coverage
+   gate inside the card: compose the spec from `backfill-defaults`, submit the standard
+   data-lake backfill job, stream its progress into the dropdown, and only emit the selection
+   once the lake catalog — re-read, not the job's word alone — confirms the bars landed.
+   Populate, then use. The gate always requests the full allowed history (5 years, trade
+   bars) so a symbol covered today cannot strand a narrower window chosen tomorrow.
+
+4. **Delisted symbols are opt-in.** The shared picker offers actives only; the Observatory
+   backfill panel has an explicit "include delisted" toggle. This keeps a survivorship-biased
+   universe an operator's visible choice rather than a default that accretes by accident.
+
+5. **A dark vendor catalog degrades visibly.** If the symbol-catalog read fails, pickers fall
+   back to lake holdings under a "live catalog unavailable" banner with a retry — never a
+   silent empty list, never a canned fallback. If a backfill fails, the strip says why and
+   offers retry; nothing is selected on a false answer.
+
+6. **Crypto and other non-equity classes are not offered** — the lake's `market='usa'`
+   pipeline cannot backfill them, so offering them would promise what the gate can never
+   deliver.
+
+## Consequences
+
+- The lake remains the sole market-data authority and the only thing any engine reads
+  (ADR 0049 unchanged). Membership and data are now distinct roles: Alpaca decides what the
+  menu shows; the lake decides what a run can read.
+- Order entry and other trading surfaces wait on a backfill for unheld symbols even though
+  placing the order needs no bars. Accepted: one story everywhere beats a special case, and
+  the Observatory panel remains the bulk/explicit path.
+- The broker assets read is on every picker page's critical path. Its TTL cache bounds the
+  vendor traffic; its failure is a banner, not an outage of the picker.
+- `TICKER_LABELS` loses its picker role permanently — it is display metadata, never
+  membership.
+- Picker hosts pass `adjustmentMode`; the coverage badge and the gate read the lake tree the
+  host's run will actually read.
+
+## Enforcement
+
+- The hard rule in `AGENTS.md` and the "Symbol picking" section of
+  `.claude/rules/angular.md` bind both Codex and Claude sessions.
+- `InstrumentCardComponent`'s spec pins the gate, the badge join, the degraded banner, and
+  the host-universe escape hatch; `EnsureCoverageService`'s spec pins the populate-then-use
+  contract, including the disarmed-gate guarantee (a cancelled or superseded backfill cannot
+  re-open the strip or select a symbol).

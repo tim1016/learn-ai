@@ -31,6 +31,24 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
 - **Reactive Forms** still valid for complex existing forms. Don't migrate just to migrate.
 - Never Template-driven forms.
 
+## Symbol picking (ADR 0066)
+
+- Every symbol input uses the shared instrument card (`app-instrument-card`) or a picker
+  wrapper (`app-ticker-range-picker`, `app-multi-ticker-range-picker`). Never hand-roll a
+  ticker input, a suggestion list, or a membership map — `TICKER_LABELS` is display
+  metadata, never membership.
+- The default universe is the joined catalog (`SymbolCatalogService`): every listed
+  US-equity symbol, with per-row lake coverage (held span / "not held" / "delisted"). Rows
+  render through `app-asset-identity`.
+- An unheld pick is gated on its lake backfill inside the card (`EnsureCoverageService`);
+  the selection emits only after the lake — re-read, not the job's word — confirms the
+  bars landed. Hosts never implement their own backfill gating.
+- A host-supplied `universe` input is a closed list the host owns outright (no gate); use it
+  only when membership genuinely is the host's — e.g. the backfill panel's vendor list with
+  the delisted toggle.
+- When the vendor catalog is dark, the picker degrades visibly (banner + lake holdings +
+  retry). Never substitute a canned symbol list for a failed read.
+
 ## Routing
 
 - Lazy-loaded routes via `loadComponent` / `loadChildren`.
