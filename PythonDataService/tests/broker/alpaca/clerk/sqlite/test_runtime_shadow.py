@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
+from app.services.broker_v2_panel.catalog_projection_service import sqlite_catalog_rollup
 from app.services.session_authority import declared_session_bounds
 from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
@@ -191,6 +192,9 @@ async def test_a_shadow_fill_retains_its_exact_simulated_execution_identity(
             assert snapshot.execution_coverage == "complete"
         finally:
             reader.close()
+        # The roster's own rollup on this real Shadow snapshot: a bot with no
+        # holds and no uncertainties must not carry the attention flag (#2178).
+        assert sqlite_catalog_rollup(snapshot).needs_attention is False
     finally:
         repo.close()
         evidence.close()
@@ -247,6 +251,17 @@ async def test_shadow_fill_survives_restart_and_reconciles_to_attributed_exposur
 
         assert proof.reconciliation_verdict == "clean"
         assert proof.exposure == {"SPY": 1.0}
+        # The reprojected economics read complete coverage after restart on
+        # their own — the roster row needs no operator reconcile to clear
+        # (#2178 acceptance criterion 8).
+        reader = SqliteEconomicProjectionReader.from_repository(restarted_repo)
+        try:
+            snapshot = reader.bot_economic_snapshot(SID, session_window=session_window_for_date(DAY))
+            assert snapshot is not None
+            assert snapshot.execution_coverage == "complete"
+            assert sqlite_catalog_rollup(snapshot).needs_attention is False
+        finally:
+            reader.close()
     finally:
         restarted_repo.close()
 

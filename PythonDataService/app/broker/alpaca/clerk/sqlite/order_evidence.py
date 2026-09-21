@@ -28,7 +28,11 @@ from app.broker.alpaca.clerk.sqlite.folds import (
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
-from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import (
+    EffectOperationResource,
+    OrderResource,
+    TransitionInput,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -128,8 +132,10 @@ def fold_order_evidence(
     if exact_events:
         _fold_simulated_execution_evidence(
             repo,
+            effect=effect,
             effect_operation_id=effect_operation_id,
             order=order,
+            order_ref=order_ref,
             events=exact_events,
             append_stale_ack=append_stale_ack,
         )
@@ -183,27 +189,41 @@ def fold_order_evidence(
     )
 
 
+#: The execution-id namespaces the deterministic no-submit worlds mint
+#: (``shape_immediate_order``/the shadow book's ``_fill_event``, from their
+#: ``id_prefix``).  A fill event carrying one of these identities is, by
+#: construction, a simulated execution; gating on the namespace keeps that
+#: claim honest even if a future real REST payload starts carrying per-fill
+#: execution ids — an identity the simulated worlds did not mint folds
+#: through the cumulative path, never as simulated execution (#2178 safety
+#: constraint: never classify a real broker aggregate as an exact execution).
+_SIMULATED_EXECUTION_ID_PREFIXES: tuple[str, ...] = ("shadow-execution:", "sim-execution:")
+
+
 def _exact_simulated_fill_events(order: BrokerOrder) -> list[BrokerOrderEvent]:
     """The fill events a deterministic no-submit adapter shaped with exact identity.
 
-    Only simulated aggregates carry them: the real REST adapter's synthesized
-    fill events never set ``execution_id`` (``adapter._order_events``), and
-    websocket frames never route through ``fold_order_evidence`` at all — so
-    an execution-bearing fill event here is, by construction, a no-submit
-    adapter's authoritative simulated execution (#2178).
+    Only the simulated worlds' aggregates carry them: the real REST adapter's
+    synthesized fill events never set ``execution_id``
+    (``adapter._order_events``), and websocket frames never route through
+    ``fold_order_evidence`` at all.
     """
     return [
         event
         for event in order.events
-        if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None
+        if event.event_type in {"fill", "partial_fill"}
+        and event.execution_id is not None
+        and event.execution_id.startswith(_SIMULATED_EXECUTION_ID_PREFIXES)
     ]
 
 
 def _fold_simulated_execution_evidence(
     repo: ClerkSqliteRepository,
     *,
+    effect: EffectOperationResource,
     effect_operation_id: str,
     order: BrokerOrder,
+    order_ref: str,
     events: list[BrokerOrderEvent],
     append_stale_ack: bool = True,
 ) -> None:
@@ -220,10 +240,6 @@ def _fold_simulated_execution_evidence(
     order's prior evidence fails closed through the same typed
     ``EXECUTION_COVERAGE_CONFLICT`` uncertainty as a real broker slice.
     """
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
-    order_ref = order.client_order_id
-    assert order_ref is not None
     for event in events:
         if event.quantity is None or event.price is None:
             raise ValueError(
@@ -243,6 +259,7 @@ def _fold_simulated_execution_evidence(
         )
         build_execution, build_conflict = _simulated_execution_transition_builders(
             repo,
+            effect=effect,
             effect_operation_id=effect_operation_id,
             order=order,
             order_ref=order_ref,
@@ -267,6 +284,7 @@ def _fold_simulated_execution_evidence(
 def _simulated_execution_transition_builders(
     repo: ClerkSqliteRepository,
     *,
+    effect: EffectOperationResource,
     effect_operation_id: str,
     order: BrokerOrder,
     order_ref: str,
@@ -278,9 +296,6 @@ def _simulated_execution_transition_builders(
     A factory of its own so the builders bind this event's identity as
     parameters — never a surrounding loop variable.
     """
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
-
     def _execution_transition() -> TransitionInput:
         return TransitionInput(
             strategy_instance_id=effect.strategy_instance_id,

@@ -747,6 +747,43 @@ def test_a_real_rest_aggregate_never_gains_an_exact_execution_classification(
         repo.close()
 
 
+def test_an_execution_id_the_simulated_worlds_did_not_mint_stays_cumulative(
+    tmp_path: Path,
+) -> None:
+    """Even if a future real REST payload carried per-fill execution ids, an
+    identity outside the ``shadow-execution:``/``sim-execution:`` namespaces
+    is not simulated evidence: it folds cumulative, exactly as today, so a
+    real broker aggregate can never be classified as an exact execution."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="foreign-execution-bot",
+        symbol="SPY",
+    )
+    try:
+        aggregate = _simulated_aggregate(
+            accepted,
+            broker="alpaca",
+            id_prefix="broker",
+            quantity=10.0,
+            price=100.25,
+            occurred_at_ms=1_786_368_000_431,
+            carry_execution_id=True,
+        )
+        assert aggregate.events[0].execution_id is not None
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.effect_operation_id or "",
+            order=aggregate,
+        )
+
+        fills = repo.fills_for_order(accepted.order_ref or "")
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] is None
+        assert fills[0]["evidence_source"] == "cumulative_recovery"
+    finally:
+        repo.close()
+
+
 def test_simulated_exact_evidence_supersedes_a_legacy_cumulative_row_without_double_counting(
     tmp_path: Path,
 ) -> None:
