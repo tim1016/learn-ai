@@ -10,8 +10,8 @@
 >
   @if (fold(); as selectedFold) {
     @if (recency(); as foldRecency) {
-      <ng-template #header>
-        <div class="fold-explainer__header">
+      <ng-template #header let-ariaLabelledBy="ariaLabelledBy">
+        <div class="fold-explainer__header" [id]="ariaLabelledBy">
           <span>Fold {{ foldRecency.position }} of {{ foldRecency.total }}</span>
           <strong>{{ foldRecency.label }}</strong>
         </div>
