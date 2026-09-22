@@ -1554,6 +1554,13 @@ async def test_manual_cancel_refuses_a_terminal_target_before_creating_a_cancel_
 async def test_manual_cancel_recovers_an_already_canceled_target_as_success(
     repo: ClerkSqliteRepository,
 ) -> None:
+    from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance
+
+    # Isolate manual-order demand from the fixture's idle deployment.
+    submit_retire_strategy_instance(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id="bot-1", retired_at_ms=repo.clock(),
+    )
+    assert repo.market_data_symbols() == ()
     trade = FakeTrade(repo=repo)
     submitted = await submit_manual_order(
         repo,
@@ -1565,6 +1572,7 @@ async def test_manual_cancel_recovers_an_already_canceled_target_as_success(
         trade=trade,
     )
     assert submitted.leg.order_ref is not None
+    assert repo.market_data_symbols() == ("SPY",)
     order = trade.orders[submitted.leg.order_ref]
     trade.orders[submitted.leg.order_ref] = order.model_copy(
         update={"status": "canceled", "canceled_at_ms": 1_700_000_000_300}
@@ -1583,6 +1591,7 @@ async def test_manual_cancel_recovers_an_already_canceled_target_as_success(
     assert trade.cancel_calls == []
     ticket = repo.manual_order_ticket(TICKET_ID)
     assert ticket is not None and ticket.state == "CANCELED"
+    assert repo.market_data_symbols() == ()
 
 
 @pytest.mark.asyncio

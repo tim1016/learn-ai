@@ -55,9 +55,8 @@ from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
-from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import (
-    liveness_blocks_entry,
+    MarketEntryPolicy,
     market_data_bars_live,
     market_liveness_fact,
 )
@@ -386,17 +385,12 @@ def _liveness_blocks_entry(
     schedule is not liveness, so ``feed`` supplies the second half: whether
     the venue is actually printing bars for this symbol right now.
     """
-    return liveness_blocks_entry(
-        liveness,
-        use_rth=binding.use_rth,
-        extended_phase_proven=lambda: extended_phase_proven_at_ms(
-            now_ms=now_ms_utc(),
-            symbol=binding.symbol,
-            account_id=capability_account_id,
-            extended_window=session.window,
-        ),
-        extended_session_live=lambda: _market_data_live(feed, binding.symbol),
+    policy = MarketEntryPolicy(
+        symbol=binding.symbol, use_rth=binding.use_rth,
+        capability_account_id=capability_account_id, extended_window=session.window,
+        clock=now_ms_utc, extended_session_live=lambda: _market_data_live(feed, binding.symbol),
     )
+    return policy.refusal(liveness) is not None
 
 
 def _market_data_live(feed: MarketDataFeed, symbol: str) -> bool:

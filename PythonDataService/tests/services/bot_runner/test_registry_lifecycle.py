@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
 )
 from app.engine.live.account_artifacts import RestartIntensityPolicy
-from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.engine.live.desired_state import DesiredState
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.broker_bots import BotProcessFact
@@ -949,19 +948,3 @@ async def test_archive_refuses_when_the_clerk_cannot_prove_flatness(
 
     assert "prove" in str(blocked.value).lower()
     assert registry.status("alpaca", _SID).phase != "RETIRED"
-
-
-async def test_market_data_demand_survives_stop_and_registry_restart(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    assert registry.market_data_symbols() == ("SPY",)
-    await registry.stop("alpaca", _SID)
-    assert registry.market_data_symbols() == ("SPY",)
-    restarted = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    assert restarted.market_data_symbols() == ("SPY",)
-    # Seed the durable retirement projection; this read-path test does not
-    # invoke the separate SQLite archive ceremony.
-    BotLifecycleStateRepo(tmp_path / "live_state" / _SID / "lifecycle_state.json").retire(
-        now_ms=_T0 + 1, updated_by="test", reason="Archived registration",
-    )
-    assert restarted.market_data_symbols() == ()

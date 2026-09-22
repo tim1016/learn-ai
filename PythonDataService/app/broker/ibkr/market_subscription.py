@@ -13,12 +13,13 @@ from uuid import uuid4
 
 from app.broker.ibkr.models import _coerce_quote, _coerce_size
 from app.schemas.market_liveness import (
+    MarketStatusSource,
     SymbolMarketDataEvidence,
     SymbolTradingStatusEvidence,
     TopOfBookQuote,
 )
 
-SOURCE = "ibkr.market_data.status"
+SOURCE = MarketStatusSource.IBKR
 # Decision-data age is an admission policy, not an assumed vendor cadence.
 DECISION_DATA_MAX_AGE_MS = 5_000
 # Establishment/stall recovery has its own budget. A stale decision input
@@ -32,10 +33,14 @@ def install_market_data_callbacks(wrapper: Any) -> None:
     ib_async 2.x's generic-size normalization maps nonpositive values to its
     empty size (zero). For halt status that turns unavailable (-1) into a
     resume (0). All other tick types keep the library decoder unchanged.
-    Installed once when our retained IBKR client is constructed.
+    Installed idempotently by the status-subscription owner; history-only
+    clients keep their decoder unchanged.
     """
     from ib_async.objects import TickData
 
+    if getattr(wrapper, "_market_status_callbacks_installed", False) is True:
+        return
+    wrapper._market_status_callbacks_installed = True
     generic = wrapper.tickGeneric
     data_type = wrapper.marketDataType
 
@@ -164,6 +169,6 @@ class MarketSubscription:
     def reported_status(self, now: int) -> SymbolTradingStatusEvidence:
         """Absence of an initial halt tick remains absence, never a clear tick."""
         return self.status or SymbolTradingStatusEvidence(
-            symbol=self.symbol, state="UNKNOWN", source=SOURCE, observed_at_ms=now,
+            symbol=self.symbol, state="NOT_REPORTED", source=SOURCE, observed_at_ms=now,
             reason_code="IBKR_STATUS_NOT_REPORTED", reason="IBKR has not reported an initial halt state.",
         )

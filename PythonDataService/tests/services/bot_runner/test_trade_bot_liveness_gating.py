@@ -287,7 +287,7 @@ def test_closed_liveness_with_a_proven_phase_and_fresh_bars_does_not_block_entry
     because the RTH-only clock reports CLOSED."""
     from types import SimpleNamespace
 
-    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
@@ -320,7 +320,7 @@ def test_closed_liveness_with_a_proven_phase_but_no_fresh_bars_blocks_entry(
     """
     from types import SimpleNamespace
 
-    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
@@ -343,7 +343,7 @@ def test_closed_liveness_with_an_unreadable_feed_health_blocks_entry(
     def _raise(_symbol: str | None = None):
         raise RuntimeError("probe exploded")
 
-    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: True)
     feed = _FakeFeed([], mode="finite")
     feed.health = _raise  # type: ignore[method-assign]
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
@@ -363,7 +363,7 @@ def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
     healthy the feed is."""
     from types import SimpleNamespace
 
-    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: False)
+    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: False)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
@@ -446,7 +446,7 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
         seen_account_ids.append(account_id)
         return True
 
-    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", fake_extended_phase_proven_at_ms)
+    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", fake_extended_phase_proven_at_ms)
 
     bars = [
         _green_bar(_WIN_START_MS + 60_000),

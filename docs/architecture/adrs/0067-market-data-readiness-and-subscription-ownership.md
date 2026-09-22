@@ -28,7 +28,10 @@ status. Positive data readiness can permit this case. An explicit unavailable
 status blocks. A reported halt is latched, persisted atomically in the clerk's
 artifacts, and cleared only by an explicit live not-halted tick. Fresh prices,
 reconnection, and process restart cannot clear it. Invalid retained evidence
-refuses startup; persistence failure blocks admission. The IBKR adapter
+refuses startup. A pending halt write remains dirty until acknowledged and is
+retried by the supervisor off the event loop; a clear cannot release its latch
+before that write succeeds. A failure blocks admission for the affected symbol
+while retaining live quotes for reducing orders and safe-flatten pricing. The IBKR adapter
 preserves tick 49's raw -1/0 distinction because the installed ib_async generic
 size decoder otherwise collapses unavailable into clear. Data-type callbacks
 also invalidate readiness even without a price tick.
@@ -36,16 +39,22 @@ also invalidate readiness even without a price tick.
 Start, Resume, strategy entries, and the clerk use the same composed fact. The
 clerk rechecks it immediately before entering the broker's submission method,
 and refuses an intervening generation change even if the new generation is
-already healthy. A refusal at this boundary records a known failed submission;
-it does not claim an ambiguous broker outcome. Exit/reduction policy is
+already healthy. Strategy, intake, and submission use one configured entry
+policy. The composer always carries the generation it evaluated. A local
+refusal records `ENTER_SUBMISSION_REFUSED` / `MARKET_LIVENESS_BLOCKED`, explicitly
+before broker contact; it does not report a broker submission failure. Exit/reduction policy is
 unchanged. A fact's assessment timestamp is current; constituent timestamps
 and the evidence deadline remain intact, so a specific refusal is not hidden
 behind a generic stale-authority message.
 
 ## Ownership and recovery
 
-Durable roster deployments keep subscriptions through Stop and process restart;
-retiring or archiving a flat deployment removes that demand. Active feeds and
+SQLite-owned deployments keep subscriptions through Stop and process restart;
+retiring or archiving a flat deployment removes that demand. The read façade
+delegates one projection to the canonical custody reads, using the shared
+working-order and nonterminal-effect sets. The consumer reads on the clerk's
+existing worker pool, caching by repository identity and control revision;
+there are no per-bot file reads or SQLite waits on the event loop. Active feeds and
 custody positions/orders have priority, followed by deployments, then explicit
 Start/Resume/limit-price preparation requests (60-second leases). Capacity is
 bounded to 64 symbol requests per clerk and four simultaneous qualifications;
@@ -65,7 +74,12 @@ changes. They are not hammered with blind retries.
 IBKR 1100 immediately invalidates evidence. Recovery with 1101 recreates requests;
 1102 reuses maintained requests but fences prior receipts and requires new
 callbacks. Socket and relevant farm transitions also invalidate the generation.
-Halt memory survives every path. Authenticated shared snapshots carry generation,
+Halt memory survives every path. The supervisor stamps its result after all
+awaits, so callback publication during qualification/removal cannot turn an
+older supervisor timestamp into a false source outage. Production pins a typed
+IBKR source policy; a different provider cannot silently relax readiness, and
+an absent initial halt tick is the explicit `NOT_REPORTED` state.
+Authenticated shared snapshots carry generation,
 receipt times and deadlines unchanged. Snapshot publication and broker-clock
 freshness each retain a separate 5,000 ms bound; one constant is not treated as a
 vendor heartbeat.
@@ -84,6 +98,10 @@ Regression coverage includes quiet trades with live quotes, pure panel reads,
 unchanged receipt deadlines, no-UI deployment/working-order ownership, stalled
 and slow subscriptions, reconnect fencing, retained halts, raw unavailable halt
 ticks, delayed/frozen transitions, request refusal and last-moment order refusal.
+Additional regressions cover off-loop revision-cached demand, callbacks during
+supervisor awaits, disk failure/retry with usable flatten quotes, newer halts
+during older writes, provider-policy validation, retained generation evidence,
+local refusal receipts, and cause-specific operator guidance.
 No runtime dependencies or paid data sources are added. The PR does not deploy
 or place orders. Paper validation must still exercise navigation and Gateway
 loss/recovery during RTH, recording state, generation, receipt ages, readiness

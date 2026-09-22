@@ -531,30 +531,9 @@ class ClerkSqliteRepositoryReadApi:
             return reads.attributed_positions_by_symbol(self._conn)
 
     def market_data_symbols(self: ClerkSqliteRepository) -> tuple[str, ...]:
-        """Keep custody positions and working orders monitored without a UI."""
-        from app.broker.alpaca.clerk.sqlite.order_projection import (
-            ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
-            read_order_details,
-        )
-
+        """Server-owned demand from deployed strategies and live custody."""
         with self._write_lock:
-            symbols = {
-                row["symbol"] for row in self._conn.execute(
-                    "SELECT DISTINCT symbol FROM positions WHERE attributed_qty != 0"
-                )
-            }
-            terminal = tuple(sorted(ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES))
-            placeholders = ",".join("?" for _ in terminal)
-            pending = tuple(sorted(reads.NONTERMINAL_EFFECT_STATES))
-            pending_placeholders = ",".join("?" for _ in pending)
-            refs = tuple(row["order_ref"] for row in self._conn.execute(
-                "SELECT o.order_ref FROM orders o JOIN effect_operations e "
-                "ON e.effect_operation_id = o.effect_operation_id "
-                f"WHERE lower(o.broker_state) NOT IN ({placeholders}) "
-                f"OR e.state IN ({pending_placeholders})", (*terminal, *pending),
-            ))
-            symbols.update(detail.symbol for detail in read_order_details(self._conn, refs).values() if detail.symbol)
-            return tuple(sorted(symbols))
+            return reads.market_data_symbols(self._conn)
 
     def attributed_positions_for_strategy(
         self: ClerkSqliteRepository,

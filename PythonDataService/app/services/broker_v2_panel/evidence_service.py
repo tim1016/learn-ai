@@ -79,6 +79,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Order submission acknowledged",
         "The broker acknowledged the exact submitted order identity.",
     ),
+    "ENTER_SUBMISSION_REFUSED": (
+        "Entry refused before submission",
+        "The Account Clerk refused the entry on local market evidence; no order was sent.",
+    ),
     "ORDER_SUBMIT_FAILED": (
         "Order submission failed",
         "The order submission reached a proven terminal failure.",

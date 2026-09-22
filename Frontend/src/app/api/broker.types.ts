@@ -17827,12 +17827,8 @@ export interface components {
              * @default []
              */
             quotes?: components["schemas"]["TopOfBookQuote"][];
-            /**
-             * Source
-             * @default alpaca.stock_data.status
-             * @enum {string}
-             */
-            source?: "alpaca.stock_data.status" | "ibkr.market_data.status";
+            /** @default alpaca.stock_data.status */
+            source?: components["schemas"]["MarketStatusSource"];
             /**
              * Subscriptions
              * @default []
@@ -17841,6 +17837,11 @@ export interface components {
             /** Symbol Statuses */
             symbol_statuses: components["schemas"]["SymbolTradingStatusEvidence"][];
         };
+        /**
+         * MarketStatusSource
+         * @enum {string}
+         */
+        MarketStatusSource: "ibkr.market_data.status" | "alpaca.stock_data.status";
         /**
          * MatrixGridResponse
          * @description Matrix grid of IV surface values.
@@ -24754,7 +24755,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "TRADABLE" | "HALTED" | "UNKNOWN";
+            state: "TRADABLE" | "HALTED" | "UNKNOWN" | "NOT_REPORTED";
             /** Symbol */
             symbol: string;
         };
@@ -25079,7 +25080,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */

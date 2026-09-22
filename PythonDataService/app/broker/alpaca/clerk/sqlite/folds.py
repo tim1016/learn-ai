@@ -1498,6 +1498,7 @@ DEFAULT_FOLD_REGISTRY.register("ENTER_UNFILLED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_FILLED", _fold_manual_order_filled)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
+DEFAULT_FOLD_REGISTRY.register("ENTER_SUBMISSION_REFUSED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
 # EXIT's cancel-analog (#1379): same generic "effect/command -> unknown, no
 # receipt" fold body — no separate function, see _fold_order_submit_uncertain

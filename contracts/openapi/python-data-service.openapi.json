@@ -24134,13 +24134,12 @@
             "type": "array"
           },
           "source": {
-            "default": "alpaca.stock_data.status",
-            "enum": [
-              "alpaca.stock_data.status",
-              "ibkr.market_data.status"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketStatusSource"
+              }
             ],
-            "title": "Source",
-            "type": "string"
+            "default": "alpaca.stock_data.status"
           },
           "subscriptions": {
             "default": [],
@@ -24166,6 +24165,14 @@
         ],
         "title": "MarketStatusSnapshot",
         "type": "object"
+      },
+      "MarketStatusSource": {
+        "enum": [
+          "ibkr.market_data.status",
+          "alpaca.stock_data.status"
+        ],
+        "title": "MarketStatusSource",
+        "type": "string"
       },
       "MatrixGridResponse": {
         "description": "Matrix grid of IV surface values.",
@@ -40121,7 +40128,8 @@
             "enum": [
               "TRADABLE",
               "HALTED",
-              "UNKNOWN"
+              "UNKNOWN",
+              "NOT_REPORTED"
             ],
             "title": "State",
             "type": "string"
@@ -40851,6 +40859,7 @@
           "COMMAND_REJECTED",
           "CUSTODY_SUBJECT_REGISTERED",
           "ENTER_ACCEPTED",
+          "ENTER_SUBMISSION_REFUSED",
           "ENTER_UNFILLED",
           "ENTRY_NEVER_ACCEPTED",
           "ENTRY_TERMINAL_CONFIRMED",

@@ -70,6 +70,7 @@ reservation commits with the same transition.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -111,6 +112,8 @@ from app.engine.live.order_identity import (
     build_order_ref,
     mint_intent_id,
 )
+
+logger = logging.getLogger(__name__)
 
 ACTION_ENTER = "ENTER"
 
@@ -343,7 +346,7 @@ async def submit_accepted_enter(
     accepted: EnterSubmission,
     leg: BrokerOrderLeg,
     trade: BrokerTradePort,
-    before_submit: Callable[[], None] | None = None,
+    before_submit: Callable[[], str | None] | None = None,
 ) -> EnterSubmission:
     """Drive a previously accepted ENTER outside the intake decision segment."""
     if not accepted.created:
@@ -359,9 +362,20 @@ async def submit_accepted_enter(
     )
     resolve_why: str | None = None
     try:
+        if before_submit is not None:
+            try:
+                refusal = before_submit()
+            except Exception:
+                logger.exception("Clerk entry preflight failed before broker contact")
+                refusal = "The Clerk could not evaluate current market evidence; no order was sent."
+            if refusal is not None:
+                fold_failed(
+                    repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+                    transition_kind="ENTER_SUBMISSION_REFUSED", summary_code="MARKET_LIVENESS_BLOCKED",
+                    reason="The Clerk refused the entry before contacting the broker.", why=refusal,
+                )
+                return _snapshot(repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref)
         try:
-            if before_submit is not None:
-                before_submit()
             order = await broker.submit(leg, client_order_id=accepted.order_ref)
         except BrokerUnavailable as exc:
             resolve_why = str(exc)

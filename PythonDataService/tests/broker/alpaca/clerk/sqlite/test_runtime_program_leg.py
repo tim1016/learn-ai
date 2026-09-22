@@ -587,7 +587,7 @@ async def test_market_loss_between_admission_and_contact_refuses_the_order(
             symbol, now_ms=at, market_clock=clock,
             connected=calls == 1 or change == "generation", connection_changed_at_ms=at,
             symbol_status=None, market_data=data, require_market_data=True,
-        ).model_copy(update={"market_data": data})
+        )
 
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", liveness)
     trade, state, _ = await _enter(

@@ -1,9 +1,8 @@
 """Compose live Alpaca clock and symbol-status evidence into one safe fact.
 
-This module intentionally has no calendar dependency. Calendar-backed session
-structure and real-time liveness answer different questions (ADR 0022): callers
-receive the scheduled phase separately, while this module owns only the live
-operational answer used by Start/Resume, V2 pulse, and new-exposure effects.
+Calendar-backed session structure and real-time liveness answer different
+questions (ADR 0022). The composer only evaluates live evidence; the shared
+entry policy consults session authority separately for extended-hours admission.
 
 IBKR subscription receipts prove current decision data independently of reported
 halt state. A missing initial halt tick is permissible only with positive data
@@ -15,13 +14,16 @@ source publication, and decision-data ages have separate bounds (ADR 0067).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerClockEvidence
 from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
     MarketStatusSnapshot,
+    MarketStatusSource,
     SymbolMarketDataEvidence,
     SymbolTradingStatusEvidence,
     TopOfBookQuote,
@@ -60,11 +62,12 @@ def unknown_market_liveness(
     observed_at_ms: int,
     reason_code: str = "MARKET_LIVENESS_UNAVAILABLE",
     reason: str = "Live market-liveness evidence is unavailable.",
+    market_data: SymbolMarketDataEvidence | None = None,
 ) -> MarketLivenessFact:
     """Return the typed fail-closed fact used before a live source is installed."""
     return MarketLivenessFact(
         symbol=symbol.upper(),
-        state="UNKNOWN",
+        state="UNKNOWN", market_data=market_data,
         observed_at_ms=observed_at_ms,
         market_clock=MarketClockLivenessEvidence(
             state="UNKNOWN",
@@ -103,6 +106,7 @@ def compose_market_liveness(
             observed_at_ms=now_ms,
             reason_code="MARKET_CLOCK_UNAVAILABLE",
             reason="No live broker clock evidence is available.",
+            market_data=market_data,
         )
     clock_violation = _freshness_violation(
         now_ms,
@@ -118,7 +122,7 @@ def compose_market_liveness(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms,
+            market_data=market_data,
             symbol_status=symbol_status,
             reason_code=reason_code,
             reason=reason,
@@ -141,7 +145,7 @@ def compose_market_liveness(
     if blocking_status is not None and blocking_status.state == "HALTED":
         return MarketLivenessFact(
             symbol=normalized_symbol,
-            state="HALTED",
+            state="HALTED", market_data=market_data,
             observed_at_ms=now_ms,
             market_clock=market_clock,
             symbol_status=symbol_status,
@@ -149,13 +153,13 @@ def compose_market_liveness(
             reason=blocking_status.reason or "Live vendor evidence reports this symbol halted.",
         )
     if blocking_status is not None and blocking_status.state != "TRADABLE" and not (
-        require_market_data and blocking_status.reason_code == "IBKR_STATUS_NOT_REPORTED"
+        require_market_data and blocking_status.state == "NOT_REPORTED"
     ):
         return _unknown(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms,
+            market_data=market_data,
             symbol_status=symbol_status,
             reason_code="SYMBOL_STATUS_UNKNOWN",
             reason=blocking_status.reason or "Live vendor evidence cannot prove this symbol is tradable.",
@@ -167,14 +171,14 @@ def compose_market_liveness(
     ):
         return _unknown(
             normalized_symbol, now_ms=now_ms, market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms, symbol_status=symbol_status,
+            market_data=market_data, symbol_status=symbol_status,
             reason_code=("MARKET_DATA_STARTING" if market_data is None else market_data.reason_code if market_data.state != "READY" else "MARKET_DATA_RECOVERING"),
             reason=(market_data.reason if market_data is not None and market_data.state != "READY" else "Waiting for current live market data for this symbol."),
         )
     if market_clock.state == "CLOSED":
         return MarketLivenessFact(
             symbol=normalized_symbol,
-            state="CLOSED",
+            state="CLOSED", market_data=market_data,
             observed_at_ms=market_clock.observed_at_ms,
             market_clock=market_clock,
             symbol_status=symbol_status,
@@ -186,7 +190,7 @@ def compose_market_liveness(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms,
+            market_data=market_data,
             symbol_status=symbol_status,
             reason_code="MARKET_CLOCK_UNKNOWN",
             reason="The live broker clock cannot prove whether the market is open.",
@@ -196,14 +200,14 @@ def compose_market_liveness(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms,
+            market_data=market_data,
             symbol_status=symbol_status,
             reason_code="STATUS_STREAM_DISCONNECTED",
             reason="The live market-data trading-status source is not connected.",
         )
     return MarketLivenessFact(
         symbol=normalized_symbol,
-        state="TRADABLE",
+        state="TRADABLE", market_data=market_data,
         # Not min(market_clock.observed_at_ms, connection_changed_at_ms):
         # the connection watermark stays fixed at the original connect
         # instant for the life of a long-lived healthy connection, so that
@@ -281,6 +285,43 @@ def liveness_blocks_entry(
     return not (extended_phase_proven() and extended_session_live())
 
 
+@dataclass(frozen=True)
+class MarketEntryPolicy:
+    """One configured entry policy shared by strategy, intake and submission."""
+
+    symbol: str
+    use_rth: bool
+    capability_account_id: str | None
+    extended_window: ExtendedHoursWindow | None
+    clock: Callable[[], int]
+    extended_session_live: Callable[[], bool]
+
+    def refusal(self, liveness: MarketLivenessFact, *, generation: str | None = None) -> str | None:
+        from app.services.market_data_capability_service import extended_phase_proven_at_ms
+
+        if generation is not None and (
+            liveness.market_data is None or liveness.market_data.generation != generation
+        ):
+            return "Market-data subscription changed after admission; current evidence must be admitted again."
+        if liveness_blocks_entry(
+            liveness, use_rth=self.use_rth,
+            extended_phase_proven=lambda: extended_phase_proven_at_ms(
+                now_ms=self.clock(), symbol=self.symbol,
+                account_id=self.capability_account_id, extended_window=self.extended_window,
+            ),
+            extended_session_live=self.extended_session_live,
+        ):
+            return f"{liveness.reason_code}: {liveness.reason}"
+        return None
+
+    def submission_guard(
+        self, read: Callable[[], MarketLivenessFact], *, admitted: MarketLivenessFact,
+    ) -> Callable[[], str | None]:
+        """Capture the admission generation with no dependence on caller locals."""
+        generation = None if admitted.market_data is None else admitted.market_data.generation
+        return lambda: self.refusal(read(), generation=generation)
+
+
 def clock_liveness_evidence(clock: BrokerClockEvidence) -> MarketClockLivenessEvidence:
     """Translate the narrow broker clock input without giving it symbol authority."""
     return MarketClockLivenessEvidence(
@@ -296,14 +337,14 @@ def _unknown(
     *,
     now_ms: int,
     market_clock: MarketClockLivenessEvidence,
-    connection_changed_at_ms: int,
+    market_data: SymbolMarketDataEvidence | None,
     symbol_status: SymbolTradingStatusEvidence | None,
     reason_code: str,
     reason: str,
 ) -> MarketLivenessFact:
     return MarketLivenessFact(
         symbol=symbol,
-        state="UNKNOWN",
+        state="UNKNOWN", market_data=market_data,
         # This is the time of the refusal, not the age of a connection or
         # latched halt. Underlying freshness is checked before composing it.
         observed_at_ms=now_ms,
@@ -324,10 +365,15 @@ class MarketLivenessStore:
         self._connected = False
         self._connection_changed_at_ms = 0
         self._upstream_observed_at_ms: int | None = None
-        self._status_source = "alpaca.stock_data.status"
+        self._status_source = MarketStatusSource.ALPACA
+        self._expected_source: MarketStatusSource | None = None
         self._requested_symbols: dict[str, int] = {}
         self._quotes: dict[str, TopOfBookQuote] = {}
         self._subscriptions: dict[str, SymbolMarketDataEvidence] = {}
+
+    def require_source(self, source: MarketStatusSource) -> None:
+        """Pin the configured provider; snapshots cannot disable its policy."""
+        self._expected_source = self._status_source = MarketStatusSource(source)
 
     def request_symbol(self, symbol: str, *, now_ms: int) -> None:
         """Explicit, bounded preview/preparation demand; fact reads are pure."""
@@ -375,8 +421,8 @@ class MarketLivenessStore:
         symbol = evidence.symbol.upper()
         current = self._symbol_statuses.get(symbol)
         if (
-            evidence.source == "ibkr.market_data.status" and current is not None
-            and current.state == "HALTED" and evidence.state == "UNKNOWN"
+            evidence.source == MarketStatusSource.IBKR and current is not None
+            and current.state == "HALTED" and evidence.state in {"UNKNOWN", "NOT_REPORTED"}
         ):
             return
         if current is None or _status_order(evidence) >= _status_order(current):
@@ -412,12 +458,15 @@ class MarketLivenessStore:
 
     def apply_status_snapshot(self, snapshot: MarketStatusSnapshot, *, now_ms: int) -> None:
         """Import fresh source proof without refreshing or erasing vendor events."""
+        source = MarketStatusSource(snapshot.source)
+        if self._expected_source is not None and source is not self._expected_source:
+            raise ValueError("Market-status snapshot does not match the configured provider.")
         if not 0 <= now_ms - snapshot.observed_at_ms <= STATUS_PUBLICATION_MAX_AGE_MS:
             raise ValueError("Shared market-status snapshot is stale or future-dated.")
         if self._upstream_observed_at_ms is not None and snapshot.observed_at_ms < self._upstream_observed_at_ms:
             raise ValueError("Shared market-status snapshot is older than retained evidence.")
         self._upstream_observed_at_ms = snapshot.observed_at_ms
-        self._status_source = snapshot.source
+        self._status_source = source
         self._connected = snapshot.connected
         self._connection_changed_at_ms = snapshot.connection_changed_at_ms
         self._subscriptions = {item.symbol: item for item in snapshot.subscriptions}
@@ -459,13 +508,6 @@ class MarketLivenessStore:
         """Return the one current live fact for Start, panel, and Clerk gates."""
         normalized_symbol = symbol.upper()
         status = self._symbol_statuses.get(normalized_symbol)
-        ibkr = self._status_source == "ibkr.market_data.status"
-        if ibkr and status is None:
-            status = SymbolTradingStatusEvidence(
-                symbol=normalized_symbol, state="UNKNOWN", source=self._status_source,
-                observed_at_ms=now_ms, reason_code="IBKR_STATUS_NOT_REPORTED",
-                reason="Preparing live market data.",
-            )
         market_data = self._subscriptions.get(normalized_symbol)
         return compose_market_liveness(
             normalized_symbol,
@@ -474,12 +516,12 @@ class MarketLivenessStore:
             connected=self._status_connected(now_ms),
             connection_changed_at_ms=self._connection_changed_at_ms,
             symbol_status=status,
-            market_data=market_data, require_market_data=ibkr,
-        ).model_copy(update={"market_data": market_data})
+            market_data=market_data, require_market_data=self._status_source.requires_live_data,
+        )
 
 
 def _status_order(evidence: SymbolTradingStatusEvidence) -> tuple[int, int]:
-    if evidence.source == "ibkr.market_data.status":
+    if evidence.source == MarketStatusSource.IBKR:
         # IBKR halt ticks have a local callback receipt, no vendor timestamp.
         return evidence.observed_at_ms, evidence.observed_at_ms
     return evidence.source_timestamp_ms or evidence.observed_at_ms, evidence.observed_at_ms

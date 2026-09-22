@@ -130,10 +130,9 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 from app.schemas.market_liveness import TopOfBookQuote
-from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import (
+    MarketEntryPolicy,
     get_market_liveness_store,
-    liveness_blocks_entry,
     market_liveness_fact,
 )
 from app.services.session_authority import SessionAuthorityState
@@ -900,6 +899,7 @@ class SqliteAlpacaClerkFacade:
                 next_step=next_step,
             )
 
+        before_submit = None
         async with self._intake:
             if self.binds_decision_bar and retained_source_bar is None:
                 return rejected(
@@ -991,40 +991,23 @@ class SqliteAlpacaClerkFacade:
                 # never silently diverge.
                 if self.authority_kind in _LIVE_MARKET_CLOCK_AUTHORITIES:
                     liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
-                    if liveness_blocks_entry(
-                        liveness,
-                        use_rth=use_rth,
-                        # Must be the feed's capability account, not
-                        # ``self.account_id`` (Alpaca execution custody) — that
-                        # can never scope an IBKR market-data entitlement, so
-                        # every extended-hours entry would be rejected here.
-                        extended_phase_proven=lambda: extended_phase_proven_at_ms(
-                            now_ms=self._repo.clock(),
-                            symbol=entry.instrument.underlying,
-                            account_id=capability_account_id,
-                            extended_window=self._program_leg_policy.window,
-                        ),
-                        # The declared window proves only the *schedule*.
-                        # An unscheduled PRE/POST closure reads exactly like
-                        # an ordinary extended session on Alpaca's RTH-only
-                        # clock, so new exposure also needs live evidence
-                        # the venue is printing. Read through the same
-                        # market-data channel `stream_health_refusal` above
-                        # already consults, so this recheck and the
-                        # strategy's ENTER gate cannot diverge. No gate
-                        # installed proves nothing, so it refuses.
-                        extended_session_live=lambda: (
-                            self._stream_health is not None
-                            and self._stream_health.market_data_live(
-                                entry.instrument.underlying
-                            )
-                        ),
-                    ):
+                    policy = MarketEntryPolicy(
+                        symbol=entry.instrument.underlying, use_rth=use_rth,
+                        capability_account_id=capability_account_id,
+                        extended_window=self._program_leg_policy.window, clock=self._repo.clock,
+                        extended_session_live=lambda: self._stream_health is not None
+                        and self._stream_health.market_data_live(entry.instrument.underlying),
+                    )
+                    if policy.refusal(liveness) is not None:
                         return rejected(
                             reason_code="MARKET_LIVENESS_BLOCKED",
                             explanation="Current market-liveness evidence does not permit new exposure.",
                             next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
                         )
+                    before_submit = policy.submission_guard(
+                        lambda: market_liveness_fact(entry.instrument.underlying, self._repo.clock()),
+                        admitted=liveness,
+                    )
                 try:
                     accepted_enter = accept_enter(
                         self._repo,
@@ -1135,23 +1118,6 @@ class SqliteAlpacaClerkFacade:
             trade = self._trade
 
         if purpose is EffectPurpose.ENTER:
-            def before_submit() -> None:
-                if self.authority_kind not in _LIVE_MARKET_CLOCK_AUTHORITIES:
-                    return
-                current = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
-                if (
-                    liveness.market_data is not None
-                    and (current.market_data is None or current.market_data.generation != liveness.market_data.generation)
-                ) or liveness_blocks_entry(
-                    current, use_rth=use_rth,
-                    extended_phase_proven=lambda: extended_phase_proven_at_ms(
-                        now_ms=self._repo.clock(), symbol=entry.instrument.underlying,
-                        account_id=capability_account_id, extended_window=self._program_leg_policy.window,
-                    ),
-                    extended_session_live=lambda: self._stream_health is not None and self._stream_health.market_data_live(entry.instrument.underlying),
-                ):
-                    raise BrokerError("Market evidence changed before submission; no order was sent.")
-
             submitted_enter = await submit_accepted_enter(
                 self._repo,
                 accepted=accepted_enter,

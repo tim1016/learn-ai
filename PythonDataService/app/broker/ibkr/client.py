@@ -264,9 +264,6 @@ class IbkrClient:
 
         self._settings = settings or get_settings()
         self._ib: IB = IB()
-        from app.broker.ibkr.market_subscription import install_market_data_callbacks
-
-        install_market_data_callbacks(self._ib.wrapper)
         self._ib.client.MaxRequests = _API_MAX_REQUESTS_PER_SECOND
         self._ib.client.RequestsInterval = _API_REQUEST_INTERVAL_SECONDS
         self._connected_account: str | None = None

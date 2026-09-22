@@ -456,3 +456,24 @@ def test_preparing_data_has_an_operator_reason_without_generic_stale_authority(
     assert pulse.headline == "Preparing live market data"
     assert pulse.explanation == liveness.reason
     assert pulse.attention_required
+
+
+@pytest.mark.parametrize("reason_code,action", [
+    ("MARKET_DATA_DISCONNECTED", "Gateway"),
+    ("MARKET_DATA_UNAVAILABLE", "permissions"),
+    ("MARKET_HALT_PERSISTENCE_FAILED", "storage"),
+    ("MARKET_CLOCK_STALE", "Alpaca"),
+])
+def test_unknown_liveness_names_the_required_operator_action(
+    monkeypatch: pytest.MonkeyPatch, reason_code: str, action: str,
+) -> None:
+    from app.services.market_liveness import unknown_market_liveness
+
+    _session(monkeypatch, "RTH")
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=121_000)
+    pulse = market_pulse.build_market_pulse(
+        None, symbol="SPY", now_ms=121_000, use_rth=True, bot_running=False,
+        liveness=unknown_market_liveness("SPY", observed_at_ms=121_000, reason_code=reason_code),
+    )
+    assert action in pulse.next_step
+    assert "Wait for current market data" not in pulse.next_step

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import copy
+from inspect import isawaitable
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,12 @@ from pydantic import TypeAdapter
 
 from app.broker.ibkr.client import IbkrClient, get_client
 from app.broker.ibkr.contracts import qualify_underlying
-from app.broker.ibkr.market_subscription import SOURCE, SUBSCRIPTION_TIMEOUT_MS, MarketSubscription
+from app.broker.ibkr.market_subscription import (
+    SOURCE,
+    SUBSCRIPTION_TIMEOUT_MS,
+    MarketSubscription,
+    install_market_data_callbacks,
+)
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import Clock, now_ms_utc
@@ -35,7 +41,7 @@ class IbkrMarketStatusSource:
     """One clerk's subscription supervisor and immutable evidence publisher."""
 
     def __init__(
-        self, *, symbols: Callable[[], tuple[str, ...]],
+        self, *, symbols: Callable[[], tuple[str, ...] | Awaitable[tuple[str, ...]]],
         client: Callable[[], IbkrClient | None] = get_client,
         clock: Clock = now_ms_utc,
         publish: Callable[[MarketStatusSnapshot], None] | None = None,
@@ -45,6 +51,8 @@ class IbkrMarketStatusSource:
         self._publish_snapshot = publish
         self._halt_path = halt_path
         self._halted = self._load_halts()
+        self._pending_halts: dict[str, SymbolTradingStatusEvidence] | None = None
+        self._halt_write_task: asyncio.Task[None] | None = None
         self._persistence_failed = False
         self._owner: IbkrClient | None = None
         self._generation: tuple[int, int, int, int] | None = None
@@ -68,39 +76,72 @@ class IbkrMarketStatusSource:
         return records
 
     def _retain_halt(self, evidence: SymbolTradingStatusEvidence) -> None:
-        records = dict(self._halted)
+        # Desired durable state is separate from the effective safety latch.
+        # A failed HALTED write must remain dirty even after its latch is set.
+        previous = dict(self._halted if self._pending_halts is None else self._pending_halts)
+        records = dict(previous)
         if evidence.state == "HALTED":
             records[evidence.symbol] = records.get(evidence.symbol, evidence)
+            self._halted.setdefault(evidence.symbol, evidence)
         elif evidence.state == "TRADABLE":
             records.pop(evidence.symbol, None)
-        if records == self._halted:
+        else:
             return
+        if records == previous:
+            return
+        if self._halt_path is None:
+            self._halted = records
+            return
+        # Retain explicit clears until storage confirms them, including a
+        # clear arriving while an older halt write is in flight.
+        self._pending_halts = records
+
+    async def _flush_halts(self) -> None:
+        if self._halt_write_task is None or self._halt_write_task.done():
+            if self._pending_halts is None:
+                return
+            self._halt_write_task = asyncio.create_task(self._write_halts(self._pending_halts))
+        # Cancellation must not discard the owner of an in-flight file write.
+        # close() drains this same task before another source can take over.
+        await asyncio.shield(self._halt_write_task)
+
+    async def _write_halts(self, records: dict[str, SymbolTradingStatusEvidence]) -> None:
+        assert self._halt_path is not None
         try:
-            if self._halt_path is not None:
-                atomic_write_bytes(self._halt_path, _HALT_RECORDS.dump_json(records))
+            await asyncio.to_thread(atomic_write_bytes, self._halt_path, _HALT_RECORDS.dump_json(records))
         except OSError:
             self._persistence_failed = True
-            # A failed write can never clear a known halt or authorize entry.
-            if evidence.state == "HALTED":
-                self._halted[evidence.symbol] = evidence
             logger.exception("Cannot persist market halt evidence", extra={"action": "market_halt_persistence_failed"})
-            return
-        self._halted = records
-        self._persistence_failed = False
+        else:
+            self._halted = dict(records)
+            if self._pending_halts is records:
+                self._pending_halts = None
+            else:
+                # New negative evidence wins over the completed older write.
+                # A newer clear still waits for its own durable acknowledgement.
+                self._halted.update(self._pending_halts or {})
+            self._persistence_failed = False
+        self._publish()
 
     async def close(self) -> None:
-        """Release our own requests and tasks, retaining durable halt facts."""
-        for task in self._pending.values():
+        """Fence callbacks, release requests, then drain the owned halt write."""
+        self._generation = None
+        pending = tuple(self._pending.values())
+        for task in pending:
             task.cancel()
-        if self._pending:
-            await asyncio.gather(*self._pending.values(), return_exceptions=True)
-        self._pending.clear()
         for subscription in self._subscriptions.values():
             self._release(subscription)
         self._subscriptions.clear()
         if self._owner is not None:
             self._owner.ib.errorEvent -= self._on_error
-        self._owner, self._generation = None, None
+        self._owner = None
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._pending.clear()
+        while self._pending_halts is not None:
+            await self._flush_halts()
+            if self._persistence_failed:
+                break
 
     def _release(self, subscription: MarketSubscription) -> None:
         ticker = subscription.ticker
@@ -115,17 +156,20 @@ class IbkrMarketStatusSource:
         return id(client), client.connection_generation, client.connectivity_lost_count, client.last_event_ms
 
     async def __call__(self) -> MarketStatusSnapshot:
+        await self._flush_halts()
+        requested = self._symbols()
+        symbols = await requested if isawaitable(requested) else requested
+        self._demand = tuple(dict.fromkeys(symbol.upper() for symbol in symbols))
         client, now = self._client(), self._clock()
-        self._demand = tuple(dict.fromkeys(symbol.upper() for symbol in self._symbols()))
         if client is None or not client.is_connected():
             await self.close()
-            return self._snapshot(now, connected=False)
+            return self._snapshot(self._clock(), connected=False)
         if client.connection_state != "connected":
             # 1100 may recover as 1102 (data maintained). Keep ownership while
             # refusing all data; the restore transition fences prior receipts.
             if client.connection_state != "soft_lost":
                 await self.close()
-            return self._snapshot(now, connected=False)
+            return self._snapshot(self._clock(), connected=False)
         generation = self._client_generation(client)
         if generation != self._generation:
             maintained = (
@@ -140,6 +184,7 @@ class IbkrMarketStatusSource:
             else:
                 await self.close()
                 self._owner = client
+                install_market_data_callbacks(client.ib.wrapper)
                 client.ib.errorEvent += self._on_error
             self._generation = generation
             self._connection_changed_at_ms = now
@@ -177,7 +222,7 @@ class IbkrMarketStatusSource:
                 subscription = MarketSubscription(symbol, now)
                 self._subscriptions[symbol] = subscription
                 self._pending[symbol] = asyncio.create_task(self._subscribe(subscription, client, generation))
-        return self._snapshot(now, connected=True)
+        return self._snapshot(self._clock(), connected=self._connected())
 
     def _retry_delay(self, symbol: str) -> int:
         attempt = self._attempts.get(symbol, 0)
@@ -232,15 +277,21 @@ class IbkrMarketStatusSource:
 
     def _publish(self) -> None:
         if self._publish_snapshot is not None:
-            connected = self._owner is not None and self._owner.connection_state == "connected" and self._generation == self._client_generation(self._owner)
-            self._publish_snapshot(self._snapshot(self._clock(), connected=connected))
+            self._publish_snapshot(self._snapshot(self._clock(), connected=self._connected()))
+
+    def _connected(self) -> bool:
+        return (
+            self._owner is not None and self._owner.connection_state == "connected"
+            and self._generation == self._client_generation(self._owner)
+        )
 
     def _snapshot(self, now: int, *, connected: bool) -> MarketStatusSnapshot:
         subscriptions, statuses, quotes = [], [], []
+        admitted = set(self._demand[:_MAX_SUBSCRIPTIONS])
         for symbol in self._demand:
             subscription = self._subscriptions.get(symbol)
             if subscription is None:
-                subscription = MarketSubscription(symbol, now, failure="Market-data subscription capacity is unavailable." if symbol not in self._demand[:_MAX_SUBSCRIPTIONS] else None)
+                subscription = MarketSubscription(symbol, now, failure="Market-data subscription capacity is unavailable." if symbol not in admitted else None)
             evidence = subscription.evidence(now, recovering=self._attempts.get(symbol, 0) > 0)
             if not connected:
                 evidence = evidence.model_copy(update={
@@ -248,15 +299,15 @@ class IbkrMarketStatusSource:
                     "reason_code": "MARKET_DATA_DISCONNECTED",
                     "reason": "Market-data connection is recovering; current evidence is required.",
                 })
-            if self._persistence_failed:
+            if self._persistence_failed and symbol in self._halted:
                 evidence = evidence.model_copy(update={
                     "state": "UNAVAILABLE", "valid_until_ms": None,
-                    "reason_code": "MARKET_DATA_UNAVAILABLE",
-                    "reason": "Halt evidence could not be saved. Restore clerk storage before trading.",
+                    "reason_code": "MARKET_HALT_PERSISTENCE_FAILED",
+                    "reason": "Halt evidence could not be saved. Restore clerk storage before trading; the service will retry.",
                 })
             subscriptions.append(evidence)
             statuses.append(self._halted.get(symbol) or subscription.reported_status(now))
-            if connected and not self._persistence_failed and (quote := subscription.quote(now)) is not None:
+            if connected and (quote := subscription.quote(now)) is not None:
                 quotes.append(quote)
         return MarketStatusSnapshot(
             source=SOURCE, connected=connected, observed_at_ms=now,

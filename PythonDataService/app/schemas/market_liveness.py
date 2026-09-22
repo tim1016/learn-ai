@@ -8,6 +8,7 @@ UTC`` at the model boundary.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -16,7 +17,22 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MarketLivenessState = Literal["TRADABLE", "HALTED", "CLOSED", "UNKNOWN"]
 MarketClockState = Literal["OPEN", "CLOSED", "UNKNOWN"]
-SymbolTradingState = Literal["TRADABLE", "HALTED", "UNKNOWN"]
+SymbolTradingState = Literal["TRADABLE", "HALTED", "UNKNOWN", "NOT_REPORTED"]
+
+
+class MarketStatusSource(StrEnum):
+    IBKR = "ibkr.market_data.status"
+    ALPACA = "alpaca.stock_data.status"
+
+    @property
+    def requires_live_data(self) -> bool:
+        match self:
+            case MarketStatusSource.IBKR:
+                return True
+            case MarketStatusSource.ALPACA:
+                return False
+        raise ValueError("Unsupported market-status source policy.")
+
 
 
 class SymbolMarketDataEvidence(BaseModel):
@@ -45,7 +61,7 @@ class SymbolMarketDataEvidence(BaseModel):
             if self.valid_until_ms is None or self.valid_until_ms < self.observed_at_ms:
                 raise ValueError("Ready market data requires an unexpired evidence deadline.")
         elif self.valid_until_ms is not None:
-            raise ValueError("Unavailable market data cannot carry a trading deadline.")
+            raise ValueError("Only READY market data can carry a trading deadline.")
         return self
 
 
@@ -128,7 +144,7 @@ class MarketStatusSnapshot(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source: Literal["alpaca.stock_data.status", "ibkr.market_data.status"] = "alpaca.stock_data.status"
+    source: MarketStatusSource = MarketStatusSource.ALPACA
     connected: bool
     observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
     connection_changed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)

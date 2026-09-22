@@ -110,7 +110,11 @@ async def test_unproven_or_non_live_data_never_implies_tradable(source: SourceFi
         offset = -5001 if kind == "stale" else 1
         ticker.rtTime = datetime.fromtimestamp((NOW + offset) / 1000, tz=UTC)
     snapshot = await poll(status)
-    assert snapshot.symbol_statuses[0].state == "UNKNOWN"
+    assert fact(snapshot).state == "UNKNOWN"
+    assert snapshot.subscriptions[0].state == {
+        "delayed": "UNAVAILABLE", "frozen": "UNAVAILABLE", "unavailable": "READY",
+        "missing": "RECOVERING", "stale": "RECOVERING", "future": "RECOVERING",
+    }[kind]
 
 
 async def test_halt_survives_disconnect_and_fresh_trades_until_explicit_resume(source: SourceFixture) -> None:
@@ -176,7 +180,7 @@ async def test_unhealthy_data_session_discards_cached_resume_until_resubscribed(
     client.connection_state = connection_state
     disconnected = await poll(status)
     assert not disconnected.connected
-    assert disconnected.symbol_statuses[0].state == "UNKNOWN"
+    assert disconnected.symbol_statuses[0].state == "NOT_REPORTED"
     client.ib.cancelMktData.assert_called_once_with(ticker.contract)
     assert not (await poll(status)).connected
     client.ib.reqMktData.assert_called_once()
@@ -188,7 +192,7 @@ async def test_unhealthy_data_session_discards_cached_resume_until_resubscribed(
     client.ib.reqMktData.return_value = recovered_ticker
     recovered = await poll(status)
     assert recovered.connected
-    assert recovered.symbol_statuses[0].state == "UNKNOWN"
+    assert recovered.symbol_statuses[0].state == "NOT_REPORTED"
     assert client.ib.reqMktData.call_count == 2
     recovered_ticker.halted = 0
     recovered_ticker.rtTime = datetime.fromtimestamp(NOW / 1000, tz=UTC)
@@ -208,7 +212,8 @@ async def test_data_session_failure_during_qualification_cannot_publish_tradable
     monkeypatch.setattr("app.broker.ibkr.market_liveness.qualify_underlying", qualify)
     snapshot = await poll(status)
     assert not snapshot.connected
-    assert snapshot.symbol_statuses[0].state == "UNKNOWN"
+    assert snapshot.symbol_statuses[0].state == "NOT_REPORTED"
+    assert fact(snapshot).state == "UNKNOWN"
     client.ib.reqMktData.assert_not_called()
 
 
@@ -551,6 +556,7 @@ async def test_failed_halt_persistence_cannot_clear_a_known_halt(
     await poll(status)
     ticker.halted = 1
     emit(ticker)
+    await poll(status)
 
     def fail_write(*_args: Any) -> None:
         raise OSError("test disk unavailable")
@@ -558,6 +564,7 @@ async def test_failed_halt_persistence_cannot_clear_a_known_halt(
     monkeypatch.setattr("app.broker.ibkr.market_liveness.atomic_write_bytes", fail_write)
     ticker.halted = 0
     emit(ticker)
+    await poll(status)
     assert fact(published[-1]).state == "HALTED"
     assert published[-1].subscriptions[0].state == "UNAVAILABLE"
     assert "storage" in published[-1].subscriptions[0].reason
@@ -566,3 +573,115 @@ async def test_failed_halt_persistence_cannot_clear_a_known_halt(
         halt_path=status._halt_path,
     )
     assert (await restored()).symbol_statuses[0].state == "HALTED"
+
+
+async def test_failed_halt_write_preserves_flatten_quotes_and_retries_without_ticks(
+    source: SourceFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.utils.atomic_file import atomic_write_bytes
+
+    status, _, ticker = source
+    status._halt_path = tmp_path / "halts.json"
+    ticker.bid, ticker.ask = 512.31, 512.36
+    await poll(status)
+    attempts = []
+    failing = True
+
+    def write(path: Path, data: bytes) -> None:
+        attempts.append(data)
+        if failing:
+            raise OSError("test transient disk failure")
+        atomic_write_bytes(path, data)
+
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.atomic_write_bytes", write)
+    ticker.halted = 1
+    emit(ticker)
+    failed = await poll(status)
+    store = MarketLivenessStore()
+    store.apply_status_snapshot(failed, now_ms=NOW)
+    assert store.top_of_book("SPY", now_ms=NOW) is not None
+    assert fact(failed).state == "HALTED"
+    failing = False
+    recovered = await poll(status)
+    assert len(attempts) >= 2
+    assert recovered.subscriptions[0].state == "READY"
+    restored = IbkrMarketStatusSource(
+        symbols=lambda: ("SPY",), client=lambda: None, clock=lambda: NOW,
+        halt_path=status._halt_path,
+    )
+    assert (await restored()).symbol_statuses[0].state == "HALTED"
+
+
+async def test_callback_during_supervisor_await_cannot_disconnect_the_store(
+    source: SourceFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.broker.alpaca.market_liveness import AlpacaMarketLivenessConsumer
+
+    status, _, ticker = source
+    store = MarketLivenessStore()
+    clock = [NOW]
+    status._clock = lambda: clock[0]
+    status._publish_snapshot = lambda snapshot: store.apply_status_snapshot(snapshot, now_ms=clock[0])
+    await poll(status)
+
+    # A second subscription is pending qualification when its demand ends.
+    # Its cancellation yields to an existing symbol's real quote callback.
+    waiting = asyncio.Event()
+
+    async def qualify(*_args: Any) -> Any:
+        waiting.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            clock[0] += 1
+            emit(ticker, clock[0])
+
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.qualify_underlying", qualify)
+    status._symbols = lambda: ("SPY", "QQQ")
+    await status()
+    await waiting.wait()
+    status._symbols = lambda: ("SPY",)
+    consumer = AlpacaMarketLivenessConsumer(
+        read=Mock(), frame_source=Mock(), store=store, clock=lambda: clock[0],
+        status_snapshot_source=status,
+    )
+    await consumer.refresh_shared_status()
+    assert store.status_snapshot(now_ms=clock[0]).connected
+    await status.close()
+
+
+async def test_a_new_halt_cannot_be_cleared_by_an_older_inflight_resume_write(
+    source: SourceFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from app.utils.atomic_file import atomic_write_bytes
+
+    status, _, ticker = source
+    status._halt_path = tmp_path / "halts.json"
+    ticker.halted = 1
+    await poll(status)
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def delayed_write(path: Path, data: bytes) -> None:
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=2), "The event loop must remain available while storage waits."
+        atomic_write_bytes(path, data)
+
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.atomic_write_bytes", delayed_write)
+    ticker.halted = 0
+    emit(ticker)
+    supervising = asyncio.create_task(status())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    ticker.halted = 2
+    emit(ticker)
+    release.set()
+    assert fact(await supervising).state == "HALTED"
+    await poll(status)
+    restarted = IbkrMarketStatusSource(
+        symbols=lambda: ("SPY",), client=lambda: None, clock=lambda: NOW,
+        halt_path=status._halt_path,
+    )
+    assert (await restarted()).symbol_statuses[0].state == "HALTED"

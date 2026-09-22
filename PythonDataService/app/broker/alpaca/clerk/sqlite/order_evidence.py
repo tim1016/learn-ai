@@ -594,8 +594,11 @@ def fold_failed(
     why: str,
     transition_kind: str = "ORDER_SUBMIT_FAILED",
 ) -> None:
-    """A definitive terminal failure (vendor 4xx/409/auth/rate-limit), or an
-    absence proven past the R4 uncertainty grace window."""
+    """Record a terminal outcome, including an explicit pre-contact refusal.
+
+    The caller names the transition and summary so local refusals cannot be
+    confused with broker rejection or absence proven after the grace window.
+    """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     facts = OrderSubmitFailedFacts(reason=reason, why=why)
