@@ -400,6 +400,18 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
     """The shipped Backend/Frontend resolve the coordinator, never combined mode."""
     if shutil.which("docker") is None and shutil.which("podman") is None:
         pytest.skip("requires Docker or Podman for a real Compose render")
+    compose_command = qualification.ComposeCommand.discover().compose
+    daemon = subprocess.run(
+        [compose_command[0], "info"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if daemon.returncode != 0:
+        # The binary exists but its daemon is not reachable (a stopped podman
+        # machine, an agent container outside the host socket). A render test
+        # has nothing to say in that environment — skip, do not fail.
+        pytest.skip("requires a reachable Docker/Podman daemon for a real Compose render")
     environment = {
         **os.environ,
         "FLEET_POSTGRES_PASSWORD": "qualification-postgres-password",
@@ -408,7 +420,6 @@ def test_full_stack_overlay_suppresses_combined_and_retargets_ingress() -> None:
         "DATA_PLANE_CONTROL_SECRET": "qualification-control-secret",
         "POLYGON_API_KEY": "qualification-polygon-placeholder",
     }
-    compose_command = qualification.ComposeCommand.discover().compose
     result = subprocess.run(
         [
             *compose_command,
