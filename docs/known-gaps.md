@@ -622,6 +622,12 @@ re-arms the server-authored timeframe auto-correct, and numeric
   unreachable for the entire drain keeps unmarked evidence, and without
   lane quiet the coordinator cannot tell that residual population from a
   quiet one; whole-machine migration, #2151, is the preferred lane move).
+  Release-then-reserve, the two-step reach of the same handover, carries
+  the ceremony's gate since #2157 closed (2026-09-22): reserving a released
+  assignment requires the successor's volume proof and refuses with the
+  same typed `ClerkReassignmentBlocked` — so an account whose assignment is
+  RELEASED cannot be re-reserved by any lane, including for re-onboarding
+  onto a new lane, until #2154's lane-quiet confirmation ships.
   Operators retiring a served lane run: `drain`, wait out the printed
   deadline, `release-assignment --operator --change-ref` per assigned
   account, then `force-retire --operator --change-ref`. Do not substitute

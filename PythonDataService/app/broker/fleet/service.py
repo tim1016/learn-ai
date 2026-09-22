@@ -1142,14 +1142,19 @@ class FleetControlService:
         ownership (FR-054). Re-reserving is defined for the same owner in
         both live states: a reserved row returns as-is, and an effective row
         is the same-owner resume of a restarted clerk, returning the
-        confirmed facts untouched (audit 2026-09-13, finding 1).
+        confirmed facts untouched (audit 2026-09-13, finding 1). A released
+        row is never re-reserved: its next owner arrives by the reassignment
+        ceremony alone (#2157) — release followed by reserve is that
+        ceremony's two-step reach, and it carries the ceremony's gate.
 
         ``volume_root`` is the co-located caller's re-proof of the mounted
         root. It is optional because the coordinator process may not have
         the volume mounted at all; the agent's own gate
         (``fleet_boot.open_fleet_lane``) is the authority, and
         ``LocalPresence`` — the one transport that does share the filesystem
-        — always supplies it.
+        — always supplies it. On the released-row transfer path it stops
+        being optional: a transfer without the successor's volume proof
+        refuses (#2157).
         """
         self._require_recovery_hold_clear()
         if not broker:
@@ -1229,30 +1234,62 @@ class FleetControlService:
                     # untouched — a resume is not a re-confirmation.
                     outcome = existing
                 elif existing.state == AssignmentState.RELEASED:
-                    # Reuse after the release ceremony: a fresh reservation at
-                    # a higher generation, compare-and-swapped on the prior
-                    # generation *and* state so a racing third writer cannot
-                    # also land.
-                    outcome = AccountAssignmentRecord(
-                        broker=broker,
-                        canonical_external_account_id=canonical,
-                        clerk_id=clerk_id,
-                        assignment_generation=existing.assignment_generation + 1,
-                        state=AssignmentState.RESERVED,
-                        recorded_at_ms=now,
-                        updated_at_ms=now,
-                    )
-                    accepted = self._store.cas_update_assignment(
-                        conn,
-                        outcome,
-                        previous_generation=existing.assignment_generation,
-                        previous_state=AssignmentState.RELEASED,
-                    )
-                    if not accepted:
+                    # A released row is a clerk-to-clerk transfer wearing a
+                    # reservation's clothes (#2157): release followed by
+                    # reserve used to reach reassignment's end state here in
+                    # two steps, with strictly less evidence — no lane-quiet
+                    # confirmation, and volume_root optional on the one path
+                    # that transfers ownership between clerks. One gate, not
+                    # two policies: the reassignment ceremony's terminal gate
+                    # refuses here too, and whatever one day opens that
+                    # ceremony (#2154) opens this branch — nothing else does.
+                    if volume_root is None:
+                        # "The coordinator may not have the volume mounted" is
+                        # a reason to refuse a transfer, not to skip its proof.
                         raise ClerkAssignmentConflict(
-                            f"Account {canonical} under broker {broker!r} changed "
-                            "while re-reserving; re-read and retry.",
+                            f"Account {canonical} under broker {broker!r} is "
+                            "released; reserving it is a clerk-to-clerk "
+                            "transfer, and a transfer requires the successor's "
+                            "volume proof (volume_root) (#2157).",
+                            next_step="Run the host reassignment ceremony with "
+                            "the successor's volume root; a remote reservation "
+                            "never transfers a released account.",
                         )
+                    predecessor = self._store.read_clerk_on(conn, existing.clerk_id)
+                    if (
+                        predecessor is None
+                        or predecessor.lifecycle_state
+                        == StoredLifecycleState.PROVISIONED
+                    ):
+                        # Only the release ceremony produces released rows, and
+                        # it requires a drained, past-deadline owner — a
+                        # released row under a provisioned or absent clerk is
+                        # registry inconsistency, reported rather than
+                        # repaired.
+                        holder = (
+                            "no registry row"
+                            if predecessor is None
+                            else "still provisioned"
+                        )
+                        raise ClerkAssignmentConflict(
+                            f"Account {canonical} under broker {broker!r} is "
+                            f"released under clerk {existing.clerk_id}, which "
+                            f"has {holder}; a released assignment belongs to "
+                            "a lane the release ceremony drained.",
+                            next_step="Restore the registry from the "
+                            "coordinator control volume's backup, then retry.",
+                        )
+                    raise ClerkReassignmentBlocked(
+                        f"Account {canonical} under broker {broker!r} is "
+                        "released; its next owner arrives by the reassignment "
+                        "ceremony, not by a reservation (#2157) — and no "
+                        "clerk-to-clerk transfer opens until a lane-quiet "
+                        "confirmation can prove the drained lane's quiet "
+                        "(#2154).",
+                        next_step="Use whole-machine migration, which moves "
+                        "the lane's volume with it and needs no successor "
+                        "(#2151), or wait for #2154 to close.",
+                    )
                 else:
                     raise ClerkAssignmentConflict(
                         f"Account {canonical} under broker {broker!r} is already "
