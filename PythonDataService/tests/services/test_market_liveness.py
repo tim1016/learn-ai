@@ -210,6 +210,24 @@ def test_stale_market_clock_fails_closed() -> None:
     assert fact.reason_code == "MARKET_CLOCK_STALE"
 
 
+def test_future_dated_market_clock_fails_closed_and_logs_loudly(caplog: pytest.LogCaptureFixture) -> None:
+    """#2256: the refusal used to leave no trace, so an operator saw
+    "Broker clock invalid" with no way to learn why."""
+    with caplog.at_level("WARNING", logger="app.services.market_liveness"):
+        fact = compose_market_liveness(
+            "SPY",
+            now_ms=_NOW,
+            market_clock=_clock(observed_at_ms=_NOW + 40),
+            connected=True,
+            connection_changed_at_ms=_NOW,
+            symbol_status=_status(),
+        )
+
+    assert (fact.state, fact.reason_code) == ("UNKNOWN", "MARKET_CLOCK_INVALID")
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "market_liveness_clock_future_dated"]
+    assert (record.now_ms, record.observed_at_ms, record.lead_ms) == (_NOW, _NOW + 40, 40)
+
+
 def _health(*, connected: bool, stale: bool) -> FeedHealth:
     return FeedHealth(
         connected=connected,
@@ -336,3 +354,24 @@ def test_configured_ibkr_provider_cannot_be_downgraded_by_a_snapshot() -> None:
         store.apply_status_snapshot(snapshot, now_ms=1000)
     with pytest.raises(ValidationError):
         MarketStatusSnapshot.model_validate({**snapshot.model_dump(), "source": "ibkr.market_data.statu"})
+
+
+def test_future_dated_market_data_fails_closed_and_logs_loudly(caplog: pytest.LogCaptureFixture) -> None:
+    """#2257: READY evidence evaluated before it was published reads as
+    MARKET_DATA_RECOVERING; the refusal must say why."""
+    from app.schemas.market_liveness import SymbolMarketDataEvidence
+
+    market_data = SymbolMarketDataEvidence(
+        symbol="SPY", generation="gen-1", state="READY", observed_at_ms=_NOW + 40,
+        valid_until_ms=_NOW + 5_040, reason_code="MARKET_DATA_READY", reason="ready",
+    )
+    with caplog.at_level("WARNING", logger="app.services.market_liveness"):
+        fact = compose_market_liveness(
+            "SPY", now_ms=_NOW, market_clock=_clock(), connected=True,
+            connection_changed_at_ms=_NOW, symbol_status=_status(),
+            market_data=market_data, require_market_data=True,
+        )
+
+    assert (fact.state, fact.reason_code) == ("UNKNOWN", "MARKET_DATA_RECOVERING")
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "market_liveness_market_data_future_dated"]
+    assert (record.now_ms, record.observed_at_ms, record.lead_ms) == (_NOW, _NOW + 40, 40)

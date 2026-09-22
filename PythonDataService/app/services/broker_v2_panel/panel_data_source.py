@@ -434,7 +434,13 @@ async def _get_panel_with_entries_from_authority(
         symbol_unresolvable=symbol_unresolvable_for_mode(binding.symbol, binding.mode),
         market_pulse=build_market_pulse(
             market_data_feed,
-            now_ms=captured_now_ms,
+            # Captured after every await above, not at request start: the
+            # broker clock re-stamps on its own ~1 s poller while this
+            # projection awaits, so the request-start instant can predate the
+            # evidence and read as a future-dated MARKET_CLOCK_INVALID on a
+            # healthy feed (#2256). Start and Resume admission re-capture for
+            # the same reason.
+            now_ms=now_ms_utc(),
             symbol=binding.symbol,
             account_id=capability_account_id,
             capability=(
