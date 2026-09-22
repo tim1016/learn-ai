@@ -479,7 +479,7 @@ def test_same_owner_restart_preserves_identity_and_reassignment_is_blocked(
     control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
 ) -> None:
     """Restart does not remint ownership; explicit reassignment is blocked
-    against a drained lane until #2155 closes (ADR 0063 §4.1/§7.1), leaving
+    against a drained lane until #2154 closes (ADR 0063 §4.1/§7.1), leaving
     the original ownership intact and unroutable for a successor."""
     original = provision_lane(fleet_service, broker="fake_alpha", label="paper", tmp_path=control_dir.parent)
     successor = provision_lane(fleet_service, broker="fake_alpha", label="live", tmp_path=control_dir.parent)
@@ -516,7 +516,7 @@ def test_reassignment_successor_failure_rolls_back_the_original_owner(
     """The second half of reassignment cannot strand a released old owner.
 
     Exercised at the store seam: the service ceremony is blocked against a
-    drained lane until #2155 closes, but the transactional atomicity it will
+    drained lane until #2154 closes, but the transactional atomicity it will
     hand these records to is a property of the store and stays covered."""
     from dataclasses import replace
 

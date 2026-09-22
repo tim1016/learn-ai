@@ -120,6 +120,13 @@ class ObservationRequest(BaseModel):
     reported_summary: dict[str, Any] | None = None
 
 
+class ObservationResponse(BaseModel):
+    """The heartbeat's answer: liveness plus the clerk's lifecycle (#2155)."""
+
+    observed: bool
+    lifecycle_state: str
+
+
 class ReserveRequest(BaseModel):
     """One reservation of a broker-qualified account."""
 
@@ -279,13 +286,13 @@ async def register_session(
     }
 
 
-@router.post("/sessions/observe", response_model=None)
+@router.post("/sessions/observe", response_model=ObservationResponse)
 async def observe_session(
     payload: ObservationRequest,
     request: Request,
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
     x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
-) -> dict[str, Any] | Response:
+) -> ObservationResponse | Response:
     """Record one heartbeat; observations never confirm anything.
 
     The answer carries the clerk's lifecycle (``lifecycle_state``) so a live
@@ -307,10 +314,10 @@ async def observe_session(
         )
     except FleetControlError as exc:
         return _refuse(exc)
-    return {
-        "observed": observation.touched,
-        "lifecycle_state": observation.lifecycle_state.value,
-    }
+    return ObservationResponse(
+        observed=observation.touched,
+        lifecycle_state=observation.lifecycle_state.value,
+    )
 
 
 @router.post("/assignments/reserve", response_model=None)

@@ -29,6 +29,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from app.broker.alpaca.clerk.fleet_boot import FleetLaneBoot
 from app.broker.fleet.confirmation import (
     ConfirmationEvidence,
     confirmation_evidence_path,
@@ -45,7 +46,7 @@ from app.broker.fleet.presence import (
     RemotePresence,
 )
 from app.broker.fleet.records import StoredLifecycleState
-from app.broker.fleet.service import FleetControlService, FleetRegistryStore
+from app.broker.fleet.service import FleetControlService, FleetRegistryStore, ProvisionedClerk
 from app.broker.fleet_composition import production_provider_adapters
 from app.config import FleetSettings
 from tests.broker.fleet.conftest import FrozenClock
@@ -500,6 +501,35 @@ async def test_local_presence_translates_the_typed_refusal(
         service.close()
 
 
+async def test_local_presence_translates_the_typed_refusal_at_confirmation_too(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path
+) -> None:
+    """Both transports answer a drained confirmation with the learnable type.
+
+    The register translation alone would leave the two presence transports
+    speaking different refusal types for the same coordinator gate.
+    """
+    service = _service(control_dir, clock)
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        service.drain_clerk(clerk_id=provisioned.clerk.clerk_id)
+        presence = LocalPresence(service, volume_root=Path(provisioned.clerk.volume_root))
+        with pytest.raises(FleetLaneDraining, match="confirms no") as refused:
+            await presence.confirm(
+                broker=provisioned.clerk.broker,
+                clerk_id=provisioned.clerk.clerk_id,
+                external_account_id=ACCOUNT,
+                binding_generation=1,
+                agent_instance_id="agnt_0000000000000000000000aa",
+                routing_epoch=1,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+            )
+        assert not isinstance(refused.value, FleetPresenceError)
+    finally:
+        service.close()
+
+
 def _refusing_coordinator_app() -> FastAPI:
     """A coordinator whose every registration answers the typed drain refusal."""
     coordinator = FastAPI()
@@ -596,7 +626,7 @@ async def test_remote_presence_observe_reads_the_lifecycle_from_the_answer() -> 
 # ---------------------------------------------------------------------------
 
 
-def _lane_settings(control_dir: Path, provisioned) -> FleetSettings:
+def _lane_settings(control_dir: Path, provisioned: ProvisionedClerk) -> FleetSettings:
     return FleetSettings(
         ROLE="clerk_agent",
         CONTROL_DIR=str(control_dir),
@@ -606,7 +636,7 @@ def _lane_settings(control_dir: Path, provisioned) -> FleetSettings:
     )
 
 
-def _offline_settings(provisioned) -> FleetSettings:
+def _offline_settings(provisioned: ProvisionedClerk) -> FleetSettings:
     return FleetSettings(
         ROLE="clerk_agent",
         COORDINATOR_URL="http://127.0.0.1:9",
@@ -622,7 +652,7 @@ async def _open_confirmed_lane(
     clock: FrozenClock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> tuple[ProvisionedClerk, Path, FleetLaneBoot]:
     """One enrolled lane, opened, reserved, confirmed, and reporting it."""
     from app.broker.alpaca.clerk.fleet_boot import (
         confirm_and_report,
@@ -687,6 +717,111 @@ async def test_a_live_lane_learns_its_drain_from_the_heartbeat_and_marks_its_evi
         session = service._store.read_session(provisioned.clerk.clerk_id)
         assert session is not None
         assert session.last_seen_at_ms == clock()
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_drain_first_heard_at_confirmation_marks_and_refuses(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The drain can land between this lane's reserve and its confirm — the
+    confirmation is then the FIRST channel that can carry the lesson.
+
+    Review follow-up on PR #2247: without a handler at the confirmation, the
+    refusal escaped unlearned (and untranslated on LocalPresence), leaving a
+    lane that never marks and a deploy caller staring at a raw refusal.
+    """
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        from app.broker.alpaca.clerk.fleet_boot import (
+            _ADAPTER,
+            close_fleet_lane,
+        )
+
+        # A fresh registration replaces the session WITHOUT re-confirming, so
+        # the confirmed grant is stale and the next beat must re-present it —
+        # the exact path whose refusal was previously unlearnable.
+        boot.session = await boot.presence.register(
+            clerk_id=boot.clerk_id,
+            worker_key=boot.worker_key,
+            agent_instance_id="agnt_0000000000000000000000bb",
+            endpoint_ref=boot.endpoint_ref,
+            adapter_version=_ADAPTER.adapter_version,
+            fleet_protocol_version=2,
+        )
+        service.drain_clerk(clerk_id=provisioned.clerk.clerk_id)
+
+        from app.broker.alpaca.clerk.fleet_boot import _reconfirm_grant_if_stale
+
+        # The beat's re-confirmation retry absorbs the refusal as news — it
+        # must not escape — but not before the lesson is durably learned.
+        await _reconfirm_grant_if_stale(boot)
+        assert boot.draining is True
+        marked = read_confirmation_evidence(root)
+        assert marked is not None
+        assert marked.lifecycle_state == "draining"
+        assert (
+            evidence_vouches_for(
+                marked,
+                canonical_account_id=ACCOUNT,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+                binding_generation=1,
+            )
+            is False
+        )
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_drain_in_the_reserve_to_confirm_window_refuses_the_bringup(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same lesson at bring-up: a confirmation refused because the lane
+    is drained surfaces as the typed boot refusal, not a raw error."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        from app.broker.alpaca.clerk.fleet_boot import (
+            FleetBootRefused,
+            close_fleet_lane,
+            confirm_and_report,
+            open_fleet_lane,
+            reserve_account,
+        )
+
+        boot = await open_fleet_lane(
+            settings=_lane_settings(control_dir, provisioned), volume_root=root
+        )
+        assert boot is not None and boot.online
+        await reserve_account(boot, external_account_id=ACCOUNT)
+        # The drain commits inside the reserve -> confirm window.
+        service.drain_clerk(clerk_id=provisioned.clerk.clerk_id)
+        with pytest.raises(FleetBootRefused, match="because it is drained"):
+            await confirm_and_report(
+                boot,
+                account_pin=ACCOUNT,
+                effective_binding_generation=1,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+                authority_kind="sqlite",
+                endpoint_mode="paper",
+            )
+        assert boot.draining is True
         await close_fleet_lane(boot)
     finally:
         service.close()
