@@ -458,6 +458,11 @@ class _BarDeliveryLogger:
         connection_lost: bool,
         message: str,
     ) -> None:
+        # After the first bar, the idle gap before the next one is normal
+        # 5-second cadence; a real mid-stream silence belongs to the stall
+        # watchdog, which raises and is surfaced by the feed.
+        if self.first_bar_logged:
+            return
         now = time.monotonic()
         if now < self.next_no_bar_log_at:
             return
@@ -742,7 +747,6 @@ async def _iter_leased_raw_bars(
 
     def _observe(raw_bar) -> _LeasedBar:
         nonlocal last_progress_at, last_source_ms
-        delivery_logger.log_first_bar(bar_count=len(bars), message=first_bar_message)
         recorder.record(
             source=f"{evidence_source}.bar",
             symbol=sym,
@@ -751,6 +755,7 @@ async def _iter_leased_raw_bars(
         )
         source_ms = _bar_time_ms(raw_bar)
         if last_source_ms is None or source_ms > last_source_ms:
+            delivery_logger.log_first_bar(bar_count=len(bars), message=first_bar_message)
             last_source_ms = source_ms
             last_progress_at = time.monotonic()
             if on_source_bar is not None:
