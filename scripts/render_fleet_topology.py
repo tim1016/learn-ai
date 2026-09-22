@@ -58,7 +58,7 @@ _RESOURCE_LIMIT_SOURCES = (("cpus", "cpus"), ("mem_limit", "memory"))
 # "master's snapshot is stale" when master was fine. The committed
 # .env.example declares the service's key set, so the render records the
 # declared contract on every machine.
-_ENV_FILE_DEFAULTS = {
+ENV_FILE_DEFAULTS = {
     "FLEET_LIVE_ENV_FILE": "./deploy/fleet/env/live.env.example",
     "FLEET_PAPER_ENV_FILE": "./deploy/fleet/env/paper.env.example",
     "FLEET_COORDINATOR_ENV_FILE": "./deploy/fleet/env/coordinator.env.example",
@@ -102,22 +102,43 @@ def load_compose_document(path: Path) -> dict[str, object]:
     return yaml.load(path.read_text(encoding="utf-8"), Loader=ComposeTagTolerantLoader)
 
 
-def _raw_env_file_paths() -> dict[str, list[str]]:
+def raw_env_file_paths() -> dict[str, list[str]]:
     """The `env_file:` `path:` entries as *written* (unexpanded, no default
     resolved) — `compose config`'s JSON output drops `env_file` entirely once
     it folds the values into `environment`, so this reads the committed
     source directly. The raw `${VAR:-default}` text is not a secret and,
     unlike the resolved path, does not depend on which env-file override this
     render happened to use.
+
+    Public because the env_file determinism contract (#2235) pins what this
+    records; it must assert against the reader the snapshot actually uses, not
+    a second walk of the same YAML that could drift away from it.
     """
     paths: dict[str, list[str]] = {}
     for name in COMPOSE_FILES:
         document = load_compose_document(REPOSITORY_ROOT / name)
         for service, spec in (document.get("services") or {}).items():
-            for entry in spec.get("env_file") or []:
+            for entry in _env_file_entries(spec.get("env_file")):
                 path = entry.get("path") if isinstance(entry, dict) else entry
                 paths.setdefault(service, []).append(path)
     return {service: sorted(entries) for service, entries in paths.items()}
+
+
+def _env_file_entries(declared: object) -> list[object]:
+    """`env_file:` normalised to a list, whichever of its three legal forms
+    the compose file uses: a bare scalar path, a list of paths, or a list of
+    `{path, required}` mappings.
+
+    The scalar form is why this exists. Iterating a `str` directly yields its
+    *characters*, so `env_file: ./PythonDataService/.env` silently recorded
+    about thirty single-character "paths" into the snapshot instead of one
+    real one — a wrong snapshot with no error anywhere.
+    """
+    if declared is None:
+        return []
+    if isinstance(declared, str):
+        return [declared]
+    return list(declared)
 
 
 def _resource_limits(spec: dict[str, object]) -> dict[str, str]:
@@ -153,14 +174,14 @@ def render(engine: list[str]) -> dict[str, object]:
         command += ["--file", str(REPOSITORY_ROOT / name)]
     command += ["config", "--format", "json"]
     render_environment = {**os.environ}
-    for key, default in _ENV_FILE_DEFAULTS.items():
+    for key, default in ENV_FILE_DEFAULTS.items():
         render_environment.setdefault(key, default)
     completed = subprocess.run(
         command, check=True, capture_output=True, text=True, timeout=180,
         cwd=REPOSITORY_ROOT, env=render_environment,
     )
     document = json.loads(completed.stdout)
-    env_file_paths = _raw_env_file_paths()
+    env_file_paths = raw_env_file_paths()
     detail: dict[str, object] = {}
     fence: dict[str, dict[str, bool]] = {}
     for name, spec in sorted((document.get("services") or {}).items()):

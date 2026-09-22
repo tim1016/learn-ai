@@ -33,14 +33,16 @@ from typing import Any
 
 import pytest
 
+from tests.contracts.compose_files import render_module
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PLACEHOLDERS = REPOSITORY_ROOT / "deploy" / "fleet" / "ci-render.placeholders"
 
-_ENV_FILE_DEFAULTS = {
-    "FLEET_LIVE_ENV_FILE": "./deploy/fleet/env/live.env.example",
-    "FLEET_PAPER_ENV_FILE": "./deploy/fleet/env/paper.env.example",
-    "FLEET_COORDINATOR_ENV_FILE": "./deploy/fleet/env/coordinator.env.example",
-}
+# The render script owns this mapping; holding a copy here drifted silently
+# when #2235 added a fourth entry, leaving this render absorbing a developer's
+# gitignored PythonDataService/.env while CI did not — the very hazard #2235
+# closed for the snapshot.
+ENV_FILE_DEFAULTS: dict[str, str] = render_module().ENV_FILE_DEFAULTS
 
 pytestmark = pytest.mark.slow
 
@@ -98,7 +100,7 @@ def _render(
     # treats an inherited empty string as still missing, so that override
     # must not shadow the tracked placeholder's non-empty value here.
     render_environment.pop("DATA_PLANE_CONTROL_SECRET", None)
-    for key, default in _ENV_FILE_DEFAULTS.items():
+    for key, default in ENV_FILE_DEFAULTS.items():
         render_environment.setdefault(key, default)
     completed = subprocess.run(
         command,

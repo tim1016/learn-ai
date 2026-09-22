@@ -157,10 +157,11 @@ def test_every_rendered_env_file_path_redirects_to_a_committed_example() -> None
     The fix is the indirection the three fleet env files already use, and this
     is the tripwire for the next one: every path the render reads must be a
     `${VAR:-default}`, `VAR` must have a default in the render script's
-    `_ENV_FILE_DEFAULTS`, and that default must name a file the repo actually
-    commits. Scoped to the render's own `COMPOSE_FILES` because those are the
-    only files whose keys can reach the snapshot — and read off the module, so
-    adding an overlay there brings it under this contract automatically.
+    `ENV_FILE_DEFAULTS`, and that default must name a file the repo actually
+    commits. It asserts against `raw_env_file_paths()` — the reader whose
+    output the snapshot records — rather than walking the YAML again, so the
+    contract cannot drift away from the thing it is pinning, and a new overlay
+    in `COMPOSE_FILES` is covered automatically.
 
     What this deliberately does not promise: an operator who exports `VAR`
     themselves still renders from their own file. `setdefault` is the existing,
@@ -168,35 +169,36 @@ def test_every_rendered_env_file_path_redirects_to_a_committed_example() -> None
     path with no indirection to override, not an override that works.
     """
     render = render_module()
-    defaults: dict[str, str] = render._ENV_FILE_DEFAULTS
+    defaults: dict[str, str] = render.ENV_FILE_DEFAULTS
     tracked = set(
         subprocess.run(
-            ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout.split()
+            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.split("\0")
+    )
+    declared = render.raw_env_file_paths()
+    assert declared, (
+        "the render read no env_file paths at all — this contract would pass "
+        "having checked nothing (#2235)"
     )
 
-    for name in render.COMPOSE_FILES:
-        document = render.load_compose_document(ROOT / name)
-        for service, spec in (document.get("services") or {}).items():
-            for entry in spec.get("env_file") or []:
-                path = entry.get("path") if isinstance(entry, dict) else entry
-                match = _ENV_FILE_INDIRECTION.match(str(path))
-                assert match, (
-                    f"{name} service {service!r} declares env_file {path!r} as a literal "
-                    "path. Write it as ${VAR:-default} and give VAR a committed-example "
-                    "default in render_fleet_topology._ENV_FILE_DEFAULTS, or the render "
-                    "absorbs whatever that gitignored file declares on the rendering "
-                    "machine (#2235)."
-                )
-                variable = match.group("variable")
-                assert variable in defaults, (
-                    f"{name} service {service!r} indirects env_file through ${{{variable}}}, "
-                    f"but render_fleet_topology._ENV_FILE_DEFAULTS has no default for it, so "
-                    f"the render still resolves {match.group('default')!r} (#2235)."
-                )
-                example = defaults[variable].removeprefix("./")
-                assert example in tracked, (
-                    f"_ENV_FILE_DEFAULTS[{variable!r}] points at {defaults[variable]!r}, "
-                    "which this repo does not commit — the render would be reproducible "
-                    "only where that file happens to exist (#2235)."
-                )
+    for service, paths in declared.items():
+        for path in paths:
+            match = _ENV_FILE_INDIRECTION.match(str(path))
+            assert match, (
+                f"service {service!r} declares env_file {path!r} as a literal path. "
+                "Write it as ${VAR:-default} and give VAR a committed-example default "
+                "in render_fleet_topology.ENV_FILE_DEFAULTS, or the render absorbs "
+                "whatever that gitignored file declares on the rendering machine (#2235)."
+            )
+            variable = match.group("variable")
+            assert variable in defaults, (
+                f"service {service!r} indirects env_file through ${{{variable}}}, but "
+                "render_fleet_topology.ENV_FILE_DEFAULTS has no default for it, so the "
+                f"render still resolves {match.group('default')!r} (#2235)."
+            )
+            example = defaults[variable].removeprefix("./")
+            assert example in tracked, (
+                f"ENV_FILE_DEFAULTS[{variable!r}] points at {defaults[variable]!r}, which "
+                "this repo does not commit — the render would be reproducible only where "
+                "that file happens to exist (#2235)."
+            )

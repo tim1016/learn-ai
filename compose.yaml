@@ -74,18 +74,21 @@ services:
         GIT_SHA: ${GIT_SHA:-unknown}
     container_name: polygon-data-service
     # Alpaca's Pydantic settings file is not mounted into /app; its values pass
-    # through this env_file, so the running data plane reads ONLY
-    # PythonDataService/.env (the repo-root .env feeds compose interpolation
-    # only). Since ADR 0060 that file carries secrets and deployment bootstrap
-    # alone: the endpoint mode and the six ALPACA_LIVE_* risk values are a saved
-    # broker profile on the alpaca-clerk-data volume below. A cut-over worker
-    # refuses to bind while any of those seven is still set here.
-    # Indirected like the fleet env files below, and for the same reason: the
-    # topology render points ${PYTHON_SERVICE_ENV_FILE} at the committed
+    # through this env_file, so the running data plane reads ONLY the one file
+    # named below -- PythonDataService/.env, unless PYTHON_SERVICE_ENV_FILE
+    # overrides it, which nothing but the topology render does (the repo-root
+    # .env feeds compose interpolation only). Since ADR 0060 that file carries
+    # secrets and deployment bootstrap alone: the endpoint mode and the six
+    # ALPACA_LIVE_* risk values are a saved broker profile on the
+    # alpaca-clerk-data volume below. A cut-over worker refuses to bind while
+    # any of those seven is still set here.
+    #
+    # The path is indirected like the fleet env files below, and for the same
+    # reason: the render points ${PYTHON_SERVICE_ENV_FILE} at the committed
     # .env.example so its snapshot records this service's declared key set
     # rather than whatever the rendering machine's gitignored .env happens to
     # carry (#2235). Deployment behaviour is unchanged -- the default is the
-    # path it always read.
+    # path this file always named.
     env_file:
       - path: ${PYTHON_SERVICE_ENV_FILE:-./PythonDataService/.env}
         required: false
