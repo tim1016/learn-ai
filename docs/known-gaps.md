@@ -633,13 +633,16 @@ re-arms the server-authored timeframe auto-correct, and numeric
   registration refusal — both require coordinator contact. A lane that is
   down or partitioned for the whole drain, then restarts during a
   coordinator outage with no reachable-coordinator contact in between,
-  still offline-boots its last-effective binding from unmarked (v1)
-  evidence. Bounded by procedure, not by mechanism: after `drain`, watch
-  for the lane's next heartbeat before proceeding (a live lane marks within
-  one heartbeat interval), and treat a lane already unreachable at drain
-  time as decommissioned — its volume is part of the retirement and is
-  never restarted, per the runbook. Shrinks only when #2154's confirmation
-  push lets the coordinator know the drain reached the lane.
+  still offline-boots its last-effective binding from evidence whose
+  lifecycle was never re-authored — a v1 file (which carries no lifecycle
+  field) and a v2 file written `provisioned` at confirmation time are
+  alike unmarked. Bounded by procedure, not by mechanism: after `drain`,
+  watch for the lane's next heartbeat before proceeding — a live lane
+  marks within one heartbeat interval, and a lane that fails to return it
+  (or was already unreachable at drain time) is treated as decommissioned:
+  its volume is part of the retirement and is never restarted, per the
+  runbook. Shrinks only when #2154's confirmation push lets the coordinator
+  know the drain reached the lane.
 
 ## Live EMA replay evidence — verified 2026-09-17
 

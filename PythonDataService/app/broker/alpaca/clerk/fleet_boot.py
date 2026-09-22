@@ -601,8 +601,11 @@ def _learn_drain(boot: FleetLaneBoot) -> None:
     """
     if boot.draining:
         return
-    boot.draining = True
+    # The latch flips only after the durable mark succeeds: an I/O failure on
+    # the evidence write must leave this call retryable, or the surviving
+    # provisioned evidence would vouch for a later offline boot forever.
     marked = mark_confirmation_evidence_draining(boot.volume_root)
+    boot.draining = True
     logger.warning(
         "This lane learned it is drained; its confirmation evidence is "
         "marked and new bot starts refuse while the drain completes.",

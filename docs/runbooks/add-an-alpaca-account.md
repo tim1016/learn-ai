@@ -495,9 +495,13 @@ host CLI, in order:
 #     learns it is drained from the heartbeat's lifecycle answer (or the
 #     typed registration refusal, if it restarts), tombstones its own
 #     confirmation evidence, and refuses new bot starts — after which no
-#     coordinator outage can boot that binding back up (#2155). A lane
-#     already unreachable at drain time never learns: treat its volume as
-#     part of this retirement and never restart it; do not wait for it.
+#     coordinator outage can boot that binding back up (#2155). A lane that
+#     never returns the heartbeat — already unreachable at drain time, or
+#     live until the drain and silent after it — is treated identically:
+#     it never learned, its evidence stays resurrection-capable, so treat
+#     its volume as part of this retirement and never restart it. Do not
+#     wait for it beyond the printed deadline; continue with steps 2 and 3,
+#     which record the lane confirmation as absent.
 
 # 2. Wait out the printed deadline, then release each assigned account under
 #    a bounded attribution (who acted, and the incident/change record naming

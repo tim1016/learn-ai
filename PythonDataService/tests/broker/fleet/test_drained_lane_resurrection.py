@@ -19,6 +19,9 @@ nothing, online or off.
 from __future__ import annotations
 
 import json
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -276,6 +279,132 @@ def test_the_heartbeat_answers_with_the_lifecycle_a_live_lane_learns(
         )
         assert after.touched is True
         assert after.lifecycle_state is StoredLifecycleState.DRAINING
+    finally:
+        service.close()
+
+
+def _drain_mid_flight(
+    service: FleetControlService, monkeypatch: pytest.MonkeyPatch, clerk_id: str
+) -> None:
+    """Interpose so the *next* write transaction opens only after a drain
+    has committed.
+
+    The lifecycle gate's pre-read is lock-free; the review follow-up on PR
+    #2247 is that a drain committing between that read and the caller's
+    ``BEGIN IMMEDIATE`` must still refuse. This helper reproduces exactly
+    that interleaving deterministically: the drain runs to its own commit
+    inside the window, then the caller's transaction opens against the
+    already-drained row.
+    """
+    store = service._store
+    real_transaction = store.transaction
+    armed = {"first": True}
+
+    @contextmanager
+    def _transaction() -> Iterator[sqlite3.Connection]:
+        if armed.pop("first", None):
+            service.drain_clerk(clerk_id=clerk_id)
+        with real_transaction() as conn:
+            yield conn
+
+    monkeypatch.setattr(store, "transaction", _transaction)
+
+
+def test_a_drain_committing_mid_registration_still_refuses(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registration gate re-reads lifecycle inside the write transaction.
+
+    Without the in-transaction re-read, this interleaving installs a fresh
+    session for a lane whose door the drain ceremony already closed.
+    """
+    service = _service(control_dir, clock)
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        _drain_mid_flight(service, monkeypatch, provisioned.clerk.clerk_id)
+        with pytest.raises(ClerkLaneDraining, match="never returns"):
+            service.register_agent_session(
+                clerk_id=provisioned.clerk.clerk_id,
+                worker_key=provisioned.clerk.worker_key,
+                fleet_protocol_version=2,
+            )
+        assert service._store.read_session(provisioned.clerk.clerk_id) is None
+    finally:
+        service.close()
+
+
+def test_a_drain_committing_mid_heartbeat_answers_draining_not_provisioned(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The heartbeat's lifecycle answer reads the transactional truth.
+
+    A stale answer here is the lesson failing to arrive: the lane would keep
+    beating as a provisioned lane and never mark its evidence.
+    """
+    service = _service(control_dir, clock)
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        session = service.register_agent_session(
+            clerk_id=provisioned.clerk.clerk_id,
+            worker_key=provisioned.clerk.worker_key,
+            fleet_protocol_version=2,
+        )
+        _drain_mid_flight(service, monkeypatch, provisioned.clerk.clerk_id)
+        observation = service.observe_session(
+            clerk_id=provisioned.clerk.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+        )
+        assert observation.touched is True
+        assert observation.lifecycle_state is StoredLifecycleState.DRAINING
+    finally:
+        service.close()
+
+
+def test_a_drain_committing_mid_confirmation_still_refuses(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The confirmation gate re-reads lifecycle inside the write transaction.
+
+    A confirmation that slips past a mid-flight drain re-presents a grant
+    the ceremony already closed — the resurrection in miniature.
+    """
+    service = _service(control_dir, clock)
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        session = service.register_agent_session(
+            clerk_id=provisioned.clerk.clerk_id,
+            worker_key=provisioned.clerk.worker_key,
+            fleet_protocol_version=2,
+        )
+        service.reserve_assignment(
+            broker="alpaca",
+            clerk_id=provisioned.clerk.clerk_id,
+            external_account_id=ACCOUNT,
+        )
+        _drain_mid_flight(service, monkeypatch, provisioned.clerk.clerk_id)
+        with pytest.raises(ClerkLaneDraining, match="confirms no binding"):
+            service.confirm_assignment(
+                broker="alpaca",
+                clerk_id=provisioned.clerk.clerk_id,
+                external_account_id=ACCOUNT,
+                binding_generation=1,
+                agent_instance_id=session.agent_instance_id,
+                routing_epoch=session.routing_epoch,
+            )
+        assignment = service._store.read_assignment(
+            broker="alpaca", canonical_account_id=ACCOUNT
+        )
+        assert assignment is not None
+        assert assignment.confirmed_binding_generation is None
     finally:
         service.close()
 
@@ -561,6 +690,59 @@ async def test_a_live_lane_learns_its_drain_from_the_heartbeat_and_marks_its_evi
         await close_fleet_lane(boot)
     finally:
         service.close()
+
+
+def test_a_failed_evidence_mark_leaves_the_drain_lesson_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed tombstone write must not latch the learned state (#2155).
+
+    Review follow-up on PR #2247: ``boot.draining`` flipped before the durable
+    mark ran, so an I/O failure on the evidence write left the lane "learned"
+    with provisioned evidence still on disk — and the once-only latch then
+    suppressed every retry, letting a later offline boot resurrect the drained
+    binding after all. The latch must flip only after the mark succeeds.
+    """
+    from app.broker.alpaca.clerk import fleet_boot
+
+    root = tmp_path
+    write_confirmation_evidence(root, _evidence(CLERK, "volm_resurrection0000000000"))
+    # ``_learn_drain`` reads no presence; the boot is just the lane's latch.
+    boot = fleet_boot.FleetLaneBoot(
+        presence=None,
+        clerk_id=CLERK,
+        worker_key="svct_" + "3" * 32,
+        volume_root=root,
+        registry_id="fltr_resurrection00000000000",
+        volume_id="volm_resurrection0000000000",
+    )
+
+    def _disk_full_mark(volume_root: Path) -> bool:
+        raise OSError("disk full while re-authoring the tombstone")
+
+    monkeypatch.setattr(fleet_boot, "mark_confirmation_evidence_draining", _disk_full_mark)
+    with pytest.raises(OSError):
+        fleet_boot._learn_drain(boot)
+    # Nothing was durably marked, so the lesson must not latch: the retry owes
+    # this volume its tombstone.
+    assert boot.draining is False
+    survived = read_confirmation_evidence(root)
+    assert survived is not None
+    assert survived.lifecycle_state == "provisioned"
+
+    monkeypatch.setattr(
+        fleet_boot,
+        "mark_confirmation_evidence_draining",
+        mark_confirmation_evidence_draining,
+    )
+    fleet_boot._learn_drain(boot)
+    assert boot.draining is True
+    marked = read_confirmation_evidence(root)
+    assert marked is not None
+    assert marked.lifecycle_state == "draining"
+    # And once the tombstone is durably in place, the latch holds: a second
+    # call is the idempotent no-op, not a second write.
+    fleet_boot._learn_drain(boot)
 
 
 async def test_a_drained_lane_restarting_offline_never_resurrects_its_binding(

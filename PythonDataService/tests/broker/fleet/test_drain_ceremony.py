@@ -582,9 +582,12 @@ def test_reassignment_refuses_a_provisioned_predecessor(
 def test_reassignment_is_blocked_against_a_drained_lane_until_2154_closes(
     fleet_service: FleetControlService, control_dir: Path, clock: FrozenClock
 ) -> None:
-    """§7.1: a lane drained during an outage never learns its drain (#2155's
-    residual window), and no lane-quiet confirmation exists yet, so no drained
-    lane is reassigned — quiet and past-deadline notwithstanding."""
+    """§7.1: even a drained, command-quiet, past-deadline lane is not
+    reassigned — no lane-quiet confirmation exists yet (#2154), and without
+    it the coordinator cannot tell a genuinely quiet lane from one that
+    never learned its drain (#2155's residual window). The fixture creates
+    no outage and no missed drain-learning; the refusal stands on the
+    missing confirmation alone."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="z3", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="z4", tmp_path=control_dir.parent)
     bind_lane(fleet_service, first, account="ACCT-Z2")
