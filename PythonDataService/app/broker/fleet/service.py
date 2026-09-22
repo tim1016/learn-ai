@@ -844,8 +844,10 @@ class FleetControlService:
         """ADR 0063 Decision 2: the retirement gate no provider can answer yet.
 
         The gate consumes a lane-quiet confirmation — the lane's own
-        assertion that it holds no working order and runs no bot decision
-        loop, fenced by the current session's instance and epoch. No
+        assertion of ADR 0063 Decision 2's five conditions (2026-09-19
+        amendment): draining, no bot running, every working order on the
+        account ended at the broker, the account flat, and no order intent
+        in flight — fenced by the current session's instance and epoch. No
         provider can answer it today (#2154), so this refuses and names the
         outstanding item rather than degrading to an operator attestation: a
         gate that always passes is the defect this ceremony exists to

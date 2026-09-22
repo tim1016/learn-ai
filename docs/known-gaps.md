@@ -615,7 +615,7 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `draining -> retired` path refuses naming the outstanding item and every
   retirement of a served clerk goes through the attributed, deadline-bound
   `force-retire` — the auditable forced count starts at 100% and stays
-  there until #2154 ships the Alpaca nothing-open attestation. Reassignment
+  there until #2154 ships the Alpaca nothing-open confirmation. Reassignment
   is blocked outright until #2154 closes (the #2155 resurrection hole is
   closed for every lane that learns its drain — heartbeat lifecycle
   answers, typed registration refusal, evidence-v2 tombstones — but a lane
