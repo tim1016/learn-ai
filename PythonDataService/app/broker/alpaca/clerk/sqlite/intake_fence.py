@@ -24,6 +24,8 @@ from collections.abc import Callable
 from contextvars import ContextVar, Token
 from types import TracebackType
 
+from app.broker.alpaca.clerk.sqlite.off_loop import off_loop_future
+
 logger = logging.getLogger(__name__)
 
 
@@ -137,7 +139,7 @@ class ReentrantAsyncLock:
         ``abandoned_hop_timeout_s`` so a wedged fold cannot brick shutdown.
         """
         async with self:
-            hop = asyncio.ensure_future(asyncio.to_thread(operation, *args, **kwargs))
+            hop = off_loop_future(operation, *args, **kwargs)
             self._permitted_hold_token = self._active_hold_token
             try:
                 return await asyncio.shield(hop)

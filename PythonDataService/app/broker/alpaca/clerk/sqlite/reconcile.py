@@ -262,16 +262,20 @@ async def _reconcile_effect(
             off_loop=to_thread,
         )
 
-    effect_after = await to_thread(lambda: repo.effect_operation(effect.effect_operation_id))
-    if effect_after is None:
-        raise ReconciliationInvariantError(
-            f"effect {effect.effect_operation_id!r} disappeared during reconciliation"
-        )
-    order_after = await to_thread(lambda: repo.order(order.order_ref))
-    if order_after is None:
-        raise ReconciliationInvariantError(
-            f"order {order.order_ref!r} disappeared during reconciliation"
-        )
+    def _verify_after_resolution() -> tuple[EffectOperationResource, OrderResource]:
+        effect_after = repo.effect_operation(effect.effect_operation_id)
+        if effect_after is None:
+            raise ReconciliationInvariantError(
+                f"effect {effect.effect_operation_id!r} disappeared during reconciliation"
+            )
+        order_after = repo.order(order.order_ref)
+        if order_after is None:
+            raise ReconciliationInvariantError(
+                f"order {order.order_ref!r} disappeared during reconciliation"
+            )
+        return effect_after, order_after
+
+    effect_after, order_after = await to_thread(_verify_after_resolution)
     if effect_after.state == "succeeded":
         outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
     elif effect_after.state in ("failed", "rejected"):

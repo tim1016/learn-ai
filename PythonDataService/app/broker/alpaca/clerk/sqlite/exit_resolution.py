@@ -129,8 +129,14 @@ async def cancel_and_prove_owned_entry(
     *,
     entry_order_ref: str,
     trade: BrokerTradePort,
+    off_loop: OffLoop | None = None,
 ) -> OrderResource:
-    """Cancel one exact owned ENTRY under its current durable custodian."""
+    """Cancel one exact owned ENTRY under its current durable custodian.
+
+    ``off_loop`` moves each synchronous repository run onto a worker thread
+    (#1993); the default keeps the pre-#1993 inline behavior.
+    """
+    run = off_loop if off_loop is not None else run_inline
     entry = repo.order(entry_order_ref)
     if entry is None or entry.role != "ENTRY":
         raise ValueError(f"{entry_order_ref!r} is not an owned ENTRY order")
@@ -153,6 +159,7 @@ async def cancel_and_prove_owned_entry(
             effect_operation_id=effect_operation_id,
             entry=entry,
             broker=broker,
+            run=run,
         )
     finally:
         repo.release_operation_claim(
