@@ -615,8 +615,10 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `lane_confirmation: present`; `release-assignment` records `present` when a
   fresh quiet confirmation covers the release and `absent` otherwise;
   re-reserving a released account succeeds only when its release recorded
-  `present`; and `reassign-assignment` requires the drained lane's fresh,
-  quiet confirmation and moves the account in one transaction. Schema v7
+  `present` and the old lane has since been retired; and
+  `reassign-assignment` requires the drained lane's fresh, quiet
+  confirmation and releases, retires the old lane and reserves for the
+  successor in one transaction. Schema v7
   makes one live assignment per clerk structural, which is what lets an
   identity-free confirmation cover exactly one account. **What remains:** a
   lane that cannot answer — restarted during its drain, host gone, no clerk —

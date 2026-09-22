@@ -565,18 +565,21 @@ to a different lane, it moves only on the old lane's own lane-quiet proof
 - **Release, then re-onboard.** Clear the account and let the draining lane
   confirm quiet (step 1c) *before* running `release-assignment`. The release
   prints `lane_confirmation`: `present` means the lane's fresh, quiet answer
-  covered it, and the new lane's boot can then reserve the account at the
-  next generation. `absent` means it did not, and **that release is never
-  re-reserved by any lane** — nothing proves the old lane stopped writing.
+  covered it. Then `retire` the old lane (it still confirms quiet on its
+  heartbeat), and only then boot the new lane: its reservation takes the
+  account at the next generation, and refuses while the old lane is still
+  draining. `absent` means the release was not covered, and **that release is
+  never re-reserved by any lane** — nothing proves the old lane stopped
+  writing.
   A release cannot be redone, so check first, read-only:
   `.venv/bin/python -m scripts.manage_broker_fleet lane-quiet --control-dir
   <coordinator-control-root> --clerk-id <clerk-id>` answers `quiet: true`
   (exit 0) exactly when the release would record `present`, and otherwise
   refuses (exit 2) naming what is outstanding.
-- **Direct reassignment.** `reassign-assignment` moves the account from the
-  drained lane to the successor in one transaction. It refuses, naming what is
-  missing, unless the drained lane's current session holds a fresh, quiet
-  confirmation.
+- **Direct reassignment.** `reassign-assignment` releases the account,
+  retires the old lane and reserves it for the successor in one transaction.
+  It refuses, naming what is missing, unless the drained lane's current
+  session holds a fresh, quiet confirmation.
 
 A lane that cannot answer (restarted mid-drain, host lost, no clerk) never
 hands its account to another lane; its account is released `absent`. Do not

@@ -745,7 +745,7 @@ def test_a_v6_registry_with_two_live_assignments_for_one_clerk_refuses_to_upgrad
         conn.close()
     from app.broker.fleet.errors import FleetRegistryUnavailable
 
-    with pytest.raises((FleetRegistryUnavailable, sqlite3.IntegrityError)):
+    with pytest.raises(FleetRegistryUnavailable, match=r"account_assignments\.clerk_id"):
         FleetRegistryStore.open(control_dir=control_dir)
     conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
     try:

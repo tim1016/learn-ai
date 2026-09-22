@@ -1472,6 +1472,7 @@ class FleetControlService:
                     conn, broker=broker, canonical_account_id=canonical
                 )
                 if existing is None:
+                    self._require_no_live_assignment(conn, clerk_id)
                     outcome = AccountAssignmentRecord(
                         broker=broker,
                         canonical_external_account_id=canonical,
@@ -1536,14 +1537,14 @@ class FleetControlService:
 
         A released row is a clerk-to-clerk transfer wearing a reservation's
         clothes, so it carries the reassignment ceremony's gate rather than a
-        second, weaker policy. The evidence is the one the release itself
-        recorded: the account moves only if its release carried
-        ``lane_confirmation: present`` — the predecessor proved it had
-        stopped, cancelled, flattened and resolved every intent, over this
-        account (schema v7 makes that account unambiguous), inside the drain
-        it could no longer leave. An ``absent`` release — a lane that could
-        not answer — stays refused, because nothing says its lane is not
-        still able to write.
+        second, weaker policy — and ends where that ceremony ends, with the
+        old lane retired. Two facts, both durable: the old lane is retired,
+        so it can never re-register or be routed to; and its release carried
+        ``lane_confirmation: present`` — it proved it had stopped, cancelled,
+        flattened and resolved every intent, over this account (schema v7
+        makes that account unambiguous), inside the drain it could no longer
+        leave. An ``absent`` release — a lane that could not answer — stays
+        refused, because nothing says that lane stopped writing.
         """
         canonical = existing.canonical_external_account_id
         broker = existing.broker
@@ -1585,19 +1586,24 @@ class FleetControlService:
                 "covered by the draining lane's own lane-quiet confirmation. Use "
                 "whole-machine migration, which needs no successor (#2151).",
             )
+        if predecessor.lifecycle_state == StoredLifecycleState.DRAINING:
+            # Checked after the release's own evidence: an absent release can
+            # never move, a draining lane only has to finish. The release proved the lane quiet, but the lane is still alive
+            # and still reads this account: retiring it first ends it for
+            # good (it can never re-register or be routed to again), and it
+            # retires on a quiet answer before a successor can trade and make
+            # that answer impossible.
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} is released, but "
+                f"clerk {existing.clerk_id}, which held it, is still draining; a "
+                "released account moves only once its old lane is retired.",
+                next_step="Retire the old lane (`retire`; it confirms lane quiet "
+                "on its heartbeat), then reserve again.",
+            )
         self._require_no_live_assignment(conn, clerk_id)
-        successor = AccountAssignmentRecord(
-            broker=broker,
-            canonical_external_account_id=canonical,
-            clerk_id=clerk_id,
-            assignment_generation=existing.assignment_generation + 1,
-            state=AssignmentState.RESERVED,
-            recorded_at_ms=now,
-            updated_at_ms=now,
-        )
         if not self._store.cas_update_assignment(
             conn,
-            successor,
+            self._successor_reservation(existing, clerk_id=clerk_id, now=now),
             previous_generation=existing.assignment_generation,
             previous_state=AssignmentState.RELEASED,
         ):
@@ -1620,6 +1626,21 @@ class FleetControlService:
         )
         assert persisted is not None
         return persisted
+
+    @staticmethod
+    def _successor_reservation(
+        released: AccountAssignmentRecord, *, clerk_id: str, now: int
+    ) -> AccountAssignmentRecord:
+        """The next generation's reservation of an account, for a new clerk."""
+        return AccountAssignmentRecord(
+            broker=released.broker,
+            canonical_external_account_id=released.canonical_external_account_id,
+            clerk_id=clerk_id,
+            assignment_generation=released.assignment_generation + 1,
+            state=AssignmentState.RESERVED,
+            recorded_at_ms=now,
+            updated_at_ms=now,
+        )
 
     def _require_no_live_assignment(self, conn: sqlite3.Connection, clerk_id: str) -> None:
         """A successor acquiring an account may hold no other live one.
@@ -1941,10 +1962,12 @@ class FleetControlService:
         otherwise resurrect, so a confirming lane is exactly one the drain
         reached. A lane that cannot answer is never reassigned.
 
-        The release and the successor's reservation commit together
-        (``store.reassign_assignment``), so no split handover is ever
-        observable. Whole-machine migration (#2151) remains the preferred
-        lane move and needs no successor at all.
+        The release, the successor's reservation and the old lane's
+        retirement (``lane_confirmation: present``) commit together, so no
+        split handover is ever observable and the old lane is never left
+        draining beside a successor that trades its account. Whole-machine
+        migration (#2151) remains the preferred lane move and needs no
+        successor at all.
         """
         bounded_operator, bounded_change_ref = _bounded_attestation(operator, change_ref)
         self._require_recovery_hold_clear()
@@ -2010,21 +2033,28 @@ class FleetControlService:
                     attested_change_ref=bounded_change_ref,
                     attested_at_ms=now,
                 )
-                successor_assignment = AccountAssignmentRecord(
-                    broker=broker,
-                    canonical_external_account_id=canonical,
-                    clerk_id=successor_clerk_id,
-                    assignment_generation=existing.assignment_generation + 1,
-                    state=AssignmentState.RESERVED,
-                    recorded_at_ms=now,
-                    updated_at_ms=now,
-                )
                 self._store.reassign_assignment(
                     conn,
                     released=released,
-                    reserved_successor=successor_assignment,
+                    reserved_successor=self._successor_reservation(
+                        existing, clerk_id=successor_clerk_id, now=now
+                    ),
                     previous_state=existing.state,
                 )
+                # The handover ends the old lane in the same commit, on the
+                # quiet answer just accepted: it holds nothing now (one live
+                # assignment per clerk), and once the successor trades, its
+                # account would never read quiet to it again.
+                if not self._store.retire_clerk_row(
+                    conn,
+                    clerk_id=existing.clerk_id,
+                    retired_at_ms=now,
+                    lane_confirmation=LaneConfirmationState.PRESENT,
+                ):
+                    raise ClerkAssignmentConflict(
+                        f"Clerk {existing.clerk_id} changed while reassigning; "
+                        "re-read and retry.",
+                    )
                 moved = self._persisted_assignment_on(
                     conn, broker=broker, canonical=canonical
                 )

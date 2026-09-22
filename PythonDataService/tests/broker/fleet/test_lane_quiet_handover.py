@@ -23,7 +23,11 @@ from app.broker.fleet.errors import (
     ClerkLaneQuietUnproven,
     ClerkReassignmentBlocked,
 )
-from app.broker.fleet.records import AssignmentState, LaneConfirmationState
+from app.broker.fleet.records import (
+    AssignmentState,
+    LaneConfirmationState,
+    StoredLifecycleState,
+)
 from app.broker.fleet.service import DEFAULT_LANE_QUIET_VALID_FOR_MS, FleetControlService
 from tests.broker.fleet.conftest import (
     TEST_CHANGE_REF,
@@ -130,6 +134,18 @@ def test_a_quiet_release_can_be_re_reserved_by_a_new_lane(
     _confirm(fleet_service, lane, session, observed_at_ms=clock())
     _release(fleet_service)
     successor = _successor(fleet_service, control_dir, "q1-next")
+
+    # The old lane is still draining: it must be retired first, on its own
+    # quiet answer, before a successor can trade the account under it.
+    with pytest.raises(ClerkAssignmentConflict, match="still draining"):
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=successor.clerk_id,
+            external_account_id=ACCOUNT,
+            volume_root=successor.volume_root,
+        )
+    retired = fleet_service.retire_clerk(clerk_id=lane.clerk_id)
+    assert retired.lane_confirmation == LaneConfirmationState.PRESENT
     # Long after the confirmation went stale: the evidence that counts is
     # what the release recorded, not the retired lane's current answer.
     clock.advance(DEFAULT_LANE_QUIET_VALID_FOR_MS * 10)
@@ -178,6 +194,7 @@ def test_a_successor_already_holding_an_account_cannot_take_a_second(
     lane, session = _drained(fleet_service, clock, control_dir, "s1")
     _confirm(fleet_service, lane, session, observed_at_ms=clock())
     _release(fleet_service)
+    fleet_service.retire_clerk(clerk_id=lane.clerk_id)
     successor = _successor(fleet_service, control_dir, "s1-next")
     bind_lane(fleet_service, successor, account="ACCT-ALREADY-HELD")
 
@@ -232,6 +249,12 @@ def test_a_quiet_drained_lane_is_reassigned_in_one_transaction(
     assert released.attested_operator == TEST_OPERATOR
     assert released.attested_change_ref == TEST_CHANGE_REF
     assert history[-1].clerk_id == successor.clerk_id
+    # The old lane is retired in the same commit, on the answer just read:
+    # once the successor trades, its account would never read quiet to it.
+    old_lane = fleet_service._store.read_clerk(lane.clerk_id)
+    assert old_lane is not None
+    assert old_lane.lifecycle_state == StoredLifecycleState.RETIRED
+    assert old_lane.lane_confirmation == LaneConfirmationState.PRESENT
 
 
 @pytest.mark.parametrize(
@@ -266,3 +289,5 @@ def test_reassignment_refuses_without_fresh_quiet_evidence_and_moves_nothing(
     assert current is not None
     assert current.clerk_id == lane.clerk_id
     assert current.state == AssignmentState.EFFECTIVE
+    still = fleet_service._store.read_clerk(lane.clerk_id)
+    assert still is not None and still.lifecycle_state == StoredLifecycleState.DRAINING
