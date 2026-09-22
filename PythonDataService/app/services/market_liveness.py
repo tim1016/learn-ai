@@ -182,6 +182,20 @@ def compose_market_liveness(
             reason_code="SYMBOL_STATUS_UNKNOWN",
             reason=blocking_status.reason or "Live vendor evidence cannot prove this symbol is tradable.",
         )
+    if require_market_data and market_data is not None and now_ms < market_data.observed_at_ms:
+        # Same shape as the clock's future-dated refusal: a caller that
+        # captured its instant before the tick publisher re-stamped this
+        # evidence (#2257). It reads as MARKET_DATA_RECOVERING, so say why.
+        logger.warning(
+            "market-data evidence is dated after the evaluation instant; new exposure is blocked",
+            extra={
+                "action": "market_liveness_market_data_future_dated",
+                "symbol": normalized_symbol,
+                "now_ms": now_ms,
+                "observed_at_ms": market_data.observed_at_ms,
+                "lead_ms": market_data.observed_at_ms - now_ms,
+            },
+        )
     if require_market_data and (
         market_data is None or market_data.symbol != normalized_symbol
         or market_data.state != "READY" or market_data.valid_until_ms is None

@@ -753,12 +753,47 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     assert calls == 0
 
 
-async def test_panel_liveness_is_evaluated_after_clock_evidence_lands_mid_request(monkeypatch) -> None:
-    """#2256: the broker-clock poller re-stamps its evidence while the panel
-    awaits its own reads. Liveness evaluated at the request-start instant then
-    saw evidence "from the future" and reported MARKET_CLOCK_INVALID on a
-    healthy feed; it must be evaluated at an instant captured after them."""
+def _clock_evidence(observed_at_ms: int):
     from app.broker.contract.models import BrokerClockEvidence
+
+    return BrokerClockEvidence(
+        broker="alpaca", is_open=True, vendor_timestamp_ms=observed_at_ms,
+        next_open_ms=None, next_close_ms=None, observed_at_ms=observed_at_ms,
+    )
+
+
+def _ibkr_snapshot(observed_at_ms: int):
+    from app.schemas.market_liveness import (
+        MarketStatusSnapshot,
+        MarketStatusSource,
+        SymbolMarketDataEvidence,
+        SymbolTradingStatusEvidence,
+    )
+
+    return MarketStatusSnapshot(
+        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=observed_at_ms,
+        connection_changed_at_ms=observed_at_ms - 60_000,
+        symbol_statuses=(SymbolTradingStatusEvidence(
+            symbol="SPY", state="TRADABLE", source=MarketStatusSource.IBKR,
+            observed_at_ms=observed_at_ms - 60_000,
+        ),),
+        subscriptions=(SymbolMarketDataEvidence(
+            symbol="SPY", generation="gen-1", state="READY", observed_at_ms=observed_at_ms,
+            valid_until_ms=observed_at_ms + 5_000, last_received_at_ms=observed_at_ms,
+            quote_received_at_ms=observed_at_ms, reason_code="MARKET_DATA_READY", reason="ready",
+        ),),
+    )
+
+
+@pytest.mark.parametrize("source", ["alpaca_clock", "ibkr_market_data"])
+async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monkeypatch, source: str) -> None:
+    """#2256 / #2257: the broker-clock poller (1 s) and the IBKR tick
+    publisher (every callback) re-stamp their evidence while the panel awaits
+    its own reads. Liveness evaluated at the request-start instant then saw
+    evidence "from the future" and reported MARKET_CLOCK_INVALID or
+    MARKET_DATA_RECOVERING on a healthy feed; it must be evaluated at an
+    instant captured after those awaits."""
+    from app.schemas.market_liveness import MarketStatusSource
     from app.services.market_liveness import (
         get_market_liveness_store,
         market_liveness_fact,
@@ -767,6 +802,13 @@ async def test_panel_liveness_is_evaluated_after_clock_evidence_lands_mid_reques
 
     request_start_ms = 1_700_000_000_000
     wall = {"now": request_start_ms}
+
+    def _land(observed_at_ms: int) -> None:
+        store = get_market_liveness_store()
+        if source == "alpaca_clock":
+            store.observe_clock(_clock_evidence(observed_at_ms))
+        else:
+            store.apply_status_snapshot(_ibkr_snapshot(observed_at_ms), now_ms=observed_at_ms)
 
     class _Registry:
         def dry_run_activity(self, _broker: str, _sid: str):
@@ -782,12 +824,9 @@ async def test_panel_liveness_is_evaluated_after_clock_evidence_lands_mid_reques
         return "account-1"
 
     async def _clerk(**_kwargs):
-        # The 1 s poller lands a fresh clock observation during this await.
+        # Fresh evidence lands during this await, as it does on a live feed.
         wall["now"] = request_start_ms + 40
-        get_market_liveness_store().observe_clock(BrokerClockEvidence(
-            broker="alpaca", is_open=True, vendor_timestamp_ms=wall["now"],
-            next_open_ms=None, next_close_ms=None, observed_at_ms=wall["now"],
-        ))
+        _land(wall["now"])
         wall["now"] += 5
         return SimpleNamespace()
 
@@ -812,7 +851,13 @@ async def test_panel_liveness_is_evaluated_after_clock_evidence_lands_mid_reques
         return SimpleNamespace()
 
     reset_market_liveness_store_for_testing()
-    get_market_liveness_store().mark_stream_connected(observed_at_ms=request_start_ms - 1_000)
+    store = get_market_liveness_store()
+    if source == "alpaca_clock":
+        store.mark_stream_connected(observed_at_ms=request_start_ms - 1_000)
+    else:
+        store.require_source(MarketStatusSource.IBKR)
+        store.observe_clock(_clock_evidence(request_start_ms - 100))
+        _land(request_start_ms - 100)
     monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: wall["now"])
     monkeypatch.setattr(panel_data_source, "validate_account", _account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
