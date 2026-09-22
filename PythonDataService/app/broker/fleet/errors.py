@@ -220,6 +220,20 @@ class ClerkDrainRequired(FleetControlError):
     status_code: ClassVar[int] = 409
 
 
+class ClerkLaneDraining(FleetControlError):
+    """A draining lane never returns to service (ADR 0063 §7.1, issue #2155).
+
+    Registration and confirmation refuse a draining clerk with this typed
+    refusal — deliberately distinct from ``ClerkNotFound`` (retired) and from
+    any transport-level unreachability — so the lane can *learn* its own
+    drain from the refusal itself and durably mark its confirmation evidence
+    before it stops, closing the offline-boot resurrection path.
+    """
+
+    reason: ClassVar[str] = "clerk_lane_draining"
+    status_code: ClassVar[int] = 409
+
+
 class ClerkCommandQuietRequired(FleetControlError):
     """The clerk holds a dispatch whose outcome the coordinator lost.
 
@@ -262,11 +276,13 @@ class ClerkDrainDeadlinePending(FleetControlError):
 class ClerkReassignmentBlocked(FleetControlError):
     """Lane-to-lane reassignment is blocked (ADR 0063 §4.1/§7.1).
 
-    A drained lane must not be reassigned while a restart during a
-    coordinator outage can resurrect its binding (#2155), and reassignment
-    requires a draining predecessor — jointly exhaustive, so the ceremony is
-    unreachable until the resurrection hole closes. Whole-machine migration
-    is the preferred lane move and needs no successor (#2151).
+    A drained lane's binding can no longer be resurrected by a restart
+    during a coordinator outage — the lane learns its drain and marks its
+    own evidence (#2155, closed) — but a lane drained while unreachable for
+    the whole drain never learns, and no provider can yet attest the drained
+    lane's quiet (#2154). Until a lane-quiet confirmation answers the
+    ceremony, reassignment stays closed; whole-machine migration is the
+    preferred lane move and needs no successor (#2151).
     """
 
     reason: ClassVar[str] = "clerk_reassignment_blocked"

@@ -816,6 +816,10 @@ async def _service_lifespan(
             feed_resolver=get_market_data_feed,
             supported_broker_ids=frozenset({"alpaca"}),
             validation_fact=current_deployment_strategy_validation_fact,
+            # #2155: once this lane's heartbeat learns it is drained, every
+            # new bot start refuses; existing bots settle undisturbed. Probed
+            # per request, so the drain lands on the next operator action.
+            drained_lane_gate=lambda: fleet_lane is not None and fleet_lane.draining,
         )
         set_bot_task_registry(bot_task_registry)
         logger.info("In-container bot runner installed (task registry, daemon-free).")

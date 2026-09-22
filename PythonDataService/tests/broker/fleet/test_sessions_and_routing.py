@@ -81,14 +81,12 @@ def test_a_stale_instance_cannot_heartbeat_over_the_current_session(
         fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_bbbbbbbbbbbbbbbbbbbbbbbb"
     )
     # The superseded instance's heartbeat is a no-op, not an overwrite.
-    assert (
-        fleet_service.observe_session(
-            clerk_id=lane.clerk_id,
-            agent_instance_id="agnt_aaaaaaaaaaaaaaaaaaaaaaaa",
-            reported_state="degraded",
-        )
-        is False
+    superseded_beat = fleet_service.observe_session(
+        clerk_id=lane.clerk_id,
+        agent_instance_id="agnt_aaaaaaaaaaaaaaaaaaaaaaaa",
+        reported_state="degraded",
     )
+    assert superseded_beat.touched is False
     session = fleet_service._store.read_session(lane.clerk_id)
     assert session is not None
     assert session.agent_instance_id == current.agent_instance_id

@@ -62,6 +62,7 @@ from app.broker.fleet.errors import (
     ClerkDrainRequired,
     ClerkEndpointNotApproved,
     ClerkIdentityMismatch,
+    ClerkLaneDraining,
     ClerkLaneQuietUnproven,
     ClerkNotFound,
     ClerkReassignmentBlocked,
@@ -102,6 +103,7 @@ from app.broker.fleet.records import (
     ProviderSummaryObservation,
     RoutingReceiptRecord,
     RoutingReceiptState,
+    SessionObservation,
     StoredLifecycleState,
     VolumeMarker,
 )
@@ -920,7 +922,9 @@ class FleetControlService:
         session under a higher epoch (FR-065's idempotent same-clerk
         recovery); the archived session keeps the epoch history auditable.
         Retirement refuses registration — routing to a retired clerk is gone
-        for good.
+        for good. Draining refuses with the typed ``ClerkLaneDraining`` so a
+        restarting lane learns its own drain from the refusal and marks its
+        evidence (#2155) rather than presenting a stale grant.
 
         An ``endpoint_ref`` must cite the deployment-approved reference for
         this clerk; it can never install or move a destination. A declared
@@ -951,6 +955,18 @@ class FleetControlService:
                 f"Clerk {clerk_id} is retired; a retired lane never returns to service.",
                 next_step="Provision a new clerk; a retired lane's identity is "
                 "never reinstated.",
+            )
+        if clerk.lifecycle_state == StoredLifecycleState.DRAINING:
+            # The typed refusal is the lesson (#2155): the lane reads this
+            # exact code, durably marks its confirmation evidence as drained,
+            # and never boots that binding offline again. A generic refusal
+            # here would be indistinguishable from unreachability and send
+            # the lane down the FR-066 offline path instead.
+            raise ClerkLaneDraining(
+                f"Clerk {clerk_id} is draining; a drained lane never returns "
+                "to service.",
+                next_step="Finish the drain ceremony on the coordinator; this "
+                "lane marks its own evidence drained and stays down.",
             )
         if adapter_version is not None and len(adapter_version) > _ADAPTER_VERSION_MAX_CHARS:
             raise ClerkIdentityMismatch(
@@ -1053,7 +1069,7 @@ class FleetControlService:
         reported_account_id: str | None = None,
         reported_state: str | None = None,
         reported_summary: Mapping[str, object] | None = None,
-    ) -> bool:
+    ) -> SessionObservation:
         """Record a heartbeat and the worker's *observed* binding facts.
 
         An observation updates liveness projections only; it can never move
@@ -1061,6 +1077,11 @@ class FleetControlService:
         ownership of anything (audit 2026-09-13, finding 1). The optional
         summary must be the bounded typed observation; agent-authored
         free-form JSON refuses.
+
+        The answer carries the clerk's own lifecycle so a live lane learns it
+        was drained and marks its evidence (#2155); observing a draining
+        clerk succeeds — the heartbeat is the lesson's channel, and the lane
+        keeps beating until the operator finishes the ceremony.
         """
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
@@ -1093,7 +1114,9 @@ class FleetControlService:
                 reported_state=reported_state,
                 reported_summary_json=summary_json,
             )
-        return touched
+        return SessionObservation(
+            touched=touched, lifecycle_state=clerk.lifecycle_state
+        )
 
     # ---- broker-qualified account assignments -----------------------------
 
@@ -1285,6 +1308,22 @@ class FleetControlService:
             raise ClerkBrokerMismatch(
                 f"Clerk {clerk_id} belongs to broker {clerk.broker!r}, not {broker!r}.",
                 next_step=_BROKER_IMMUTABLE_NEXT_STEP,
+            )
+        if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
+            raise ClerkNotFound(
+                f"Clerk {clerk_id} is retired; a retired lane confirms nothing.",
+                next_step="Provision a new clerk; a retired lane's identity is "
+                "never reinstated.",
+            )
+        if clerk.lifecycle_state == StoredLifecycleState.DRAINING:
+            # A confirmation while draining is the resurrection this gate
+            # exists to prevent (#2155): the drain closed the door, and no
+            # later heartbeat or repair path may reopen it from the lane side.
+            raise ClerkLaneDraining(
+                f"Clerk {clerk_id} is draining; a drained lane confirms no "
+                "binding.",
+                next_step="Finish the drain ceremony on the coordinator; this "
+                "grant is not re-presentable.",
             )
         if binding_generation < 1:
             raise ClerkBindingGenerationConflict(
@@ -1524,20 +1563,21 @@ class FleetControlService:
         successor_clerk_id: str,
         successor_volume_root: Path,
     ) -> None:
-        """Refuse every lane-to-lane reassignment until #2155 closes (ADR 0063 §4.1/§7.1).
+        """Refuse every lane-to-lane reassignment until #2154 closes (ADR 0063 §4.1/§7.1).
 
         The ceremony's checks all run and each refusal names its first
         outstanding item: the successor's marked volume is verified, its
         broker must match, it may hold no active assignment, the generation
         pin holds, and the predecessor must be draining, command-quiet, and
         past the drain deadline. Past all of those, the ceremony still
-        refuses on §7.1's ground — a drained lane can resurrect its binding
-        by restarting while the coordinator is unreachable (#2155), and the
-        draining-predecessor requirement plus this prohibition leave
-        reassignment no legal predecessor state. There is no transfer code
-        behind the refusal: unreachable code cannot be exercised through
-        this seam, and the transactional transfer (``store.reassign_assignment``)
-        carries its own coverage and returns with #2155's unblocking change.
+        refuses on §7.1's ground — #2155 closed the resurrection for every
+        lane that learns its drain, but a lane drained while unreachable for
+        the whole ceremony never learns, and until a lane-quiet confirmation
+        exists (#2154) the coordinator cannot distinguish those lanes from
+        quiet ones. There is no transfer code behind the refusal: unreachable
+        code cannot be exercised through this seam, and the transactional
+        transfer (``store.reassign_assignment``) carries its own coverage and
+        returns with #2154's unblocking change.
 
         The block is a fact about one ceremony's reachability, not a safety
         property; whole-machine migration is the preferred lane move
@@ -1611,22 +1651,24 @@ class FleetControlService:
                     conn, existing.clerk_id, now=now
                 )
                 self._require_command_quiet(conn, existing.clerk_id)
-                # §7.1: no drained lane is reassigned while restart-during-
-                # outage can resurrect its binding. Until #2155 closes, this
+                # §7.1: no drained lane is reassigned while a lane drained
+                # during a coordinator outage can still hold an unmarked
+                # grant. Until #2154's lane-quiet confirmation exists, this
                 # leaves the ceremony unreachable — stated as the ADR's
                 # conclusion, not papered over. There is deliberately no
                 # transfer code behind the refusal: unreachable code cannot
                 # be exercised through this seam, and the transactional
                 # transfer it will call (store.reassign_assignment) carries
-                # its own coverage and arrives with #2155's unblocking
+                # its own coverage and arrives with #2154's unblocking
                 # change.
                 raise ClerkReassignmentBlocked(
                     f"Account {canonical} is held by drained clerk {existing.clerk_id}; "
-                    "a drained lane must not be reassigned while restarting during "
-                    "a coordinator outage can resurrect its binding (#2155).",
+                    "a drained lane is not reassigned until a lane-quiet "
+                    "confirmation can prove the drain reached the lane "
+                    "(#2154).",
                     next_step="Use whole-machine migration, which moves the lane's "
                     "volume with it and needs no successor (#2151), or wait for "
-                    "#2155 to close.",
+                    "#2154 to close.",
                 )
         except sqlite3.IntegrityError as exc:
             raise ClerkAssignmentConflict(

@@ -266,6 +266,7 @@ class BotTaskRegistry:
         symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
         validation_fact: ValidationFactResolver | None = None,
+        drained_lane_gate: Callable[[], bool] | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -388,6 +389,21 @@ class BotTaskRegistry:
             authority_for=self._authorities.for_binding,
         )
         self._replay_receipt_tasks: set[asyncio.Task[None]] = set()
+        # #2155: a lane that has learned it is drained starts no new runs.
+        # Probed per start/resume so the flag the fleet heartbeat sets lands
+        # on the next operator action without a process restart. ``None`` is
+        # a non-fleet deployment (legacy posture) — nothing to refuse.
+        self._drained_lane_gate = drained_lane_gate
+
+    def _refuse_if_lane_drained(self) -> None:
+        """Fail a new-run request closed when the lane learned its drain."""
+        if self._drained_lane_gate is not None and self._drained_lane_gate():
+            raise RunAdmissionRefusedError(
+                "This lane is drained; it starts no new bots.",
+                detail="The fleet coordinator marked this lane draining and its "
+                "binding is being handed over. Existing bots settle; new "
+                "starts refuse for the rest of this lane's life.",
+            )
 
     # ── deploy / stop ─────────────────────────────────────────────────
 
@@ -442,6 +458,7 @@ class BotTaskRegistry:
         strategy_param_origins: dict[str, ParameterOrigin] | None = None,
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
+        self._refuse_if_lane_drained()
         require_start_configuration(
             carryover_policy,
             carryover_allowed=self._carryover_allowed,
@@ -561,6 +578,7 @@ class BotTaskRegistry:
         strategy_instance_id: str,
     ) -> AdmittedBotResume:
         """Create a new run using the same policy exposed by preview."""
+        self._refuse_if_lane_drained()
         async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
             try:

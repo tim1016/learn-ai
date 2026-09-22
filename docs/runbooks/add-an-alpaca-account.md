@@ -491,6 +491,14 @@ host CLI, in order:
 .venv/bin/python -m scripts.manage_broker_fleet drain \
   --control-dir <coordinator-control-root> --clerk-id <clerk-id>
 
+# 1b. Watch for the lane's next heartbeat before proceeding. A live lane
+#     learns it is drained from the heartbeat's lifecycle answer (or the
+#     typed registration refusal, if it restarts), tombstones its own
+#     confirmation evidence, and refuses new bot starts — after which no
+#     coordinator outage can boot that binding back up (#2155). A lane
+#     already unreachable at drain time never learns: treat its volume as
+#     part of this retirement and never restart it; do not wait for it.
+
 # 2. Wait out the printed deadline, then release each assigned account under
 #    a bounded attribution (who acted, and the incident/change record naming
 #    why — the old fixed proof phrase is deleted and never a substitute).
@@ -509,9 +517,12 @@ host CLI, in order:
   --operator <named-operator> --change-ref <restricted-record>
 ```
 
-Lane-to-lane reassignment remains blocked while a drained lane can resurrect
-its binding by restarting during a coordinator outage (#2155); whole-machine
-migration is the preferred lane move. Do not delete registry rows, reuse the
+Lane-to-lane reassignment remains blocked until #2154's lane-quiet
+confirmation ships — #2155's resurrection hole is closed for every lane
+that learns its drain, but a lane unreachable for the entire drain keeps
+unmarked evidence, and without lane quiet the coordinator cannot tell that
+residual population from a quiet one; whole-machine migration is the
+preferred lane move. Do not delete registry rows, reuse the
 old volume for another account, or run `down -v`.
 
 Closing the actual brokerage account is a separate action in Alpaca, outside

@@ -62,6 +62,21 @@ class FleetPresenceError(FleetControlError):
     status_code = 503
 
 
+class FleetLaneDraining(FleetControlError):
+    """The coordinator refused this call because the lane itself is drained.
+
+    Deliberately *not* a ``FleetPresenceError``: FR-066's offline fallback
+    catches that family, and a drained lane that fell into it would boot its
+    stale evidence right back up — the exact resurrection #2155 closes. Both
+    transports raise this one type whether the coordinator refused over the
+    wire (reason ``clerk_lane_draining``) or in-process, so the lane marks
+    its evidence drained and stays down instead of retrying or recovering.
+    """
+
+    reason = "fleet_lane_draining"
+    status_code = 409
+
+
 class FleetPresence(Protocol):
     """The one interface both transports present."""
 
@@ -116,8 +131,14 @@ class FleetPresence(Protocol):
         reported_account_id: str | None = None,
         reported_state: str | None = None,
         reported_summary: dict[str, object] | None = None,
-    ) -> None:
-        """Heartbeat: refresh observations; confirm nothing."""
+    ) -> str | None:
+        """Heartbeat: refresh observations; confirm nothing.
+
+        Returns the clerk's lifecycle value as the coordinator holds it
+        (``provisioned``/``draining``), or ``None`` when this coordinator
+        carries no such news — the channel a live lane learns its drain
+        through (#2155).
+        """
         ...
 
     async def close(self) -> None:
@@ -160,15 +181,23 @@ class LocalPresence:
         fleet_protocol_version: int,
     ) -> SessionInfo:
         """Register through the service; the epoch is theirs to assign."""
-        session = self._service.register_agent_session(
-            clerk_id=clerk_id,
-            worker_key=worker_key,
-            agent_instance_id=agent_instance_id,
-            volume_root=self._volume_root,
-            endpoint_ref=endpoint_ref,
-            adapter_version=adapter_version,
-            fleet_protocol_version=fleet_protocol_version,
-        )
+        from app.broker.fleet.errors import ClerkLaneDraining
+
+        try:
+            session = self._service.register_agent_session(
+                clerk_id=clerk_id,
+                worker_key=worker_key,
+                agent_instance_id=agent_instance_id,
+                volume_root=self._volume_root,
+                endpoint_ref=endpoint_ref,
+                adapter_version=adapter_version,
+                fleet_protocol_version=fleet_protocol_version,
+            )
+        except ClerkLaneDraining as exc:
+            # Same translation the wire transport performs on the refusal's
+            # reason: one type across both transports, neither of them the
+            # unavailability family FR-066's offline fallback catches.
+            raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
         return SessionInfo(
             agent_instance_id=session.agent_instance_id,
             routing_epoch=session.routing_epoch,
@@ -218,9 +247,9 @@ class LocalPresence:
         reported_account_id: str | None = None,
         reported_state: str | None = None,
         reported_summary: dict[str, object] | None = None,
-    ) -> None:
+    ) -> str | None:
         """Observe through the service."""
-        self._service.observe_session(
+        observation = self._service.observe_session(
             clerk_id=clerk_id,
             agent_instance_id=agent_instance_id,
             reported_binding_generation=reported_binding_generation,
@@ -228,6 +257,7 @@ class LocalPresence:
             reported_state=reported_state,
             reported_summary=reported_summary,
         )
+        return observation.lifecycle_state.value
 
     async def close(self) -> None:
         """The service's lifetime is the caller's, not ours."""
@@ -275,6 +305,15 @@ class RemotePresence:
             )
         if response.status_code != 200:
             detail = _error_detail(response)
+            if _error_reason(response) == "clerk_lane_draining":
+                # The refusal the lane must learn from, kept clearly out of
+                # the unavailability family: FR-066's offline fallback would
+                # otherwise boot the drained binding right back up (#2155).
+                raise FleetLaneDraining(
+                    detail or f"The fleet coordinator refused {path}: the lane is drained.",
+                    next_step="Finish the drain ceremony on the coordinator; "
+                    "this lane marks its own evidence drained and stays down.",
+                )
             raise FleetPresenceError(
                 f"The fleet coordinator refused {path}: {detail or response.status_code}",
                 next_step="Retry once the coordinator is reachable; an "
@@ -438,9 +477,9 @@ class RemotePresence:
         reported_account_id: str | None = None,
         reported_state: str | None = None,
         reported_summary: dict[str, object] | None = None,
-    ) -> None:
+    ) -> str | None:
         """Heartbeat over the internal surface."""
-        await self._post(
+        body = await self._post(
             "/internal/fleet/sessions/observe",
             clerk_id=clerk_id,
             payload={
@@ -452,6 +491,19 @@ class RemotePresence:
                 "reported_summary": reported_summary,
             },
         )
+        lifecycle = body.get("lifecycle_state")
+        # An older coordinator sends no key — no news, not an error. Anything
+        # that is present but not a string is the coordinator misbehaving on
+        # the one field this call exists to carry, so it refuses loudly
+        # rather than being flattened into "no news".
+        if lifecycle is None:
+            return None
+        if not isinstance(lifecycle, str):
+            raise FleetPresenceError(
+                "The fleet coordinator returned an unexpected lifecycle_state "
+                "for /internal/fleet/sessions/observe.",
+            )
+        return lifecycle
 
     async def close(self) -> None:
         """Each call builds a client; nothing persists."""
@@ -464,19 +516,35 @@ def matches_service_token(presented: str, expected: str) -> bool:
 
 def _error_detail(response: object) -> str | None:
     """Best-effort reason extraction from a refusal body."""
-    import json
-
-    try:
-        body = json.loads(getattr(response, "text", ""))
-    except (ValueError, TypeError):
-        return None
-    if isinstance(body, dict):
+    body = _error_body(response)
+    if body is not None:
         message = body.get("message") or body.get("detail")
         if isinstance(message, str):
             return message
         if isinstance(message, dict):
             return str(message)
     return None
+
+
+def _error_reason(response: object) -> str | None:
+    """The typed ``reason`` code a fleet refusal body carries, if any."""
+    body = _error_body(response)
+    if body is not None:
+        reason = body.get("reason")
+        if isinstance(reason, str):
+            return reason
+    return None
+
+
+def _error_body(response: object) -> dict[str, object] | None:
+    """The refusal's JSON body when it parses as a flat object."""
+    import json
+
+    try:
+        body = json.loads(getattr(response, "text", ""))
+    except (ValueError, TypeError):
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def _assignment_from_body(body: dict[str, object]) -> AccountAssignmentRecord:
@@ -515,6 +583,7 @@ def _optional_int(body: dict[str, object], key: str) -> int | None:
 
 
 __all__ = [
+    "FleetLaneDraining",
     "FleetPresence",
     "FleetPresenceError",
     "LocalPresence",

@@ -616,12 +616,30 @@ re-arms the server-authored timeframe auto-correct, and numeric
   retirement of a served clerk goes through the attributed, deadline-bound
   `force-retire` — the auditable forced count starts at 100% and stays
   there until #2154 ships the Alpaca nothing-open attestation. Reassignment
-  is blocked outright until #2155 closes the drained-lane resurrection hole
-  (whole-machine migration, #2151, is the preferred lane move). Operators
-  retiring a served lane run: `drain`, wait out the printed deadline,
-  `release-assignment --operator --change-ref` per assigned account, then
-  `force-retire --operator --change-ref`. Do not substitute direct registry
-  edits.
+  is blocked outright until #2154 closes (the #2155 resurrection hole is
+  closed for every lane that learns its drain — heartbeat lifecycle
+  answers, typed registration refusal, evidence-v2 tombstones — but a lane
+  unreachable for the entire drain keeps unmarked evidence, and without
+  lane quiet the coordinator cannot tell that residual population from a
+  quiet one; whole-machine migration, #2151, is the preferred lane move).
+  Operators retiring a served lane run: `drain`, wait out the printed
+  deadline, `release-assignment --operator --change-ref` per assigned
+  account, then `force-retire --operator --change-ref`. Do not substitute
+  direct registry edits.
+- **P2: a lane unreachable for the entire drain keeps resurrection-capable
+  evidence (#2155 residual window).** A drained lane learns its drain and
+  tombstones its confirmation evidence through exactly two channels: the
+  heartbeat's `lifecycle_state` answer, and the typed `clerk_lane_draining`
+  registration refusal — both require coordinator contact. A lane that is
+  down or partitioned for the whole drain, then restarts during a
+  coordinator outage with no reachable-coordinator contact in between,
+  still offline-boots its last-effective binding from unmarked (v1)
+  evidence. Bounded by procedure, not by mechanism: after `drain`, watch
+  for the lane's next heartbeat before proceeding (a live lane marks within
+  one heartbeat interval), and treat a lane already unreachable at drain
+  time as decommissioned — its volume is part of the retirement and is
+  never restarted, per the runbook. Shrinks only when #2154's confirmation
+  push lets the coordinator know the drain reached the lane.
 
 ## Live EMA replay evidence — verified 2026-09-17
 

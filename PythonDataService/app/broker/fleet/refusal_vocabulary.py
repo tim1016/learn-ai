@@ -1,6 +1,6 @@
 """The fleet control plane's closed refusal vocabulary (#2067).
 
-Thirty-eight distinct reason codes exist on the fleet surface: the 33-class
+Forty distinct reason codes exist on the fleet surface: the 35-class
 ``FleetControlError`` subclass closure (``FleetControlError`` itself plus
 every subclass, wherever in ``app/`` it is declared) and 5 codes minted
 without a ``FleetControlError`` at all -- a Pydantic-typed literal
@@ -92,7 +92,7 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The complete fleet refusal vocabulary: the 33-class FleetControlError
+#: The complete fleet refusal vocabulary: the 35-class FleetControlError
 #: subclass closure plus the 5 codes minted outside it. Sorted by code.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
@@ -131,6 +131,9 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "clerk_identity_mismatch": RefusalFamily(
         409, "A session presented facts that contradict the clerk's registry identity."
     ),
+    "clerk_lane_draining": RefusalFamily(
+        409, "The clerk is draining; registration and confirmation refuse so the lane can learn its drain."
+    ),
     "clerk_lane_quiet_unproven": RefusalFamily(
         409, "No lane-quiet confirmation answers the retirement gate; force-retire is the named exit."
     ),
@@ -138,7 +141,7 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
         404, "No clerk carries this identity, including malformed or retired ones."
     ),
     "clerk_reassignment_blocked": RefusalFamily(
-        409, "Lane-to-lane reassignment is blocked until a drained lane cannot resurrect its binding."
+        409, "Lane-to-lane reassignment is blocked until the drain ceremony can prove the drained lane's quiet."
     ),
     "clerk_routing_attempt_conflict": RefusalFamily(
         409, "An illegal transition or idempotency-key reuse on a routing attempt."
@@ -190,6 +193,9 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     ),
     "fleet_control_plane_not_installed": RefusalFamily(
         503, "A required fleet control-plane component is not configured or installed on this process."
+    ),
+    "fleet_lane_draining": RefusalFamily(
+        409, "The coordinator refused this presence call because the lane itself is drained."
     ),
     "fleet_lane_capacity_exhausted": RefusalFamily(
         503, "A lane's bounded request or stream budget could not admit the caller."
