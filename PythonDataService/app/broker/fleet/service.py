@@ -669,8 +669,8 @@ class FleetControlService:
 
         A distinct ceremony, never a branch inside ``retire``: an operator
         who force-retires knows they did, and an auditor can count how often
-        it happens — a count that starts at 100% of served-clerk retirements
-        and stays there until a provider answers lane quiet (#2154).
+        it happens. Since the Alpaca lane answers lane quiet (#2154) it is
+        the exit only for a lane that cannot answer.
         """
         bounded_operator, bounded_change_ref = _bounded_attestation(operator, change_ref)
         self._require_recovery_hold_clear()
@@ -1000,10 +1000,28 @@ class FleetControlService:
         """
         return self._store.read_latest_lane_quiet_confirmation(clerk_id)
 
+    def check_lane_quiet(self, *, clerk_id: str) -> LaneQuietConfirmationRecord:
+        """Preview the lane-quiet gate for one clerk, changing nothing.
+
+        The same read retirement and every handover make, so an operator can
+        see before an irreversible release whether it would record
+        ``present``. Raises the gate's own ``ClerkLaneQuietUnproven`` naming
+        why not.
+        """
+        self._require_recovery_hold_clear()
+        clerk = self._require_clerk(clerk_id)
+        with self._store.transaction() as conn:
+            return self._require_lane_quiet(conn, clerk, now=self._clock())
+
     def _require_lane_quiet(
         self, conn: sqlite3.Connection, clerk: ClerkRecord, *, now: int
-    ) -> None:
-        """ADR 0063 Decision 2's retirement gate, read from the lane's own answer.
+    ) -> LaneQuietConfirmationRecord:
+        """ADR 0063 Decision 2's gate, read from the lane's own answer.
+
+        Shared by retirement and by the three handover paths (§4.1's
+        amendment: the hole closes only if the confirmation is wired into
+        release, re-reservation and reassignment, not retirement alone).
+        Returns the fresh, quiet confirmation it accepted.
 
         Three ways this refuses, each a different fact about the evidence and
         each named so an operator knows which one they are in:
@@ -1068,8 +1086,36 @@ class FleetControlService:
                 next_step="Clear every item above: stop the bots, cancel the "
                 "working orders and flatten in the bot panel, and close anything "
                 "opened by hand directly at the broker. The lane re-confirms on its "
-                "next beat; then retire.",
+                "next beat; then re-run the ceremony.",
             )
+        return confirmation
+
+    def _handover_lane_confirmation(
+        self, conn: sqlite3.Connection, predecessor: ClerkRecord, *, now: int
+    ) -> LaneConfirmationState:
+        """Whether a fresh lane-quiet confirmation covers this handover (#2154).
+
+        The account it covers needs no identity on the row: schema v7 makes
+        one live assignment per clerk structural, and a draining clerk
+        reserves nothing, so the draining predecessor's one live assignment
+        is the only account its confirmation can be about. Release stays
+        available without one — it is the fleet's only exit, and a lane that
+        cannot answer still has to leave — but records ``absent``, and an
+        ``absent`` release is what re-reservation later refuses.
+        """
+        try:
+            self._require_lane_quiet(conn, predecessor, now=now)
+        except ClerkLaneQuietUnproven as exc:
+            logger.info(
+                "fleet handover proceeds without lane quiet",
+                extra={
+                    "clerk_id": predecessor.clerk_id,
+                    "action": "fleet_handover_lane_quiet_absent",
+                    "reason": exc.message,
+                },
+            )
+            return LaneConfirmationState.ABSENT
+        return LaneConfirmationState.PRESENT
 
     # ---- approved endpoints (host ceremony) --------------------------------
 
@@ -1354,9 +1400,10 @@ class FleetControlService:
         both live states: a reserved row returns as-is, and an effective row
         is the same-owner resume of a restarted clerk, returning the
         confirmed facts untouched (audit 2026-09-13, finding 1). A released
-        row is never re-reserved: its next owner arrives by the reassignment
-        ceremony alone (#2157) — release followed by reserve is that
-        ceremony's two-step reach, and it carries the ceremony's gate.
+        row is a transfer — release followed by reserve is the reassignment
+        ceremony's two-step reach — and carries that ceremony's gate: it
+        moves only if its release was covered by the predecessor's lane-quiet
+        confirmation (``_reserve_released_account``, #2157, #2154).
 
         ``volume_root`` is the co-located caller's re-proof of the mounted
         root. It is optional because the coordinator process may not have
@@ -1445,61 +1492,12 @@ class FleetControlService:
                     # untouched — a resume is not a re-confirmation.
                     outcome = existing
                 elif existing.state == AssignmentState.RELEASED:
-                    # A released row is a clerk-to-clerk transfer wearing a
-                    # reservation's clothes (#2157): release followed by
-                    # reserve used to reach reassignment's end state here in
-                    # two steps, with strictly less evidence — no lane-quiet
-                    # confirmation, and volume_root optional on the one path
-                    # that transfers ownership between clerks. One gate, not
-                    # two policies: the reassignment ceremony's terminal gate
-                    # refuses here too, and whatever one day opens that
-                    # ceremony (#2154) opens this branch — nothing else does.
-                    if volume_root is None:
-                        # "The coordinator may not have the volume mounted" is
-                        # a reason to refuse a transfer, not to skip its proof.
-                        raise ClerkAssignmentConflict(
-                            f"Account {canonical} under broker {broker!r} is "
-                            "released; reserving it is a clerk-to-clerk "
-                            "transfer, and a transfer requires the successor's "
-                            "volume proof (volume_root) (#2157).",
-                            next_step="Run the host reassignment ceremony with "
-                            "the successor's volume root; a remote reservation "
-                            "never transfers a released account.",
-                        )
-                    predecessor = self._store.read_clerk_on(conn, existing.clerk_id)
-                    if (
-                        predecessor is None
-                        or predecessor.lifecycle_state
-                        == StoredLifecycleState.PROVISIONED
-                    ):
-                        # Only the release ceremony produces released rows, and
-                        # it requires a drained, past-deadline owner — a
-                        # released row under a provisioned or absent clerk is
-                        # registry inconsistency, reported rather than
-                        # repaired.
-                        holder = (
-                            "no registry row"
-                            if predecessor is None
-                            else "still provisioned"
-                        )
-                        raise ClerkAssignmentConflict(
-                            f"Account {canonical} under broker {broker!r} is "
-                            f"released under clerk {existing.clerk_id}, which "
-                            f"has {holder}; a released assignment belongs to "
-                            "a lane the release ceremony drained.",
-                            next_step="Restore the registry from the "
-                            "coordinator control volume's backup, then retry.",
-                        )
-                    raise ClerkReassignmentBlocked(
-                        f"Account {canonical} under broker {broker!r} is "
-                        "released; its next owner arrives by the reassignment "
-                        "ceremony, not by a reservation (#2157) — and no "
-                        "clerk-to-clerk transfer opens until a lane-quiet "
-                        "confirmation can prove the drained lane's quiet "
-                        "(#2154).",
-                        next_step="Use whole-machine migration, which moves "
-                        "the lane's volume with it and needs no successor "
-                        "(#2151), or wait for #2154 to close.",
+                    outcome = self._reserve_released_account(
+                        conn,
+                        existing=existing,
+                        clerk_id=clerk_id,
+                        volume_root=volume_root,
+                        now=now,
                     )
                 else:
                     raise ClerkAssignmentConflict(
@@ -1524,6 +1522,120 @@ class FleetControlService:
             extra={"broker": broker, "clerk_id": clerk_id},
         )
         return outcome
+
+    def _reserve_released_account(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        existing: AccountAssignmentRecord,
+        clerk_id: str,
+        volume_root: Path | None,
+        now: int,
+    ) -> AccountAssignmentRecord:
+        """Reserve a released account for a new clerk — a transfer (#2157, #2154).
+
+        A released row is a clerk-to-clerk transfer wearing a reservation's
+        clothes, so it carries the reassignment ceremony's gate rather than a
+        second, weaker policy. The evidence is the one the release itself
+        recorded: the account moves only if its release carried
+        ``lane_confirmation: present`` — the predecessor proved it had
+        stopped, cancelled, flattened and resolved every intent, over this
+        account (schema v7 makes that account unambiguous), inside the drain
+        it could no longer leave. An ``absent`` release — a lane that could
+        not answer — stays refused, because nothing says its lane is not
+        still able to write.
+        """
+        canonical = existing.canonical_external_account_id
+        broker = existing.broker
+        if volume_root is None:
+            # "The coordinator may not have the volume mounted" is a reason
+            # to refuse a transfer, not to skip its proof.
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} is released; "
+                "reserving it is a clerk-to-clerk transfer, and a transfer "
+                "requires the successor's volume proof (volume_root) (#2157).",
+                next_step="Run the host reassignment ceremony with the "
+                "successor's volume root; a remote reservation never transfers "
+                "a released account.",
+            )
+        predecessor = self._store.read_clerk_on(conn, existing.clerk_id)
+        if predecessor is None or predecessor.lifecycle_state == StoredLifecycleState.PROVISIONED:
+            # Only the release ceremony produces released rows, and it
+            # requires a drained, past-deadline owner — a released row under a
+            # provisioned or absent clerk is registry inconsistency, reported
+            # rather than repaired.
+            holder = "no registry row" if predecessor is None else "still provisioned"
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} is released under "
+                f"clerk {existing.clerk_id}, which has {holder}; a released "
+                "assignment belongs to a lane the release ceremony drained.",
+                next_step="Restore the registry from the coordinator control "
+                "volume's backup, then retry.",
+            )
+        release = self._released_history_record(
+            broker=broker, canonical=canonical, generation=existing.assignment_generation
+        )
+        if release.lane_confirmation != LaneConfirmationState.PRESENT:
+            raise ClerkReassignmentBlocked(
+                f"Account {canonical} under broker {broker!r} was released without "
+                f"a lane-quiet confirmation from clerk {existing.clerk_id}; nothing "
+                "proves that lane stopped writing, so the account does not move "
+                "to another lane (#2157, #2154).",
+                next_step="A released account moves only when its release was "
+                "covered by the draining lane's own lane-quiet confirmation. Use "
+                "whole-machine migration, which needs no successor (#2151).",
+            )
+        self._require_no_live_assignment(conn, clerk_id)
+        successor = AccountAssignmentRecord(
+            broker=broker,
+            canonical_external_account_id=canonical,
+            clerk_id=clerk_id,
+            assignment_generation=existing.assignment_generation + 1,
+            state=AssignmentState.RESERVED,
+            recorded_at_ms=now,
+            updated_at_ms=now,
+        )
+        if not self._store.cas_update_assignment(
+            conn,
+            successor,
+            previous_generation=existing.assignment_generation,
+            previous_state=AssignmentState.RELEASED,
+        ):
+            raise ClerkAssignmentConflict(
+                f"Account {canonical} under broker {broker!r} changed while reserving.",
+            )
+        return self._persisted_assignment_on(conn, broker=broker, canonical=canonical)
+
+    def _persisted_assignment_on(
+        self, conn: sqlite3.Connection, *, broker: str, canonical: str
+    ) -> AccountAssignmentRecord:
+        """The row a transfer left behind, read back rather than restated.
+
+        The compare-and-swap keeps the account row's original
+        ``recorded_at_ms``, so the record a transfer built is not the one it
+        stored; callers get the stored one.
+        """
+        persisted = self._store.read_assignment_on(
+            conn, broker=broker, canonical_account_id=canonical
+        )
+        assert persisted is not None
+        return persisted
+
+    def _require_no_live_assignment(self, conn: sqlite3.Connection, clerk_id: str) -> None:
+        """A successor acquiring an account may hold no other live one.
+
+        Schema v7's unique owner index backstops this; the check is here so
+        the refusal names the successor instead of surfacing as a constraint
+        failure that reads like a concurrent reservation.
+        """
+        if any(
+            assignment.state != AssignmentState.RELEASED
+            for assignment in self._store.list_assignments_for_clerk_on(conn, clerk_id)
+        ):
+            raise ClerkAssignmentConflict(
+                f"Clerk {clerk_id} already holds a live assignment; one lane "
+                "holds one account.",
+            )
 
     def confirm_assignment(
         self,
@@ -1721,10 +1833,12 @@ class FleetControlService:
         attributable ``operator``/``change_ref`` — attribution, not proof,
         in the shape ``closeout_empty_registry_recovery`` established — and
         the owning clerk must be draining, command-quiet, and past the
-        drain deadline that bounds ``force-retire``, recording
-        ``lane_confirmation: absent`` as a durable fact on the released
-        history row so an auditor can count how many handovers proceeded
-        without it (ADR 0063 §4.1: today, all of them).
+        drain deadline that bounds ``force-retire``. The released history row
+        records ``lane_confirmation: present`` when a fresh, quiet
+        confirmation from the owner's current session covers the release
+        (#2154), and ``absent`` otherwise, so an auditor can count how many
+        handovers proceeded without it — and a later re-reservation of this
+        account reads exactly that fact.
         """
         bounded_operator, bounded_change_ref = _bounded_attestation(operator, change_ref)
         self._require_recovery_hold_clear()
@@ -1757,7 +1871,6 @@ class FleetControlService:
             existing,
             state=AssignmentState.RELEASED,
             updated_at_ms=now,
-            lane_confirmation=LaneConfirmationState.ABSENT,
             attested_operator=bounded_operator,
             attested_change_ref=bounded_change_ref,
             attested_at_ms=now,
@@ -1775,10 +1888,16 @@ class FleetControlService:
                 raise ClerkAssignmentConflict(
                     f"Account {canonical} under broker {broker!r} changed while releasing.",
                 )
-            self._require_draining_predecessor_past_deadline(
+            predecessor = self._require_draining_predecessor_past_deadline(
                 conn, existing.clerk_id, now=now
             )
             self._require_command_quiet(conn, existing.clerk_id)
+            released = replace(
+                released,
+                lane_confirmation=self._handover_lane_confirmation(
+                    conn, predecessor, now=now
+                ),
+            )
             accepted = self._store.cas_update_assignment(
                 conn, released, previous_generation=existing.assignment_generation,
                 previous_state=existing.state,
@@ -1808,30 +1927,26 @@ class FleetControlService:
         change_ref: str,
         successor_clerk_id: str,
         successor_volume_root: Path,
-    ) -> None:
-        """Refuse every lane-to-lane reassignment until #2154 closes (ADR 0063 §4.1/§7.1).
+    ) -> AccountAssignmentRecord:
+        """Move one account from a drained lane to a new one (ADR 0063 §4.1/§7.1).
 
-        The ceremony's checks all run and each refusal names its first
-        outstanding item: the successor's marked volume is verified, its
-        broker must match, it may hold no active assignment, the generation
-        pin holds, and the predecessor must be draining, command-quiet, and
-        past the drain deadline. Past all of those, the ceremony still
-        refuses on §7.1's ground — #2155 closed the resurrection for every
-        lane that learns its drain, but a lane drained while unreachable for
-        the whole ceremony never learns, and until a lane-quiet confirmation
-        exists (#2154) the coordinator cannot distinguish those lanes from
-        quiet ones. There is no transfer code behind the refusal: unreachable
-        code cannot be exercised through this seam, and the transactional
-        transfer (``store.reassign_assignment``) carries its own coverage and
-        returns with #2154's unblocking change.
+        Every check names its first outstanding item: the successor's marked
+        volume is verified, its broker must match, it may hold no live
+        assignment, the generation pin holds, and the predecessor must be
+        draining, command-quiet and past the drain deadline. Past all of
+        those, the predecessor's current session must hold a fresh, quiet
+        lane-quiet confirmation (#2154). That confirmation is also what
+        answers §7.1: a lane only confirms after it has learned its drain,
+        and learning it tombstones the volume evidence an offline boot would
+        otherwise resurrect, so a confirming lane is exactly one the drain
+        reached. A lane that cannot answer is never reassigned.
 
-        The block is a fact about one ceremony's reachability, not a safety
-        property; whole-machine migration is the preferred lane move
-        (#2151) and needs no successor at all.
+        The release and the successor's reservation commit together
+        (``store.reassign_assignment``), so no split handover is ever
+        observable. Whole-machine migration (#2151) remains the preferred
+        lane move and needs no successor at all.
         """
-        # Validate the attribution the ceremony will one day record, so a
-        # malformed invocation is refused as one (exit 1) before the block.
-        _bounded_attestation(operator, change_ref)
+        bounded_operator, bounded_change_ref = _bounded_attestation(operator, change_ref)
         self._require_recovery_hold_clear()
         successor = self._require_clerk(successor_clerk_id)
         if successor.broker != broker:
@@ -1866,19 +1981,7 @@ class FleetControlService:
                         f"Successor clerk {successor_clerk_id} is no longer provisioned; "
                         "it cannot receive a reassignment.",
                     )
-                active_successor_assignments = [
-                    assignment
-                    for assignment in self._store.list_assignments_for_clerk_on(
-                        conn, successor_clerk_id
-                    )
-                    if assignment.state != AssignmentState.RELEASED
-                ]
-                if active_successor_assignments:
-                    raise ClerkAssignmentConflict(
-                        f"Successor clerk {successor_clerk_id} already holds an active "
-                        "assignment; one lane cannot acquire a second account during "
-                        "reassignment.",
-                    )
+                self._require_no_live_assignment(conn, successor_clerk_id)
                 if existing.assignment_generation != expected_assignment_generation:
                     raise ClerkAssignmentConflict(
                         f"Account {canonical} under broker {broker!r} is at assignment "
@@ -1893,34 +1996,53 @@ class FleetControlService:
                     )
                 # §4.1's predecessor preconditions, in order, each naming the
                 # first outstanding item.
-                self._require_draining_predecessor_past_deadline(
+                predecessor = self._require_draining_predecessor_past_deadline(
                     conn, existing.clerk_id, now=now
                 )
                 self._require_command_quiet(conn, existing.clerk_id)
-                # §7.1: no drained lane is reassigned while a lane drained
-                # during a coordinator outage can still hold an unmarked
-                # grant. Until #2154's lane-quiet confirmation exists, this
-                # leaves the ceremony unreachable — stated as the ADR's
-                # conclusion, not papered over. There is deliberately no
-                # transfer code behind the refusal: unreachable code cannot
-                # be exercised through this seam, and the transactional
-                # transfer it will call (store.reassign_assignment) carries
-                # its own coverage and arrives with #2154's unblocking
-                # change.
-                raise ClerkReassignmentBlocked(
-                    f"Account {canonical} is held by drained clerk {existing.clerk_id}; "
-                    "a drained lane is not reassigned until a lane-quiet "
-                    "confirmation can prove the drain reached the lane "
-                    "(#2154).",
-                    next_step="Use whole-machine migration, which moves the lane's "
-                    "volume with it and needs no successor (#2151), or wait for "
-                    "#2154 to close.",
+                self._require_lane_quiet(conn, predecessor, now=now)
+                released = replace(
+                    existing,
+                    state=AssignmentState.RELEASED,
+                    updated_at_ms=now,
+                    lane_confirmation=LaneConfirmationState.PRESENT,
+                    attested_operator=bounded_operator,
+                    attested_change_ref=bounded_change_ref,
+                    attested_at_ms=now,
+                )
+                successor_assignment = AccountAssignmentRecord(
+                    broker=broker,
+                    canonical_external_account_id=canonical,
+                    clerk_id=successor_clerk_id,
+                    assignment_generation=existing.assignment_generation + 1,
+                    state=AssignmentState.RESERVED,
+                    recorded_at_ms=now,
+                    updated_at_ms=now,
+                )
+                self._store.reassign_assignment(
+                    conn,
+                    released=released,
+                    reserved_successor=successor_assignment,
+                    previous_state=existing.state,
+                )
+                moved = self._persisted_assignment_on(
+                    conn, broker=broker, canonical=canonical
                 )
         except sqlite3.IntegrityError as exc:
             raise ClerkAssignmentConflict(
                 f"Account {canonical} under broker {broker!r} changed while reassignment "
                 "was preparing the successor; the original ownership remains intact.",
             ) from exc
+        logger.info(
+            "fleet account assignment reassigned",
+            extra={
+                "broker": broker,
+                "clerk_id": successor_clerk_id,
+                "predecessor_clerk_id": existing.clerk_id,
+                "operator": bounded_operator,
+            },
+        )
+        return moved
 
     # ---- routing -----------------------------------------------------------
 

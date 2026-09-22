@@ -6,8 +6,8 @@ the handler beside the subparser registration that invokes it — instead of
 being split across the handler table and the parser table of the main
 module. The main module keeps the shared plumbing (``_write``, ``_service``,
 the exit-code mapping) and passes it in; this module owns the drain,
-retire, force-retire, release-assignment and reassign-assignment surfaces
-and nothing else.
+lane-quiet, retire, force-retire, release-assignment and reassign-assignment
+surfaces and nothing else.
 """
 
 from __future__ import annotations
@@ -53,6 +53,30 @@ def register_lifecycle_ceremony_subparsers(
     _with_control(drain)
     drain.add_argument("--clerk-id", required=True)
     drain.set_defaults(func=_drain)
+
+    def _lane_quiet(args: argparse.Namespace) -> int:
+        """Handle ``lane-quiet``: would retire or a release accept this lane's proof?"""
+        service = service_factory(args)
+        try:
+            confirmation = service.check_lane_quiet(clerk_id=args.clerk_id)
+            write(
+                {
+                    "clerk_id": confirmation.clerk_id,
+                    "quiet": confirmation.is_quiet,
+                    "observed_at_ms": confirmation.observed_at_ms,
+                }
+            )
+        finally:
+            service.close()
+        return 0
+
+    lane_quiet = subparsers.add_parser(
+        "lane-quiet",
+        help="Check, read-only, whether a draining lane's lane-quiet proof is fresh and quiet",
+    )
+    _with_control(lane_quiet)
+    lane_quiet.add_argument("--clerk-id", required=True)
+    lane_quiet.set_defaults(func=_lane_quiet)
 
     def _retire(args: argparse.Namespace) -> int:
         """Handle ``retire``: retire a clerk terminally."""
@@ -169,15 +193,13 @@ def register_lifecycle_ceremony_subparsers(
     release.set_defaults(func=_release)
 
     def _reassign(args: argparse.Namespace) -> int:
-        """Handle ``reassign-assignment``: refuse, naming the block (until #2155).
+        """Handle ``reassign-assignment``: move one account to a successor lane.
 
-        Every invocation today answers with the typed
-        ``clerk_reassignment_blocked`` refusal (exit 2); the transfer output
-        this handler will one day write returns with #2155's unblocking
-        change."""
+        Refuses (exit 2) unless the drained predecessor's current session holds
+        a fresh, quiet lane-quiet confirmation (#2154)."""
         service = service_factory(args)
         try:
-            service.reassign_assignment(
+            successor = service.reassign_assignment(
                 broker=args.broker,
                 external_account_id=args.account_id,
                 expected_assignment_generation=args.expected_generation,
@@ -186,13 +208,23 @@ def register_lifecycle_ceremony_subparsers(
                 successor_clerk_id=args.successor_clerk_id,
                 successor_volume_root=Path(args.successor_volume_root),
             )
+            write(
+                {
+                    "broker": successor.broker,
+                    "canonical_external_account_id": successor.canonical_external_account_id,
+                    "clerk_id": successor.clerk_id,
+                    "state": str(successor.state),
+                    "assignment_generation": successor.assignment_generation,
+                }
+            )
         finally:
             service.close()
         return 0
 
     reassign = subparsers.add_parser(
         "reassign-assignment",
-        help="Attributed host reassignment to an original successor volume (blocked until #2155 closes)",
+        help="Attributed host reassignment to an original successor volume "
+        "(requires the drained lane's lane-quiet confirmation)",
     )
     _with_control(reassign)
     reassign.add_argument("--broker", required=True)

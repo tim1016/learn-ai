@@ -277,15 +277,13 @@ class ClerkDrainDeadlinePending(FleetControlError):
 
 
 class ClerkReassignmentBlocked(FleetControlError):
-    """Lane-to-lane reassignment is blocked (ADR 0063 §4.1/§7.1).
+    """A clerk-to-clerk transfer has no lane-quiet evidence to stand on (ADR 0063 §4.1).
 
-    A drained lane's binding can no longer be resurrected by a restart
-    during a coordinator outage — the lane learns its drain and marks its
-    own evidence (#2155, closed) — but a lane drained while unreachable for
-    the whole drain never learns, and no provider can yet attest the drained
-    lane's quiet (#2154). Until a lane-quiet confirmation answers the
-    ceremony, reassignment stays closed; whole-machine migration is the
-    preferred lane move and needs no successor (#2151).
+    Raised when a released account is re-reserved but its release carried
+    ``lane_confirmation: absent``: the lane that held it never proved it had
+    stopped writing — it could not answer, so a transfer would risk two
+    writers against one account (#2154). Whole-machine migration moves a lane
+    without a successor and is unaffected (#2151).
     """
 
     reason: ClassVar[str] = "clerk_reassignment_blocked"

@@ -653,3 +653,62 @@ def test_backup_restore_and_d_rollback_cli_enter_the_reconciliation_hold(
     assert closeout["mutations_closed"] is False
     assert "assignment_mutation_closed" not in closeout
     assert closeout["empty_inventory_attestation"]["operator"] == "fleet-owner"
+
+
+def test_lane_quiet_previews_the_gate_read_only(tmp_path: Path, capsys) -> None:
+    """``lane-quiet`` answers exactly what a release or retire would read: it
+    refuses (exit 2) naming the gate until the draining lane confirms, then
+    reports its fresh, quiet answer (exit 0) — changing nothing either way."""
+    control_dir = tmp_path / "control"
+    volume_root = tmp_path / "volumes" / "lq"
+    volume_root.mkdir(parents=True)
+    assert main(_argv("init", "--control-dir", str(control_dir))) == 0
+    assert (
+        main(
+            _argv(
+                "provision", "--control-dir", str(control_dir), "--broker", "alpaca",
+                "--label", "Lane quiet", "--volume-root", str(volume_root),
+            )
+        )
+        == 0
+    )
+    clerk_id = json.loads(capsys.readouterr().out.splitlines()[-1])["clerk_id"]
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+    )
+    try:
+        worker_key = service._store.read_clerk(clerk_id).worker_key
+        session = service.register_agent_session(
+            clerk_id=clerk_id, worker_key=worker_key, fleet_protocol_version=2
+        )
+        service.drain_clerk(clerk_id=clerk_id)
+    finally:
+        service.close()
+
+    check = _argv("lane-quiet", "--control-dir", str(control_dir), "--clerk-id", clerk_id)
+    assert main(check) == 2
+    assert json.loads(capsys.readouterr().out)["error"].startswith("clerk_lane_quiet_unproven:")
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+    )
+    try:
+        service.confirm_lane_quiet(
+            clerk_id=clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+            observed_at_ms=now_ms_utc(),
+            runner_idle=True,
+            broker_work_ended=True,
+            account_flat=True,
+            intents_resolved=True,
+        )
+    finally:
+        service.close()
+
+    assert main(check) == 0
+    answer = json.loads(capsys.readouterr().out)
+    assert answer["clerk_id"] == clerk_id
+    assert answer["quiet"] is True
