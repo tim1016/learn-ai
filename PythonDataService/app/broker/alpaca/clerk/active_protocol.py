@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     )
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
+    from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
     from app.broker.alpaca.clerk.sqlite.models import OrderResource
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
@@ -84,6 +85,10 @@ class ActiveAlpacaClerk(Protocol):
     async def recover(self) -> None: ...
 
     async def unresolved_effect_count(self, *, subject_id: str | None = None) -> int: ...
+
+    async def observe_account_quiet(self) -> AccountQuietObservation | None:
+        """The account's three lane-quiet conditions, or ``None`` if unreadable (#2154)."""
+        ...
 
     async def register_strategy_run(
         self,

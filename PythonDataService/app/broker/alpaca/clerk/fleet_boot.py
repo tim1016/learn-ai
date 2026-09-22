@@ -20,6 +20,10 @@ of the authority's own semantics:
    re-registers the lane, and a replacement session that inherits a granted
    binding re-confirms it (step 3 again) rather than leaving the lane
    projecting ``starting`` until a human restarts the container.
+5. While draining, the beat also carries the lane's lane-quiet confirmation
+   (#2154, ADR 0063 Decision 2): a separate, session-fenced call made on
+   every beat, never a heartbeat field, so the answer the retirement gate
+   reads is always a fresh observation rather than a remembered one.
 
 Step 4 is not sequenced with steps 2 and 3 at all: the beat starts when the
 lane *opens*, before the installation lock, before the profiles database and
@@ -63,9 +67,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 from app.broker.fleet import volume as volume_module
@@ -91,12 +96,16 @@ from app.broker.fleet.presence import (
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
 from app.broker.fleet.records import (
     _ACCOUNT_NICKNAME_MAX_CHARS,
+    LANE_QUIET_CONDITIONS,
     AccountAssignmentRecord,
     StoredLifecycleState,
 )
 from app.broker.fleet.service import FleetControlService, FleetRegistryStore
 from app.config import FleetSettings
 from app.utils.timestamps import now_ms_utc
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +138,67 @@ class ConfirmedGrant:
     binding_generation: int
     effective_profile_id: str | None
     effective_revision: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class LaneQuietAnswer:
+    """This lane's answer to the four lane-quiet conditions it owns (#2154).
+
+    The fifth, that the lane is draining, is the registry's fact. The field
+    names are ``confirm_lane_quiet``'s, so the answer crosses the seam
+    unrenamed.
+    """
+
+    observed_at_ms: int
+    runner_idle: bool
+    broker_work_ended: bool
+    account_flat: bool
+    intents_resolved: bool
+
+    @property
+    def outstanding(self) -> tuple[str, ...]:
+        """The conditions left unsatisfied, in the registry's declared order."""
+        return tuple(
+            phrase for name, phrase in LANE_QUIET_CONDITIONS if not getattr(self, name)
+        )
+
+
+#: Produces a fresh answer, or ``None`` when the lane cannot observe its
+#: account this beat — no answer, never a "not quiet" one.
+LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
+
+
+def lane_quiet_probe(
+    *,
+    bots_running: Callable[[], bool],
+    observe_account: Callable[[], Awaitable[AccountQuietObservation | None]],
+) -> LaneQuietProbe:
+    """Compose the lane's answer from the bot runner and the account's clerk.
+
+    "No bot running" means the runner's own tasks have exited, not that the
+    panel records ``STOPPED``: the panel holds what the operator wants, the
+    task registry holds what is still running. It is read before and after
+    the account observation and holds only if both reads find nothing, so a
+    bot still winding down while the broker was read cannot slip between
+    them. Once the lane has learned its drain no new bot can start
+    (``bot_runner._refuse_if_lane_drained``), which is what keeps the answer
+    true after it is taken.
+    """
+
+    async def probe() -> LaneQuietAnswer | None:
+        idle_before = not bots_running()
+        account = await observe_account()
+        if account is None:
+            return None
+        return LaneQuietAnswer(
+            observed_at_ms=account.observed_at_ms,
+            runner_idle=idle_before and not bots_running(),
+            broker_work_ended=account.broker_work_ended,
+            account_flat=account.account_flat,
+            intents_resolved=account.intents_resolved,
+        )
+
+    return probe
 
 
 @dataclass
@@ -186,6 +256,14 @@ class FleetLaneBoot:
     #: bot-start gate and the re-confirmation retry so a drained lane serves
     #: nothing new and re-presents no grant while it winds down.
     draining: bool = False
+    #: How this lane answers lane quiet once draining (#2154). Installed by
+    #: the composition root once both the bot runner and the account's clerk
+    #: exist; ``None`` on a lane with no clerk, which then never confirms and
+    #: exits through ``force-retire``.
+    lane_quiet_probe: LaneQuietProbe | None = field(default=None, repr=False)
+    #: The outstanding conditions of the last answer the coordinator accepted,
+    #: so the log records a change rather than repeating every beat.
+    lane_quiet_outstanding: tuple[str, ...] | None = None
     heartbeat: asyncio.Task | None = field(default=None, repr=False)
 
     @property
@@ -632,6 +710,15 @@ def _learn_drain(boot: FleetLaneBoot) -> None:
             "evidence_marked": marked,
         },
     )
+    if boot.lane_quiet_probe is None:
+        # Said once, here, because the gate's own refusal only reaches the
+        # operator running retire: a lane with no clerk to read its account
+        # never confirms lane quiet, so this drain can only end forced.
+        logger.warning(
+            "This drained lane cannot answer lane quiet; it retires only "
+            "through force-retire, after its account is closed at the broker.",
+            extra={"clerk_id": boot.clerk_id, "action": "lane_quiet_unanswerable"},
+        )
 
 
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
@@ -710,6 +797,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     # pending — this is that retry, running on every landed
                     # beat rather than waiting for another refusal.
                     await _reconfirm_grant_if_stale(boot)
+                await _confirm_lane_quiet_if_draining(boot)
         except asyncio.CancelledError:
             # Normal shutdown (stop_heartbeat's task.cancel()) is not a death
             # to log — re-raise it untouched.
@@ -738,6 +826,60 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
         _beat(), name=f"fleet-heartbeat-{boot.clerk_id}"
     )
     return boot.heartbeat
+
+
+async def _confirm_lane_quiet_if_draining(boot: FleetLaneBoot) -> None:
+    """Send a fresh lane-quiet answer while this lane is draining (#2154).
+
+    Every beat, not once: the coordinator's gate reads the answer only while
+    it is younger than its validity window, so a lane that stopped confirming
+    refuses exactly as a dead one does. Nothing here may end the beat — a
+    lane whose presence stopped would be projected unreachable while it still
+    holds the account — so a refused confirmation and a failed observation
+    are both logged and retried on the next beat.
+    """
+    session = boot.session
+    if not boot.draining or boot.lane_quiet_probe is None or session is None:
+        return
+    try:
+        answer = await boot.lane_quiet_probe()
+    except Exception:
+        logger.exception(
+            "Lane-quiet observation failed; no confirmation this beat",
+            extra={"clerk_id": boot.clerk_id, "action": "lane_quiet_observation_failed"},
+        )
+        return
+    if answer is None:
+        return
+    try:
+        await boot.presence.confirm_lane_quiet(
+            clerk_id=boot.clerk_id,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+            observed_at_ms=answer.observed_at_ms,
+            runner_idle=answer.runner_idle,
+            broker_work_ended=answer.broker_work_ended,
+            account_flat=answer.account_flat,
+            intents_resolved=answer.intents_resolved,
+        )
+    except FleetControlError as exc:
+        logger.warning(
+            "Lane-quiet confirmation refused: %s",
+            exc.message,
+            extra={"clerk_id": boot.clerk_id, "action": "lane_quiet_confirmation_refused"},
+        )
+        return
+    if answer.outstanding != boot.lane_quiet_outstanding:
+        logger.info(
+            "Lane-quiet answer changed",
+            extra={
+                "clerk_id": boot.clerk_id,
+                "action": "lane_quiet_confirmed",
+                "quiet": not answer.outstanding,
+                "outstanding": list(answer.outstanding),
+            },
+        )
+    boot.lane_quiet_outstanding = answer.outstanding
 
 
 async def stop_heartbeat(boot: FleetLaneBoot | None) -> None:
@@ -1083,12 +1225,15 @@ __all__ = [
     "ConfirmedGrant",
     "FleetBootRefused",
     "FleetLaneBoot",
+    "LaneQuietAnswer",
+    "LaneQuietProbe",
     "binding_is_granted",
     "close_fleet_lane",
     "confirm_and_report",
     "confirm_binding",
     "confirmation_evidence_path",
     "heartbeat_facts",
+    "lane_quiet_probe",
     "offline_boot_matches",
     "open_fleet_lane",
     "reserve_account",

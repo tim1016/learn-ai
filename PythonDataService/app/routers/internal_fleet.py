@@ -41,7 +41,7 @@ from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Header, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.fleet.errors import (
     FleetAgentTokenRefused,
@@ -55,6 +55,7 @@ from app.config import settings
 from app.schemas.broker_v2_panel import ChartHistoryTimeframe
 from app.schemas.fleet_history_batch import HistoryBatchRequest, HistoryBatchResponse
 from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,33 @@ class ConfirmRequest(BaseModel):
     effective_revision: int | None = None
 
 
+class LaneQuietRequest(BaseModel):
+    """One draining lane's answer about its own quiescence (#2154).
+
+    Strict, like the history batch pair: a missing condition is a malformed
+    answer, never a default. A default of ``True`` would let an older or
+    broken agent assert a condition it never observed.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    clerk_id: str = Field(min_length=1)
+    agent_instance_id: str = Field(min_length=1)
+    routing_epoch: int = Field(ge=1)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    runner_idle: bool
+    broker_work_ended: bool
+    account_flat: bool
+    intents_resolved: bool
+
+
+class LaneQuietResponse(BaseModel):
+    """What the coordinator recorded: whether the answer was quiet, and what is not."""
+
+    quiet: bool
+    outstanding: list[str]
+
+
 def _service(request: Request) -> FleetControlService:
     """The coordinator's fleet service, installed by the lifespan."""
     service = getattr(request.app.state, "fleet_service", None)
@@ -172,7 +200,7 @@ def _authorized_agent(
     Also requires the caller's ``X-Fleet-Clerk-Id`` header identity to equal
     ``clerk_id`` (the body's, or the path's for the volume-expectation read)
     -- an absent header, or one naming a different clerk, refuses exactly
-    like a wrong or missing token. Applied uniformly across all six routes:
+    like a wrong or missing token. Applied uniformly across every route:
     ``RemotePresence._headers()`` has sent this header on every one of its
     calls since commit 318c92e2, so no route needs, or gets, an opt-out
     (issue #2204).
@@ -367,6 +395,35 @@ async def confirm_assignment(
     except FleetControlError as exc:
         return _refuse(exc)
     return _assignment_body(assignment)
+
+
+@router.post("/lanes/confirm-quiet", response_model=LaneQuietResponse)
+async def confirm_lane_quiet(
+    payload: LaneQuietRequest,
+    request: Request,
+    x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
+) -> LaneQuietResponse | Response:
+    """Record one draining lane's lane-quiet answer, fenced by its session."""
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
+    try:
+        confirmation = _service(request).confirm_lane_quiet(
+            clerk_id=payload.clerk_id,
+            agent_instance_id=payload.agent_instance_id,
+            routing_epoch=payload.routing_epoch,
+            observed_at_ms=payload.observed_at_ms,
+            runner_idle=payload.runner_idle,
+            broker_work_ended=payload.broker_work_ended,
+            account_flat=payload.account_flat,
+            intents_resolved=payload.intents_resolved,
+        )
+    except FleetControlError as exc:
+        return _refuse(exc)
+    return LaneQuietResponse(
+        quiet=confirmation.is_quiet, outstanding=list(confirmation.outstanding)
+    )
 
 
 @router.post("/history/batch", response_model=HistoryBatchResponse)

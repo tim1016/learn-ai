@@ -516,6 +516,25 @@ class AccountReconciliationResult:
     recorded_at_ms: int | None = None
 
 
+async def read_account_open_work(
+    read: BrokerReadPort,
+) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
+    """The account's open orders and positions, as the broker reports them.
+
+    The one read of whole-account broker truth: reconciliation folds it into
+    custody and the lane-quiet observation (#2154) asks only whether it is
+    empty. A ``BrokerError`` propagates, because what an unreadable broker
+    means is the caller's to decide. The two lists are gathered concurrently
+    with no consistency fence between them, so a caller that needs them to
+    describe one instant owes its own re-read rule.
+    """
+    broker_orders, broker_positions = await asyncio.gather(
+        read.list_orders(status="open", limit=MAX_OPEN_ORDER_SNAPSHOT),
+        read.list_positions(),
+    )
+    return broker_orders, broker_positions
+
+
 async def _read_account_snapshot(
     repo: ClerkSqliteRepository,
     read: BrokerReadPort,
@@ -523,10 +542,7 @@ async def _read_account_snapshot(
     intake: ReentrantAsyncLock,
 ) -> tuple[list[BrokerOrder], list[BrokerPosition]] | None:
     try:
-        broker_orders, broker_positions = await asyncio.gather(
-            read.list_orders(status="open", limit=MAX_OPEN_ORDER_SNAPSHOT),
-            read.list_positions(),
-        )
+        broker_orders, broker_positions = await read_account_open_work(read)
     except BrokerError as exc:
         await _under_intake(intake, _raise_stale_snapshot_uncertainty, repo, str(exc))
         logger.warning(
@@ -914,5 +930,6 @@ __all__ = [
     "ReconciliationInvariantError",
     "ReconciliationLockOrderError",
     "plan_account_reconciliation",
+    "read_account_open_work",
     "reconcile_account",
 ]

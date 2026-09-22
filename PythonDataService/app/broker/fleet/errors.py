@@ -253,10 +253,11 @@ class ClerkLaneQuietUnproven(FleetControlError):
     The lane's own assertion of ADR 0063 Decision 2's five conditions
     (2026-09-19 amendment) — draining, no bot running, every working order
     on the account ended at the broker, the account flat, and no order
-    intent in flight — fenced by the current session's instance and epoch. No
-    provider can answer it yet (#2154), so the normal ``draining -> retired``
-    path refuses rather than degrading to an attestation; ``force-retire`` is
-    the separately named exit.
+    intent in flight — fenced by the current session's instance and epoch.
+    The Alpaca lane answers it on every beat while draining (#2154); a lane
+    that has not answered, answered stale, or left a condition outstanding is
+    refused rather than degraded to an attestation, and ``force-retire`` is
+    the separately named exit for a lane that cannot answer.
     """
 
     reason: ClassVar[str] = "clerk_lane_quiet_unproven"
