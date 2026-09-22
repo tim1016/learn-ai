@@ -16,6 +16,7 @@ import pytest
 from app.broker.fleet.errors import (
     BrokerNotSupported,
     ClerkAssignmentConflict,
+    ClerkReassignmentBlocked,
     ClerkUnreachable,
     ClerkVolumeIdentityMismatch,
 )
@@ -31,19 +32,29 @@ from tests.broker.fleet.conftest import (
 )
 
 
-def test_assignment_history_preserves_released_generations(
+def test_a_refused_transfer_appends_nothing_to_the_released_history(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """Re-reservation overwrites the pointer, never the audited past."""
+    """The released row's audited past is append-only and stays that way: a
+    successor's reservation on it is a refused transfer (#2157), and a
+    refused transfer overwrites nothing and appends nothing. The
+    generations-across-owners half of the original audit — the pointer
+    moving to a new owner while history keeps every generation — returns
+    with #2154's unblocking change, on the ceremony both paths will then
+    share."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="h1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="h2", tmp_path=control_dir.parent)
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=first.clerk_id, external_account_id="acct-h"
     )
     release_after_drain(fleet_service, clock, first, account="acct-h")
-    fleet_service.reserve_assignment(
-        broker="fake_alpha", clerk_id=second.clerk_id, external_account_id="acct-h"
-    )
+    with pytest.raises(ClerkReassignmentBlocked, match="#2157"):
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=second.clerk_id,
+            external_account_id="acct-h",
+            volume_root=second.volume_root,
+        )
 
     history = fleet_service._store.list_assignment_history(
         broker="fake_alpha", canonical_account_id="ACCT-H"
@@ -52,13 +63,12 @@ def test_assignment_history_preserves_released_generations(
     assert states == [
         (first.clerk_id, AssignmentState.RESERVED),
         (first.clerk_id, AssignmentState.RELEASED),
-        (second.clerk_id, AssignmentState.RESERVED),
     ]
-    # The current pointer names only the new owner.
+    # The current pointer still names the released generation's owner.
     current = fleet_service._store.read_assignment(
         broker="fake_alpha", canonical_account_id="ACCT-H"
     )
-    assert current is not None and current.clerk_id == second.clerk_id
+    assert current is not None and current.clerk_id == first.clerk_id
 
 
 def test_concurrent_registrations_serialize_into_distinct_epochs(

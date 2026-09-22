@@ -16,6 +16,7 @@ from app.broker.fleet.errors import (
     ClerkAccountMismatch,
     ClerkAssignmentConflict,
     ClerkBrokerMismatch,
+    ClerkReassignmentBlocked,
 )
 from app.broker.fleet.records import AssignmentState
 from app.broker.fleet.service import FleetControlService
@@ -259,8 +260,9 @@ def test_release_requires_the_ceremony_gates_and_starts_a_higher_generation(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
     """The release ceremony demands a drained, deadline-elapsed predecessor, a
-    bounded attribution, and a pinned generation; reuse restarts at a higher
-    generation (ADR 0063 Decision 4)."""
+    bounded attribution, and a pinned generation; the released row's next
+    owner arrives by the reassignment ceremony alone (ADR 0063 Decision 4,
+    #2157)."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="gen1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="gen2", tmp_path=control_dir.parent)
     _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-g")
@@ -308,11 +310,17 @@ def test_release_requires_the_ceremony_gates_and_starts_a_higher_generation(
     assert fleet_service._store.list_assignments_for_clerk(first.clerk_id)[0].state == (
         AssignmentState.RELEASED
     )
-    # …and reuse starts a fresh reservation at a higher generation.
+    # …and its next owner arrives by the reassignment ceremony alone: a
+    # reservation on the released row is that ceremony's two-step reach and
+    # refuses on its gate (#2157) — the covering tests live below.
     clock.advance(1)
-    reassigned = _reserved(fleet_service, "fake_alpha", second.clerk_id, "acct-g")
-    assert reassigned.clerk_id == second.clerk_id
-    assert reassigned.assignment_generation == released.assignment_generation + 1
+    with pytest.raises(ClerkReassignmentBlocked, match="#2157"):
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=second.clerk_id,
+            external_account_id="acct-g",
+            volume_root=second.volume_root,
+        )
 
 
 def test_a_concurrent_reserve_race_admits_exactly_one_winner(
@@ -371,3 +379,122 @@ def test_a_concurrent_reserve_race_admits_exactly_one_winner(
     assert settled is not None
     assert settled.clerk_id == winners[0].clerk_id
     assert settled.state == AssignmentState.RESERVED
+
+
+# ---- release-then-reserve: one transfer gate (#2157) -----------------------
+
+
+def test_release_then_reserve_reaches_the_same_transfer_gate_as_reassign(
+    control_dir: Path, clock: FrozenClock, fleet_service: FleetControlService
+) -> None:
+    """#2157: the two-step reach of reassignment carries the ceremony's gate.
+
+    Drain, wait out the deadline, release under attribution — then a fresh
+    provisioned successor reserves the same account: that is a clerk-to-clerk
+    transfer wearing a reservation's clothes, and it refuses on exactly the
+    ground reassignment refuses on, leaving the released row untouched. The
+    block holds after the predecessor retires too: a released row under a
+    retired lane is the runbook's normal end state, not an inconsistency.
+    """
+    first = provision_lane(
+        fleet_service, broker="fake_alpha", label="rel", tmp_path=control_dir.parent
+    )
+    second = provision_lane(
+        fleet_service, broker="fake_alpha", label="succ", tmp_path=control_dir.parent
+    )
+    _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-moved")
+    released = release_after_drain(fleet_service, clock, first, account="acct-moved")
+
+    with pytest.raises(ClerkReassignmentBlocked, match="#2157") as blocked:
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=second.clerk_id,
+            external_account_id="acct-moved",
+            volume_root=second.volume_root,
+        )
+    assert "#2154" in blocked.value.message
+
+    fleet_service.force_retire_clerk(
+        clerk_id=first.clerk_id, operator=TEST_OPERATOR, change_ref=TEST_CHANGE_REF
+    )
+    with pytest.raises(ClerkReassignmentBlocked, match="#2157"):
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=second.clerk_id,
+            external_account_id="acct-moved",
+            volume_root=second.volume_root,
+        )
+
+    # The refused transfers left the released row exactly as the ceremony
+    # wrote it — no generation bump, no new owner.
+    unchanged = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id="ACCT-MOVED"
+    )
+    assert unchanged is not None
+    assert unchanged.state == AssignmentState.RELEASED
+    assert unchanged.clerk_id == first.clerk_id
+    assert unchanged.assignment_generation == released.assignment_generation
+
+
+def test_a_released_row_never_transfers_without_the_successors_volume_proof(
+    control_dir: Path, clock: FrozenClock, fleet_service: FleetControlService
+) -> None:
+    """The transfer path's volume_root is required, not optional (#2157).
+
+    A remote reservation — the one transport that cannot carry a volume
+    proof — never moves a released account on any ground; "the coordinator
+    may not have the volume mounted" is a reason to refuse, not to skip.
+    """
+    first = provision_lane(
+        fleet_service, broker="fake_alpha", label="nv", tmp_path=control_dir.parent
+    )
+    second = provision_lane(
+        fleet_service, broker="fake_alpha", label="nv2", tmp_path=control_dir.parent
+    )
+    _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-nv")
+    release_after_drain(fleet_service, clock, first, account="acct-nv")
+
+    with pytest.raises(ClerkAssignmentConflict, match="volume proof"):
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=second.clerk_id,
+            external_account_id="acct-nv",
+        )
+
+
+def test_a_released_row_under_a_provisioned_clerk_is_registry_inconsistency(
+    control_dir: Path, fleet_service: FleetControlService
+) -> None:
+    """Only the release ceremony produces released rows, and it requires a
+    drained, past-deadline owner; a released row surfacing under a
+    still-provisioned clerk reports the inconsistency rather than
+    transferring or reusing."""
+    from dataclasses import replace
+
+    first = provision_lane(
+        fleet_service, broker="fake_alpha", label="bad", tmp_path=control_dir.parent
+    )
+    second = provision_lane(
+        fleet_service, broker="fake_alpha", label="bad2", tmp_path=control_dir.parent
+    )
+    _reserved(fleet_service, "fake_alpha", first.clerk_id, "acct-bad")
+    store = fleet_service._store
+    row = store.read_assignment(broker="fake_alpha", canonical_account_id="ACCT-BAD")
+    assert row is not None
+    forged = replace(row, state=AssignmentState.RELEASED)
+    with store.transaction() as conn:
+        accepted = store.cas_update_assignment(
+            conn,
+            forged,
+            previous_generation=row.assignment_generation,
+            previous_state=AssignmentState.RESERVED,
+        )
+    assert accepted
+
+    with pytest.raises(ClerkAssignmentConflict, match="still provisioned"):
+        fleet_service.reserve_assignment(
+            broker="fake_alpha",
+            clerk_id=second.clerk_id,
+            external_account_id="acct-bad",
+            volume_root=second.volume_root,
+        )

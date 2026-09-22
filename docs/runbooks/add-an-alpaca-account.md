@@ -526,8 +526,11 @@ confirmation ships — #2155's resurrection hole is closed for every lane
 that learns its drain, but a lane unreachable for the entire drain keeps
 unmarked evidence, and without lane quiet the coordinator cannot tell that
 residual population from a quiet one; whole-machine migration is the
-preferred lane move. Do not delete registry rows, reuse the
-old volume for another account, or run `down -v`.
+preferred lane move. Since #2157 closed (2026-09-22) the two-step reach of
+the same handover carries the same gate: a released assignment cannot be
+re-reserved by any lane — including to re-onboard the account onto a new
+lane after its old lane retired — until #2154 ships. Do not delete registry
+rows, reuse the old volume for another account, or run `down -v`.
 
 Closing the actual brokerage account is a separate action in Alpaca, outside
 this application. This runbook deliberately does not claim that a saved-profile
