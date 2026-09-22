@@ -13,6 +13,7 @@ source publication, and decision-data ages have separate bounds (ADR 0067).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -35,6 +36,8 @@ MARKET_CLOCK_MAX_AGE_MS = 5_000
 STATUS_PUBLICATION_MAX_AGE_MS = 5_000
 QUOTE_MAX_AGE_MS = 5_000
 _UNKNOWN_CLOCK_SOURCE = "market_liveness.unavailable"
+
+logger = logging.getLogger(__name__)
 
 
 def _freshness_violation(
@@ -118,6 +121,21 @@ def compose_market_liveness(
     )
     if clock_violation is not None:
         reason_code, reason = clock_violation
+        if reason_code == "MARKET_CLOCK_INVALID":
+            # The clock is stamped locally at ingestion, so a future-dated
+            # stamp is either a caller that captured its instant before the
+            # evidence landed (#2256) or a wall clock that stepped backward.
+            # Both block new exposure, so neither may be silent.
+            logger.warning(
+                "broker clock evidence is dated after the evaluation instant; new exposure is blocked",
+                extra={
+                    "action": "market_liveness_clock_future_dated",
+                    "symbol": normalized_symbol,
+                    "now_ms": now_ms,
+                    "observed_at_ms": market_clock.observed_at_ms,
+                    "lead_ms": market_clock.observed_at_ms - now_ms,
+                },
+            )
         return _unknown(
             normalized_symbol,
             now_ms=now_ms,

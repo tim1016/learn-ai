@@ -753,6 +753,86 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     assert calls == 0
 
 
+async def test_panel_liveness_is_evaluated_after_clock_evidence_lands_mid_request(monkeypatch) -> None:
+    """#2256: the broker-clock poller re-stamps its evidence while the panel
+    awaits its own reads. Liveness evaluated at the request-start instant then
+    saw evidence "from the future" and reported MARKET_CLOCK_INVALID on a
+    healthy feed; it must be evaluated at an instant captured after them."""
+    from app.broker.contract.models import BrokerClockEvidence
+    from app.services.market_liveness import (
+        get_market_liveness_store,
+        market_liveness_fact,
+        reset_market_liveness_store_for_testing,
+    )
+
+    request_start_ms = 1_700_000_000_000
+    wall = {"now": request_start_ms}
+
+    class _Registry:
+        def dry_run_activity(self, _broker: str, _sid: str):
+            return []
+
+        def binding_for_control(self, _broker: str, sid: str):
+            return SimpleNamespace(
+                strategy_instance_id=sid, run_id="run-1", symbol="SPY", use_rth=True,
+                mode="trade", strategy_key="deployment_validation", sealed_program=None,
+            )
+
+    async def _account(*_args) -> str:
+        return "account-1"
+
+    async def _clerk(**_kwargs):
+        # The 1 s poller lands a fresh clock observation during this await.
+        wall["now"] = request_start_ms + 40
+        get_market_liveness_store().observe_clock(BrokerClockEvidence(
+            broker="alpaca", is_open=True, vendor_timestamp_ms=wall["now"],
+            next_open_ms=None, next_close_ms=None, observed_at_ms=wall["now"],
+        ))
+        wall["now"] += 5
+        return SimpleNamespace()
+
+    async def _evidence(*_args, **_kwargs):
+        return SimpleNamespace(
+            status=SimpleNamespace(running=True),
+            projection=SimpleNamespace(),
+            economics=SimpleNamespace(
+                session_fills=(),
+                snapshot=SimpleNamespace(
+                    exposure={}, fills_today=0, realized_pnl_today=0.0,
+                    open_pnl=None, last_activity_at_ms=None,
+                ),
+            ),
+        )
+
+    evaluated: list[object] = []
+
+    def _market_pulse(*_args, now_ms: int, symbol: str, liveness=None, **_kwargs):
+        # build_market_pulse's own default when the caller supplies no fact.
+        evaluated.append(liveness or market_liveness_fact(symbol, now_ms))
+        return SimpleNamespace()
+
+    reset_market_liveness_store_for_testing()
+    get_market_liveness_store().mark_stream_connected(observed_at_ms=request_start_ms - 1_000)
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: wall["now"])
+    monkeypatch.setattr(panel_data_source, "validate_account", _account)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
+    monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
+    monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])
+    monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
+    monkeypatch.setattr(panel_data_source, "build_market_pulse", _market_pulse)
+    monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
+
+    try:
+        await panel_data_source.get_panel("alpaca", "account-1", _SID)
+    finally:
+        reset_market_liveness_store_for_testing()
+
+    [liveness] = evaluated
+    assert (liveness.state, liveness.reason_code) == ("TRADABLE", "MARKET_TRADABLE")
+
+
 async def test_pause_and_continue_performers_preserve_run_identity(monkeypatch) -> None:
     calls: list[tuple[str, str, str]] = []
 

@@ -210,6 +210,24 @@ def test_stale_market_clock_fails_closed() -> None:
     assert fact.reason_code == "MARKET_CLOCK_STALE"
 
 
+def test_future_dated_market_clock_fails_closed_and_logs_loudly(caplog: pytest.LogCaptureFixture) -> None:
+    """#2256: the refusal used to leave no trace, so an operator saw
+    "Broker clock invalid" with no way to learn why."""
+    with caplog.at_level("WARNING", logger="app.services.market_liveness"):
+        fact = compose_market_liveness(
+            "SPY",
+            now_ms=_NOW,
+            market_clock=_clock(observed_at_ms=_NOW + 40),
+            connected=True,
+            connection_changed_at_ms=_NOW,
+            symbol_status=_status(),
+        )
+
+    assert (fact.state, fact.reason_code) == ("UNKNOWN", "MARKET_CLOCK_INVALID")
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "market_liveness_clock_future_dated"]
+    assert (record.now_ms, record.observed_at_ms, record.lead_ms) == (_NOW, _NOW + 40, 40)
+
+
 def _health(*, connected: bool, stale: bool) -> FeedHealth:
     return FeedHealth(
         connected=connected,
