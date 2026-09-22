@@ -163,6 +163,13 @@ class LaneQuietAnswer:
         )
 
 
+#: How long one beat waits for the lane-quiet observation. It runs inline on
+#: the beat, and two broker reads against a slow broker could otherwise hold
+#: the beat past the coordinator's session staleness (30 s) and project a
+#: lane that still holds its account as unreachable. A timed-out observation
+#: is no answer, exactly like an unreadable broker.
+LANE_QUIET_OBSERVATION_TIMEOUT_S = 5.0
+
 #: Produces a fresh answer, or ``None`` when the lane cannot observe its
 #: account this beat — no answer, never a "not quiet" one.
 LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
@@ -180,9 +187,13 @@ def lane_quiet_probe(
     task registry holds what is still running. It is read before and after
     the account observation and holds only if both reads find nothing, so a
     bot still winding down while the broker was read cannot slip between
-    them. Once the lane has learned its drain no new bot can start
+    them. Once the lane has learned its drain a new start or resume refuses
     (``bot_runner._refuse_if_lane_drained``), which is what keeps the answer
-    true after it is taken.
+    true after it is taken. The gate is checked at admission, so a start
+    already past it when the drain is learned can still create its task a
+    moment later; the next beat then reports the bot running, and the gate
+    reads the newest answer, so that stale "idle" never survives to a
+    retirement that is itself a drain deadline away.
     """
 
     async def probe() -> LaneQuietAnswer | None:
@@ -842,7 +853,15 @@ async def _confirm_lane_quiet_if_draining(boot: FleetLaneBoot) -> None:
     if not boot.draining or boot.lane_quiet_probe is None or session is None:
         return
     try:
-        answer = await boot.lane_quiet_probe()
+        answer = await asyncio.wait_for(
+            boot.lane_quiet_probe(), timeout=LANE_QUIET_OBSERVATION_TIMEOUT_S
+        )
+    except TimeoutError:
+        logger.warning(
+            "Lane-quiet observation timed out; no confirmation this beat",
+            extra={"clerk_id": boot.clerk_id, "action": "lane_quiet_observation_timed_out"},
+        )
+        return
     except Exception:
         logger.exception(
             "Lane-quiet observation failed; no confirmation this beat",

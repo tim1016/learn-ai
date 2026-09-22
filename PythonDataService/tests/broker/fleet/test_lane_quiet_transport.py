@@ -176,7 +176,7 @@ async def test_a_serving_lane_never_observes_or_confirms(
         service.close()
 
 
-@pytest.mark.parametrize("failure", ["raises", "no_answer"])
+@pytest.mark.parametrize("failure", ["raises", "no_answer", "hangs"])
 async def test_a_failed_observation_sends_nothing_and_the_beat_goes_on(
     failure: str,
     control_dir: Path,
@@ -184,11 +184,16 @@ async def test_a_failed_observation_sends_nothing_and_the_beat_goes_on(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Neither an exception nor an unreadable broker may end the lane's presence.
+    """Neither an exception, an unreadable broker nor a hung one may end the
+    lane's presence.
 
-    A lane whose beat died would be projected unreachable while it still holds
-    the account; and a missing answer is silence, which the gate refuses.
+    A lane whose beat died or stalled would be projected unreachable while it
+    still holds the account; and a missing answer is silence, which the gate
+    refuses.
     """
+    from app.broker.alpaca.clerk import fleet_boot
+
+    monkeypatch.setattr(fleet_boot, "LANE_QUIET_OBSERVATION_TIMEOUT_S", 0.05)
     service = _service(control_dir, clock)
     try:
         _provisioned, _root, boot = await _open_confirmed_lane(
@@ -200,6 +205,8 @@ async def test_a_failed_observation_sends_nothing_and_the_beat_goes_on(
             attempts.append(clock())
             if failure == "raises":
                 raise RuntimeError("the clerk's ledger is unreadable")
+            if failure == "hangs":
+                await asyncio.Event().wait()
             return None
 
         boot.lane_quiet_probe = probe

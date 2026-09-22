@@ -59,11 +59,6 @@ class AccountQuietObservation:
     account_flat: bool
     intents_resolved: bool
 
-    @property
-    def is_quiet(self) -> bool:
-        """Whether all three conditions hold."""
-        return self.broker_work_ended and self.account_flat and self.intents_resolved
-
 
 async def _read_once(
     repo: ClerkSqliteRepository, read: BrokerReadPort
