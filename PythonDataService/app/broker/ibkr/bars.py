@@ -458,6 +458,11 @@ class _BarDeliveryLogger:
         connection_lost: bool,
         message: str,
     ) -> None:
+        # After the first bar, the idle gap before the next one is normal
+        # 5-second cadence; a real mid-stream silence is the stall watchdog's
+        # to raise, and it fails closed.
+        if self.first_bar_logged:
+            return
         now = time.monotonic()
         if now < self.next_no_bar_log_at:
             return

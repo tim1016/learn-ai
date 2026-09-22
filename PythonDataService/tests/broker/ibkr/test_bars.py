@@ -802,6 +802,36 @@ def test_live_idempotent_skip_logs_at_info_not_warning(
     assert counters.skipped_duplicate == 1
 
 
+@pytest.mark.parametrize(
+    ("first_bar_delivered", "expected_warnings"),
+    [(False, 1), (True, 0)],
+)
+def test_no_bar_warning_only_fires_before_the_first_bar(
+    caplog: pytest.LogCaptureFixture,
+    first_bar_delivered: bool,
+    expected_warnings: int,
+) -> None:
+    # Once a bar has arrived, the idle gap before the next 5-second bar is
+    # normal cadence, not a missing feed: a mid-stream silence belongs to the
+    # stall watchdog, which fails closed. The warning used to keep firing on
+    # its backoff for the life of a healthy subscription.
+    delivery_logger = bars_mod._BarDeliveryLogger(symbol="SPY", con_id=1, use_rth=True)
+    if first_bar_delivered:
+        delivery_logger.log_first_bar(bar_count=1, message="first bar")
+    delivery_logger.next_no_bar_log_at = 0.0
+
+    with caplog.at_level("WARNING", logger="app.broker.ibkr.bars"):
+        delivery_logger.maybe_log_no_bar(
+            bar_count=1,
+            connected=True,
+            connection_lost=False,
+            message="has not delivered",
+        )
+
+    warnings = [r for r in caplog.records if r.message == "has not delivered"]
+    assert len(warnings) == expected_warnings
+
+
 def test_live_applied_correction_still_logs_at_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
