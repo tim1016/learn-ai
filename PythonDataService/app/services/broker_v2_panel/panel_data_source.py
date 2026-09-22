@@ -113,7 +113,6 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_panel_evidence,
 )
 from app.services.market_data_capability_service import get_market_data_capability_service
-from app.services.market_liveness import market_liveness_fact
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
@@ -435,15 +434,14 @@ async def _get_panel_with_entries_from_authority(
         symbol_unresolvable=symbol_unresolvable_for_mode(binding.symbol, binding.mode),
         market_pulse=build_market_pulse(
             market_data_feed,
-            now_ms=captured_now_ms,
+            # Captured after every await above, not at request start: the
+            # broker clock re-stamps on its own ~1 s poller while this
+            # projection awaits, so the request-start instant can predate the
+            # evidence and read as a future-dated MARKET_CLOCK_INVALID on a
+            # healthy feed (#2256). Start and Resume admission re-capture for
+            # the same reason.
+            now_ms=now_ms_utc(),
             symbol=binding.symbol,
-            # Evaluated at an instant captured after every await above, not
-            # at request start: the broker clock re-stamps on its own ~1 s
-            # poller while this projection awaits, so the request-start
-            # instant can predate the evidence and read as a future-dated
-            # MARKET_CLOCK_INVALID on a healthy feed (#2256). Start and Resume
-            # admission re-capture for the same reason.
-            liveness=market_liveness_fact(binding.symbol, now_ms_utc()),
             account_id=capability_account_id,
             capability=(
                 get_market_data_capability_service().read_latest_for(
