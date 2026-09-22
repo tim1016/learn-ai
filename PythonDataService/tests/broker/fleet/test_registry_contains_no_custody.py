@@ -29,6 +29,7 @@ _ALLOWED_TABLES = {
     "account_assignment_history",
     "routing_receipts",
     "force_retire_correlations",
+    "clerk_lane_confirmations",
 }
 
 _FORBIDDEN_NAME_FRAGMENTS = (

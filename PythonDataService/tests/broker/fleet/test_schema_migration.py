@@ -143,6 +143,23 @@ def _build_v4_registry(control_dir: Path) -> None:
         conn.close()
 
 
+def _build_v5_registry(control_dir: Path) -> None:
+    """Materialize a populated v5 registry: the v4 shape plus the registered
+    v4 → v5 upgrade, so the v5 → v6 case starts from the real v5 DDL rather
+    than a reconstruction of it."""
+    _build_v4_registry(control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for statement in schema.SCHEMA_MIGRATIONS[4]:
+            conn.execute(statement)
+        conn.execute("UPDATE fleet_meta SET schema_version = 5 WHERE id = 1")
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
 _INSERT_CLERK_SQL = (
     "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
     "volume_root, deployment_namespace, volume_attestation_kind, "
@@ -598,5 +615,45 @@ def test_a_v4_registry_gains_the_drain_ceremony_schema_and_data_survives(
         assert not any(line.startswith("SCAN routing_receipts") for line in quiet_plan), (
             quiet_plan
         )
+    finally:
+        store.close()
+
+
+def test_a_v5_registry_gains_the_lane_quiet_confirmation_table_and_data_survives(
+    control_dir: Path, tmp_path: Path
+) -> None:
+    """ADR 0063 Decision 2 / #2154: the v5 → v6 upgrade installs the lane-quiet
+    confirmation table, its lookup index and both append-only triggers, exactly
+    as a fresh v6 build carries them, and every pre-existing row survives.
+
+    The table starts empty on an upgraded registry, which is the correct
+    reading: no lane has confirmed, so no lane retires on the normal path
+    until one does. An upgrade that fabricated a confirmation would open the
+    gate the ceremony exists to keep shut.
+    """
+    _build_v5_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert store.schema_version == schema.SCHEMA_VERSION
+
+        def objects(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+            return {
+                (str(row[0]), str(row[1]))
+                for row in conn.execute(
+                    "SELECT type, name FROM sqlite_master "
+                    "WHERE type IN ('trigger', 'index', 'table') AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+
+        fresh = FleetRegistryStore.open(control_dir=tmp_path / "fresh-v6")
+        try:
+            assert objects(store._conn) == objects(fresh._conn)
+        finally:
+            fresh.close()
+
+        clerk = store.read_clerk("clrk_aaaaaaaaaaaaaaaaaaaaaaaa")
+        assert clerk is not None
+        assert clerk.lifecycle_state.value == "provisioned"
+        assert store.read_latest_lane_quiet_confirmation(clerk.clerk_id) is None
     finally:
         store.close()

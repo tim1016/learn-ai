@@ -370,6 +370,9 @@ def downgrade_backup_to_v2(backup_dir: Path) -> None:
         connection.execute("DROP INDEX IF EXISTS ix_routing_receipts_clerk_created_at")
         connection.execute("DROP INDEX IF EXISTS ix_routing_receipts_unsettled")
         connection.execute("DROP TABLE IF EXISTS force_retire_correlations")
+        # Dropping the table takes its index and both append-only triggers
+        # with it, which is the whole of v6.
+        connection.execute("DROP TABLE IF EXISTS clerk_lane_confirmations")
         connection.execute(
             """CREATE TABLE clerks_v2 (
                 clerk_id                TEXT PRIMARY KEY,

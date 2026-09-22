@@ -233,9 +233,13 @@ def test_a_clerk_that_registered_once_is_served_and_cannot_bypass_the_drain(
 def test_a_served_drained_clerk_retires_only_through_lane_quiet(
     fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
 ) -> None:
-    """Decision 2: no provider can answer lane quiet yet (#2154), so the
-    normal path refuses naming the outstanding item — never degrades. The
-    assignment is released first so every earlier gate is genuinely green."""
+    """Decision 2: a served lane that has not confirmed lane quiet refuses —
+    silence is never read as quiet, and the gate never degrades to an operator
+    attestation. The assignment is released first so every earlier gate is
+    genuinely green, which makes this refusal the lane-quiet one.
+
+    The confirmed path is covered in ``test_lane_quiet_confirmation.py``; this
+    case pins the default, which is refusal."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="r3", tmp_path=control_dir.parent)
     bind_lane(fleet_service, lane, account="ACCT-R3")
     drain_and_pass_deadline(fleet_service, clock, lane.clerk_id)
@@ -246,7 +250,7 @@ def test_a_served_drained_clerk_retires_only_through_lane_quiet(
         operator=OPERATOR,
         change_ref=CHANGE_REF,
     )
-    with pytest.raises(ClerkLaneQuietUnproven, match="#2154"):
+    with pytest.raises(ClerkLaneQuietUnproven, match="has not confirmed lane"):
         fleet_service.retire_clerk(clerk_id=lane.clerk_id)
 
 

@@ -66,7 +66,7 @@ import sqlite3
 from app.broker.fleet.schema_migrations import SCHEMA_DDL_V1, SCHEMA_MIGRATIONS
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: Every ``*_ms`` column carries this bound in the schema, so a corrupt or
 #: hostile write cannot persist a negative or out-of-range instant as fleet
@@ -323,6 +323,51 @@ CREATE TRIGGER trg_force_retire_correlations_no_delete
 BEFORE DELETE ON force_retire_correlations
 BEGIN
     SELECT RAISE(ABORT, 'forced-unknown obligations are append-only');
+END;
+
+-- ============================================================
+-- clerk_lane_confirmations — ADR 0063 Decision 2 (2026-09-19
+-- amendment, #2154). One lane's answer about its own quiescence at
+-- one observed instant, fenced by the session that prepared it. The
+-- gate reads the NEWEST row for the clerk's CURRENT session: a
+-- restart destroys the running-process knowledge conditions 2, 3 and
+-- 5 assert, so the row survives a session change while its authority
+-- does not.
+--
+-- Append-only, like every other evidence table here: what a lane
+-- claimed, and when, stays auditable after the clerk is terminal.
+-- Custody-free by construction — four booleans and an instant, never
+-- a quantity, a symbol or an identifier. The condition names are
+-- deliberately about the lane's state rather than the broker's
+-- records, which is also what keeps them clear of the registry's
+-- forbidden-fragment sweep.
+-- ============================================================
+CREATE TABLE clerk_lane_confirmations (
+    clerk_id          TEXT NOT NULL CHECK (length(clerk_id) > 0),
+    agent_instance_id TEXT NOT NULL CHECK (length(agent_instance_id) > 0),
+    routing_epoch  INTEGER NOT NULL CHECK (routing_epoch >= 1),
+    observed_at_ms INTEGER NOT NULL CHECK (observed_at_ms >= 0 AND observed_at_ms <= MAX_TIMESTAMP_MS),
+    recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0 AND recorded_at_ms <= MAX_TIMESTAMP_MS),
+    runner_idle       INTEGER NOT NULL CHECK (runner_idle IN (0, 1)),
+    broker_work_ended INTEGER NOT NULL CHECK (broker_work_ended IN (0, 1)),
+    account_flat      INTEGER NOT NULL CHECK (account_flat IN (0, 1)),
+    intents_resolved  INTEGER NOT NULL CHECK (intents_resolved IN (0, 1)),
+    PRIMARY KEY (clerk_id, agent_instance_id, routing_epoch, observed_at_ms)
+);
+
+CREATE INDEX ix_clerk_lane_confirmations_latest
+    ON clerk_lane_confirmations(clerk_id, agent_instance_id, routing_epoch, observed_at_ms DESC);
+
+CREATE TRIGGER trg_clerk_lane_confirmations_immutable
+BEFORE UPDATE ON clerk_lane_confirmations
+BEGIN
+    SELECT RAISE(ABORT, 'lane-quiet confirmations are append-only');
+END;
+
+CREATE TRIGGER trg_clerk_lane_confirmations_no_delete
+BEFORE DELETE ON clerk_lane_confirmations
+BEGIN
+    SELECT RAISE(ABORT, 'lane-quiet confirmations are append-only');
 END;
 
 -- ============================================================

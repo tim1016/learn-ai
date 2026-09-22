@@ -220,6 +220,64 @@ class ClerkRecord:
     retire_change_ref: str | None = None
 
 
+#: ADR 0063 Decision 2, as amended 2026-09-19 (#2154). Condition 1 — the
+#: lane is draining — is the registry's own fact and is never taken from the
+#: lane; these are the four the lane answers about itself. The mapping is a
+#: closed vocabulary: the refusal names which condition is outstanding, never
+#: its contents, so no quantity, symbol or identifier crosses the seam.
+LANE_QUIET_CONDITIONS: tuple[tuple[str, str], ...] = (
+    ("runner_idle", "a bot is still running"),
+    ("broker_work_ended", "a working order on the account has not ended"),
+    ("account_flat", "the account is not flat"),
+    ("intents_resolved", "an order intent is unresolved"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LaneQuietConfirmationRecord:
+    """One lane's answer about its own quiescence, at one observed instant.
+
+    A *confirmation*, not an observation: it carries the session instance and
+    epoch it was prepared under, and the gate reads it only while that session
+    is still the current one. An answer that leaves a condition outstanding is
+    recorded exactly as a quiet one is — a lane saying "not yet" is evidence,
+    and is what lets the retirement gate name what is outstanding instead of
+    reporting the silence of a lane that never answered at all.
+    """
+
+    clerk_id: str
+    agent_instance_id: str
+    routing_epoch: int
+    observed_at_ms: int
+    recorded_at_ms: int
+    runner_idle: bool
+    broker_work_ended: bool
+    account_flat: bool
+    intents_resolved: bool
+
+    @property
+    def outstanding(self) -> tuple[str, ...]:
+        """The conditions this answer leaves unsatisfied, in declared order.
+
+        Every one, not the first: an operator clearing them one at a time
+        would otherwise walk the ceremony once per item.
+        """
+        return tuple(
+            phrase
+            for field_name, phrase in LANE_QUIET_CONDITIONS
+            if not getattr(self, field_name)
+        )
+
+    @property
+    def is_quiet(self) -> bool:
+        """True only when every condition the lane answers holds.
+
+        Derived, never stored and never sent: a lane cannot assert quiet
+        while reporting a condition it failed.
+        """
+        return not self.outstanding
+
+
 @dataclass(frozen=True, slots=True)
 class ClerkSessionRecord:
     broker: str
@@ -381,6 +439,7 @@ class ClerkDescriptor:
 
 
 __all__ = [
+    "LANE_QUIET_CONDITIONS",
     "AccountAssignmentRecord",
     "ApprovedEndpointRecord",
     "AssignmentState",
@@ -389,6 +448,7 @@ __all__ = [
     "ClerkRecord",
     "ClerkSessionRecord",
     "LaneConfirmationState",
+    "LaneQuietConfirmationRecord",
     "ProviderSummaryObservation",
     "RoutingReceiptRecord",
     "RoutingReceiptState",
