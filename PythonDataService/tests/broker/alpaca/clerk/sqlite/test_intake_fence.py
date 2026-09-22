@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import threading
 from typing import Protocol
 
 import pytest
@@ -16,7 +17,11 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
     missing_guarded_async_methods,
 )
-from app.broker.alpaca.clerk.sqlite.runtime import IntakeFenceYieldError, ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.runtime import (
+    IntakeFencePoisonedError,
+    IntakeFenceYieldError,
+    ReentrantAsyncLock,
+)
 from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
@@ -235,3 +240,176 @@ async def test_production_yield_records_structured_warning_counter_and_hold_dura
     record = next(record for record in caplog.records if record.name.endswith("intake_fence"))
     assert record.intake_fence_event == "yielded_while_held"
     assert record.yielded_fence_count == 1
+
+
+# ── the sanctioned off_loop hop (#1993) ───────────────────────────────────────
+
+
+async def test_off_loop_runs_fold_on_worker_thread_with_sanctioned_yield_only() -> None:
+    fence = ReentrantAsyncLock(strict_yield_detection=True)
+    main_thread = threading.current_thread()
+    observed: dict[str, object] = {}
+
+    def fold() -> int:
+        observed["thread"] = threading.current_thread()
+        # The shared-pool hop copies the caller's context, so the worker
+        # inherits the fenced dynamic scope: broker ports would still reject
+        # contact from inside the fold.
+        observed["scope_depth"] = fence.current_scope_depth()
+        return 7
+
+    assert await fence.off_loop(fold) == 7
+
+    assert fence.yielded_fence_count == 0
+    assert not fence.held_by_current_task()
+    assert fence.current_scope_depth() == 0
+    assert observed["thread"] is not main_thread
+    assert observed["scope_depth"] == 1
+
+
+async def test_forbidden_yield_after_a_sanctioned_hop_still_fails_strict_mode() -> None:
+    """The hop must not blind the detector to the rest of its hold (#1993 review).
+
+    ``async with fence: await fence.off_loop(...); await asyncio.sleep(0)``
+    used to pass strict mode with a yield count of zero because the
+    detector's single callback fired inside the permitted window and was
+    never rearmed.
+    """
+    fence = ReentrantAsyncLock(strict_yield_detection=True)
+
+    with pytest.raises(IntakeFenceYieldError, match="yielded while held"):
+        async with fence:
+            await fence.off_loop(lambda: None)
+            await asyncio.sleep(0)
+
+    assert fence.yielded_fence_count == 1
+    # The fence itself was not poisoned — only this hold misbehaved.
+    async with fence:
+        assert fence.held_by_current_task()
+
+
+async def test_off_loop_cancellation_holds_intake_until_abandoned_fold_completes() -> None:
+    """The minimum bar from #1993: no second fold enters while an abandoned
+    fold is still writing, and the abandoned fold completes anyway."""
+    fence = ReentrantAsyncLock(strict_yield_detection=True)
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+    events: list[str] = []
+
+    def slow_fold() -> int:
+        events.append("fold-start")
+        fold_started.set()
+        fold_release.wait(timeout=10)
+        events.append("fold-end")
+        return 42
+
+    task = asyncio.create_task(fence.off_loop(slow_fold))
+    await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+    task.cancel()
+
+    second = asyncio.create_task(fence.off_loop(lambda: events.append("second-fold")))
+    await asyncio.sleep(0.05)
+    assert events == ["fold-start"]
+    assert not second.done()
+
+    fold_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert events == ["fold-start", "fold-end"]
+
+    await asyncio.wait_for(second, timeout=5)
+    assert events == ["fold-start", "fold-end", "second-fold"]
+    assert not fence.held_by_current_task()
+
+
+async def test_off_loop_abandoned_fold_timeout_poisons_the_fence(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A worker that outlives the bounded wait must not be interleaved with.
+
+    Releasing alone would reopen the fence to the next fold while the
+    abandoned worker may still be writing (#1993 review); the fence fails
+    closed instead and refuses every later hold.
+    """
+    fence = ReentrantAsyncLock(abandoned_hop_timeout_s=0.05)
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+
+    def stuck_fold() -> None:
+        fold_started.set()
+        fold_release.wait(timeout=10)
+
+    task = asyncio.create_task(fence.off_loop(stuck_fold))
+    await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+    with caplog.at_level(logging.CRITICAL):
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert not fence.held_by_current_task()
+    with pytest.raises(IntakeFencePoisonedError, match="poisoned"):
+        async with fence:
+            pass
+    with pytest.raises(IntakeFencePoisonedError, match="poisoned"):
+        await fence.off_loop(lambda: None)
+    record = next(
+        record for record in caplog.records if record.name.endswith("intake_fence")
+    )
+    assert record.intake_fence_event == "abandoned_hop_poisoned"
+    fold_release.set()
+
+
+async def test_off_loop_abandoned_wait_recancellation_poisons_the_fence() -> None:
+    """Shutdown cancelling the bounded wait releases with the worker live.
+
+    The unwind must still complete (a wedged fold cannot brick stop()), and
+    the fence must refuse later holds rather than interleave with whatever
+    that worker still writes (#1993 review).
+    """
+    fence = ReentrantAsyncLock()
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+
+    def stuck_fold() -> None:
+        fold_started.set()
+        fold_release.wait(timeout=10)
+
+    task = asyncio.create_task(fence.off_loop(stuck_fold))
+    await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()  # the second cancellation lands inside the bounded wait
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not fence.held_by_current_task()
+    with pytest.raises(IntakeFencePoisonedError, match="poisoned"):
+        async with fence:
+            pass
+    fold_release.set()
+
+
+async def test_off_loop_abandoned_fold_error_is_logged_not_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fence = ReentrantAsyncLock()
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+
+    def failing_fold() -> None:
+        fold_started.set()
+        fold_release.wait(timeout=10)
+        raise RuntimeError("abandoned fold failed")
+
+    task = asyncio.create_task(fence.off_loop(failing_fold))
+    await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+    with caplog.at_level(logging.ERROR):
+        task.cancel()
+        fold_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = next(
+        record for record in caplog.records if record.name.endswith("intake_fence")
+    )
+    assert record.intake_fence_event == "abandoned_hop_error"

@@ -3081,3 +3081,168 @@ async def test_heartbeat_survives_a_transient_renewal_error(tmp_path: Path) -> N
         hold_heartbeat.set()
         await sweep.stop()
         clerk_repo.close()
+
+
+# ── the pass runs its repository spine off the event loop (#1993) ─────────────
+
+
+async def test_clean_pass_emits_no_fence_yield_warnings_under_strict_detection(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Strict yield detection is enableable where it matters: a clean pass's
+    sanctioned hops are the only yields under intake, and none of them count.
+
+    This is the acceptance bar #1993 set against the withdrawn approach, where
+    an ``asyncio.to_thread`` inside ``async with intake`` made one clean pass
+    emit five "yielded while held" warnings and strict mode raise."""
+    intake = ReentrantAsyncLock(strict_yield_detection=True)
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), intake=intake)
+
+    assert result.verdict == "clean"
+    assert intake.yielded_fence_count == 0
+
+
+async def test_reconciliation_folds_run_off_the_event_loop_thread(
+    repo: ClerkSqliteRepository,
+) -> None:
+    fold_threads: dict[str, threading.Thread] = {}
+    inner_begin = repo.begin_reconciliation
+    inner_end = repo.end_reconciliation
+
+    def recording_begin() -> None:
+        fold_threads["begin"] = threading.current_thread()
+        inner_begin()
+
+    def recording_end() -> None:
+        fold_threads["end"] = threading.current_thread()
+        inner_end()
+
+    repo.begin_reconciliation = recording_begin  # type: ignore[method-assign]
+    repo.end_reconciliation = recording_end  # type: ignore[method-assign]
+
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+
+    assert result.verdict == "clean"
+    main_thread = threading.current_thread()
+    assert fold_threads["begin"] is not main_thread
+    assert fold_threads["end"] is not main_thread
+
+
+# ── off-loop pass hardening (#1993 review, round two) ─────────────────────────
+
+
+async def test_cancelled_begin_releases_the_account_gate(repo: ClerkSqliteRepository) -> None:
+    """Cancelling the pass while its begin fold runs must not strand the gate.
+
+    The begin hop's worker completes inside the drained hop even when the
+    caller is cancelled, so the cleanup path — not just the happy path — has
+    to release ``_reconciliation_in_progress`` and fold the incomplete-pass
+    uncertainty (#1993 review). Before the fix, every later pass failed
+    "reconciliation is already in progress" until restart.
+    """
+    began = threading.Event()
+    gate = threading.Event()
+    inner_begin = repo.begin_reconciliation
+
+    def gated_begin() -> None:
+        inner_begin()
+        began.set()
+        gate.wait(timeout=5)
+
+    repo.begin_reconciliation = gated_begin  # type: ignore[method-assign]
+    task = asyncio.create_task(reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade()))
+    await asyncio.get_running_loop().run_in_executor(None, began.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert (
+        repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="RECONCILIATION_INCOMPLETE",
+            strategy_instance_id=None,
+        )
+        is not None
+    )
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    assert result.verdict == "clean"
+
+
+async def test_escalation_revalidates_the_episode_under_intake_instead_of_trusting_the_scan(
+    clocked_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An episode resolved after the scan must not escalate to EXIT_STUCK.
+
+    The scan runs unfenced on a worker; websocket evidence can resolve the
+    episode (or flatten the position) before the escalation fold. Escalating
+    from the cached scan would leave an already-flat strategy paused behind
+    a false operator-visible error (#1993 review).
+    """
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    _set_exit_not_flat_max_redrives(monkeypatch, 0)
+
+    inner = repo.active_uncertainty
+    reads = {"n": 0}
+
+    def resolved_after_the_scan(scope, *, reason_code, strategy_instance_id=None):
+        if reason_code == EXIT_NOT_FLAT_REASON_CODE:
+            reads["n"] += 1
+            if reads["n"] > 1:
+                return None
+        return inner(
+            scope=scope,
+            reason_code=reason_code,
+            strategy_instance_id=strategy_instance_id,
+        )
+
+    monkeypatch.setattr(repo, "active_uncertainty", resolved_after_the_scan)
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
+    )
+
+    assert reads["n"] >= 2  # the escalation re-read, not just the scan
+    assert (
+        repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT",
+            reason_code=EXIT_STUCK_REASON_CODE,
+            strategy_instance_id=WATCHDOG_SID,
+        )
+        is None
+    )
+
+
+async def test_absence_void_rechecks_broker_identity_before_folding(
+    repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broker identity arriving after the prologue read blocks the void.
+
+    The absence fold must decide from a fresh read, not the prologue's
+    capture: a trade-update acknowledgement written between the exact
+    lookup and the fold means the order reached the broker, and voiding it
+    as definitively absent would be a false terminal record (#1993 review).
+    """
+    order_ref = await _make_uncertain_order(repo)
+    repo.clock.advance(30_001)  # type: ignore[attr-defined]
+    inner_order = repo.order
+    reads = {"n": 0}
+
+    def identity_appears_after_the_prologue(order_ref_arg: str):
+        row = inner_order(order_ref_arg)
+        if row is not None and row.order_ref == order_ref and row.broker_order_id is None:
+            reads["n"] += 1
+            if reads["n"] >= 2:
+                return dataclasses.replace(row, broker_order_id="broker-late-identity")
+        return row
+
+    monkeypatch.setattr(repo, "order", identity_appears_after_the_prologue)
+    await _reconcile_unknown_effect(repo, trade=_FakeTrade(lookup_absent=True))
+    assert reads["n"] >= 2  # the fold re-read the identity
+    effect = repo.effect_operation(inner_order(order_ref).effect_operation_id)  # type: ignore[union-attr]
+    assert effect is not None and effect.state == "unknown"  # not voided as absent

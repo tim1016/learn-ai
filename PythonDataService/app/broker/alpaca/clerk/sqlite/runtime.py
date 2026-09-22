@@ -80,6 +80,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
 )
 from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import (
+    IntakeFencePoisonedError,
     IntakeFenceYieldError,
     ReentrantAsyncLock,
 )
@@ -1686,6 +1687,7 @@ def _count_fact(count: int, *, trusted: bool) -> CustodyCountFact:
 
 
 __all__ = [
+    "IntakeFencePoisonedError",
     "IntakeFenceYieldError",
     "MissingEntryCustodyError",
     "ReentrantAsyncLock",

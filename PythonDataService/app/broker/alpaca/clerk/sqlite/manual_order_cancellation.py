@@ -32,6 +32,12 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.off_loop import (
+    OffLoop,
+    claim_scoped,
+    run_drained,
+    run_inline,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     fold_submit_absence_void,
@@ -333,14 +339,21 @@ async def _resolve_claimed_manual_order_cancellation(
     *,
     cancellation: ManualOrderCancellationResource,
     broker: ClaimedBrokerIO,
+    run: OffLoop,
 ) -> None:
     """Use exact source-order evidence after the one durable cancel intent."""
-    _leg, target, source_effect = _target_or_raise(
-        repo,
-        order_ref=cancellation.order_ref,
-        subject_id=cancellation.subject_id,
-    )
-    if source_effect.state in {"succeeded", "failed", "rejected"}:
+
+    def _read_target() -> tuple[OrderResource, EffectOperationResource]:
+        _leg, target, source_effect = _target_or_raise(
+            repo,
+            order_ref=cancellation.order_ref,
+            subject_id=cancellation.subject_id,
+        )
+        return target, source_effect
+
+    target, source_effect = await run(_read_target)
+
+    def _fold_already_terminal() -> None:
         _append_cancellation_result(
             repo,
             cancellation=cancellation,
@@ -351,14 +364,20 @@ async def _resolve_claimed_manual_order_cancellation(
                 else "The owned manual order was already terminal before this cancellation could act."
             ),
         )
+
+    if source_effect.state in {"succeeded", "failed", "rejected"}:
+        await run(_fold_already_terminal)
         return
     observed = await broker.observe_exact(target.client_order_id)
-    # Sibling of EXIT's never-accepted branch (#1775). The other
-    # cancel-uncertain folds below are deliberately *not* absence proofs: a
-    # returned snapshot missing a broker id contradicts itself, a lost cancel
-    # response says nothing about the order, and once a broker order id exists
-    # an absent lookup is a contradiction to investigate, not a confirmation.
-    if observed is None and order_never_reached_broker(repo, target):
+
+    def _fold_never_reached_broker() -> bool:
+        # Sibling of EXIT's never-accepted branch (#1775). The other
+        # cancel-uncertain folds below are deliberately *not* absence proofs: a
+        # returned snapshot missing a broker id contradicts itself, a lost cancel
+        # response says nothing about the order, and once a broker order id exists
+        # an absent lookup is a contradiction to investigate, not a confirmation.
+        if observed is not None or not order_never_reached_broker(repo, target):
+            return False
         # Voided as never-submitted rather than closed with
         # ``MANUAL_ORDER_TERMINAL``: that transition is evidence of an
         # observed terminal *broker* state, and here no broker order ever
@@ -374,77 +393,93 @@ async def _resolve_claimed_manual_order_cancellation(
             succeeded=False,
             why="The manual order never reached the broker, so there was nothing to cancel.",
         )
+        return True
+
+    if await run(_fold_never_reached_broker):
         return
     if isinstance(observed, BrokerError) or observed is None:
-        fold_uncertain(
-            repo,
-            effect_operation_id=cancellation.effect_operation_id,
-            order_ref=target.order_ref,
-            why=(str(observed) if isinstance(observed, BrokerError) else "No exact order evidence yet."),
-            transition_kind="ORDER_CANCEL_UNCERTAIN",
+        await run(
+            lambda: fold_uncertain(
+                repo,
+                effect_operation_id=cancellation.effect_operation_id,
+                order_ref=target.order_ref,
+                why=(str(observed) if isinstance(observed, BrokerError) else "No exact order evidence yet."),
+                transition_kind="ORDER_CANCEL_UNCERTAIN",
+            )
         )
         return
-    fold_order_evidence(
-        repo,
-        effect_operation_id=source_effect.effect_operation_id,
-        order=observed,
-        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
-    )
-    target = repo.order(target.order_ref)
-    source_effect = repo.effect_operation(source_effect.effect_operation_id)
-    assert target is not None and source_effect is not None
-    if _terminal(target.broker_state):
-        if target.broker_state is not None and target.broker_state.lower() == "canceled":
-            _append_source_canceled(
-                repo,
-                order_ref=target.order_ref,
-                source_effect=source_effect,
-                why="Exact broker evidence proved the manual order canceled.",
-            )
-            _append_cancellation_result(
-                repo,
-                cancellation=cancellation,
-                succeeded=True,
-                why="Exact broker evidence proved the manual order was already canceled.",
-            )
-        else:
-            _append_source_terminal(
-                repo,
-                order_ref=target.order_ref,
-                source_effect=source_effect,
-                why="Exact broker evidence proved the manual order terminal before cancellation.",
-            )
-            _append_cancellation_result(
-                repo,
-                cancellation=cancellation,
-                succeeded=False,
-                why="The owned manual order was already terminal at the broker.",
-            )
-        return
-    if (target.broker_state or "").lower() == "pending_cancel":
-        # The exact broker snapshot is durable evidence that a cancellation is
-        # already in flight. Recovery polls this target on its next sweep but
-        # must not issue another DELETE for the same durable cancel resource.
-        return
-    if target.broker_order_id is None:
-        fold_uncertain(
+
+    def _fold_observed_and_decide_cancel() -> str | None:
+        """Fold exact evidence; return the broker order id to cancel, if any."""
+        fold_order_evidence(
             repo,
-            effect_operation_id=cancellation.effect_operation_id,
-            order_ref=target.order_ref,
-            why="Exact broker evidence did not include a broker order identity to cancel.",
-            transition_kind="ORDER_CANCEL_UNCERTAIN",
+            effect_operation_id=source_effect.effect_operation_id,
+            order=observed,
+            simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
         )
+        refreshed_target = repo.order(target.order_ref)
+        refreshed_source = repo.effect_operation(source_effect.effect_operation_id)
+        assert refreshed_target is not None and refreshed_source is not None
+        if _terminal(refreshed_target.broker_state):
+            if refreshed_target.broker_state is not None and refreshed_target.broker_state.lower() == "canceled":
+                _append_source_canceled(
+                    repo,
+                    order_ref=refreshed_target.order_ref,
+                    source_effect=refreshed_source,
+                    why="Exact broker evidence proved the manual order canceled.",
+                )
+                _append_cancellation_result(
+                    repo,
+                    cancellation=cancellation,
+                    succeeded=True,
+                    why="Exact broker evidence proved the manual order was already canceled.",
+                )
+            else:
+                _append_source_terminal(
+                    repo,
+                    order_ref=refreshed_target.order_ref,
+                    source_effect=refreshed_source,
+                    why="Exact broker evidence proved the manual order terminal before cancellation.",
+                )
+                _append_cancellation_result(
+                    repo,
+                    cancellation=cancellation,
+                    succeeded=False,
+                    why="The owned manual order was already terminal at the broker.",
+                )
+            return None
+        if (refreshed_target.broker_state or "").lower() == "pending_cancel":
+            # The exact broker snapshot is durable evidence that a cancellation is
+            # already in flight. Recovery polls this target on its next sweep but
+            # must not issue another DELETE for the same durable cancel resource.
+            return None
+        if refreshed_target.broker_order_id is None:
+            fold_uncertain(
+                repo,
+                effect_operation_id=cancellation.effect_operation_id,
+                order_ref=refreshed_target.order_ref,
+                why="Exact broker evidence did not include a broker order identity to cancel.",
+                transition_kind="ORDER_CANCEL_UNCERTAIN",
+            )
+            return None
+        return refreshed_target.broker_order_id
+
+    cancel_broker_order_id = await run(_fold_observed_and_decide_cancel)
+    if cancel_broker_order_id is None:
         return
     cancel_error: BrokerError | None = None
     try:
-        await broker.cancel(target.broker_order_id, order_ref=target.order_ref)
+        await broker.cancel(cancel_broker_order_id, order_ref=target.order_ref)
     except BrokerUnavailable as exc:
-        fold_uncertain(
-            repo,
-            effect_operation_id=cancellation.effect_operation_id,
-            order_ref=target.order_ref,
-            why=str(exc),
-            transition_kind="ORDER_CANCEL_UNCERTAIN",
+        unavailable_why = str(exc)
+        await run(
+            lambda: fold_uncertain(
+                repo,
+                effect_operation_id=cancellation.effect_operation_id,
+                order_ref=target.order_ref,
+                why=unavailable_why,
+                transition_kind="ORDER_CANCEL_UNCERTAIN",
+            )
         )
         return
     except BrokerError as exc:
@@ -453,65 +488,71 @@ async def _resolve_claimed_manual_order_cancellation(
         cancel_error = exc
     observed_after = await broker.observe_exact(target.client_order_id)
     if isinstance(observed_after, BrokerError) or observed_after is None:
-        fold_uncertain(
-            repo,
-            effect_operation_id=cancellation.effect_operation_id,
-            order_ref=target.order_ref,
-            why=(
-                str(observed_after)
-                if isinstance(observed_after, BrokerError)
-                else (
-                    f"{cancel_error}; cancellation response had no exact broker follow-up evidence."
-                    if cancel_error is not None
-                    else "Cancellation response had no exact broker follow-up evidence."
-                )
-            ),
-            transition_kind="ORDER_CANCEL_UNCERTAIN",
+        await run(
+            lambda: fold_uncertain(
+                repo,
+                effect_operation_id=cancellation.effect_operation_id,
+                order_ref=target.order_ref,
+                why=(
+                    str(observed_after)
+                    if isinstance(observed_after, BrokerError)
+                    else (
+                        f"{cancel_error}; cancellation response had no exact broker follow-up evidence."
+                        if cancel_error is not None
+                        else "Cancellation response had no exact broker follow-up evidence."
+                    )
+                ),
+                transition_kind="ORDER_CANCEL_UNCERTAIN",
+            )
         )
         return
-    fold_order_evidence(
-        repo,
-        effect_operation_id=source_effect.effect_operation_id,
-        order=observed_after,
-        simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
-    )
-    target_after = repo.order(target.order_ref)
-    source_after = repo.effect_operation(source_effect.effect_operation_id)
-    assert target_after is not None and source_after is not None
-    if target_after.broker_state is not None and target_after.broker_state.lower() == "canceled":
-        _append_source_canceled(
+
+    def _fold_final_evidence() -> None:
+        fold_order_evidence(
             repo,
-            order_ref=target_after.order_ref,
-            source_effect=source_after,
-            why="Exact broker evidence proved this durable cancel request canceled the manual order.",
+            effect_operation_id=source_effect.effect_operation_id,
+            order=observed_after,
+            simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
         )
-        _append_cancellation_result(
-            repo,
-            cancellation=cancellation,
-            succeeded=True,
-            why="Exact broker evidence proved the manual order canceled.",
-        )
-    elif _terminal(target_after.broker_state):
-        _append_source_terminal(
-            repo,
-            order_ref=target_after.order_ref,
-            source_effect=source_after,
-            why="Exact broker evidence proved the manual order terminal before cancellation.",
-        )
-        _append_cancellation_result(
-            repo,
-            cancellation=cancellation,
-            succeeded=False,
-            why="The manual order became terminal before cancellation could be proven.",
-        )
-    elif cancel_error is not None:
-        fold_uncertain(
-            repo,
-            effect_operation_id=cancellation.effect_operation_id,
-            order_ref=target_after.order_ref,
-            why=(f"{cancel_error}; exact broker evidence still reports the manual order working."),
-            transition_kind="ORDER_CANCEL_UNCERTAIN",
-        )
+        target_after = repo.order(target.order_ref)
+        source_after = repo.effect_operation(source_effect.effect_operation_id)
+        assert target_after is not None and source_after is not None
+        if target_after.broker_state is not None and target_after.broker_state.lower() == "canceled":
+            _append_source_canceled(
+                repo,
+                order_ref=target_after.order_ref,
+                source_effect=source_after,
+                why="Exact broker evidence proved this durable cancel request canceled the manual order.",
+            )
+            _append_cancellation_result(
+                repo,
+                cancellation=cancellation,
+                succeeded=True,
+                why="Exact broker evidence proved the manual order canceled.",
+            )
+        elif _terminal(target_after.broker_state):
+            _append_source_terminal(
+                repo,
+                order_ref=target_after.order_ref,
+                source_effect=source_after,
+                why="Exact broker evidence proved the manual order terminal before cancellation.",
+            )
+            _append_cancellation_result(
+                repo,
+                cancellation=cancellation,
+                succeeded=False,
+                why="The manual order became terminal before cancellation could be proven.",
+            )
+        elif cancel_error is not None:
+            fold_uncertain(
+                repo,
+                effect_operation_id=cancellation.effect_operation_id,
+                order_ref=target_after.order_ref,
+                why=(f"{cancel_error}; exact broker evidence still reports the manual order working."),
+                transition_kind="ORDER_CANCEL_UNCERTAIN",
+            )
+
+    await run(_fold_final_evidence)
 
 
 async def resolve_manual_order_cancellation(
@@ -519,20 +560,37 @@ async def resolve_manual_order_cancellation(
     *,
     effect_operation_id: str,
     trade: BrokerTradePort,
+    off_loop: OffLoop | None = None,
 ) -> ManualOrderCancellationSubmission:
-    """Resume the one durable cancellation, including after a process restart."""
-    cancellation = repo.manual_order_cancellation_for_effect(effect_operation_id=effect_operation_id)
-    if cancellation is None:
-        raise ManualOrderCancelOwnershipError("Cancellation recovery has no owned manual target.")
-    effect = repo.effect_operation(effect_operation_id)
-    if effect is None:
-        raise RuntimeError("manual cancellation effect disappeared")
-    if effect.state not in {"succeeded", "failed", "rejected"}:
-        claim = repo.claim_before_broker_contact(effect_operation_id)
+    """Resume the one durable cancellation, including after a process restart.
+
+    ``off_loop`` moves each synchronous repository run onto a worker thread
+    (#1993); the default keeps the pre-#1993 inline behavior for every
+    non-sweep caller.
+    """
+    run = off_loop if off_loop is not None else run_inline
+
+    def _read_resolution_state() -> tuple[ManualOrderCancellationResource, bool]:
+        cancellation = repo.manual_order_cancellation_for_effect(effect_operation_id=effect_operation_id)
+        if cancellation is None:
+            raise ManualOrderCancelOwnershipError("Cancellation recovery has no owned manual target.")
+        effect = repo.effect_operation(effect_operation_id)
+        if effect is None:
+            raise RuntimeError("manual cancellation effect disappeared")
+        return cancellation, effect.state in {"succeeded", "failed", "rejected"}
+
+    cancellation, already_terminal = await run(_read_resolution_state)
+    if not already_terminal:
+        # The claim is taken on the caller's thread with no await between
+        # the read and the claim, and the claimed body runs claim_scoped: a
+        # cancellation can neither strand a claim taken by an abandoned
+        # worker nor release this one around a still-running fold (#1993
+        # review).
+        claim_token = repo.claim_before_broker_contact(effect_operation_id).token
         broker = ClaimedBrokerIO(
             repo=repo,
             effect_operation_id=effect_operation_id,
-            claim_token=claim.token,
+            claim_token=claim_token,
             trade=trade,
         )
         try:
@@ -540,15 +598,25 @@ async def resolve_manual_order_cancellation(
                 repo,
                 cancellation=cancellation,
                 broker=broker,
+                run=claim_scoped(run),
             )
         finally:
-            repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim.token)
-    return _submission(
-        repo,
-        order_ref=cancellation.order_ref,
-        command_id=cancellation.command_id,
-        effect_operation_id=cancellation.effect_operation_id,
-        created=False,
+            # Off the loop (it takes the write lock) and drained on
+            # cancellation (#1993 review).
+            await run_drained(
+                run,
+                lambda: repo.release_operation_claim(
+                    effect_operation_id=effect_operation_id, token=claim_token
+                ),
+            )
+    return await run(
+        lambda: _submission(
+            repo,
+            order_ref=cancellation.order_ref,
+            command_id=cancellation.command_id,
+            effect_operation_id=cancellation.effect_operation_id,
+            created=False,
+        )
     )
 
 

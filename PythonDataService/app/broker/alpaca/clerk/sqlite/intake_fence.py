@@ -2,7 +2,20 @@
 
 Fenced bodies perform bounded synchronous repository work only. They must not
 perform broker I/O, yield the event loop, or yield caller code from a context
-manager. The dynamic-scope marker is intentionally separate from task
+manager — with one sanctioned exception (#1993): :meth:`ReentrantAsyncLock.off_loop`
+holds the fence while its fold runs on a worker thread. Awaiting that worker's
+completion (and, after a cancellation, awaiting the abandoned worker's finish)
+is the mechanism, not a violation; the yield detector skips exactly those
+awaits via the permitted hold token and still counts every other yield. Broker
+I/O stays forbidden for the whole hold, including across the hop.
+
+The fence fails closed against its own worst case: if it is ever released
+while an abandoned fold's worker may still be writing (the bounded wait
+elapsed, or shutdown cancelled the wait itself), it refuses every later hold
+with :class:`IntakeFencePoisonedError` rather than let the next fold
+interleave with writes it cannot see.
+
+The dynamic-scope marker is intentionally separate from task
 ownership: child tasks inherit the marker so future broker-port guards can
 reject work spawned from a fenced body, while lock-order checks can still ask
 whether the current task is the fence owner.
@@ -13,8 +26,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from contextvars import ContextVar, Token
 from types import TracebackType
+
+from app.broker.alpaca.clerk.sqlite.off_loop import finish_abandoned_hop, off_loop_future
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +42,26 @@ class IntakeFenceYieldError(RuntimeError):
         super().__init__("SQLite Clerk intake fence yielded while held")
 
 
+class IntakeFencePoisonedError(RuntimeError):
+    """The fence refused a hold because an abandoned fold may still write."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            "SQLite Clerk intake fence is poisoned: an abandoned fold outlived its "
+            f"bounded wait ({reason}); it refuses new holds until the process restarts"
+        )
+        self.reason = reason
+
+
 class ReentrantAsyncLock:
     """Task-reentrant SQLite intake fence with dynamic-scope liveness checks."""
 
-    def __init__(self, *, strict_yield_detection: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        strict_yield_detection: bool = False,
+        abandoned_hop_timeout_s: float = 30.0,
+    ) -> None:
         self._lock = asyncio.Lock()
         self._owner: asyncio.Task[object] | None = None
         self._depth = 0
@@ -37,6 +69,9 @@ class ReentrantAsyncLock:
         self._scope_tokens: list[Token[int]] = []
         self._strict_yield_detection = strict_yield_detection
         self._active_hold_token: object | None = None
+        self._permitted_hold_token: object | None = None
+        self._abandoned_hop_timeout_s = abandoned_hop_timeout_s
+        self._poisoned_reason: str | None = None
         self._hold_started_at: float | None = None
         self._current_hold_yielded = False
         self._yielded_fence_count = 0
@@ -68,6 +103,8 @@ class ReentrantAsyncLock:
             self._depth += 1
             self._scope_tokens.append(self._enter_dynamic_scope())
             return self
+        if self._poisoned_reason is not None:
+            raise IntakeFencePoisonedError(self._poisoned_reason)
 
         await self._lock.acquire()
         self._owner = current
@@ -106,6 +143,79 @@ class ReentrantAsyncLock:
         if yielded and self._strict_yield_detection and exc_type is None:
             raise IntakeFenceYieldError()
 
+    async def off_loop[LocalResult](
+        self,
+        operation: Callable[..., LocalResult],
+        *args: object,
+        **kwargs: object,
+    ) -> LocalResult:
+        """Run one bounded repository fold on a worker thread, under intake.
+
+        The fence's one sanctioned yield (#1993): awaiting the worker — and,
+        after a cancellation, awaiting the abandoned worker's finish — is
+        permitted for this hold's token while nothing else is. Cancellation
+        never abandons a writing fold to the fence's next customer: the hold
+        is released only after the worker completes, bounded by
+        ``abandoned_hop_timeout_s`` — and a worker that outlives the bound
+        poisons the fence instead of reopening it.
+        """
+        async with self:
+            owner = asyncio.current_task()
+            hop = off_loop_future(operation, *args, **kwargs)
+            self._permitted_hold_token = self._active_hold_token
+            try:
+                return await asyncio.shield(hop)
+            except asyncio.CancelledError:
+                await self._finish_abandoned_hop(hop)
+                raise
+            finally:
+                self._permitted_hold_token = None
+                if owner is not None and self._active_hold_token is not None:
+                    # The permitted window is closed: resume yield checking
+                    # for the remainder of this hold, so a later forbidden
+                    # yield cannot hide behind the sanctioned hop (#1993
+                    # review).
+                    asyncio.get_running_loop().call_soon(
+                        self._detect_event_loop_yield, owner, self._active_hold_token
+                    )
+
+    async def _finish_abandoned_hop(self, hop: asyncio.Future[object]) -> None:
+        """Let a fold whose caller was cancelled finish before intake releases.
+
+        Cancelling the worker await does not stop the worker already inside
+        the fold, and releasing the fence while that worker may still write
+        is the interleaving hazard #1993 exists to close — the same shape
+        ``ClerkSqliteRepository.close`` solves by taking the write lock and
+        ``ReconciliationSweep._finish_orphaned_revival`` bounds with one
+        lease TTL. If the bounded wait is outrun anyway (a wedged fold, or a
+        second cancellation during shutdown), the fence still releases so
+        the unwind can proceed — but it poisons itself, refusing every later
+        hold rather than letting the next fold interleave with the
+        unfinished worker.
+        """
+        status = await finish_abandoned_hop(
+            hop,
+            timeout_s=self._abandoned_hop_timeout_s,
+            log_outcome=_log_abandoned_hop_outcome,
+        )
+        if status == "completed":
+            return
+        reason = (
+            f"abandoned hop exceeded {self._abandoned_hop_timeout_s:g}s"
+            if status == "timeout"
+            else "abandoned hop wait was itself cancelled"
+        )
+        self._poisoned_reason = reason
+        logger.critical(
+            "SQLite Clerk intake fold still running after its caller was "
+            "cancelled; the fence released and now refuses new holds",
+            extra={
+                "intake_fence_event": "abandoned_hop_poisoned",
+                "abandoned_hop_timeout_s": self._abandoned_hop_timeout_s,
+                "reason": reason,
+            },
+        )
+
     def _enter_dynamic_scope(self) -> Token[int]:
         return self._scope_depth.set(self._scope_depth.get() + 1)
 
@@ -115,6 +225,14 @@ class ReentrantAsyncLock:
         hold_token: object,
     ) -> None:
         if self._owner is not owner or self._active_hold_token is not hold_token:
+            return
+        if self._permitted_hold_token is hold_token:
+            # The sanctioned off_loop hop (or its abandoned-hop finish) is the
+            # one yield this hold is allowed. The callback does not rearm
+            # itself here — that would busy-spin the loop for the hop's whole
+            # duration. off_loop's finally rearms once the permitted window
+            # closes, so a later forbidden yield inside the same hold is
+            # still counted (#1993 review).
             return
         if self._current_hold_yielded:
             return
@@ -137,4 +255,15 @@ class ReentrantAsyncLock:
         return time.perf_counter() - self._hold_started_at
 
 
-__all__ = ["IntakeFenceYieldError", "ReentrantAsyncLock"]
+def _log_abandoned_hop_outcome(error: BaseException | None) -> None:
+    """Log an abandoned fold's failure so it is not dropped unseen."""
+    if error is None:
+        return
+    logger.error(
+        "SQLite Clerk intake fold errored after its caller was cancelled",
+        extra={"intake_fence_event": "abandoned_hop_error"},
+        exc_info=error,
+    )
+
+
+__all__ = ["IntakeFencePoisonedError", "IntakeFenceYieldError", "ReentrantAsyncLock"]
