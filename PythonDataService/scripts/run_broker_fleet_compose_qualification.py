@@ -65,6 +65,9 @@ _FLEET_REGISTRY_TABLES = frozenset(
         "account_assignments",
         "account_assignment_history",
         "routing_receipts",
+        # ADR 0063 Decision 5: the forced-unknown obligations a force-retirement
+        # recorded — routing bookkeeping with attribution, not custody data.
+        "force_retire_correlations",
     )
 )
 FAULT_SCENARIOS = (

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
@@ -35,6 +35,7 @@ from app.broker.fleet.records import (
     AssignmentState,
     ClerkRecord,
     ClerkSessionRecord,
+    LaneConfirmationState,
     RoutingReceiptRecord,
     RoutingReceiptState,
     StoredLifecycleState,
@@ -292,7 +293,8 @@ class FleetRegistryStore:
     _CLERK_COLUMNS = (
         "clerk_id, broker, worker_key, display_label, volume_id, volume_root, "
         "deployment_namespace, volume_attestation_kind, volume_attestation_id, "
-        "lifecycle_state, created_at_ms, retired_at_ms"
+        "lifecycle_state, created_at_ms, retired_at_ms, draining_since_ms, "
+        "drain_deadline_at_ms, lane_confirmation, retire_operator, retire_change_ref"
     )
 
     def read_clerk(self, clerk_id: str) -> ClerkRecord | None:
@@ -393,8 +395,10 @@ class FleetRegistryStore:
         conn.execute(
             "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
             "volume_root, deployment_namespace, volume_attestation_kind, "
-            "volume_attestation_id, lifecycle_state, created_at_ms, retired_at_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "volume_attestation_id, lifecycle_state, created_at_ms, retired_at_ms, "
+            "draining_since_ms, drain_deadline_at_ms, lane_confirmation, "
+            "retire_operator, retire_change_ref) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 clerk.clerk_id,
                 clerk.broker,
@@ -408,23 +412,88 @@ class FleetRegistryStore:
                 str(clerk.lifecycle_state),
                 clerk.created_at_ms,
                 clerk.retired_at_ms,
+                clerk.draining_since_ms,
+                clerk.drain_deadline_at_ms,
+                clerk.lane_confirmation,
+                clerk.retire_operator,
+                clerk.retire_change_ref,
             ),
         )
 
-    def update_clerk_lifecycle(
+    def drain_clerk_row(
         self,
         conn: sqlite3.Connection,
         *,
         clerk_id: str,
-        lifecycle_state: StoredLifecycleState,
-        retired_at_ms: int | None,
+        draining_since_ms: int,
+        drain_deadline_at_ms: int,
     ) -> bool:
-        """Move one clerk's durable lifecycle state forward."""
+        """Enter the drain: set the durable start instant and deadline.
+
+        Guarded on ``provisioned`` in the ``WHERE`` clause, so a concurrent
+        second drain (or a retirement that committed first) cannot be
+        overwritten; the service's idempotent re-drain path never reaches
+        here. The write-once trigger is the fence underneath: even a caller
+        that raced past the guard cannot move an existing drain's facts.
+        """
         cursor = conn.execute(
-            "UPDATE clerks SET lifecycle_state = ?, retired_at_ms = ? WHERE clerk_id = ?",
-            (str(lifecycle_state), retired_at_ms, clerk_id),
+            "UPDATE clerks SET lifecycle_state = 'draining', draining_since_ms = ?, "
+            "drain_deadline_at_ms = ? WHERE clerk_id = ? AND lifecycle_state = 'provisioned'",
+            (draining_since_ms, drain_deadline_at_ms, clerk_id),
         )
         return cursor.rowcount == 1
+
+    def retire_clerk_row(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        clerk_id: str,
+        retired_at_ms: int,
+        lane_confirmation: str | None = None,
+        retire_operator: str | None = None,
+        retire_change_ref: str | None = None,
+    ) -> bool:
+        """Retire: set the terminal instant and, when given, the attribution.
+
+        Guarded on a not-yet-retired row in the ``WHERE`` clause, so the
+        transition and its attribution facts are written exactly once; the
+        write-once trigger beneath refuses any later rewrite of the
+        attribution columns outright.
+        """
+        cursor = conn.execute(
+            "UPDATE clerks SET lifecycle_state = 'retired', retired_at_ms = ?, "
+            "lane_confirmation = COALESCE(?, lane_confirmation), "
+            "retire_operator = COALESCE(?, retire_operator), "
+            "retire_change_ref = COALESCE(?, retire_change_ref) "
+            "WHERE clerk_id = ? AND lifecycle_state <> 'retired'",
+            (
+                retired_at_ms,
+                lane_confirmation,
+                retire_operator,
+                retire_change_ref,
+                clerk_id,
+            ),
+        )
+        return cursor.rowcount == 1
+
+    def clerk_has_served_on(self, conn: sqlite3.Connection, clerk_id: str) -> bool:
+        """ADR 0063 Decision 6's never-served predicate, read in the caller's
+        transaction.
+
+        Three clauses, each delete-proof at the schema: a row in the
+        append-only assignment history, a row in the append-only session
+        history, or a live ``clerk_sessions`` row — the third is load-bearing
+        because that table is a per-clerk upsert that is never deleted, so a
+        clerk that registered exactly once holds a live row and zero history
+        rows.
+        """
+        row = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM account_assignment_history WHERE clerk_id = ?) "
+            "OR EXISTS (SELECT 1 FROM clerk_session_history WHERE clerk_id = ?) "
+            "OR EXISTS (SELECT 1 FROM clerk_sessions WHERE clerk_id = ?)",
+            (clerk_id, clerk_id, clerk_id),
+        ).fetchone()
+        return bool(row[0])
 
     # ---- sessions -------------------------------------------------------
 
@@ -712,13 +781,16 @@ class FleetRegistryStore:
         transitions land here: a confirmed-observation refinement inside the
         same (generation, state) is not one, so the insert is ignored on the
         primary key rather than colliding. The confirmed observation lives on
-        the current row only.
+        the current row only; the release/reassignment attestation
+        (ADR 0063 Decision 4) lives here only, written at this INSERT and
+        never afterwards — which is also why a pre-v5 row keeps NULL forever.
         """
         conn.execute(
             "INSERT OR IGNORE INTO account_assignment_history (broker, "
             "canonical_external_account_id, clerk_id, assignment_generation, state, "
-            "effective_profile_id, effective_revision, recorded_at_ms, updated_at_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "effective_profile_id, effective_revision, recorded_at_ms, updated_at_ms, "
+            "lane_confirmation, attested_operator, attested_change_ref, attested_at_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 assignment.broker,
                 assignment.canonical_external_account_id,
@@ -729,12 +801,17 @@ class FleetRegistryStore:
                 assignment.effective_revision,
                 assignment.recorded_at_ms,
                 assignment.updated_at_ms,
+                assignment.lane_confirmation,
+                assignment.attested_operator,
+                assignment.attested_change_ref,
+                assignment.attested_at_ms,
             ),
         )
 
     _HISTORY_ASSIGNMENT_COLUMNS = (
         "broker, canonical_external_account_id, clerk_id, assignment_generation, state, "
-        "effective_profile_id, effective_revision, recorded_at_ms, updated_at_ms"
+        "effective_profile_id, effective_revision, recorded_at_ms, updated_at_ms, "
+        "lane_confirmation, attested_operator, attested_change_ref, attested_at_ms"
     )
 
     def list_assignment_history(
@@ -901,6 +978,83 @@ class FleetRegistryStore:
         parameters.append(limit)
         return [_receipt_from_row(row) for row in self._query(sql, tuple(parameters))]
 
+    _UNSETTLED_ATTEMPT_SQL = (
+        "SELECT {columns} FROM routing_receipts "
+        "WHERE clerk_id = ? AND state = 'not_dispatched' AND dispatched_at_ms IS NOT NULL "
+        "ORDER BY created_at_ms ASC"
+    )
+
+    def list_unsettled_routing_receipts_on(
+        self, conn: sqlite3.Connection, clerk_id: str
+    ) -> list[RoutingReceiptRecord]:
+        """ADR 0063 Decision 3's command-quiet predicate: the clerk's attempts
+        the coordinator dispatched and never heard the outcome of, read
+        inside the caller's transaction.
+
+        Correctly read, each such row means *the coordinator lost a dispatch
+        outcome* — a real reconciliation obligation, and the only one this
+        ledger can name. Receipts settle on the lane's HTTP response, never
+        on the order, so the absence of unsettled rows says nothing about
+        the broker (the ADR's central finding); the partial index serves the
+        predicate without scanning the append-only table. The drain
+        ceremonies evaluate this in the same ``BEGIN IMMEDIATE`` transaction
+        as the lifecycle transition they gate, so a dispatch landing between
+        the check and the commit cannot retire a lane past an attempt it
+        just lost the outcome of.
+        """
+        sql = self._UNSETTLED_ATTEMPT_SQL.format(columns=self._RECEIPT_COLUMNS)
+        return [_receipt_from_row(row) for row in conn.execute(sql, (clerk_id,)).fetchall()]
+
+    # ---- forced-unknown obligations ---------------------------------------
+
+    def record_forced_correlations(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        broker: str,
+        clerk_id: str,
+        forced_at_ms: int,
+        operator: str,
+        change_ref: str,
+        correlation_ids: Sequence[str],
+    ) -> int:
+        """Record the obligations a force-retirement created, in its transaction.
+
+        ADR 0063 Decision 5's durable home for the forced-unknown ids: they
+        outlive the retired clerk that owned them, so they live in the
+        registry's append-only table — atomic with the retirement transition
+        and included in every registry backup — rather than a sidecar file
+        whose failed write would silently drop a reconciliation work queue.
+        """
+        rows = [
+            (correlation_id, broker, clerk_id, forced_at_ms, operator, change_ref)
+            for correlation_id in correlation_ids
+        ]
+        conn.executemany(
+            "INSERT INTO force_retire_correlations (correlation_id, broker, clerk_id, "
+            "forced_at_ms, operator, change_ref) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        return len(rows)
+
+    def list_forced_correlations(self, clerk_id: str) -> list[tuple[str, str, int, str, str]]:
+        """One clerk's forced-unknown obligations, oldest first.
+
+        Each entry is ``(correlation_id, broker, forced_at_ms, operator,
+        change_ref)`` — the reconcile-by-identity work queue a force-retirement
+        left behind, kept queryable after the clerk row is terminal.
+        """
+        rows = self._query(
+            "SELECT correlation_id, broker, forced_at_ms, operator, change_ref "
+            "FROM force_retire_correlations WHERE clerk_id = ? "
+            "ORDER BY forced_at_ms ASC, correlation_id ASC",
+            (clerk_id,),
+        )
+        return [
+            (str(row[0]), str(row[1]), int(row[2]), str(row[3]), str(row[4]))
+            for row in rows
+        ]
+
     def insert_routing_receipt(
         self, conn: sqlite3.Connection, receipt: RoutingReceiptRecord
     ) -> None:
@@ -984,6 +1138,15 @@ def _clerk_from_row(row: sqlite3.Row) -> ClerkRecord:
         lifecycle_state=StoredLifecycleState(row["lifecycle_state"]),
         created_at_ms=int(row["created_at_ms"]),
         retired_at_ms=_optional_int(row, "retired_at_ms"),
+        draining_since_ms=_optional_int(row, "draining_since_ms"),
+        drain_deadline_at_ms=_optional_int(row, "drain_deadline_at_ms"),
+        lane_confirmation=(
+            None
+            if row["lane_confirmation"] is None
+            else LaneConfirmationState(row["lane_confirmation"])
+        ),
+        retire_operator=row["retire_operator"],
+        retire_change_ref=row["retire_change_ref"],
     )
 
 
@@ -1059,7 +1222,7 @@ def _endpoint_from_row(row: sqlite3.Row) -> ApprovedEndpointRecord:
 
 
 def _history_from_row(row: sqlite3.Row) -> AccountAssignmentRecord:
-    """Map one history row: ownership facts only, no confirmed observation."""
+    """Map one history row: ownership facts and the ceremony attestation."""
     return AccountAssignmentRecord(
         broker=row["broker"],
         canonical_external_account_id=row["canonical_external_account_id"],
@@ -1070,6 +1233,14 @@ def _history_from_row(row: sqlite3.Row) -> AccountAssignmentRecord:
         effective_revision=_optional_int(row, "effective_revision"),
         recorded_at_ms=int(row["recorded_at_ms"]),
         updated_at_ms=int(row["updated_at_ms"]),
+        lane_confirmation=(
+            None
+            if row["lane_confirmation"] is None
+            else LaneConfirmationState(row["lane_confirmation"])
+        ),
+        attested_operator=row["attested_operator"],
+        attested_change_ref=row["attested_change_ref"],
+        attested_at_ms=_optional_int(row, "attested_at_ms"),
     )
 
 

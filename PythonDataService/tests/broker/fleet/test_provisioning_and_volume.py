@@ -19,7 +19,14 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet.volume import marker_path, read_volume_marker
-from tests.broker.fleet.conftest import FrozenClock, Lane, provision_lane
+from tests.broker.fleet.conftest import (
+    TEST_CHANGE_REF,
+    TEST_OPERATOR,
+    FrozenClock,
+    Lane,
+    provision_lane,
+    release_after_drain,
+)
 
 
 def test_provision_mints_distinct_identities_and_marks_the_volume(
@@ -192,7 +199,11 @@ def test_registration_and_reservation_verify_the_volume_before_authority(
 def test_retirement_is_terminal_and_refuses_outstanding_assignments(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """Retirement refuses outstanding obligations, is terminal, and revokes every route."""
+    """Retirement refuses outstanding obligations, is terminal, and revokes every route.
+
+    A lane that has held an assignment has served, so its exit is the drain
+    ceremony: release after the deadline, then the force-retire exit (no
+    provider answers lane quiet yet, ADR 0063)."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="retiring", tmp_path=control_dir.parent
     )
@@ -204,17 +215,10 @@ def test_retirement_is_terminal_and_refuses_outstanding_assignments(
     with pytest.raises(ClerkAssignmentConflict):
         fleet_service.retire_clerk(clerk_id=lane.clerk_id)
 
-    reserved_r = fleet_service._store.read_assignment(
-        broker="fake_alpha", canonical_account_id="ACCT-R"
+    release_after_drain(fleet_service, clock, lane, account="acct-r")
+    retired = fleet_service.force_retire_clerk(
+        clerk_id=lane.clerk_id, operator=TEST_OPERATOR, change_ref=TEST_CHANGE_REF
     )
-    assert reserved_r is not None
-    fleet_service.release_assignment(
-        broker="fake_alpha",
-        external_account_id="acct-r",
-        expected_assignment_generation=reserved_r.assignment_generation,
-        proof="old-clerk-offline-and-obligations-clear",
-    )
-    retired = fleet_service.retire_clerk(clerk_id=lane.clerk_id)
     assert str(retired.lifecycle_state) == "retired"
 
     # Terminal: a retired clerk never registers, reserves or routes again.

@@ -605,18 +605,23 @@ re-arms the server-authored timeframe auto-correct, and numeric
   a product decision and a resolver change only — the client applies
   whatever dates Python resolves.
 
-## Fleet account retirement — verified 2026-09-16
+## Fleet account retirement — verified 2026-09-21
 
-- **P1: accepted drain/handover contract is not implemented.**
-  [ADR 0063](architecture/adrs/0063-draining-is-an-observed-lane-handover.md)
-  requires observed drain, deadline, command-quiet, and attributed mount
-  evidence. `PythonDataService/scripts/manage_broker_fleet.py` still exposes
-  the older `retire` and fixed-phrase `release-assignment --proof` interface;
-  `app/broker/fleet/service.py` has no drain/force-retire implementation.
-  A served account cannot be permanently retired/reassigned through a
-  compliant supported ceremony yet. Operators can stop and preserve a lane
-  using [the account runbook](runbooks/add-an-alpaca-account.md#6-removal).
-  Do not substitute direct registry edits or the old published proof token.
+- **P1: the drain ceremony's normal retirement path is blocked on lane
+  quiet (#2154).** ADR 0063's ceremony core now ships (schema v5; `drain`,
+  `force-retire`, attributed `release-assignment`, the never-served
+  predicate, the calendar-derived deadline; `RELEASE_PROOF_TOKEN` deleted),
+  but no provider can answer lane quiet yet, so the normal
+  `draining -> retired` path refuses naming the outstanding item and every
+  retirement of a served clerk goes through the attributed, deadline-bound
+  `force-retire` — the auditable forced count starts at 100% and stays
+  there until #2154 ships the Alpaca nothing-open attestation. Reassignment
+  is blocked outright until #2155 closes the drained-lane resurrection hole
+  (whole-machine migration, #2151, is the preferred lane move). Operators
+  retiring a served lane run: `drain`, wait out the printed deadline,
+  `release-assignment --operator --change-ref` per assigned account, then
+  `force-retire --operator --change-ref`. Do not substitute direct registry
+  edits.
 
 ## Live EMA replay evidence — verified 2026-09-17
 

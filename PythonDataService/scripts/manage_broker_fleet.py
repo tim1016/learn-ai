@@ -23,7 +23,18 @@ volume::
         --control-dir /app/artifacts/fleet --clerk-id clrk_... \\
         --volume-root /app/artifacts/clerks/paper
 
-The worker key printed by ``provision`` is the one secret-shaped artifact the
+    A served lane leaves service through the drain ceremony (ADR 0063): drain
+    closes the door, the deadline bounds the wait, and a lane that cannot
+    answer lane quiet exits through the separately named force-retire::
+
+        python -m scripts.manage_broker_fleet drain \\
+            --control-dir /app/artifacts/fleet --clerk-id clrk_...
+
+        python -m scripts.manage_broker_fleet force-retire \\
+            --control-dir /app/artifacts/fleet --clerk-id clrk_... \\
+            --operator inkant --change-ref incident-2026-09-21-lane-decom
+
+    The worker key printed by ``provision`` is the one secret-shaped artifact the
 ceremony mints; it is handed to exactly one agent process and never returned
 over any API.
 
@@ -67,6 +78,9 @@ from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
 from scripts._operator_cli import jsonable
+from scripts.fleet_lifecycle_ceremonies import (
+    register_lifecycle_ceremony_subparsers,
+)
 
 
 def _write(payload: object) -> None:
@@ -205,40 +219,6 @@ def _show(args: argparse.Namespace) -> int:
     return 0
 
 
-def _retire(args: argparse.Namespace) -> int:
-    """Handle ``retire``: retire a clerk terminally."""
-    service = _service(args)
-    try:
-        retired = service.retire_clerk(clerk_id=args.clerk_id)
-        _write({"clerk_id": retired.clerk_id, "lifecycle_state": str(retired.lifecycle_state)})
-    finally:
-        service.close()
-    return 0
-
-
-def _release(args: argparse.Namespace) -> int:
-    """Handle ``release-assignment``: run the host release ceremony."""
-    service = _service(args)
-    try:
-        released = service.release_assignment(
-            broker=args.broker,
-            external_account_id=args.account_id,
-            expected_assignment_generation=args.expected_generation,
-            proof=args.proof,
-        )
-        _write(
-            {
-                "broker": released.broker,
-                "canonical_external_account_id": released.canonical_external_account_id,
-                "state": str(released.state),
-                "assignment_generation": released.assignment_generation,
-            }
-        )
-    finally:
-        service.close()
-    return 0
-
-
 def _compatibility_snapshot(args: argparse.Namespace) -> int:
     """Capture one privacy-preserving compatibility aggregate snapshot."""
     snapshot = capture_snapshot(
@@ -292,35 +272,6 @@ def _compatibility_retire(args: argparse.Namespace) -> int:
             "route_state_count": len(rollout.retired_route_state_paths),
         }
     )
-    return 0
-
-
-def _reassign(args: argparse.Namespace) -> int:
-    """Handle ``reassign-assignment``: verify then transfer one ownership fence."""
-    service = _service(args)
-    try:
-        assigned = service.reassign_assignment(
-            broker=args.broker,
-            external_account_id=args.account_id,
-            expected_assignment_generation=args.expected_generation,
-            proof=args.proof,
-            successor_clerk_id=args.successor_clerk_id,
-            successor_volume_root=Path(args.successor_volume_root),
-        )
-        _write(
-            {
-                "broker": assigned.broker,
-                "canonical_external_account_id": assigned.canonical_external_account_id,
-                "clerk_id": assigned.clerk_id,
-                "assignment_generation": assigned.assignment_generation,
-                "state": str(assigned.state),
-                "routing_open": False,
-                "note": "The successor remains unroutable until its own agent "
-                "confirms the exact binding and existing provider gates admit it.",
-            }
-        )
-    finally:
-        service.close()
     return 0
 
 
@@ -764,29 +715,9 @@ def _build_parser() -> argparse.ArgumentParser:
     show.add_argument("--include-retired", action="store_true")
     show.set_defaults(func=_show)
 
-    retire = subparsers.add_parser("retire", help="Retire a clerk (terminal)")
-    _with_control(retire)
-    retire.add_argument("--clerk-id", required=True)
-    retire.set_defaults(func=_retire)
-
-    release = subparsers.add_parser(
-        "release-assignment", help="Host-only account release ceremony"
+    register_lifecycle_ceremony_subparsers(
+        subparsers, service_factory=_service, write=_write
     )
-    _with_control(release)
-    release.add_argument("--broker", required=True)
-    release.add_argument("--account-id", required=True)
-    release.add_argument(
-        "--expected-generation",
-        type=int,
-        required=True,
-        help="The assignment generation this release's evidence was prepared against",
-    )
-    release.add_argument(
-        "--proof",
-        required=True,
-        help="Offline-and-obligations-clear proof token",
-    )
-    release.set_defaults(func=_release)
 
     compatibility_snapshot = subparsers.add_parser(
         "compatibility-snapshot",
@@ -849,18 +780,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restricted host journal for resumable per-lane retirement acknowledgements",
     )
     compatibility_retire.set_defaults(func=_compatibility_retire)
-
-    reassign = subparsers.add_parser(
-        "reassign-assignment", help="Proof-driven host reassignment to an original successor volume"
-    )
-    _with_control(reassign)
-    reassign.add_argument("--broker", required=True)
-    reassign.add_argument("--account-id", required=True)
-    reassign.add_argument("--expected-generation", type=int, required=True)
-    reassign.add_argument("--proof", required=True)
-    reassign.add_argument("--successor-clerk-id", required=True)
-    reassign.add_argument("--successor-volume-root", required=True)
-    reassign.set_defaults(func=_reassign)
 
     backup = subparsers.add_parser(
         "backup-registry", help="Create a nonsecret fleet-registry backup and manifest"

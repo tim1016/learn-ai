@@ -25,6 +25,11 @@ The load-bearing invariants, each with a test:
   ``worker_key`` (FR-012).
 - Routing attempts pin their context before dispatch, and a delivered
   outcome is terminal (audit 2026-09-13, finding 7).
+- A clerk that has served leaves service only through the drain ceremony
+  (ADR 0063): drain closes the door, the deadline bounds the wait, and the
+  normal retirement path refuses without a lane-quiet confirmation rather
+  than degrading to an attestation; ``force-retire`` is the separately
+  named, operator-attributed exit.
 """
 
 from __future__ import annotations
@@ -41,6 +46,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from app.broker.fleet import volume as volume_module
+from app.broker.fleet.drain_deadline import (
+    DRAIN_DEADLINE_FLOOR_MS,
+    drain_deadline_at_ms,
+)
 from app.broker.fleet.errors import (
     BrokerAndClerkRequired,
     BrokerClerkCapabilityUnavailable,
@@ -48,9 +57,14 @@ from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkBindingGenerationConflict,
     ClerkBrokerMismatch,
+    ClerkCommandQuietRequired,
+    ClerkDrainDeadlinePending,
+    ClerkDrainRequired,
     ClerkEndpointNotApproved,
     ClerkIdentityMismatch,
+    ClerkLaneQuietUnproven,
     ClerkNotFound,
+    ClerkReassignmentBlocked,
     ClerkRoutingAttemptConflict,
     ClerkUnreachable,
     ClerkVolumeAlreadyRegistered,
@@ -84,6 +98,7 @@ from app.broker.fleet.records import (
     ClerkLifecycleState,
     ClerkRecord,
     ClerkSessionRecord,
+    LaneConfirmationState,
     ProviderSummaryObservation,
     RoutingReceiptRecord,
     RoutingReceiptState,
@@ -100,14 +115,22 @@ logger = logging.getLogger(__name__)
 #: A projection only: it never releases, downgrades or transfers anything.
 DEFAULT_SESSION_STALE_AFTER_MS = 30_000
 
-#: The release ceremony's explicit attestation token (PRD FR-055). The host
-#: operator types exactly this to release an assignment, so a release can
-#: never happen by accident or by an unattributed caller. The *proof chain*
-#: behind the attestation — the old agent and volume verifiably offline,
-#: credentials isolated, provider obligations clear — is enforced by the
-#: host ceremony checklist and gains machine-checked proof with the Phase 2
-#: agent liveness surface; the spine refuses everything weaker than the token.
-RELEASE_PROOF_TOKEN = "old-clerk-offline-and-obligations-clear"
+#: The drain ceremony's deployment-owned duration (ADR 0063 Decision 5): the
+#: first leg of the two-legged deadline floor. A deployment may raise it; the
+#: floor in ``drain_deadline.py`` refuses anything lower. It must be judged
+#: against a plausible working-order lifetime, never against
+#: ``DEFAULT_SESSION_STALE_AFTER_MS`` — that 30-second constant measures
+#: heartbeat-staleness detection latency, an entirely different quantity.
+DEFAULT_DRAIN_DEADLINE_MS = DRAIN_DEADLINE_FLOOR_MS
+
+#: The bounded operator attribution every release, reassignment and
+#: force-retirement carries (ADR 0063 Decision 4), in the shape
+#: ``closeout_empty_registry_recovery`` already uses. Attribution, not
+#: proof: a change reference names who acted and why, where the deleted
+#: ``RELEASE_PROOF_TOKEN`` named nobody and was published in the artifact
+#: that checked it.
+_OPERATOR_MAX_CHARS = 128
+_CHANGE_REF_MAX_CHARS = 512
 
 _COMPOSE_NAMED_VOLUME = "compose_named_volume"
 ATTESTATION_KINDS = frozenset({_COMPOSE_NAMED_VOLUME})
@@ -159,6 +182,7 @@ class FleetControlService:
         provider_adapters: Mapping[str, BrokerProviderAdapter] | None = None,
         clock: Callable[[], int] = now_ms_utc,
         session_stale_after_ms: int = DEFAULT_SESSION_STALE_AFTER_MS,
+        drain_deadline_ms: int = DEFAULT_DRAIN_DEADLINE_MS,
     ) -> None:
         """Bind the registry store, the deployment's adapters, and the clock."""
         self._store = store
@@ -170,6 +194,13 @@ class FleetControlService:
         )
         self._clock = clock
         self._session_stale_after_ms = session_stale_after_ms
+        if drain_deadline_ms < DRAIN_DEADLINE_FLOOR_MS:
+            raise ValueError(
+                f"drain_deadline_ms={drain_deadline_ms} is below the "
+                f"{DRAIN_DEADLINE_FLOOR_MS} ms floor (ADR 0063 Decision 5); a "
+                "deployment may raise the duration, never lower it"
+            )
+        self._drain_deadline_ms = drain_deadline_ms
 
     def close(self) -> None:
         """Close the underlying registry store."""
@@ -358,12 +389,15 @@ class FleetControlService:
             # received its marker (read-only volume, full disk, killed
             # process). Retire the half-born clerk so its attestation and
             # volume identity leave the active set and the lane can be
-            # re-provisioned cleanly instead of wedging on a ghost.
+            # re-provisioned cleanly instead of wedging on a ghost. The
+            # clerk provably never served (no session, no assignment, no
+            # history), so the lifecycle trigger's never-served arm admits
+            # this direct retirement — the one legitimate writer of that
+            # edge besides the ceremony's own predicate.
             with self._store.transaction() as conn:
-                self._store.update_clerk_lifecycle(
+                self._store.retire_clerk_row(
                     conn,
                     clerk_id=clerk_id,
-                    lifecycle_state=StoredLifecycleState.RETIRED,
                     retired_at_ms=self._clock(),
                 )
             logger.error(
@@ -433,53 +467,396 @@ class FleetControlService:
             )
         return marker
 
-    def retire_clerk(self, *, clerk_id: str) -> ClerkRecord:
-        """Retirement is terminal; IDs are never recycled (PRD FR-013).
+    def drain_clerk(self, *, clerk_id: str) -> ClerkRecord:
+        """Enter the drain: ``provisioned -> draining``, deliberately cheap (ADR 0063 Decision 1).
 
-        Refuses while the clerk still holds an effective assignment — the
-        obligations the assignment represents must be resolved by the release
-        ceremony first, not silently orphaned. The assignment check and the
-        lifecycle transition share one write transaction, so a concurrent
-        reservation cannot observe "provisioned" while retirement observes
-        "no assignments" and leave a retired clerk owning an active
-        assignment.
+        Nothing gates entry but the registry recovery hold and the clerk
+        being provisioned: the transition *is* the stop-accepting-new-work
+        step (``resolve_route`` already refuses a draining clerk), and a
+        drain that could be refused for being inconvenient would leave an
+        operator unable to close the door. It writes the durable
+        ``draining_since_ms`` and the absolute ``drain_deadline_at_ms``
+        resolved from the deployment duration and the trading calendar, in
+        one transaction.
+
+        Idempotent without extending the bound (§7.3): re-draining a
+        draining clerk returns the existing record with both instants
+        untouched — a retry loop must not make the deadline decorative. The
+        write-once trigger beneath the store seam is the fence a race cannot
+        step over. Drain is irreversible; an operator who drains the wrong
+        lane provisions a new one.
+        """
+        self._require_recovery_hold_clear()
+        clerk = self._require_clerk(clerk_id)
+        if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
+            raise ClerkNotFound(
+                f"Clerk {clerk_id} is retired; a retired lane never returns to service.",
+                next_step="Provision a new clerk; a retired lane's identity is "
+                "never reinstated.",
+            )
+        if clerk.lifecycle_state == StoredLifecycleState.DRAINING:
+            return clerk
+        now = self._clock()
+        deadline = drain_deadline_at_ms(
+            draining_since_ms=now, drain_deadline_ms=self._drain_deadline_ms
+        )
+        with self._store.transaction() as conn:
+            live = self._store.read_clerk_on(conn, clerk_id)
+            if live is None or live.lifecycle_state != StoredLifecycleState.PROVISIONED:
+                raise ClerkAssignmentConflict(
+                    f"Clerk {clerk_id} is no longer provisioned; drain entered or "
+                    "retired concurrently.",
+                    next_step="Re-read the clerk's lifecycle state and retry the "
+                    "ceremony against the current state.",
+                )
+            updated = self._store.drain_clerk_row(
+                conn,
+                clerk_id=clerk_id,
+                draining_since_ms=now,
+                drain_deadline_at_ms=deadline,
+            )
+            if not updated:
+                raise ClerkAssignmentConflict(
+                    f"Clerk {clerk_id} left provisioned while the drain was "
+                    "committing; no drain was written.",
+                    next_step="Re-read the clerk's lifecycle state and retry.",
+                )
+        logger.info(
+            "fleet clerk drained",
+            extra={
+                "broker": clerk.broker,
+                "clerk_id": clerk_id,
+                "draining_since_ms": now,
+                "drain_deadline_at_ms": deadline,
+            },
+        )
+        drained = self._store.read_clerk(clerk_id)
+        assert drained is not None
+        return drained
+
+    def retire_clerk(self, *, clerk_id: str) -> ClerkRecord:
+        """Retirement is terminal; IDs are never recycled (PRD FR-013, ADR 0063).
+
+        A clerk that provably never served — no row in the append-only
+        assignment history, none in the append-only session history, and no
+        live session row — retires directly. A clerk that has ever served
+        must pass through the drain: it must be ``draining``, command-quiet
+        (zero dispatches whose outcome the coordinator lost), and covered by
+        a lane-quiet confirmation no provider can answer yet (#2154) — so
+        the normal path refuses, naming the outstanding item, and
+        ``force_retire_clerk`` is the separately named exit. The held
+        assignment check runs first in every branch, and each gate shares
+        one write transaction with the transition it guards.
         """
         self._require_recovery_hold_clear()
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
             return clerk
         now = self._clock()
-        updated = False
         with self._store.transaction() as conn:
             held = [
                 assignment
-                for assignment in self._store.list_assignments_for_clerk(clerk_id)
+                for assignment in self._store.list_assignments_for_clerk_on(conn, clerk_id)
                 if assignment.state != AssignmentState.RELEASED
             ]
             if held:
                 raise ClerkAssignmentConflict(
                     f"Clerk {clerk_id} still holds {len(held)} account assignment(s); "
-                    "retirement requires the release ceremony to prove obligations "
-                    "clear first.",
-                    next_step="Run the host release ceremony for each assigned account, "
-                    "then retire.",
+                    "retirement requires the release ceremony for each assigned "
+                    "account after the drain, not a silent orphaning.",
+                    next_step="Drain the clerk, run the release ceremony for each "
+                    "assigned account, then retire.",
                 )
-            updated = self._store.update_clerk_lifecycle(
-                conn,
-                clerk_id=clerk_id,
-                lifecycle_state=StoredLifecycleState.RETIRED,
-                retired_at_ms=now,
-            )
-        if not updated:
-            raise ClerkNotFound(
-                f"No clerk carries identity {clerk_id!r}.",
-                next_step="Confirm the clerk id; a clerk that never existed "
-                "cannot be retired.",
-            )
+            if not self._store.clerk_has_served_on(conn, clerk_id):
+                # Decision 6: the bypass is closed against an observable.
+                # This half-born or never-booted clerk retires directly; the
+                # lifecycle trigger's fourth arm mirrors this predicate
+                # exactly, so no caller can step over it.
+                updated = self._store.retire_clerk_row(
+                    conn, clerk_id=clerk_id, retired_at_ms=now
+                )
+                if not updated:
+                    raise ClerkAssignmentConflict(
+                        f"Clerk {clerk_id} changed while retiring; re-read and retry.",
+                    )
+            else:
+                live = self._store.read_clerk_on(conn, clerk_id)
+                assert live is not None
+                if live.lifecycle_state == StoredLifecycleState.PROVISIONED:
+                    raise ClerkDrainRequired(
+                        f"Clerk {clerk_id} has served and retires only through "
+                        "draining; a served clerk's direct retirement is closed.",
+                        next_step="Run the drain ceremony first, then wait out the "
+                        "deadline and retire.",
+                    )
+                self._require_command_quiet(conn, clerk_id)
+                self._require_lane_quiet(clerk_id)
+                # Unreachable until a provider answers lane quiet (#2154): the
+                # gate above raises today, which is the ceremony's honest
+                # "blocked, not degraded" state. When the confirmation
+                # arrives, this is the transition it completes.
+                updated = self._store.retire_clerk_row(
+                    conn,
+                    clerk_id=clerk_id,
+                    retired_at_ms=now,
+                    lane_confirmation=LaneConfirmationState.PRESENT,
+                )
+                if not updated:
+                    raise ClerkAssignmentConflict(
+                        f"Clerk {clerk_id} changed while retiring; re-read and retry.",
+                    )
         logger.info("fleet clerk retired", extra={"broker": clerk.broker, "clerk_id": clerk_id})
         retired = self._store.read_clerk(clerk_id)
         assert retired is not None
         return retired
+
+    def force_retire_clerk(
+        self, *, clerk_id: str, operator: str, change_ref: str
+    ) -> ClerkRecord:
+        """The separately named exit for a drain that cannot answer (ADR 0063 Decision 5).
+
+        Requires the clerk to be draining and the two-legged deadline to have
+        actually elapsed. Settles every still-unsettled attempt as
+        ``outcome_unknown`` — fabricating nothing: that value *means* "may
+        have executed, reconcile by identity, never resubmit" — releases any
+        assignment the lane still holds under the same attribution (a lane
+        that cannot answer is exactly a lane whose release ceremony cannot
+        run, because a lost dispatch outcome is what blocks it), records the
+        retirement with ``lane_confirmation: absent`` and the operator's
+        bounded attribution, and records every forced correlation id in the registry's append-only
+        obligations table — in the same transaction, so the reconciliation
+        work queue is atomic with the retirement and rides every backup.
+
+        A distinct ceremony, never a branch inside ``retire``: an operator
+        who force-retires knows they did, and an auditor can count how often
+        it happens — a count that starts at 100% of served-clerk retirements
+        and stays there until a provider answers lane quiet (#2154).
+        """
+        bounded_operator, bounded_change_ref = _bounded_attestation(operator, change_ref)
+        self._require_recovery_hold_clear()
+        clerk = self._require_clerk(clerk_id)
+        if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
+            return clerk
+        now = self._clock()
+        forced_correlation_ids: list[str] = []
+        with self._store.transaction() as conn:
+            live = self._store.read_clerk_on(conn, clerk_id)
+            assert live is not None
+            if live.lifecycle_state == StoredLifecycleState.PROVISIONED:
+                raise ClerkDrainRequired(
+                    f"Clerk {clerk_id} is provisioned; force-retire is the exit for "
+                    "a stalled drain, and a clerk that never served retires "
+                    "directly.",
+                    next_step="Run the plain retire for a never-served clerk, or "
+                    "drain first and wait out the deadline.",
+                )
+            if live.drain_deadline_at_ms is None or now < live.drain_deadline_at_ms:
+                deadline = live.drain_deadline_at_ms
+                raise ClerkDrainDeadlinePending(
+                    f"Clerk {clerk_id}'s drain deadline "
+                    f"({'unknown' if deadline is None else deadline}) has not "
+                    f"elapsed (now {now}); the bound is what a stalled drain "
+                    "holds a lane to.",
+                    next_step="Wait for the drain deadline recorded on the clerk "
+                    "row, then re-run force-retire.",
+                )
+            unsettled = self._store.list_unsettled_routing_receipts_on(conn, clerk_id)
+            forced_correlation_ids = [receipt.correlation_id for receipt in unsettled]
+            for receipt in unsettled:
+                settled = self._store.update_routing_receipt_outcome(
+                    conn,
+                    correlation_id=receipt.correlation_id,
+                    state=RoutingReceiptState.OUTCOME_UNKNOWN,
+                    upstream_receipt_ref=None,
+                    updated_at_ms=now,
+                )
+                if not settled:
+                    raise ClerkRoutingAttemptConflict(
+                        f"Attempt {receipt.correlation_id} changed while "
+                        "force-retire was settling it; re-read and retry.",
+                    )
+            held = [
+                assignment
+                for assignment in self._store.list_assignments_for_clerk_on(conn, clerk_id)
+                if assignment.state != AssignmentState.RELEASED
+            ]
+            for assignment in held:
+                # The same release the ceremony would have run, under the same
+                # attribution: the sweep happens only after the attempts that
+                # blocked release are settled, so nothing is orphaned past an
+                # unresolved obligation.
+                released = replace(
+                    assignment,
+                    state=AssignmentState.RELEASED,
+                    updated_at_ms=now,
+                    lane_confirmation=LaneConfirmationState.ABSENT,
+                    attested_operator=bounded_operator,
+                    attested_change_ref=bounded_change_ref,
+                    attested_at_ms=now,
+                )
+                accepted = self._store.cas_update_assignment(
+                    conn,
+                    released,
+                    previous_generation=assignment.assignment_generation,
+                    previous_state=assignment.state,
+                )
+                if not accepted:
+                    raise ClerkAssignmentConflict(
+                        f"Account {assignment.canonical_external_account_id} under "
+                        f"broker {assignment.broker!r} changed while force-retire "
+                        "was releasing it; re-read and retry.",
+                    )
+            updated = self._store.retire_clerk_row(
+                conn,
+                clerk_id=clerk_id,
+                retired_at_ms=now,
+                lane_confirmation=LaneConfirmationState.ABSENT,
+                retire_operator=bounded_operator,
+                retire_change_ref=bounded_change_ref,
+            )
+            if not updated:
+                raise ClerkAssignmentConflict(
+                    f"Clerk {clerk_id} changed while force-retiring; re-read and "
+                    "retry.",
+                )
+            # The forced-unknown obligations are recorded in the same
+            # transaction as the retirement: a failure anywhere above rolls
+            # the whole ceremony back, and the work queue can never be
+            # orphaned by a sidecar write that did not happen.
+            if forced_correlation_ids:
+                self._store.record_forced_correlations(
+                    conn,
+                    broker=clerk.broker,
+                    clerk_id=clerk_id,
+                    forced_at_ms=now,
+                    operator=bounded_operator,
+                    change_ref=bounded_change_ref,
+                    correlation_ids=forced_correlation_ids,
+                )
+        logger.info(
+            "fleet clerk force-retired",
+            extra={
+                "broker": clerk.broker,
+                "clerk_id": clerk_id,
+                "operator": bounded_operator,
+                "forced_correlation_count": len(forced_correlation_ids),
+            },
+        )
+        retired = self._store.read_clerk(clerk_id)
+        assert retired is not None
+        return retired
+
+    def _require_command_quiet(self, conn: sqlite3.Connection, clerk_id: str) -> None:
+        """ADR 0063 Decision 3: refuse past a dispatch whose outcome was lost.
+
+        Read inside the caller's write transaction, so a dispatch landing
+        between the check and the commit cannot retire a lane past an
+        attempt it just lost the outcome of. At its true strength and no
+        higher: this is bookkeeping about the coordinator's own knowledge —
+        it prevents retiring past a command whose outcome the coordinator
+        lost, and it never claimed to measure orders.
+        """
+        unsettled = self._store.list_unsettled_routing_receipts_on(conn, clerk_id)
+        if unsettled:
+            raise ClerkCommandQuietRequired(
+                f"Clerk {clerk_id} holds {len(unsettled)} dispatched routing "
+                "attempt(s) whose outcome the coordinator lost; retiring the "
+                "lane would strand a reconciliation obligation with no owner.",
+                next_step="Reconcile or settle each unsettled attempt, then retry "
+                "the ceremony.",
+            )
+
+    def _require_draining_predecessor_past_deadline(
+        self, conn: sqlite3.Connection, clerk_id: str, *, now: int
+    ) -> ClerkRecord:
+        """ADR 0063 §4/§4.1's shared predecessor gate, read in the caller's
+        write transaction: the owning lane must exist, be draining (a closed
+        door is what makes the rest of the ceremony's evidence meaningful),
+        and have actually waited out the deadline that bounds ``force-retire``.
+
+        A retired predecessor refuses too: retirement sweeps or refuses every
+        held assignment on its own terms, so a released assignment surfacing
+        under one is a registry inconsistency this ceremony reports rather
+        than repairs.
+        """
+        predecessor = self._store.read_clerk_on(conn, clerk_id)
+        if predecessor is None:
+            raise ClerkNotFound(
+                f"The clerk holding this assignment, {clerk_id}, has no registry "
+                "row.",
+                next_step="Confirm the clerk id against the fleet directory "
+                "before retrying.",
+            )
+        if predecessor.lifecycle_state != StoredLifecycleState.DRAINING:
+            if predecessor.lifecycle_state == StoredLifecycleState.PROVISIONED:
+                raise ClerkDrainRequired(
+                    f"The owning clerk {clerk_id} is still provisioned; this "
+                    "ceremony requires a lane whose door is closed.",
+                    next_step="Drain the owning clerk first, then wait out the "
+                    "drain deadline, then re-run.",
+                )
+            raise ClerkAssignmentConflict(
+                f"The owning clerk {clerk_id} is retired; its assignment is "
+                "not released here.",
+                next_step="Restore the registry from its backup — a retired "
+                "clerk never holds a live assignment.",
+            )
+        if predecessor.drain_deadline_at_ms is None or now < predecessor.drain_deadline_at_ms:
+            raise ClerkDrainDeadlinePending(
+                f"Clerk {clerk_id}'s drain deadline "
+                f"({'unknown' if predecessor.drain_deadline_at_ms is None else predecessor.drain_deadline_at_ms}) "
+                f"has not elapsed (now {now}); the ceremony waits out the same "
+                "bound that gates force-retire.",
+                next_step="Wait for the drain deadline recorded on the clerk "
+                "row, then re-run the ceremony.",
+            )
+        return predecessor
+
+    def _released_history_record(
+        self, *, broker: str, canonical: str, generation: int
+    ) -> AccountAssignmentRecord:
+        """The persisted release row for one generation, from the audit history.
+
+        The current-row pointer a released assignment leaves behind carries no
+        ceremony facts — the attestation lives only on the history row the
+        release inserted — so this is the record an idempotent retry owes its
+        caller: identical audit facts to the first run, never nulls. A
+        released current row with no matching history row is registry
+        corruption (every release transition appends one) and refuses loudly
+        rather than synthesizing a record.
+        """
+        for row in self._store.list_assignment_history(
+            broker=broker, canonical_account_id=canonical
+        ):
+            if row.state == AssignmentState.RELEASED and row.assignment_generation == generation:
+                return row
+        raise ClerkAssignmentConflict(
+            f"Account {canonical} under broker {broker!r} is released at generation "
+            f"{generation} but its release history row is missing; the registry is "
+            "not internally consistent.",
+            next_step="Restore the registry from the coordinator control volume's "
+            "backup, then retry.",
+        )
+
+    def _require_lane_quiet(self, clerk_id: str) -> None:
+        """ADR 0063 Decision 2: the retirement gate no provider can answer yet.
+
+        The gate consumes a lane-quiet confirmation — the lane's own
+        assertion that it holds no working order and runs no bot decision
+        loop, fenced by the current session's instance and epoch. No
+        provider can answer it today (#2154), so this refuses and names the
+        outstanding item rather than degrading to an operator attestation: a
+        gate that always passes is the defect this ceremony exists to
+        remove. ``force_retire_clerk`` is the named exit.
+        """
+        raise ClerkLaneQuietUnproven(
+            f"Clerk {clerk_id} has no lane-quiet confirmation; no provider can "
+            "answer lane quiet yet (#2154), so the normal retirement path "
+            "refuses rather than degrading to an attestation.",
+            next_step="Run force-retire — the separately named, deadline-bound, "
+            "operator-attributed exit — or wait for the lane-quiet provider "
+            "(#2154).",
+        )
 
     # ---- approved endpoints (host ceremony) --------------------------------
 
@@ -1043,9 +1420,10 @@ class FleetControlService:
         broker: str,
         external_account_id: str,
         expected_assignment_generation: int,
-        proof: str,
+        operator: str,
+        change_ref: str,
     ) -> AccountAssignmentRecord:
-        """The host-only release ceremony (PRD FR-055).
+        """The host-only release ceremony (PRD FR-055, ADR 0063 Decisions 4/4.1).
 
         Terminal for the generation: the row records ``released`` and stays
         in the append-only history, which is what makes "never expire into
@@ -1053,14 +1431,18 @@ class FleetControlService:
         with a higher generation. The caller pins the assignment generation
         its evidence was prepared against, so release evidence prepared for
         generation N cannot silently release generation N+1's new owner.
+
+        The fixed proof phrase is gone: the ceremony now requires a bounded,
+        attributable ``operator``/``change_ref`` — attribution, not proof,
+        in the shape ``closeout_empty_registry_recovery`` established — and
+        the owning clerk must be draining, command-quiet, and past the
+        drain deadline that bounds ``force-retire``, recording
+        ``lane_confirmation: absent`` as a durable fact on the released
+        history row so an auditor can count how many handovers proceeded
+        without it (ADR 0063 §4.1: today, all of them).
         """
+        bounded_operator, bounded_change_ref = _bounded_attestation(operator, change_ref)
         self._require_recovery_hold_clear()
-        if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
-            raise ClerkAssignmentConflict(
-                "The release ceremony requires the offline-and-obligations-clear proof.",
-                next_step="Prove the old agent and volume are offline and the "
-                "provider's obligations are clear, then re-run with the proof token.",
-            )
         adapter = self._adapter(broker)
         canonical = adapter.canonical_account_id(external_account_id)
         existing = self._store.read_assignment(broker=broker, canonical_account_id=canonical)
@@ -1068,11 +1450,6 @@ class FleetControlService:
             raise ClerkAssignmentConflict(
                 f"Account {canonical} under broker {broker!r} has no assignment to release.",
             )
-        if (
-            existing.state == AssignmentState.RELEASED
-            and existing.assignment_generation == expected_assignment_generation
-        ):
-            return existing
         if existing.assignment_generation != expected_assignment_generation:
             raise ClerkAssignmentConflict(
                 f"Account {canonical} under broker {broker!r} is at assignment "
@@ -1082,27 +1459,41 @@ class FleetControlService:
                 next_step="Re-read the assignment and re-prepare the release evidence.",
             )
         if existing.state == AssignmentState.RELEASED:
-            return existing
+            # Idempotent, and audited the same both times: the retry returns
+            # the persisted release history row — which carries the
+            # ``lane_confirmation`` and attribution the current-row pointer
+            # does not store — so a repeated ceremony reports the same facts
+            # the first one recorded, never null audit columns.
+            return self._released_history_record(
+                broker=broker, canonical=canonical, generation=expected_assignment_generation
+            )
         now = self._clock()
-        released = AccountAssignmentRecord(
-            broker=broker,
-            canonical_external_account_id=canonical,
-            clerk_id=existing.clerk_id,
-            assignment_generation=existing.assignment_generation,
+        released = replace(
+            existing,
             state=AssignmentState.RELEASED,
-            effective_profile_id=existing.effective_profile_id,
-            effective_revision=existing.effective_revision,
-            confirmed_binding_generation=existing.confirmed_binding_generation,
-            confirmed_profile_id=existing.confirmed_profile_id,
-            confirmed_revision=existing.confirmed_revision,
-            confirmed_at_ms=existing.confirmed_at_ms,
-            confirmed_agent_instance_id=existing.confirmed_agent_instance_id,
-            confirmed_routing_epoch=existing.confirmed_routing_epoch,
-            recorded_at_ms=existing.recorded_at_ms,
             updated_at_ms=now,
+            lane_confirmation=LaneConfirmationState.ABSENT,
+            attested_operator=bounded_operator,
+            attested_change_ref=bounded_change_ref,
+            attested_at_ms=now,
         )
         accepted = False
         with self._store.transaction() as conn:
+            # The predecessor gates read inside the same write transaction as
+            # the transition: a drain entered (or an attempt opened) between
+            # the outer read and this commit is the state this ceremony
+            # decides against, not a race it silently wins (ADR 0063 §4.1).
+            live_assignment = self._store.read_assignment_on(
+                conn, broker=broker, canonical_account_id=canonical
+            )
+            if live_assignment is None or live_assignment.state != existing.state:
+                raise ClerkAssignmentConflict(
+                    f"Account {canonical} under broker {broker!r} changed while releasing.",
+                )
+            self._require_draining_predecessor_past_deadline(
+                conn, existing.clerk_id, now=now
+            )
+            self._require_command_quiet(conn, existing.clerk_id)
             accepted = self._store.cas_update_assignment(
                 conn, released, previous_generation=existing.assignment_generation,
                 previous_state=existing.state,
@@ -1113,9 +1504,14 @@ class FleetControlService:
             )
         logger.info(
             "fleet account assignment released",
-            extra={"broker": broker},
+            extra={"broker": broker, "operator": bounded_operator},
         )
-        return released
+        # Both paths answer with the persisted history row: the read-back is
+        # itself a check that the ceremony's durable facts landed, and a
+        # retry of the completed ceremony returns byte-identical audit facts.
+        return self._released_history_record(
+            broker=broker, canonical=canonical, generation=expected_assignment_generation
+        )
 
     def reassign_assignment(
         self,
@@ -1123,16 +1519,33 @@ class FleetControlService:
         broker: str,
         external_account_id: str,
         expected_assignment_generation: int,
-        proof: str,
+        operator: str,
+        change_ref: str,
         successor_clerk_id: str,
         successor_volume_root: Path,
-    ) -> AccountAssignmentRecord:
-        """Transfer an account only through the proof-driven host ceremony.
+    ) -> None:
+        """Refuse every lane-to-lane reassignment until #2155 closes (ADR 0063 §4.1/§7.1).
 
-        The successor's marked volume is verified before the old assignment is
-        released. The successor is reserved, not confirmed or routed: its
-        agent must still pass its provider-owned binding and arming gates.
+        The ceremony's checks all run and each refusal names its first
+        outstanding item: the successor's marked volume is verified, its
+        broker must match, it may hold no active assignment, the generation
+        pin holds, and the predecessor must be draining, command-quiet, and
+        past the drain deadline. Past all of those, the ceremony still
+        refuses on §7.1's ground — a drained lane can resurrect its binding
+        by restarting while the coordinator is unreachable (#2155), and the
+        draining-predecessor requirement plus this prohibition leave
+        reassignment no legal predecessor state. There is no transfer code
+        behind the refusal: unreachable code cannot be exercised through
+        this seam, and the transactional transfer (``store.reassign_assignment``)
+        carries its own coverage and returns with #2155's unblocking change.
+
+        The block is a fact about one ceremony's reachability, not a safety
+        property; whole-machine migration is the preferred lane move
+        (#2151) and needs no successor at all.
         """
+        # Validate the attribution the ceremony will one day record, so a
+        # malformed invocation is refused as one (exit 1) before the block.
+        _bounded_attestation(operator, change_ref)
         self._require_recovery_hold_clear()
         successor = self._require_clerk(successor_clerk_id)
         if successor.broker != broker:
@@ -1140,12 +1553,6 @@ class FleetControlService:
                 f"Successor clerk {successor_clerk_id} belongs to broker "
                 f"{successor.broker!r}, not {broker!r}.",
                 next_step=_BROKER_IMMUTABLE_NEXT_STEP,
-            )
-        if not proof or proof.strip() != RELEASE_PROOF_TOKEN:
-            raise ClerkAssignmentConflict(
-                "The reassignment ceremony requires the offline-and-obligations-clear proof.",
-                next_step="Prove the old agent and volume are offline and the provider's "
-                "obligations are clear, then re-run with the proof token.",
             )
         self._verify_volume(successor, successor_volume_root)
         canonical = self._adapter(broker).canonical_account_id(external_account_id)
@@ -1198,32 +1605,34 @@ class FleetControlService:
                         f"Account {canonical} under broker {broker!r} is already released; "
                         "a completed ceremony is never silently continued.",
                     )
-                released = replace(existing, state=AssignmentState.RELEASED, updated_at_ms=now)
-                reserved = AccountAssignmentRecord(
-                    broker=broker,
-                    canonical_external_account_id=canonical,
-                    clerk_id=successor_clerk_id,
-                    assignment_generation=existing.assignment_generation + 1,
-                    state=AssignmentState.RESERVED,
-                    recorded_at_ms=now,
-                    updated_at_ms=now,
+                # §4.1's predecessor preconditions, in order, each naming the
+                # first outstanding item.
+                self._require_draining_predecessor_past_deadline(
+                    conn, existing.clerk_id, now=now
                 )
-                self._store.reassign_assignment(
-                    conn,
-                    released=released,
-                    reserved_successor=reserved,
-                    previous_state=existing.state,
+                self._require_command_quiet(conn, existing.clerk_id)
+                # §7.1: no drained lane is reassigned while restart-during-
+                # outage can resurrect its binding. Until #2155 closes, this
+                # leaves the ceremony unreachable — stated as the ADR's
+                # conclusion, not papered over. There is deliberately no
+                # transfer code behind the refusal: unreachable code cannot
+                # be exercised through this seam, and the transactional
+                # transfer it will call (store.reassign_assignment) carries
+                # its own coverage and arrives with #2155's unblocking
+                # change.
+                raise ClerkReassignmentBlocked(
+                    f"Account {canonical} is held by drained clerk {existing.clerk_id}; "
+                    "a drained lane must not be reassigned while restarting during "
+                    "a coordinator outage can resurrect its binding (#2155).",
+                    next_step="Use whole-machine migration, which moves the lane's "
+                    "volume with it and needs no successor (#2151), or wait for "
+                    "#2155 to close.",
                 )
         except sqlite3.IntegrityError as exc:
             raise ClerkAssignmentConflict(
                 f"Account {canonical} under broker {broker!r} changed while reassignment "
                 "was preparing the successor; the original ownership remains intact.",
             ) from exc
-        logger.info(
-            "fleet account assignment reassigned",
-            extra={"broker": broker, "clerk_id": successor_clerk_id},
-        )
-        return reserved
 
     # ---- routing -----------------------------------------------------------
 
@@ -1802,6 +2211,8 @@ class FleetControlService:
             capabilities=capabilities,
             provider_summary=provider_summary,
             observed_at_ms=now,
+            draining_since_ms=clerk.draining_since_ms,
+            drain_deadline_at_ms=clerk.drain_deadline_at_ms,
         )
 
     # ---- read-only aggregation over lanes -----------------------------------
@@ -1938,6 +2349,33 @@ class FleetControlService:
         return clerk
 
 
+def _bounded_attestation(operator: str, change_ref: str) -> tuple[str, str]:
+    """Validate and normalize one ceremony's operator attribution (ADR 0063 Decision 4).
+
+    The shape ``closeout_empty_registry_recovery`` established: a bounded,
+    non-empty ``operator`` (≤128) and ``change_ref`` (≤512), stripped. This
+    buys attribution, not proof — a change reference is unique per ceremony
+    and names who acted and why; a phrase published in the repository that
+    checks it is replayable and names nobody, which is exactly the failure
+    of the token this replaces. A malformed attribution is a malformed
+    invocation (``ValueError``, CLI exit 1), not a ceremony state refusal.
+    """
+    bounded_operator = operator.strip()
+    bounded_change_ref = change_ref.strip()
+    if (
+        not bounded_operator
+        or len(bounded_operator) > _OPERATOR_MAX_CHARS
+        or not bounded_change_ref
+        or len(bounded_change_ref) > _CHANGE_REF_MAX_CHARS
+    ):
+        raise ValueError(
+            "A release, reassignment or force-retirement requires a non-empty "
+            f"operator (≤{_OPERATOR_MAX_CHARS} chars) and change reference "
+            f"(≤{_CHANGE_REF_MAX_CHARS} chars), attributing who acted and why."
+        )
+    return bounded_operator, bounded_change_ref
+
+
 def _validate_internal_base_url(base_url: str) -> str:
     """Normalize and bound one internal agent destination.
 
@@ -2020,9 +2458,9 @@ def _project_lifecycle(
 __all__ = [
     "ATTESTATION_KINDS",
     "DEFAULT_DEPLOYMENT_NAMESPACE",
+    "DEFAULT_DRAIN_DEADLINE_MS",
     "DEFAULT_SESSION_STALE_AFTER_MS",
     "FLEET_PROTOCOL_VERSION",
-    "RELEASE_PROOF_TOKEN",
     "FleetControlService",
     "ProvisionedClerk",
 ]

@@ -59,6 +59,20 @@ class AssignmentState(StrEnum):
     RELEASED = "released"
 
 
+class LaneConfirmationState(StrEnum):
+    """Whether a lane-quiet confirmation covered a lifecycle exit (ADR 0063).
+
+    ``absent`` records that the exit proceeded without one — every release,
+    reassignment and force-retirement today, which is the countable fact an
+    auditor reads. ``present`` is the value the normal retirement path writes
+    once a provider answers lane quiet (#2154). NULL, not a member, means the
+    row predates the ceremony or its transition carried no confirmation.
+    """
+
+    ABSENT = "absent"
+    PRESENT = "present"
+
+
 class RoutingReceiptState(StrEnum):
     """The four-way outcome vocabulary of one routing attempt.
 
@@ -193,6 +207,17 @@ class ClerkRecord:
     lifecycle_state: StoredLifecycleState
     created_at_ms: int
     retired_at_ms: int | None = None
+    #: ADR 0063 Decision 1/5 — the drain start instant and the absolute
+    #: deadline computed at drain time; both persist into retirement.
+    draining_since_ms: int | None = None
+    drain_deadline_at_ms: int | None = None
+    #: ADR 0063 Decision 5 — ``absent`` when force-retired past an
+    #: unanswered lane-quiet gate, ``present`` when the normal path retires
+    #: on a lane confirmation, ``None`` until retired (and for a never-served
+    #: clerk's direct retirement).
+    lane_confirmation: LaneConfirmationState | None = None
+    retire_operator: str | None = None
+    retire_change_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +253,16 @@ class AccountAssignmentRecord:
     confirmed_routing_epoch: int | None = None
     recorded_at_ms: int = 0
     updated_at_ms: int = 0
+    #: ADR 0063 Decision 4/4.1 — the release and reassignment attestation
+    #: facts. They live only on the append-only history row the ceremony
+    #: inserts; the current-row writer leaves them ``None``, exactly as the
+    #: confirmed observation lives only on the current row. A ``None`` on a
+    #: row recorded before schema v5 means "no such fact existed then",
+    #: never "absent confirmation".
+    lane_confirmation: LaneConfirmationState | None = None
+    attested_operator: str | None = None
+    attested_change_ref: str | None = None
+    attested_at_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +338,11 @@ class ClerkDescriptor:
     capabilities: tuple[str, ...]
     provider_summary: Mapping[str, object] | None
     observed_at_ms: int
+    #: ADR 0063 — the drain window's durable endpoints, so an operator
+    #: holding a draining lane can see when the deadline that bounds
+    #: ``force-retire`` actually elapses. ``None`` outside a drain.
+    draining_since_ms: int | None = None
+    drain_deadline_at_ms: int | None = None
 
     def public_fields(self) -> dict[str, object]:
         """The wire shape; ``provider_summary`` is provider-authored and typed."""
@@ -318,6 +358,8 @@ class ClerkDescriptor:
             "capabilities": list(self.capabilities),
             "provider_summary": dict(self.provider_summary) if self.provider_summary else None,
             "observed_at_ms": self.observed_at_ms,
+            "draining_since_ms": self.draining_since_ms,
+            "drain_deadline_at_ms": self.drain_deadline_at_ms,
         }
 
 
@@ -329,6 +371,7 @@ __all__ = [
     "ClerkLifecycleState",
     "ClerkRecord",
     "ClerkSessionRecord",
+    "LaneConfirmationState",
     "ProviderSummaryObservation",
     "RoutingReceiptRecord",
     "RoutingReceiptState",

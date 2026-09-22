@@ -85,19 +85,22 @@ def test_clerk_rows_are_immutable_never_deleted_and_lifecycle_moves_forward(
         )
     with pytest.raises(sqlite3.IntegrityError, match="never deleted"), store.transaction() as conn:
         conn.execute("DELETE FROM clerks WHERE clerk_id = ?", (lane.clerk_id,))
+    # A never-served clerk retires through the store seam; a backwards move
+    # refuses at the schema's forward-only fence no matter who writes it.
+    with store.transaction() as conn:
+        assert store.retire_clerk_row(
+            conn, clerk_id=lane.clerk_id, retired_at_ms=clock()
+        )
     with pytest.raises(sqlite3.IntegrityError, match="forward only"), store.transaction() as conn:
-        fleet_service._store.update_clerk_lifecycle(
-            conn, clerk_id=lane.clerk_id, lifecycle_state=StoredLifecycleState.RETIRED,
-            retired_at_ms=clock(),
+        conn.execute(
+            "UPDATE clerks SET lifecycle_state = 'provisioned', retired_at_ms = NULL "
+            "WHERE clerk_id = ?",
+            (lane.clerk_id,),
         )
-        fleet_service._store.update_clerk_lifecycle(
-            conn, clerk_id=lane.clerk_id,
-            lifecycle_state=StoredLifecycleState.PROVISIONED, retired_at_ms=None,
-        )
-    # Sanity: the failed transitions left the row untouched.
+    # Sanity: the failed transition left the row terminal.
     clerk = store.read_clerk(lane.clerk_id)
     assert clerk is not None
-    assert clerk.lifecycle_state == StoredLifecycleState.PROVISIONED
+    assert clerk.lifecycle_state == StoredLifecycleState.RETIRED
 
 
 def test_foreign_key_pins_assignments_and_sessions_to_real_clerks(

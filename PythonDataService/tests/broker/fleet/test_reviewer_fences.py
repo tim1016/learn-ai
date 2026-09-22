@@ -27,9 +27,8 @@ from tests.broker.fleet.conftest import (
     FrozenClock,
     fake_alpha,
     provision_lane,
+    release_after_drain,
 )
-
-RELEASE_PROOF = "old-clerk-offline-and-obligations-clear"
 
 
 def test_assignment_history_preserves_released_generations(
@@ -38,15 +37,10 @@ def test_assignment_history_preserves_released_generations(
     """Re-reservation overwrites the pointer, never the audited past."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="h1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="h2", tmp_path=control_dir.parent)
-    reserved = fleet_service.reserve_assignment(
+    fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=first.clerk_id, external_account_id="acct-h"
     )
-    fleet_service.release_assignment(
-        broker="fake_alpha",
-        external_account_id="acct-h",
-        expected_assignment_generation=reserved.assignment_generation,
-        proof=RELEASE_PROOF,
-    )
+    release_after_drain(fleet_service, clock, first, account="acct-h")
     fleet_service.reserve_assignment(
         broker="fake_alpha", clerk_id=second.clerk_id, external_account_id="acct-h"
     )

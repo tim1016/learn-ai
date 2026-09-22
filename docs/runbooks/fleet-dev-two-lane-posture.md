@@ -495,5 +495,9 @@ attaches the secret via `proxy.conf.js`).
    `python-service` first would give two processes concurrent authority over
    one SQLite custody state for however long it takes to reach the `rm -f`.
    Then `podman compose -f compose.yaml -f compose.override.yaml up -d python-service`.
-4. Optionally retire the paper clerk host-side (`manage_broker_fleet retire`)
-   to drop it from the directory.
+4. Optionally retire the paper clerk host-side to drop it from the directory.
+   That lane has booted, so under ADR 0063 it is a served clerk: the direct
+   `retire` refuses and the exit is the drain ceremony — `drain`, wait out
+   the drain deadline the drain command prints, `release-assignment` with
+   `--operator`/`--change-ref`, then `force-retire` with the same
+   attribution.

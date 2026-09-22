@@ -61,6 +61,12 @@ def _build_v1_registry(control_dir: Path) -> None:
             "'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 2, 'effective', 'prof_1', 3, 40, 50)"
         )
         conn.execute(
+            "INSERT INTO account_assignment_history (broker, canonical_external_account_id, "
+            "clerk_id, assignment_generation, state, effective_profile_id, effective_revision, "
+            "recorded_at_ms, updated_at_ms) VALUES ('fake_alpha', 'ACCT-LEGACY', "
+            "'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 1, 'released', NULL, NULL, 20, 30)"
+        )
+        conn.execute(
             "INSERT INTO routing_receipts (correlation_id, broker, clerk_id, operation_kind, "
             "nonsecret_target_ref, idempotency_key, state, upstream_receipt_ref, created_at_ms, "
             "updated_at_ms) VALUES ('corr_aaaaaaaaaaaaaaaaaaaaaaaa', 'fake_alpha', "
@@ -115,6 +121,23 @@ def _build_v3_registry(control_dir: Path) -> None:
         for statement in schema.SCHEMA_MIGRATIONS[2]:
             conn.execute(statement)
         conn.execute("UPDATE fleet_meta SET schema_version = 3 WHERE id = 1")
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
+def _build_v4_registry(control_dir: Path) -> None:
+    """Materialize a populated v4 registry: the v3 shape plus the registered
+    v3 → v4 upgrade, so the v4 → v5 case starts from the real v4 DDL rather
+    than a reconstruction of it."""
+    _build_v3_registry(control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for statement in schema.SCHEMA_MIGRATIONS[3]:
+            conn.execute(statement)
+        conn.execute("UPDATE fleet_meta SET schema_version = 4 WHERE id = 1")
         conn.execute("COMMIT")
     finally:
         conn.close()
@@ -472,6 +495,108 @@ def test_a_v3_registry_gains_the_audit_indexes_and_data_survives(
         ), clerk_plan
         assert not any(line.startswith("SCAN routing_receipts") for line in clerk_plan), (
             clerk_plan
+        )
+    finally:
+        store.close()
+
+
+def test_a_v4_registry_gains_the_drain_ceremony_schema_and_data_survives(
+    control_dir: Path, tmp_path: Path
+) -> None:
+    """ADR 0063 / #2111: the v4 → v5 upgrade installs the drain ceremony's
+    columns, indexes and trigger backstops byte-for-byte as a fresh v5 build
+    carries them, every pre-existing row survives with its new columns NULL
+    (a pre-v5 history row keeps NULL forever — the immutability trigger
+    forbids the backfill UPDATE), the fourth lifecycle arm closes the
+    ``provisioned -> retired`` bypass for a clerk that has served, and the
+    command-quiet predicate's partial index serves the drain ceremonies'
+    read instead of scanning the append-only receipts table.
+
+    The populated v4 registry carries the legacy clerk with a live session
+    row and an effective assignment — exactly the "has served" population
+    the bypass closure must catch.
+    """
+    _build_v4_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert store.schema_version == schema.SCHEMA_VERSION
+
+        # Object parity with a fresh build: the recreated lifecycle trigger,
+        # the new write-once trigger, the two partial/plain indexes.
+        def objects(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+            return {
+                (str(row[0]), str(row[1]))
+                for row in conn.execute(
+                    "SELECT type, name FROM sqlite_master "
+                    "WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+
+        fresh = FleetRegistryStore.open(control_dir=tmp_path / "fresh")
+        try:
+            assert objects(store._conn) == objects(fresh._conn)
+        finally:
+            fresh.close()
+
+        # Every pre-existing row survives, with the new facts reading as
+        # "not present" rather than being fabricated.
+        clerk = store.read_clerk("clrk_aaaaaaaaaaaaaaaaaaaaaaaa")
+        assert clerk is not None
+        assert clerk.lifecycle_state.value == "provisioned"
+        assert clerk.draining_since_ms is None
+        assert clerk.drain_deadline_at_ms is None
+        assert clerk.lane_confirmation is None
+        assignment = store.read_assignment(
+            broker="fake_alpha", canonical_account_id="ACCT-LEGACY"
+        )
+        assert assignment is not None
+        history = store.list_assignment_history(
+            broker="fake_alpha", canonical_account_id="ACCT-LEGACY"
+        )
+        assert history
+        for row in history:
+            assert row.lane_confirmation is None
+            assert row.attested_operator is None
+            assert row.attested_at_ms is None
+
+        # The fourth arm is live on the migrated registry: this clerk holds a
+        # live session row (and assignment history), so a direct retirement
+        # aborts — where the same v4 registry would have accepted it.
+        with pytest.raises(
+            sqlite3.IntegrityError, match="retires through draining"
+        ), store.transaction() as conn:
+            conn.execute(
+                "UPDATE clerks SET lifecycle_state = 'retired', retired_at_ms = 999 "
+                "WHERE clerk_id = 'clrk_aaaaaaaaaaaaaaaaaaaaaaaa'"
+            )
+
+        # The write-once trigger is live: a drain's facts never move.
+        with store.transaction() as conn:
+            conn.execute(
+                "UPDATE clerks SET lifecycle_state = 'draining', draining_since_ms = 500, "
+                "drain_deadline_at_ms = 900 WHERE clerk_id = 'clrk_aaaaaaaaaaaaaaaaaaaaaaaa'"
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError, match="written once"
+        ), store.transaction() as conn:
+            conn.execute(
+                "UPDATE clerks SET drain_deadline_at_ms = 901 "
+                "WHERE clerk_id = 'clrk_aaaaaaaaaaaaaaaaaaaaaaaa'"
+            )
+
+        # The command-quiet predicate reads through the partial index.
+        columns = FleetRegistryStore._RECEIPT_COLUMNS
+        quiet_plan = _query_plan(
+            store._conn,
+            f"SELECT {columns} FROM routing_receipts WHERE clerk_id = ? "
+            "AND state = 'not_dispatched' AND dispatched_at_ms IS NOT NULL",
+            ("clrk_aaaaaaaaaaaaaaaaaaaaaaaa",),
+        )
+        assert any(
+            "USING INDEX ix_routing_receipts_unsettled" in line for line in quiet_plan
+        ), quiet_plan
+        assert not any(line.startswith("SCAN routing_receipts") for line in quiet_plan), (
+            quiet_plan
         )
     finally:
         store.close()

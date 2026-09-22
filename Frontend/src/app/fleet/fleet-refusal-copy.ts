@@ -69,6 +69,21 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     message: "The broker in the request path differs from this clerk's immutable broker.",
     nextStep: "Route the command through this clerk's own broker path.",
   },
+  clerk_command_quiet_required: {
+    outcome: 'conflict',
+    message: 'This lane still holds a dispatched command whose outcome the coordinator lost.',
+    nextStep: 'Reconcile or settle each unsettled attempt before retrying the ceremony.',
+  },
+  clerk_drain_deadline_pending: {
+    outcome: 'conflict',
+    message: "This lane's drain deadline has not elapsed yet.",
+    nextStep: 'Wait for the deadline recorded on the lane, then re-run the ceremony.',
+  },
+  clerk_drain_required: {
+    outcome: 'conflict',
+    message: 'This ceremony requires a lane whose door is closed.',
+    nextStep: 'Run the drain ceremony first, then retry.',
+  },
   clerk_endpoint_not_approved: {
     outcome: 'conflict',
     message: 'This registration cites an endpoint the deployment has not approved.',
@@ -79,10 +94,20 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     message: "This session's identity facts contradict the clerk's registry record.",
     nextStep: "Refresh the clerk's registry identity before retrying.",
   },
+  clerk_lane_quiet_unproven: {
+    outcome: 'conflict',
+    message: "No lane-quiet confirmation answers this lane's retirement gate.",
+    nextStep: 'Run force-retire, the named exit, or wait for the lane-quiet provider.',
+  },
   clerk_not_found: {
     outcome: 'failure',
     message: 'No clerk carries this identity.',
     nextStep: 'Confirm the clerk id; retrying the same identity will not succeed.',
+  },
+  clerk_reassignment_blocked: {
+    outcome: 'conflict',
+    message: 'Lane-to-lane reassignment is blocked while a drained lane can resurrect its binding.',
+    nextStep: 'Use whole-machine migration, which moves the volume with the lane.',
   },
   clerk_routing_attempt_conflict: {
     outcome: 'conflict',
