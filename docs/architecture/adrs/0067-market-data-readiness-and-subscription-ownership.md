@@ -1,6 +1,8 @@
 # ADR 0067 — Server-owned market-data readiness and recovery
 
-**Status:** Accepted 2026-09-22, implementing the owner's request for robust market-liveness behavior and a reviewable PR.
+**Status:** Accepted 2026-09-22
+**Provenance:** Implements the owner's request for robust market-liveness behaviour, delivered as a reviewable pull request.
+**Vocabulary:** `CONTEXT.md` § "Market-data readiness (resolved 2026-09-22)".
 
 The clerk owns market-data subscriptions for deployed bots, running feeds, and
 custody positions and working orders. Browser observation neither creates nor
