@@ -315,7 +315,10 @@ async def test_off_loop_cancellation_holds_intake_until_abandoned_fold_completes
     fold_release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert events == ["fold-start", "fold-end"]
+    # The release wakes the second fold and this test together, so the
+    # second fold may already have run by now; what must hold is that it
+    # never ran before the abandoned fold finished.
+    assert events[:2] == ["fold-start", "fold-end"]
 
     await asyncio.wait_for(second, timeout=5)
     assert events == ["fold-start", "fold-end", "second-fold"]
