@@ -2193,6 +2193,7 @@ class _ClaimLedgerRepo:
         self.claims: list[str] = []
         self.read_started = threading.Event()
         self.read_release = threading.Event()
+        self.read_done = threading.Event()
         self.state_started = threading.Event()
         self.state_release = threading.Event()
         self.effect = SimpleNamespace(
@@ -2209,6 +2210,7 @@ class _ClaimLedgerRepo:
         self.read_started.set()
         self.read_release.wait(timeout=10)
         self.events.append("read-end")
+        self.read_done.set()
         return self.effect
 
     def claim_before_broker_contact(self, effect_operation_id: str) -> object:
@@ -2243,6 +2245,9 @@ async def test_resolve_exit_cancellation_during_the_prologue_read_leaves_no_clai
     await asyncio.get_running_loop().run_in_executor(None, repo.read_started.wait, 10)
     task.cancel()
     repo.read_release.set()
+    # A pre-claim read has no exclusion to drain, so its abandoned worker is
+    # only read-only background work: wait for it to settle before asserting.
+    await asyncio.get_running_loop().run_in_executor(None, repo.read_done.wait, 10)
     with pytest.raises(asyncio.CancelledError):
         await task
 

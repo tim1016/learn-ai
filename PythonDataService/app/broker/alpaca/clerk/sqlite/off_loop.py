@@ -27,7 +27,16 @@ fold runs under — the intake fence, or an operation claim — must hold that
 exclusion until the worker finishes (:func:`finish_abandoned_hop` is that
 bounded wait). :func:`claim_scoped` wraps a runner so the claim release in a
 resolver's ``finally`` can never interleave with its own abandoned worker's
-writes.
+writes, and :func:`run_drained` runs that release itself off the loop.
+
+Known limit, accepted: the bounded wait releases the exclusion but cannot
+kill the worker — Python threads are not cancellable, and the pool's threads
+are joined at interpreter exit. A fold wedged past the bound therefore keeps
+its pool thread (and can delay a clean process exit) until the process is
+restarted; the fence already poisons itself at that point, and the restart
+its error demands is what reclaims the thread. Making a wedged store call
+abandonable is a repository-level concern (sqlite ``interrupt()``/busy
+timeouts), not a seam-level one.
 
 New module rather than a home in an existing one: the type is shared by
 ``exit_resolution``, ``order_evidence``, ``manual_order_cancellation``,
@@ -171,6 +180,16 @@ def claim_scoped(
     return guarded
 
 
+async def run_drained[T](run: OffLoop, operation: Callable[[], T]) -> T:
+    """Run one unit through ``run``, drained if the caller is cancelled.
+
+    For the release tail of a claim scope: the release must leave the
+    event-loop thread (it takes the repository write lock), and a
+    cancellation landing on its await must not abandon it mid-release.
+    """
+    return await claim_scoped(run)(operation)
+
+
 def _log_claim_scoped_outcome(error: BaseException | None) -> None:
     if error is None:
         return
@@ -187,6 +206,7 @@ __all__ = [
     "claim_scoped",
     "finish_abandoned_hop",
     "off_loop_future",
+    "run_drained",
     "run_inline",
     "to_thread",
 ]

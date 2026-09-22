@@ -27,7 +27,12 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, claim_scoped, run_inline
+from app.broker.alpaca.clerk.sqlite.off_loop import (
+    OffLoop,
+    claim_scoped,
+    run_drained,
+    run_inline,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     entry_never_accepted_durably,
@@ -115,7 +120,13 @@ async def resolve_exit(
             run=claim_scoped(run),
         )
     finally:
-        repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim_token)
+        # Off the loop (it takes the write lock) and drained on cancellation.
+        await run_drained(
+            run,
+            lambda: repo.release_operation_claim(
+                effect_operation_id=effect_operation_id, token=claim_token
+            ),
+        )
 
 
 async def cancel_and_prove_owned_entry(
@@ -157,9 +168,11 @@ async def cancel_and_prove_owned_entry(
             run=claim_scoped(run),
         )
     finally:
-        repo.release_operation_claim(
-            effect_operation_id=effect_operation_id,
-            token=claim_token,
+        await run_drained(
+            run,
+            lambda: repo.release_operation_claim(
+                effect_operation_id=effect_operation_id, token=claim_token
+            ),
         )
     refreshed = await run(lambda: repo.order(entry_order_ref))
     assert refreshed is not None

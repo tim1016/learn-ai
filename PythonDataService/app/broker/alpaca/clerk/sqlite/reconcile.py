@@ -652,8 +652,21 @@ async def reconcile_account(
             "SQLite reconciliation must acquire the reconciliation lock before intake"
         )
     async with _reconciliation_lock(repo):
-        await _under_intake(intake, repo.begin_reconciliation)
+        # ``began`` is set inside the worker, not after the await: cancellation
+        # arriving mid-begin still drains the hop (off_loop waits the worker
+        # out), so by the time CancelledError propagates the flag already says
+        # whether the account gate was installed — and without the cleanup
+        # below, a cancelled begin would leave every later pass failing
+        # "reconciliation is already in progress" (#1993 review).
+        began = False
+
+        def _begin() -> None:
+            nonlocal began
+            repo.begin_reconciliation()
+            began = True
+
         try:
+            await _under_intake(intake, _begin)
             result = await _reconcile_account_serialized(
                 repo,
                 read=read,
@@ -663,12 +676,14 @@ async def reconcile_account(
                 pricing=pricing,
             )
         except asyncio.CancelledError:
-            await asyncio.shield(
-                _commit_incomplete_reconciliation_and_release(repo, intake=intake)
-            )
+            if began:
+                await asyncio.shield(
+                    _commit_incomplete_reconciliation_and_release(repo, intake=intake)
+                )
             raise
         except Exception:
-            await _commit_incomplete_reconciliation_and_release(repo, intake=intake)
+            if began:
+                await _commit_incomplete_reconciliation_and_release(repo, intake=intake)
             raise
         await _under_intake(intake, repo.end_reconciliation)
         return result

@@ -33,7 +33,12 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, claim_scoped, run_inline
+from app.broker.alpaca.clerk.sqlite.off_loop import (
+    OffLoop,
+    claim_scoped,
+    run_drained,
+    run_inline,
+)
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
@@ -757,25 +762,21 @@ async def resolve_order_submission(
     """
     run = off_loop if off_loop is not None else run_inline
 
-    def _read_submission_state() -> tuple[EffectOperationResource | None, int | None, str | None]:
+    def _read_submission_state() -> tuple[EffectOperationResource | None, int | None]:
         order_row = repo.order(order_ref)
         assert order_row is not None
         effect = repo.effect_operation(order_row.effect_operation_id)
         assert effect is not None
         if effect.state in ("succeeded", "failed", "rejected"):
-            return None, None, None
-        return (
-            effect,
-            _uncertain_since_ms(repo, order_ref),
-            order_row.broker_order_id,
-        )
+            return None, None
+        return effect, _uncertain_since_ms(repo, order_ref)
 
     # ClaimedBrokerIO itself uses ``fold_uncertain`` above. Importing it only
     # after this module is fully initialized preserves that shared dependency
     # direction without an import-time cycle.
     from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 
-    effect, uncertain_since_ms, captured_broker_order_id = await run(_read_submission_state)
+    effect, uncertain_since_ms = await run(_read_submission_state)
     if effect is None:
         return
     # The claim is taken on the caller's thread with no await between the
@@ -825,7 +826,6 @@ async def resolve_order_submission(
                     repo,
                     effect_operation_id=effect.effect_operation_id,
                     order_ref=order_ref,
-                    captured_broker_order_id=captured_broker_order_id,
                     uncertain_since_ms=uncertain_since_ms,
                 )
             )
@@ -839,12 +839,14 @@ async def resolve_order_submission(
                 )
             )
     finally:
-        # Claim release on the caller's thread, guarded above: one bounded
-        # append that never interleaves with an abandoned worker's writes
-        # (#1993 review).
-        repo.release_operation_claim(
-            effect_operation_id=effect.effect_operation_id,
-            token=claim_token,
+        # Off the loop (it takes the write lock) and drained on cancellation
+        # so it never interleaves with an abandoned worker's writes (#1993
+        # review).
+        await run_drained(
+            run,
+            lambda: repo.release_operation_claim(
+                effect_operation_id=effect.effect_operation_id, token=claim_token
+            ),
         )
 
 
@@ -853,11 +855,18 @@ def _fold_absence_if_past_grace(
     *,
     effect_operation_id: str,
     order_ref: str,
-    captured_broker_order_id: str | None,
     uncertain_since_ms: int,
 ) -> None:
-    """Void a never-reached order only past the submit-absence grace window."""
-    if captured_broker_order_id is not None:
+    """Void a never-reached order only past the submit-absence grace window.
+
+    The broker identity is re-read here, not carried from the prologue: a
+    trade-update acknowledgement can write it between the exact lookup's
+    ``None`` and this fold, and voiding an order that reached the broker as
+    definitively absent would be a false terminal record (#1993 review).
+    """
+    order_row = repo.order(order_ref)
+    assert order_row is not None
+    if order_row.broker_order_id is not None:
         return
     grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
     if grace_active:

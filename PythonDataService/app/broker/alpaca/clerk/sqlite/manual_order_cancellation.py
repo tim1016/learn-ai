@@ -32,7 +32,12 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, claim_scoped, run_inline
+from app.broker.alpaca.clerk.sqlite.off_loop import (
+    OffLoop,
+    claim_scoped,
+    run_drained,
+    run_inline,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     fold_submit_absence_void,
@@ -596,7 +601,14 @@ async def resolve_manual_order_cancellation(
                 run=claim_scoped(run),
             )
         finally:
-            repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim_token)
+            # Off the loop (it takes the write lock) and drained on
+            # cancellation (#1993 review).
+            await run_drained(
+                run,
+                lambda: repo.release_operation_claim(
+                    effect_operation_id=effect_operation_id, token=claim_token
+                ),
+            )
     return await run(
         lambda: _submission(
             repo,

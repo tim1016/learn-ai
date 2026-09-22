@@ -165,31 +165,56 @@ async def redrive_or_escalate_stale_exits(
         remaining = stale_exit.remaining
         redrives = stale_exit.redrives
         if redrives >= redrive_policy.max_count:
-            escalated = await intake.off_loop(
-                raise_uncertainty,
-                repo,
-                strategy_instance_id=sid,
-                reason_code=redrive_policy.escalate_to,
-                headline="A stuck EXIT exhausted automatic re-drives",
-                explanation=(
-                    f"{remaining:g} {cause.symbol} remains attributed after "
-                    f"{redrives} automatic EXIT re-drives."
-                ),
-                operator_impact=(
-                    "New exposure stays paused for this strategy and automatic "
-                    "re-drives stopped. Exact operator reduction remains available."
-                ),
-                next_step="Run Reconcile now, then execute the presented safe flatten.",
-                evidence_refs=(episode["uncertainty_id"],),
-                cause_facts=ExitStuckCause(
-                    symbol=cause.symbol,
-                    attributed_qty=remaining,
-                    redrive_count=redrives,
-                    first_observed_at_ms=episode["observed_at_ms"],
-                ).to_mapping(),
-                severity="error",
-            )
-            if escalated != "unchanged":
+
+            def _escalate_if_still_stuck(
+                sid: str = sid,
+                cause: ExitNotFlatCause = cause,
+                redrives: int = redrives,
+            ) -> str | None:
+                """Raise EXIT_STUCK from a fresh read, never the scan's cache.
+
+                The scan ran unfenced on a worker; websocket evidence can
+                resolve the episode or flatten the position between then and
+                now. Escalating either from obsolete data would leave an
+                already-flat strategy paused behind a false operator-visible
+                error (#1993 review).
+                """
+                episode_now = repo.active_uncertainty(
+                    scope="CUSTODY_SUBJECT",
+                    reason_code=EXIT_NOT_FLAT_REASON_CODE,
+                    strategy_instance_id=sid,
+                )
+                if episode_now is None:
+                    return None
+                remaining_now = repo.position(sid, cause.symbol)
+                if not position_quantity_is_nonzero(remaining_now):
+                    return None
+                return raise_uncertainty(
+                    repo,
+                    strategy_instance_id=sid,
+                    reason_code=redrive_policy.escalate_to,
+                    headline="A stuck EXIT exhausted automatic re-drives",
+                    explanation=(
+                        f"{remaining_now:g} {cause.symbol} remains attributed after "
+                        f"{redrives} automatic EXIT re-drives."
+                    ),
+                    operator_impact=(
+                        "New exposure stays paused for this strategy and automatic "
+                        "re-drives stopped. Exact operator reduction remains available."
+                    ),
+                    next_step="Run Reconcile now, then execute the presented safe flatten.",
+                    evidence_refs=(episode_now["uncertainty_id"],),
+                    cause_facts=ExitStuckCause(
+                        symbol=cause.symbol,
+                        attributed_qty=remaining_now,
+                        redrive_count=redrives,
+                        first_observed_at_ms=episode_now["observed_at_ms"],
+                    ).to_mapping(),
+                    severity="error",
+                )
+
+            escalated = await intake.off_loop(_escalate_if_still_stuck)
+            if escalated is not None and escalated != "unchanged":
                 logger.error(
                     "stale EXIT escalated to a durable operator-visible EXIT_STUCK episode",
                     extra={
