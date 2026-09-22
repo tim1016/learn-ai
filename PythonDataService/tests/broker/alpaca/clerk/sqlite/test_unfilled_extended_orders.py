@@ -221,24 +221,30 @@ async def test_partially_filled_then_cancelled_enter_does_not_reach_failed(
     assert repo.position(SID, "SPY") == 4.0
 
 
-async def test_an_exit_owned_entry_cancel_leaves_the_enter_to_2251(
+def _enter_unfilled_rows(clerk: ClerkSqliteRepository, effect_operation_id: str) -> list[dict]:
+    rows = clerk._conn.execute(
+        "SELECT * FROM custody_transitions WHERE effect_operation_id = ? "
+        "AND transition_kind = 'ENTER_UNFILLED'",
+        (effect_operation_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def test_an_exit_owned_entry_cancel_ends_the_enter_without_breaking_the_nesting(
     repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
 ) -> None:
-    """The boundary #2006 deliberately does not cross, pinned so it stays
-    deliberate.
+    """#2251: an ENTER whose entry an EXIT cancels unfilled reaches ``failed``.
 
     Every observation route hands the evidence gate
     ``active_exit_for_order(order) or order.effect_operation_id``, so while an
-    EXIT is cancelling a working entry the effect in charge is the EXIT. The
-    ENTER keeps its residue there (#2251) rather than #2006 breaking #1379's
-    operation-first timeline to reach it: a transition appended against
-    ``entry_ref`` during an EXIT must carry *that EXIT's* effect id, and
-    ``_fold_effect_terminal`` terminalizes whichever effect the transition is
-    nested under — so there is no way to end the ENTER from here without
-    either mis-nesting the receipt or failing an EXIT that did not fail.
+    EXIT is cancelling a working entry the effect in charge is the EXIT. Before
+    #2251 the ENTER kept ``in_progress`` there forever, holding its instance in
+    ``strategy_instances_with_live_custody`` while provably flat.
 
-    This asserts both halves: the ENTER is untouched, and nothing
-    ``ENTER_UNFILLED`` was written under it.
+    Both halves of #1379 still hold: every transition against ``entry_ref``
+    after ``EXIT_ACCEPTED`` carries the EXIT's id, and the ENTER's receipt sits
+    on the ENTER's own timeline, unkeyed to the order, so the fold only ends
+    the effect that carries it.
     """
     entry_ref = await _make_entry(repo)
     entry = repo.order(entry_ref)
@@ -267,14 +273,81 @@ async def test_an_exit_owned_entry_cancel_leaves_the_enter_to_2251(
 
     enter_effect = repo.effect_operation(enter_effect_id)
     assert enter_effect is not None
-    assert enter_effect.state == "in_progress", (
-        "#2251, not #2006: the ENTER's residue survives an EXIT-owned cancel"
+    assert enter_effect.state == "failed"
+    exit_effect = repo.effect_operation(accepted.effect_operation_id)
+    assert exit_effect is not None
+    assert exit_effect.state in NONTERMINAL_EFFECT_STATES, (
+        "the ENTER's receipt must not end the EXIT, which did not fail"
     )
-    assert not [
-        row
-        for row in repo.transitions_for_order(entry_ref)
-        if row["transition_kind"] == "ENTER_UNFILLED"
-    ], "#1379: nothing may be appended against the entry under the ENTER during an EXIT"
+
+    (receipt,) = _enter_unfilled_rows(repo, enter_effect_id)
+    assert receipt["order_ref"] is None
+    assert accepted.effect_operation_id in receipt["facts_json"]
+
+    transitions = repo.transitions_for_order(entry_ref)
+    exit_accepted_seq = next(
+        t["sequence"] for t in transitions if t["transition_kind"] == "EXIT_ACCEPTED"
+    )
+    for transition in transitions:
+        if transition["sequence"] >= exit_accepted_seq:
+            assert transition["effect_operation_id"] == accepted.effect_operation_id
+
+
+async def test_an_exit_owned_entry_fold_is_idempotent_across_routes(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """A poll, the sweep and a trade-update frame all re-deliver the same dead
+    entry under the EXIT; the ENTER's failure is folded exactly once."""
+    entry_ref = await _make_entry(repo)
+    entry = repo.order(entry_ref)
+    assert entry is not None
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+
+    dead = _broker_order(entry_ref, status="canceled", filled_quantity=0.0)
+    for _ in range(3):
+        fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=dead)
+
+    assert len(_enter_unfilled_rows(repo, entry.effect_operation_id)) == 1
+
+
+async def test_a_partially_filled_entry_an_exit_cancels_keeps_its_enter_open(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """A partial fill opened real exposure; an EXIT cancelling the remainder
+    does not prove the ENTER unfilled."""
+    entry_ref = await _make_entry(repo, status="partially_filled", filled_quantity=3.0)
+    entry = repo.order(entry_ref)
+    assert entry is not None
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            entry_ref, status="canceled", filled_quantity=3.0, filled_avg_price=100.0
+        ),
+    )
+
+    enter_effect = repo.effect_operation(entry.effect_operation_id)
+    assert enter_effect is not None
+    assert enter_effect.state in NONTERMINAL_EFFECT_STATES
+    assert not _enter_unfilled_rows(repo, entry.effect_operation_id)
 
 
 async def test_a_submit_response_that_returns_cancelled_does_not_end_the_enter(
