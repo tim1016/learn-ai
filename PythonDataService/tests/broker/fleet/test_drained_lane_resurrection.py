@@ -567,13 +567,13 @@ async def test_remote_presence_translates_the_typed_refusal_not_unavailability()
         server.stop()
 
 
-def _observing_coordinator_app(lifecycle: object) -> FastAPI:
+def _observing_coordinator_app(lifecycle: object, *, observed: object = True) -> FastAPI:
     """A coordinator whose observe answer carries ``lifecycle`` as sent."""
     coordinator = FastAPI()
 
     @coordinator.post("/internal/fleet/sessions/observe")
     async def observe() -> JSONResponse:
-        body: dict[str, object] = {"observed": True}
+        body: dict[str, object] = {"observed": observed}
         if lifecycle is not None:
             body["lifecycle_state"] = lifecycle
         return JSONResponse(body)
@@ -619,6 +619,26 @@ async def test_remote_presence_observe_reads_the_lifecycle_from_the_answer() -> 
             )
     finally:
         wrong.stop()
+
+
+@pytest.mark.parametrize(
+    ("observed", "match"),
+    [(False, "holds no session"), ("yes", "observed flag")],
+)
+async def test_remote_presence_observe_refuses_a_beat_that_touched_no_session(
+    observed: object, match: str
+) -> None:
+    """#2259: a 200 whose beat refreshed nothing is not a landed heartbeat."""
+    server = _RealServer(_observing_coordinator_app("provisioned", observed=observed))
+    server.start()
+    try:
+        presence = RemotePresence(base_url=server.base_url, agent_service_token=CLERK_TOKEN)
+        with pytest.raises(FleetPresenceError, match=match):
+            await presence.observe(
+                clerk_id=CLERK, agent_instance_id="agnt_0000000000000000000000aa"
+            )
+    finally:
+        server.stop()
 
 
 # ---------------------------------------------------------------------------
