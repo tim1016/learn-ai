@@ -19,6 +19,13 @@ import sqlite3
 
 from app.broker.fleet import schema
 
+# A registry table is enumerated in TWO places, deliberately: here, and in
+# ``scripts/run_broker_fleet_compose_qualification.py``'s
+# ``_FLEET_REGISTRY_TABLES``, which asserts an exact table set against a live
+# deployed registry. The duplication is the point — deriving either list from
+# ``schema`` would make it pass by construction and stop catching anything —
+# so a new table must be added to both, and CI fails the qualification suite
+# until it is.
 _ALLOWED_TABLES = {
     "fleet_meta",
     "clerks",
@@ -29,6 +36,7 @@ _ALLOWED_TABLES = {
     "account_assignment_history",
     "routing_receipts",
     "force_retire_correlations",
+    "clerk_lane_confirmations",
 }
 
 _FORBIDDEN_NAME_FRAGMENTS = (

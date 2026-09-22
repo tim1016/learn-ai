@@ -100,6 +100,7 @@ from app.broker.fleet.records import (
     ClerkRecord,
     ClerkSessionRecord,
     LaneConfirmationState,
+    LaneQuietConfirmationRecord,
     ProviderSummaryObservation,
     RoutingReceiptRecord,
     RoutingReceiptState,
@@ -116,6 +117,25 @@ logger = logging.getLogger(__name__)
 #: How stale a heartbeat may be before the directory projects ``unreachable``.
 #: A projection only: it never releases, downgrades or transfers anything.
 DEFAULT_SESSION_STALE_AFTER_MS = 30_000
+
+#: How long one lane-quiet confirmation stays valid (ADR 0063 Decision 2's
+#: 2026-09-19 amendment, #2154). The lane re-asserts on its heartbeat
+#: cadence (``HEARTBEAT_INTERVAL_S``, 10 s by default), so this is nine
+#: beats: long enough to ride out a refused beat and the lane repair that
+#: follows it, short enough that a gate reading "quiet" is reading a claim
+#: made minutes ago rather than hours. Sized from that push cadence but
+#: written as a literal: the cadence is a deployment setting, and a registry
+#: constant must not reach into application settings to compute itself.
+#: Deliberately **not** reasoned from ``DEFAULT_SESSION_STALE_AFTER_MS`` —
+#: that constant measures heartbeat-staleness *detection latency*, a
+#: different quantity, and Decision 5 already forbids reasoning from it for
+#: the drain deadline. Note the trap: three times that constant happens to
+#: equal this value today, so no test can catch a re-derivation from it and
+#: the ban is a review-time rule. What goes stale here is the evidence,
+#: never the lane: a lane beating steadily but no longer confirming refuses
+#: exactly as a dead one does, which is what keeps this clear of Decision
+#: 5's rule that silence never *moves* anything.
+DEFAULT_LANE_QUIET_VALID_FOR_MS = 90_000
 
 #: The drain ceremony's deployment-owned duration (ADR 0063 Decision 5): the
 #: first leg of the two-legged deadline floor. A deployment may raise it; the
@@ -185,6 +205,7 @@ class FleetControlService:
         clock: Callable[[], int] = now_ms_utc,
         session_stale_after_ms: int = DEFAULT_SESSION_STALE_AFTER_MS,
         drain_deadline_ms: int = DEFAULT_DRAIN_DEADLINE_MS,
+        lane_quiet_valid_for_ms: int = DEFAULT_LANE_QUIET_VALID_FOR_MS,
     ) -> None:
         """Bind the registry store, the deployment's adapters, and the clock."""
         self._store = store
@@ -203,6 +224,18 @@ class FleetControlService:
                 "deployment may raise the duration, never lower it"
             )
         self._drain_deadline_ms = drain_deadline_ms
+        if lane_quiet_valid_for_ms <= 0:
+            raise ValueError(
+                f"lane_quiet_valid_for_ms={lane_quiet_valid_for_ms} must be positive; "
+                "a non-positive window would make every confirmation stale on arrival "
+                "and close the normal retirement path #2154 exists to open"
+            )
+        self._lane_quiet_valid_for_ms = lane_quiet_valid_for_ms
+
+    @property
+    def lane_quiet_valid_for_ms(self) -> int:
+        """How long a lane-quiet confirmation answers the gate, in ms."""
+        return self._lane_quiet_valid_for_ms
 
     def close(self) -> None:
         """Close the underlying registry store."""
@@ -544,9 +577,12 @@ class FleetControlService:
         live session row — retires directly. A clerk that has ever served
         must pass through the drain: it must be ``draining``, command-quiet
         (zero dispatches whose outcome the coordinator lost), and covered by
-        a lane-quiet confirmation no provider can answer yet (#2154) — so
-        the normal path refuses, naming the outstanding item, and
-        ``force_retire_clerk`` is the separately named exit. The held
+        a fresh lane-quiet confirmation from its current session (#2154). A
+        lane that has genuinely gone quiet now retires here; a lane that has
+        not, or that cannot answer, is refused by name and leaves through
+        ``force_retire_clerk``. No lane answers in production yet — #2154's
+        provider fact and transport are open — so every served retirement is
+        still a forced one until they land. The held
         assignment check runs first in every branch, and each gate shares
         one write transaction with the transition it guards.
         """
@@ -592,11 +628,14 @@ class FleetControlService:
                         "deadline and retire.",
                     )
                 self._require_command_quiet(conn, clerk_id)
-                self._require_lane_quiet(clerk_id)
-                # Unreachable until a provider answers lane quiet (#2154): the
-                # gate above raises today, which is the ceremony's honest
-                # "blocked, not degraded" state. When the confirmation
-                # arrives, this is the transition it completes.
+                # Read inside the write transaction because every other
+                # fence here is. It cannot be raced today — #2155 refuses a
+                # draining clerk's re-registration, so the session this
+                # scopes to cannot be replaced mid-ceremony — and it is held
+                # as the file's standing pattern against that rule relaxing,
+                # not as a live race. The store-level tests pin the scoping
+                # where it can still fail.
+                self._require_lane_quiet(conn, live, now=now)
                 updated = self._store.retire_clerk_row(
                     conn,
                     clerk_id=clerk_id,
@@ -840,25 +879,196 @@ class FleetControlService:
             "backup, then retry.",
         )
 
-    def _require_lane_quiet(self, clerk_id: str) -> None:
-        """ADR 0063 Decision 2: the retirement gate no provider can answer yet.
+    def confirm_lane_quiet(
+        self,
+        *,
+        clerk_id: str,
+        agent_instance_id: str,
+        routing_epoch: int,
+        observed_at_ms: int,
+        runner_idle: bool,
+        broker_work_ended: bool,
+        account_flat: bool,
+        intents_resolved: bool,
+    ) -> LaneQuietConfirmationRecord:
+        """Record one lane's answer about its own quiescence (#2154).
 
-        The gate consumes a lane-quiet confirmation — the lane's own
-        assertion that it holds no working order and runs no bot decision
-        loop, fenced by the current session's instance and epoch. No
-        provider can answer it today (#2154), so this refuses and names the
-        outstanding item rather than degrading to an operator attestation: a
-        gate that always passes is the defect this ceremony exists to
-        remove. ``force_retire_clerk`` is the named exit.
+        ADR 0063 Decision 2, as amended 2026-09-19. The lane answers
+        conditions 2-5 — no bot running, every working order on the account
+        ended at the broker, the account flat, no order intent in flight.
+        Condition 1, that the lane is draining, is the registry's own fact and
+        is checked here rather than taken from the lane.
+
+        An answer that leaves a condition outstanding is recorded exactly as a
+        quiet one is. A lane saying "not yet" is evidence: it is what lets the
+        retirement gate name what is outstanding instead of reporting the
+        silence of a lane that never answered at all, and it is why the gate
+        can distinguish the two.
+
+        The fences are ``confirm_assignment``'s, inherited rather than
+        re-invented: the calling instance and epoch must equal the current
+        session's, compared inside the write transaction so a superseded
+        session cannot slip its answer between the read and the commit.
         """
-        raise ClerkLaneQuietUnproven(
-            f"Clerk {clerk_id} has no lane-quiet confirmation; no provider can "
-            "answer lane quiet yet (#2154), so the normal retirement path "
-            "refuses rather than degrading to an attestation.",
-            next_step="Run force-retire — the separately named, deadline-bound, "
-            "operator-attributed exit — or wait for the lane-quiet provider "
-            "(#2154).",
+        self._require_recovery_hold_clear()
+        self._require_clerk(clerk_id)
+        now = self._clock()
+        # A boundary check, not a paranoid guard: the observation instant
+        # arrives from the agent. A lane whose clock runs ahead would hold a
+        # confirmation that never ages out, so freshness is only a bound if
+        # the instant cannot be in the future.
+        if observed_at_ms > now:
+            raise ClerkLaneQuietUnproven(
+                f"Clerk {clerk_id} observed lane quiet at {observed_at_ms}, which is "
+                f"ahead of the coordinator's clock ({now}); a confirmation from the "
+                "future would never go stale.",
+                next_step="Correct the lane host's clock, then re-confirm.",
+            )
+        if observed_at_ms < 0:
+            raise ValueError("observed_at_ms is an int64 ms UTC instant at or after the epoch")
+        confirmation = LaneQuietConfirmationRecord(
+            clerk_id=clerk_id,
+            agent_instance_id=agent_instance_id,
+            routing_epoch=routing_epoch,
+            observed_at_ms=observed_at_ms,
+            recorded_at_ms=now,
+            runner_idle=runner_idle,
+            broker_work_ended=broker_work_ended,
+            account_flat=account_flat,
+            intents_resolved=intents_resolved,
         )
+        with self._store.transaction() as conn:
+            live = self._clerk_on_or_unknown(conn, clerk_id)
+            if live.lifecycle_state != StoredLifecycleState.DRAINING:
+                raise ClerkDrainRequired(
+                    f"Clerk {clerk_id} is {live.lifecycle_state.value}; a lane "
+                    "confirms lane quiet only while draining, because the claim is "
+                    "about the period after the door closed.",
+                    next_step="Run the drain ceremony first; a serving lane has "
+                    "nothing to confirm.",
+                )
+            # The schema's CHECK makes this non-null for every draining row.
+            draining_since_ms = live.draining_since_ms
+            assert draining_since_ms is not None
+            if observed_at_ms < draining_since_ms:
+                raise ClerkLaneQuietUnproven(
+                    f"Clerk {clerk_id} observed lane quiet at {observed_at_ms}, before "
+                    f"the drain began at {draining_since_ms}; quiescence seen before "
+                    "the door closed proves nothing about the period after it.",
+                    next_step="Re-observe now and confirm that.",
+                )
+            session = self._store.read_session_on(conn, clerk_id)
+            if session is None:
+                raise ClerkUnreachable(
+                    f"Clerk {clerk_id} has no registered agent session, so there "
+                    "is no session for this confirmation to be fenced to.",
+                    next_step="A draining lane cannot obtain one — #2155 refuses a "
+                    "draining clerk's registration — so force-retire is its exit.",
+                )
+            if (
+                session.agent_instance_id != agent_instance_id
+                or session.routing_epoch != routing_epoch
+            ):
+                raise ClerkIdentityMismatch(
+                    f"The lane-quiet confirmation for clerk {clerk_id} was prepared by "
+                    f"session {agent_instance_id}/{routing_epoch}, but the current "
+                    f"session is {session.agent_instance_id}/{session.routing_epoch}; a "
+                    "superseded session cannot confirm.",
+                    next_step="Confirm under the lane's current session. A draining "
+                    "clerk's session is never replaced (#2155), so a lane that lost "
+                    "its own exits through force-retire instead.",
+                )
+            self._store.record_lane_quiet_confirmation(conn, confirmation)
+        logger.info(
+            "fleet lane quiet confirmed",
+            extra={
+                "clerk_id": clerk_id,
+                "action": "fleet_lane_quiet_confirmed",
+                "quiet": confirmation.is_quiet,
+                "outstanding_count": len(confirmation.outstanding),
+            },
+        )
+        return confirmation
+
+    def read_lane_quiet_confirmation(
+        self, *, clerk_id: str
+    ) -> LaneQuietConfirmationRecord | None:
+        """This clerk's newest lane-quiet answer, from any session.
+
+        The audit read, deliberately unscoped by session: an operator asking
+        what a lane last claimed is asking about its history. The gate's own
+        read is session-scoped and lives in ``_require_lane_quiet``.
+        """
+        return self._store.read_latest_lane_quiet_confirmation(clerk_id)
+
+    def _require_lane_quiet(
+        self, conn: sqlite3.Connection, clerk: ClerkRecord, *, now: int
+    ) -> None:
+        """ADR 0063 Decision 2's retirement gate, read from the lane's own answer.
+
+        Three ways this refuses, each a different fact about the evidence and
+        each named so an operator knows which one they are in:
+
+        - the current session has not answered — silence, which is never read
+          as quiet. The read is scoped to that session rather than filtered
+          afterwards, because a confirmation does not survive the session that
+          made it: conditions 2, 3 and 5 assert a running process's own
+          knowledge, and a restart destroys it. There is deliberately no
+          separate "a superseded session answered" refusal, because a
+          draining clerk's session cannot be replaced at all — #2155 refuses
+          its re-registration — so a lane that restarts mid-drain never
+          confirms again and exits through force-retire. The next step says so
+          rather than leaving an operator to infer it;
+        - the answer is older than the validity window, so the lane stopped
+          re-asserting. What refuses is the evidence's own age, never the
+          lane's liveness: a lane beating steadily but no longer confirming
+          refuses exactly as a dead one does. Decision 5 forbids silence from
+          *moving* something; here it makes a gate refuse, which is the safe
+          direction;
+        - the answer names an outstanding condition, and the refusal names
+          every one of them rather than the first, so an operator clearing
+          them does not walk the ceremony once per item.
+
+        ``force_retire_clerk`` remains the exit for a lane that cannot answer.
+        """
+        session = self._store.read_session_on(conn, clerk.clerk_id)
+        confirmation = (
+            None
+            if session is None
+            else self._store.read_lane_quiet_confirmation_on(
+                conn,
+                clerk.clerk_id,
+                agent_instance_id=session.agent_instance_id,
+                routing_epoch=session.routing_epoch,
+            )
+        )
+        if confirmation is None:
+            raise ClerkLaneQuietUnproven(
+                f"Clerk {clerk.clerk_id}'s current session has not confirmed lane "
+                "quiet; silence is never read as quiet.",
+                next_step="No lane can confirm yet: #2154's provider fact and its "
+                "transport are still open, so force-retire is today's exit. Once they "
+                "land — stop the bots, cancel the working orders and flatten the "
+                "account, then let the lane confirm. A lane whose process restarted "
+                "during the drain can never confirm — #2155 refuses a draining "
+                "clerk's re-registration — so force-retire stays its exit.",
+            )
+        age_ms = now - confirmation.observed_at_ms
+        if age_ms > self._lane_quiet_valid_for_ms:
+            raise ClerkLaneQuietUnproven(
+                f"Clerk {clerk.clerk_id}'s lane-quiet confirmation is stale: observed "
+                f"{age_ms} ms ago, past the {self._lane_quiet_valid_for_ms} ms window. "
+                "The lane has stopped re-asserting, so the answer no longer describes "
+                "now.",
+                next_step="Wait for the lane's next confirmation, or run force-retire.",
+            )
+        if not confirmation.is_quiet:
+            outstanding = "; ".join(confirmation.outstanding)
+            raise ClerkLaneQuietUnproven(
+                f"Clerk {clerk.clerk_id} is not quiet — {outstanding}.",
+                next_step="Clear every item above in the bot panel, let the lane "
+                "re-confirm, then retire.",
+            )
 
     # ---- approved endpoints (host ceremony) --------------------------------
 

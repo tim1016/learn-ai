@@ -55,6 +55,11 @@ _COORDINATOR_CONTROL_PATHS = frozenset(
         "fleet/registry.db-wal",
     )
 )
+# The exact table set a deployed fleet registry may carry. Restated here
+# independently of ``app.broker.fleet.schema`` on purpose: derived from the
+# schema it would pass by construction. Its peer is ``_ALLOWED_TABLES`` in
+# ``tests/broker/fleet/test_registry_contains_no_custody.py``; a new table
+# belongs in both.
 _FLEET_REGISTRY_TABLES = frozenset(
     (
         "fleet_meta",
@@ -68,6 +73,11 @@ _FLEET_REGISTRY_TABLES = frozenset(
         # ADR 0063 Decision 5: the forced-unknown obligations a force-retirement
         # recorded — routing bookkeeping with attribution, not custody data.
         "force_retire_correlations",
+        # ADR 0063 Decision 2's 2026-09-19 amendment (#2154): one lane's answer
+        # about its own quiescence. Four booleans and two instants — nullity
+        # predicates about the lane's state, never an order, position or
+        # quantity — so the registry stays custody-free with it present.
+        "clerk_lane_confirmations",
     )
 )
 FAULT_SCENARIOS = (

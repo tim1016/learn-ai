@@ -36,6 +36,7 @@ from app.broker.fleet.records import (
     ClerkRecord,
     ClerkSessionRecord,
     LaneConfirmationState,
+    LaneQuietConfirmationRecord,
     RoutingReceiptRecord,
     RoutingReceiptState,
     StoredLifecycleState,
@@ -1036,6 +1037,93 @@ class FleetRegistryStore:
             rows,
         )
         return len(rows)
+
+    _LANE_CONFIRMATION_COLUMNS = (
+        "clerk_id, agent_instance_id, routing_epoch, observed_at_ms, recorded_at_ms, "
+        "runner_idle, broker_work_ended, account_flat, intents_resolved"
+    )
+
+    @staticmethod
+    def _lane_confirmation(row: sqlite3.Row) -> LaneQuietConfirmationRecord:
+        return LaneQuietConfirmationRecord(
+            clerk_id=str(row["clerk_id"]),
+            agent_instance_id=str(row["agent_instance_id"]),
+            routing_epoch=int(row["routing_epoch"]),
+            observed_at_ms=int(row["observed_at_ms"]),
+            recorded_at_ms=int(row["recorded_at_ms"]),
+            runner_idle=bool(row["runner_idle"]),
+            broker_work_ended=bool(row["broker_work_ended"]),
+            account_flat=bool(row["account_flat"]),
+            intents_resolved=bool(row["intents_resolved"]),
+        )
+
+    def record_lane_quiet_confirmation(
+        self, conn: sqlite3.Connection, confirmation: LaneQuietConfirmationRecord
+    ) -> None:
+        """Append one lane-quiet answer (ADR 0063 Decision 2, #2154).
+
+        A plain insert with no conflict to resolve: the row is identified by
+        the append sequence the registry assigns, so nothing the lane sends
+        can collide. A re-sent answer after a lost response appends a second
+        row saying the same thing, and a lane correcting itself within the
+        same millisecond records that correction — both of which the old
+        instant-keyed identity turned into an integrity error.
+        """
+        conn.execute(
+            f"INSERT INTO clerk_lane_confirmations ({self._LANE_CONFIRMATION_COLUMNS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                confirmation.clerk_id,
+                confirmation.agent_instance_id,
+                confirmation.routing_epoch,
+                confirmation.observed_at_ms,
+                confirmation.recorded_at_ms,
+                int(confirmation.runner_idle),
+                int(confirmation.broker_work_ended),
+                int(confirmation.account_flat),
+                int(confirmation.intents_resolved),
+            ),
+        )
+
+    def read_lane_quiet_confirmation_on(
+        self,
+        conn: sqlite3.Connection,
+        clerk_id: str,
+        *,
+        agent_instance_id: str,
+        routing_epoch: int,
+    ) -> LaneQuietConfirmationRecord | None:
+        """The newest answer this clerk's *named* session gave, on a caller's
+        transaction connection.
+
+        Scoped to the session rather than filtered afterwards: a confirmation
+        does not survive the session that made it, so a superseded session's
+        row must not be the one the gate reads and then rejects — it must not
+        be reachable as "the latest" at all.
+        """
+        row = conn.execute(
+            f"SELECT {self._LANE_CONFIRMATION_COLUMNS} FROM clerk_lane_confirmations "
+            "WHERE clerk_id = ? AND agent_instance_id = ? AND routing_epoch = ? "
+            "ORDER BY confirmation_seq DESC LIMIT 1",
+            (clerk_id, agent_instance_id, routing_epoch),
+        ).fetchone()
+        return None if row is None else self._lane_confirmation(row)
+
+    def read_latest_lane_quiet_confirmation(
+        self, clerk_id: str
+    ) -> LaneQuietConfirmationRecord | None:
+        """This clerk's newest answer from any session — the audit read.
+
+        Deliberately unscoped, unlike the gate's read above: an operator
+        asking "what did this lane last claim?" is asking about its history,
+        and a superseded session's answer is part of that history.
+        """
+        rows = self._query(
+            f"SELECT {self._LANE_CONFIRMATION_COLUMNS} FROM clerk_lane_confirmations "
+            "WHERE clerk_id = ? ORDER BY confirmation_seq DESC LIMIT 1",
+            (clerk_id,),
+        )
+        return None if not rows else self._lane_confirmation(rows[0])
 
     def list_forced_correlations(self, clerk_id: str) -> list[tuple[str, str, int, str, str]]:
         """One clerk's forced-unknown obligations, oldest first.

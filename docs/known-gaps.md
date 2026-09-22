@@ -611,11 +611,16 @@ re-arms the server-authored timeframe auto-correct, and numeric
   quiet (#2154).** ADR 0063's ceremony core now ships (schema v5; `drain`,
   `force-retire`, attributed `release-assignment`, the never-served
   predicate, the calendar-derived deadline; `RELEASE_PROOF_TOKEN` deleted),
-  but no provider can answer lane quiet yet, so the normal
-  `draining -> retired` path refuses naming the outstanding item and every
-  retirement of a served clerk goes through the attributed, deadline-bound
-  `force-retire` — the auditable forced count starts at 100% and stays
-  there until #2154 ships the Alpaca nothing-open attestation. Reassignment
+  and #2154's coordinator half has since landed — schema v6's append-only
+  `clerk_lane_confirmations`, the fenced `confirm_lane_quiet` entry point,
+  and a `_require_lane_quiet` that reads the current session's newest answer
+  rather than raising unconditionally. What is still missing is the half a
+  lane needs to answer at all: the Alpaca provider fact and its transport.
+  So no provider can answer lane quiet yet, the normal
+  `draining -> retired` path still refuses naming the outstanding item, and
+  every retirement of a served clerk still goes through the attributed,
+  deadline-bound `force-retire` — the auditable forced count starts at 100% and stays
+  there until #2154 ships the Alpaca nothing-open confirmation. Reassignment
   is blocked outright until #2154 closes (the #2155 resurrection hole is
   closed for every lane that learns its drain — heartbeat lifecycle
   answers, typed registration refusal, evidence-v2 tombstones — but a lane

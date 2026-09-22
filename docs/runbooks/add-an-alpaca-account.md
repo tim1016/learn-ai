@@ -503,6 +503,30 @@ host CLI, in order:
 #     wait for it beyond the printed deadline; continue with steps 2 and 3,
 #     which record the lane confirmation as absent.
 
+# 1c. Clear the account at the broker, by hand, in the Alpaca dashboard.
+#     THIS STEP IS NOT ENFORCED BY ANY COMMAND BELOW. `force-retire` records
+#     `lane_confirmation: absent` precisely because nothing proved the lane
+#     quiet, and the fleet layer reads no order and no position (ADR 0063 §8),
+#     so it cannot refuse a lane whose account still has work outstanding.
+#     Skipping this retires a lane while an order can still fill or a position
+#     stays open, with no owner left watching either.
+#
+#     Order matters, and "cancel sent" is not an ending (owner decision
+#     2026-09-19):
+#       i.   stop every bot on the lane;
+#       ii.  cancel every working order on the account — including a resting
+#            GTC, and including orders no bot placed;
+#       iii. flatten every open position, including any opened by hand;
+#       iv.  wait for the flatten orders THEMSELVES to reach a terminal state
+#            at the broker — a cancel can lose the race to a fill;
+#       v.   re-read the account and confirm zero open orders and zero
+#            positions before continuing.
+#     If the lane is still reachable, prefer its own panel controls (`stop`,
+#     `cancel_verified_working_orders`, `flatten_stop`) so its custody records
+#     follow along; the dashboard is the path for a lane that cannot answer.
+#     Once #2154's provider fact ships, the normal `retire` proves this
+#     instead of asking an operator to attest it by hand.
+
 # 2. Wait out the printed deadline, then release each assigned account under
 #    a bounded attribution (who acted, and the incident/change record naming
 #    why — the old fixed proof phrase is deleted and never a substitute).
