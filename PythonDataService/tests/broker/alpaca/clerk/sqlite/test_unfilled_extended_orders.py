@@ -22,8 +22,12 @@ import pytest
 from app.broker.alpaca.clerk.program_leg import LegShape
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
-from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    cancel_and_prove_owned_entry,
+    resolve_exit,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
@@ -58,13 +62,11 @@ async def test_enter_cancelled_by_the_vendor_unfilled_leaves_no_exposure(
     the strategy flat and admissible again — no lingering exposure, no
     lingering admission block.
 
-    ENTER's own module deliberately never drives its effect operation to a
-    terminal ``state`` (``enter.py``'s docstring: that's EXIT/reconciliation
-    territory) — so the invariant this test actually pins is not "the effect
-    row reads a terminal state" but the two things that matter operationally:
-    zero attributed exposure, and a fresh ENTER decision is not blocked by
-    what happened to this one. See the test's assertions and the task
-    report for the empirical effect-state finding.
+    This pin covers the two operational facts: zero attributed exposure, and
+    a fresh ENTER decision is not blocked by what happened to this one. The
+    effect row's own terminal state is pinned separately by
+    ``test_enter_cancelled_by_the_vendor_unfilled_reaches_failed`` below —
+    it read ``in_progress`` forever until #2006 mirrored R12 for ENTER.
     """
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
@@ -102,6 +104,256 @@ async def test_enter_cancelled_by_the_vendor_unfilled_leaves_no_exposure(
         capability=Capability.NEW_EXPOSURE,
         strategy_instance_id=SID,
     ).allowed
+
+
+async def test_enter_cancelled_by_the_vendor_unfilled_reaches_failed(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """#2006 — the ENTER mirror of R12.
+
+    A vendor cancel/expire/reject with zero fills is proven unfilled, so the
+    ENTER's effect operation must reach ``failed`` rather than sit
+    ``in_progress`` forever. Before this, ``fold_order_acknowledgement`` wrote
+    ``operation_state="in_progress"`` unconditionally, so the instance stayed
+    in the nonterminal set that ``strategy_instances_with_live_custody`` reads
+    even when provably flat — daily residue in extended hours.
+    """
+    trade = _FakeTrade(
+        submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_XH_LEG,
+        trade=trade,
+    )
+    assert submission.effect_operation_id is not None and submission.order_ref is not None
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submission.effect_operation_id,
+        order=_broker_order(submission.order_ref, status="expired", filled_quantity=0.0),
+    )
+
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None
+    assert effect.state == "failed"
+    assert effect.state not in NONTERMINAL_EFFECT_STATES
+
+
+async def test_terminal_unfilled_enter_folds_its_failure_once(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """Re-observing the same dead ENTER is routine — a poll, the reconciliation
+    sweep and a trade-update frame can all deliver it. Only one
+    ``ENTER_UNFILLED`` transition may be appended for the order."""
+    trade = _FakeTrade(
+        submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_XH_LEG,
+        trade=trade,
+    )
+    assert submission.effect_operation_id is not None and submission.order_ref is not None
+
+    dead = _broker_order(submission.order_ref, status="canceled", filled_quantity=0.0)
+    for _ in range(3):
+        fold_order_evidence(
+            repo,
+            effect_operation_id=submission.effect_operation_id,
+            order=dead,
+        )
+
+    transitions = [
+        row
+        for row in repo.transitions_for_order(submission.order_ref)
+        if row["transition_kind"] == "ENTER_UNFILLED"
+    ]
+    assert len(transitions) == 1
+
+
+async def test_partially_filled_then_cancelled_enter_does_not_reach_failed(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """The negative case that keeps the mirror honest.
+
+    ``canceled`` with a recorded execution is not proven unfilled — real
+    exposure was opened. Folding that to ``failed`` would declare an ENTER
+    dead while the strategy still holds shares, which is the opposite of the
+    residue this fix removes.
+    """
+    trade = _FakeTrade(
+        submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_XH_LEG,
+        trade=trade,
+    )
+    assert submission.effect_operation_id is not None and submission.order_ref is not None
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submission.effect_operation_id,
+        order=_broker_order(
+            submission.order_ref,
+            status="canceled",
+            filled_quantity=4.0,
+            filled_avg_price=100.10,
+        ),
+    )
+
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None
+    assert effect.state != "failed"
+    assert repo.position(SID, "SPY") == 4.0
+
+
+async def test_an_exit_owned_entry_cancel_leaves_the_enter_to_2251(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """The boundary #2006 deliberately does not cross, pinned so it stays
+    deliberate.
+
+    Every observation route hands the evidence gate
+    ``active_exit_for_order(order) or order.effect_operation_id``, so while an
+    EXIT is cancelling a working entry the effect in charge is the EXIT. The
+    ENTER keeps its residue there (#2251) rather than #2006 breaking #1379's
+    operation-first timeline to reach it: a transition appended against
+    ``entry_ref`` during an EXIT must carry *that EXIT's* effect id, and
+    ``_fold_effect_terminal`` terminalizes whichever effect the transition is
+    nested under — so there is no way to end the ENTER from here without
+    either mis-nesting the receipt or failing an EXIT that did not fail.
+
+    This asserts both halves: the ENTER is untouched, and nothing
+    ``ENTER_UNFILLED`` was written under it.
+    """
+    entry_ref = await _make_entry(repo)
+    entry = repo.order(entry_ref)
+    assert entry is not None
+    enter_effect_id = entry.effect_operation_id
+
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    active = repo.active_exit_for_order(entry_ref)
+    assert active is not None and active.kind == "EXIT", (
+        "this test is only meaningful while an EXIT owns the entry's fold"
+    )
+    assert active.effect_operation_id != enter_effect_id
+
+    cancel_trade = _FakeTrade(
+        lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)]
+    )
+    await cancel_and_prove_owned_entry(repo, entry_order_ref=entry_ref, trade=cancel_trade)
+
+    enter_effect = repo.effect_operation(enter_effect_id)
+    assert enter_effect is not None
+    assert enter_effect.state == "in_progress", (
+        "#2251, not #2006: the ENTER's residue survives an EXIT-owned cancel"
+    )
+    assert not [
+        row
+        for row in repo.transitions_for_order(entry_ref)
+        if row["transition_kind"] == "ENTER_UNFILLED"
+    ], "#1379: nothing may be appended against the entry under the ENTER during an EXIT"
+
+
+async def test_a_submit_response_that_returns_cancelled_does_not_end_the_enter(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """Owner decision, 2026-09-21: only a later observation ends an ENTER.
+
+    A terminal effect surfaces as an ``EffectOperationState.REJECTED``
+    receipt, which ``bot_trade_strategy`` reads as "discard this evaluation".
+    ``SyntheticBroker``'s ruling R9 cancels every non-marketable limit on the
+    spot with zero fills, so folding on the submit response would flip Dry Run
+    and Shadow from commit to discard for a whole class of decisions. #2006 is
+    a custody-residue fix, not a decision-loop change.
+    """
+    trade = _FakeTrade(
+        submit_result=_broker_order("placeholder", status="canceled", filled_quantity=0.0)
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_XH_LEG,
+        trade=trade,
+    )
+    assert submission.effect_operation_id is not None
+
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None
+    assert effect.state != "failed"
+
+
+async def test_a_recorded_fill_blocks_the_fold_even_when_the_snapshot_reports_zero(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """The durable fill row is read as well as the snapshot, and this is the
+    case that makes it load-bearing.
+
+    A snapshot reporting ``filled_quantity=0`` is not proof of nothing filled
+    when an execution is already recorded against the order — that ENTER
+    opened real exposure, and calling it ``failed`` would declare it dead
+    while the strategy still holds shares.
+    """
+    trade = _FakeTrade(
+        submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_XH_LEG,
+        trade=trade,
+    )
+    assert submission.effect_operation_id is not None and submission.order_ref is not None
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submission.effect_operation_id,
+        order=_broker_order(
+            submission.order_ref,
+            status="partially_filled",
+            filled_quantity=4.0,
+            filled_avg_price=100.10,
+        ),
+    )
+    assert repo.fills_for_order(submission.order_ref)
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submission.effect_operation_id,
+        order=_broker_order(submission.order_ref, status="canceled", filled_quantity=0.0),
+    )
+
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None
+    assert effect.state != "failed"
 
 
 async def test_exit_reducing_order_cancelled_unfilled_is_an_uncertainty_immediately(
