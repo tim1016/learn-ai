@@ -416,26 +416,34 @@ def _fold_enter_unfilled_if_proven(
     a daily event, so that residue accumulated (#2006).
 
     It raises no uncertainty and needs no operator: a zero-fill ENTER opened
-    nothing, so there is no stranded exposure to flag. The terminal fold
-    resolves any open unknown-outcome episode for the order on its way through.
+    nothing, so there is no stranded exposure to flag.
 
-    **Scope: the ENTER must be the effect in charge of its own order.** Every
-    observation route hands this gate
-    ``active_exit_for_order(order) or order.effect_operation_id``, so while an
-    EXIT is cancelling the entry the effect in charge is the EXIT — and #1379's
-    operation-first timeline requires every transition appended against
-    ``entry_ref`` during an EXIT to carry *that EXIT's* ``effect_operation_id``
-    (pinned by ``test_exit.py::test_nested_timeline_carries_the_exit_effect_
-    operation_id_not_the_enters``). Terminalizing the ENTER from here would
-    have to append under the ENTER, which breaks that nesting; appending under
-    the EXIT would terminalize the EXIT, which did not fail. The repo has no
-    fold that writes under one effect and terminalizes another — the closest
-    shape, ``ENTRY_NEVER_ACCEPTED``, deliberately operates on the carrying
-    effect only. So an ENTER whose entry an EXIT cancels unfilled keeps its
-    residue here, and that route is tracked separately (#2251) rather than
-    closed by breaking the timeline invariant. Comparing the order's owning
-    effect against the one in hand states that boundary instead of leaving it
-    to a ``kind`` read that happened to produce it.
+    **Who is in charge decides where the receipt nests.** Every observation
+    route hands this gate ``active_exit_for_order(order) or
+    order.effect_operation_id``:
+
+    - **The ENTER itself** (#2006): ``ENTER_UNFILLED`` is appended against the
+      order, and the terminal fold resolves any open unknown-outcome episode
+      for it on the way through.
+    - **An EXIT cancelling the entry** (#2251): #1379's operation-first
+      timeline requires the order evidence appended against ``entry_ref``
+      during an EXIT to carry *that EXIT's* id (pinned by ``test_exit.py::
+      test_nested_timeline_carries_the_exit_effect_operation_id_not_the_
+      enters``). So ``ENTER_UNFILLED`` goes on the ENTER's own timeline with no
+      ``order_ref``: it names the order and the EXIT in ``why``, stays out of
+      the entry's order timeline, and terminalizes only the effect that
+      carries it, the ENTER. The EXIT is not ended; it reaches its own
+      outcome. (``exit_resolution._prove_never_accepted`` is the one fold that
+      does key the ENTER's receipt to ``entry_ref`` during an EXIT, because
+      its void must resolve the order's unknown-outcome identity.)
+
+      Without an ``order_ref`` this fold cannot resolve that identity, so it
+      declines while the ENTER is ``unknown`` — the effect-local mirror of an
+      open episode naming it. Terminalizing then would drop the ENTER out of
+      every reconciliation read and strand the episode, blocking new
+      exposure. The ENTER stays reconcilable instead, and once the EXIT ends
+      the next observation lands under the ENTER itself, resolves the
+      episode, and folds the first case above.
 
     Reached from the observation gate only, never the submit response and
     never under simulated execution authority (owner decision, 2026-09-21): a
@@ -459,23 +467,37 @@ def _fold_enter_unfilled_if_proven(
       reporting ``0`` over a recorded execution is not proof of nothing filled.
     """
     owning = repo.order(order_ref)
+    if owning is None:
+        return
+    in_charge_is_owner = owning.effect_operation_id == effect.effect_operation_id
+    if not in_charge_is_owner:
+        active_exit = repo.active_exit_for_order(order_ref)
+        if active_exit is None or active_exit.effect_operation_id != effect.effect_operation_id:
+            return
+    enter = effect if in_charge_is_owner else repo.effect_operation(owning.effect_operation_id)
     if (
-        owning is None
-        or owning.effect_operation_id != effect.effect_operation_id
-        or effect.kind != "ENTER"
-        or effect.state not in NONTERMINAL_EFFECT_STATES
+        enter is None
+        or enter.kind != "ENTER"
+        or enter.state not in NONTERMINAL_EFFECT_STATES
+        or (not in_charge_is_owner and enter.state == "unknown")
         or (order.status or "").lower() not in UNFILLED_TERMINAL_STATES
         or order.filled_quantity >= FILL_QTY_EPSILON
         or repo.fills_for_order(order_ref)
     ):
         return
+    why = f"broker_state={(order.status or '').lower()!r} with no recorded execution."
+    if not in_charge_is_owner:
+        why += (
+            f" Order {order_ref} ended while EXIT {effect.effect_operation_id} "
+            "held its evidence; that EXIT's timeline carries the order's history."
+        )
     fold_failed(
         repo,
-        effect_operation_id=effect.effect_operation_id,
-        order_ref=order_ref,
+        effect_operation_id=enter.effect_operation_id,
+        order_ref=order_ref if in_charge_is_owner else None,
         summary_code="ENTER_UNFILLED",
         reason="The broker ended the entry order without filling it.",
-        why=f"broker_state={(order.status or '').lower()!r} with no recorded execution.",
+        why=why,
         transition_kind="ENTER_UNFILLED",
     )
 
@@ -588,7 +610,7 @@ def fold_failed(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
-    order_ref: str,
+    order_ref: str | None,
     summary_code: str,
     reason: str,
     why: str,
@@ -598,6 +620,8 @@ def fold_failed(
 
     The caller names the transition and summary so local refusals cannot be
     confused with broker rejection or absence proven after the grace window.
+    ``order_ref`` is ``None`` only for an effect-level outcome whose order
+    evidence nests under another effect (``ENTER_UNFILLED`` during an EXIT).
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
