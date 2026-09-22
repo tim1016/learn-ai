@@ -33,7 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
+from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, claim_scoped, run_inline
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
@@ -757,16 +757,15 @@ async def resolve_order_submission(
     """
     run = off_loop if off_loop is not None else run_inline
 
-    def _read_and_claim() -> tuple[EffectOperationResource | None, str | None, int | None, str | None]:
+    def _read_submission_state() -> tuple[EffectOperationResource | None, int | None, str | None]:
         order_row = repo.order(order_ref)
         assert order_row is not None
         effect = repo.effect_operation(order_row.effect_operation_id)
         assert effect is not None
         if effect.state in ("succeeded", "failed", "rejected"):
-            return None, None, None, None
+            return None, None, None
         return (
             effect,
-            repo.claim_before_broker_contact(effect.effect_operation_id).token,
             _uncertain_since_ms(repo, order_ref),
             order_row.broker_order_id,
         )
@@ -776,9 +775,15 @@ async def resolve_order_submission(
     # direction without an import-time cycle.
     from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 
-    effect, claim_token, uncertain_since_ms, captured_broker_order_id = await run(_read_and_claim)
+    effect, uncertain_since_ms, captured_broker_order_id = await run(_read_submission_state)
     if effect is None:
         return
+    # The claim is taken on the caller's thread with no await between the
+    # read and the claim, and every unit inside the scope runs claim_scoped:
+    # a cancellation can neither strand a claim taken by an abandoned worker
+    # nor release this one around a still-running fold (#1993 review).
+    claim_token = repo.claim_before_broker_contact(effect.effect_operation_id).token
+    guarded = claim_scoped(run)
     broker = ClaimedBrokerIO(
         repo=repo,
         effect_operation_id=effect.effect_operation_id,
@@ -790,7 +795,7 @@ async def resolve_order_submission(
             order = await broker.lookup(order_ref)
         except BrokerError as exc:
             lookup_failed_why = f"Exact broker lookup failed before outcome proof: {exc}"
-            await run(
+            await guarded(
                 lambda: fold_uncertain(
                     repo,
                     effect_operation_id=effect.effect_operation_id,
@@ -801,7 +806,7 @@ async def resolve_order_submission(
             return
 
         if order is not None and order.client_order_id != order_ref:
-            await run(
+            await guarded(
                 lambda: fold_uncertain(
                     repo,
                     effect_operation_id=effect.effect_operation_id,
@@ -815,22 +820,17 @@ async def resolve_order_submission(
             return
 
         if order is None:
-
-            def _fold_absence_if_past_grace() -> None:
-                if captured_broker_order_id is not None:
-                    return
-                grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
-                if grace_active:
-                    return
-                fold_submit_absence_void(
+            await guarded(
+                lambda: _fold_absence_if_past_grace(
                     repo,
                     effect_operation_id=effect.effect_operation_id,
                     order_ref=order_ref,
+                    captured_broker_order_id=captured_broker_order_id,
+                    uncertain_since_ms=uncertain_since_ms,
                 )
-
-            await run(_fold_absence_if_past_grace)
+            )
         else:
-            await run(
+            await guarded(
                 lambda: fold_order_evidence(
                     repo,
                     effect_operation_id=effect.effect_operation_id,
@@ -839,13 +839,34 @@ async def resolve_order_submission(
                 )
             )
     finally:
-        # Claim release stays on the caller's thread: one bounded append, and
-        # hopping it inside a cancellation unwind would trade a sub-
-        # millisecond write for a second abandonable worker (#1993).
+        # Claim release on the caller's thread, guarded above: one bounded
+        # append that never interleaves with an abandoned worker's writes
+        # (#1993 review).
         repo.release_operation_claim(
             effect_operation_id=effect.effect_operation_id,
             token=claim_token,
         )
+
+
+def _fold_absence_if_past_grace(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    captured_broker_order_id: str | None,
+    uncertain_since_ms: int,
+) -> None:
+    """Void a never-reached order only past the submit-absence grace window."""
+    if captured_broker_order_id is not None:
+        return
+    grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
+    if grace_active:
+        return
+    fold_submit_absence_void(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+    )
 
 
 def _uncertain_since_ms(repo: ClerkSqliteRepository, order_ref: str) -> int:

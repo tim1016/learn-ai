@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
+from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, claim_scoped, run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     entry_never_accepted_durably,
@@ -93,17 +93,14 @@ async def resolve_exit(
     for every non-sweep caller.
     """
     run = off_loop if off_loop is not None else run_inline
-
-    def _read_and_claim() -> tuple[ExitSubmission | None, str | None]:
-        effect = repo.effect_operation(effect_operation_id)
-        assert effect is not None
-        if effect.state in ("succeeded", "failed", "rejected"):
-            return _snapshot(repo, effect_operation_id), None
-        return None, repo.claim_before_broker_contact(effect_operation_id).token
-
-    terminal_result, claim_token = await run(_read_and_claim)
-    if terminal_result is not None:
-        return terminal_result
+    effect = await run(lambda: repo.effect_operation(effect_operation_id))
+    assert effect is not None
+    if effect.state in ("succeeded", "failed", "rejected"):
+        return await run(lambda: _snapshot(repo, effect_operation_id))
+    # Claim on the caller's thread, body claim_scoped: a cancellation can
+    # neither strand a claim nor release around a still-running worker
+    # (#1993 review).
+    claim_token = repo.claim_before_broker_contact(effect_operation_id).token
     broker = ClaimedBrokerIO(
         repo=repo,
         effect_operation_id=effect_operation_id,
@@ -115,12 +112,9 @@ async def resolve_exit(
             repo,
             effect_operation_id=effect_operation_id,
             broker=broker,
-            run=run,
+            run=claim_scoped(run),
         )
     finally:
-        # Claim release stays on the caller's thread: one bounded append,
-        # and hopping it inside a cancellation unwind would trade a
-        # sub-millisecond write for a second abandonable worker.
         repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim_token)
 
 
@@ -137,20 +131,21 @@ async def cancel_and_prove_owned_entry(
     (#1993); the default keeps the pre-#1993 inline behavior.
     """
     run = off_loop if off_loop is not None else run_inline
-    entry = repo.order(entry_order_ref)
+    entry = await run(lambda: repo.order(entry_order_ref))
     if entry is None or entry.role != "ENTRY":
         raise ValueError(f"{entry_order_ref!r} is not an owned ENTRY order")
-    active_exit = repo.active_exit_for_order(entry_order_ref)
+    active_exit = await run(lambda: repo.active_exit_for_order(entry_order_ref))
     effect_operation_id = (
         active_exit.effect_operation_id
         if active_exit is not None
         else entry.effect_operation_id
     )
-    claim = repo.claim_before_broker_contact(effect_operation_id)
+    # Claim on the caller's thread, body claim_scoped (see resolve_exit).
+    claim_token = repo.claim_before_broker_contact(effect_operation_id).token
     broker = ClaimedBrokerIO(
         repo=repo,
         effect_operation_id=effect_operation_id,
-        claim_token=claim.token,
+        claim_token=claim_token,
         trade=trade,
     )
     try:
@@ -159,14 +154,14 @@ async def cancel_and_prove_owned_entry(
             effect_operation_id=effect_operation_id,
             entry=entry,
             broker=broker,
-            run=run,
+            run=claim_scoped(run),
         )
     finally:
         repo.release_operation_claim(
             effect_operation_id=effect_operation_id,
-            token=claim.token,
+            token=claim_token,
         )
-    refreshed = repo.order(entry_order_ref)
+    refreshed = await run(lambda: repo.order(entry_order_ref))
     assert refreshed is not None
     return refreshed
 
@@ -179,7 +174,165 @@ class _ClaimedState(NamedTuple):
     reducing: OrderResource | None
     symbol: str
     recovery: bool
-    blocked_snapshot: ExitSubmission | None
+
+
+def _read_exit_claim_state(
+    repo: ClerkSqliteRepository, effect_operation_id: str
+) -> _ClaimedState:
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    orders = repo.orders_for_effect_operation(effect_operation_id)
+    entries = [order for order in orders if order.role == "ENTRY"]
+    reducing = next((order for order in orders if order.role == "REDUCING"), None)
+    assert entries
+    return _ClaimedState(
+        effect, entries, reducing, _single_entry_symbol(repo, entries), _is_recovery_exit(repo, effect_operation_id)
+    )
+
+
+def _recovery_gate_snapshot(
+    repo: ClerkSqliteRepository, effect_operation_id: str, state: _ClaimedState
+) -> ExitSubmission | None:
+    """The pre-broker-contact recovery gate; ``None`` when the leg may proceed.
+
+    Decided before any broker contact, so a recovery EXIT waiting for the
+    open does not poll the broker all night. The leg actually created is
+    checked again in :func:`_prepare_reduction`, after the side
+    reconciliation.
+    """
+    if not (state.recovery and state.reducing is None):
+        return None
+    accepted = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
+    if _recovery_leg_may_proceed(
+        repo,
+        effect_operation_id=effect_operation_id,
+        extended_hours=accepted is not None and accepted.extended_hours,
+        order_ref=_primary_entry_ref(repo, state.entries),
+        symbol=state.symbol,
+    ):
+        return None
+    return _snapshot(repo, effect_operation_id)
+
+
+def _fold_attributed_flat_or_none(
+    repo: ClerkSqliteRepository, effect_operation_id: str, state: _ClaimedState
+) -> ExitSubmission | None:
+    remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
+    if state.reducing is None and not position_quantity_is_nonzero(remaining_qty):
+        _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
+        return _snapshot(repo, effect_operation_id)
+    return None
+
+
+def _prepare_reduction(
+    repo: ClerkSqliteRepository, effect_operation_id: str, state: _ClaimedState
+) -> tuple[OrderResource | None, ExitSubmission | None]:
+    """One atomic admission-to-append run: ``(created, None)``, or
+    ``(None, snapshot)`` when a precondition folded the EXIT to an early
+    end — attributed-flat, the recovery gate, or a moved quantity.
+    """
+    remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
+    if not position_quantity_is_nonzero(remaining_qty):
+        _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
+        return None, _snapshot(repo, effect_operation_id)
+    shape = _resolved_reducing_shape(
+        repo,
+        effect_operation_id=effect_operation_id,
+        reducing_side=OrderSide.SELL if remaining_qty > 0 else OrderSide.BUY,
+    )
+    if state.recovery and not _recovery_leg_may_proceed(
+        repo,
+        effect_operation_id=effect_operation_id,
+        extended_hours=shape.extended_hours,
+        order_ref=_primary_entry_ref(repo, state.entries),
+        symbol=state.symbol,
+    ):
+        return None, _snapshot(repo, effect_operation_id)
+    if not _confirmed_quantity_still_holds(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=_primary_entry_ref(repo, state.entries),
+        symbol=state.symbol,
+        remaining_qty=remaining_qty,
+    ):
+        return None, _snapshot(repo, effect_operation_id)
+    require_capability(
+        repo,
+        capability=Capability.REDUCE,
+        strategy_instance_id=state.effect.strategy_instance_id,
+        reduction_intent=ReductionIntent(
+            symbol=state.symbol,
+            side="SELL" if remaining_qty > 0 else "BUY",
+            quantity=abs(remaining_qty),
+        ),
+    )
+    return (
+        _create_reducing_order(
+            repo,
+            effect_operation_id=effect_operation_id,
+            symbol=state.symbol,
+            quantity=remaining_qty,
+            shape=shape,
+        ),
+        None,
+    )
+
+
+def _finalize_claimed_exit(
+    repo: ClerkSqliteRepository,
+    effect_operation_id: str,
+    state: _ClaimedState,
+    submitted_reducing: OrderResource,
+) -> ExitSubmission:
+    """Fold the driven reducing order's outcome and snapshot the EXIT."""
+    refreshed = repo.order(submitted_reducing.order_ref)
+    assert refreshed is not None
+    if not _is_terminal(refreshed.broker_state):
+        return _snapshot(repo, effect_operation_id)
+    final_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
+    if not position_quantity_is_nonzero(final_qty):
+        _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
+        return _snapshot(repo, effect_operation_id)
+    # A synchronous submit response can truthfully say the reducing order
+    # is terminal (``filled``/``replaced``) while its execution slice has
+    # not reached the websocket capture path yet.  That is incomplete
+    # custody evidence, not proof that an EXIT failed to flatten, so hold
+    # the effect unknown until an exact execution or labelled recovery
+    # observation can establish the economic delta.  A ``canceled`` /
+    # ``expired`` / ``rejected`` terminal snapshot with no recorded
+    # execution carries no such ambiguity — it is proven unfilled
+    # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
+    if (
+        not repo.fills_for_order(refreshed.order_ref)
+        and (refreshed.broker_state or "").lower() not in UNFILLED_TERMINAL_STATES
+    ):
+        if state.effect.state != "unknown":
+            fold_uncertain(
+                repo,
+                effect_operation_id=effect_operation_id,
+                order_ref=refreshed.order_ref,
+                why=(
+                    "Reducing order is terminal but no execution slice has been "
+                    "recorded; awaiting websocket or recovery evidence."
+                ),
+            )
+        return _snapshot(repo, effect_operation_id)
+    _fold_exit_not_flat(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=refreshed.order_ref,
+        symbol=state.symbol,
+        attributed_qty=final_qty,
+        summary_code="EXIT_NOT_FLAT",
+        reason="The reducing order resolved without flattening the position.",
+        headline="A completed EXIT left attributed exposure",
+        explanation=(
+            f"The reducing order became terminal while {final_qty:g} {state.symbol} "
+            "remained attributed to this strategy."
+        ),
+        next_step="Run another EXIT or reconcile until attributed exposure is flat.",
+    )
+    return _snapshot(repo, effect_operation_id)
 
 
 async def _resolve_claimed(
@@ -189,36 +342,16 @@ async def _resolve_claimed(
     broker: ClaimedBrokerIO,
     run: OffLoop,
 ) -> ExitSubmission:
-    def _read_claimed_state() -> _ClaimedState:
-        effect = repo.effect_operation(effect_operation_id)
-        assert effect is not None
-        orders = repo.orders_for_effect_operation(effect_operation_id)
-        entries = [order for order in orders if order.role == "ENTRY"]
-        reducing = next((order for order in orders if order.role == "REDUCING"), None)
-        assert entries
-        symbol = _single_entry_symbol(repo, entries)
-        recovery = _is_recovery_exit(repo, effect_operation_id)
-        if recovery and reducing is None:
-            # Decided before any broker contact, so a recovery EXIT waiting for
-            # the open does not poll the broker all night. The leg actually
-            # created is checked again below, after the side reconciliation.
-            accepted = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
-            if not _recovery_leg_may_proceed(
-                repo,
-                effect_operation_id=effect_operation_id,
-                extended_hours=accepted is not None and accepted.extended_hours,
-                order_ref=_primary_entry_ref(repo, entries),
-                symbol=symbol,
-            ):
-                return _ClaimedState(
-                    effect, entries, reducing, symbol, recovery, _snapshot(repo, effect_operation_id)
-                )
-        return _ClaimedState(effect, entries, reducing, symbol, recovery, None)
+    """The claimed EXIT machine: read state, prove terminal, reduce, finalize.
 
-    state = await run(_read_claimed_state)
-    if state.blocked_snapshot is not None:
-        return state.blocked_snapshot
-
+    Broker sequencing stays here; every synchronous repository phase is a
+    named module-level function executed through ``run`` — the claim-scoped
+    off-loop seam ``resolve_exit`` wraps before handing it in (#1993).
+    """
+    state = await run(lambda: _read_exit_claim_state(repo, effect_operation_id))
+    blocked = await run(lambda: _recovery_gate_snapshot(repo, effect_operation_id, state))
+    if blocked is not None:
+        return blocked
     if not await _prove_entry_set_terminal(
         repo,
         effect_operation_id=effect_operation_id,
@@ -229,18 +362,14 @@ async def _resolve_claimed(
     ):
         return await run(lambda: _snapshot(repo, effect_operation_id))
 
-    def _flat_after_terminal_proof() -> ExitSubmission | None:
-        remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
-        if state.reducing is None and not position_quantity_is_nonzero(remaining_qty):
-            _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
-            return _snapshot(repo, effect_operation_id)
-        return None
-
-    flat_snapshot = await run(_flat_after_terminal_proof)
+    flat_snapshot = await run(
+        lambda: _fold_attributed_flat_or_none(repo, effect_operation_id, state)
+    )
     if flat_snapshot is not None:
         return flat_snapshot
 
-    if state.reducing is None:
+    reducing = state.reducing
+    if reducing is None:
         # A previous call may have proven terminal minutes ago. Refresh every
         # exact entry identity under the same claim immediately before the
         # reducing quantity is fixed.
@@ -252,54 +381,9 @@ async def _resolve_claimed(
             run=run,
         ):
             return await run(lambda: _snapshot(repo, effect_operation_id))
-
-        def _prepare_reduction() -> tuple[OrderResource | None, ExitSubmission | None]:
-            remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
-            if not position_quantity_is_nonzero(remaining_qty):
-                _fold_attributed_flat(
-                    repo, effect_operation_id, _primary_entry_ref(repo, state.entries)
-                )
-                return None, _snapshot(repo, effect_operation_id)
-            shape = _resolved_reducing_shape(
-                repo,
-                effect_operation_id=effect_operation_id,
-                reducing_side=OrderSide.SELL if remaining_qty > 0 else OrderSide.BUY,
-            )
-            if state.recovery and not _recovery_leg_may_proceed(
-                repo,
-                effect_operation_id=effect_operation_id,
-                extended_hours=shape.extended_hours,
-                order_ref=_primary_entry_ref(repo, state.entries),
-                symbol=state.symbol,
-            ):
-                return None, _snapshot(repo, effect_operation_id)
-            if not _confirmed_quantity_still_holds(
-                repo,
-                effect_operation_id=effect_operation_id,
-                order_ref=_primary_entry_ref(repo, state.entries),
-                symbol=state.symbol,
-                remaining_qty=remaining_qty,
-            ):
-                return None, _snapshot(repo, effect_operation_id)
-            require_capability(
-                repo,
-                capability=Capability.REDUCE,
-                strategy_instance_id=state.effect.strategy_instance_id,
-                reduction_intent=ReductionIntent(
-                    symbol=state.symbol,
-                    side="SELL" if remaining_qty > 0 else "BUY",
-                    quantity=abs(remaining_qty),
-                ),
-            )
-            return _create_reducing_order(
-                repo,
-                effect_operation_id=effect_operation_id,
-                symbol=state.symbol,
-                quantity=remaining_qty,
-                shape=shape,
-            ), None
-
-        reducing, prepared_snapshot = await run(_prepare_reduction)
+        reducing, prepared_snapshot = await run(
+            lambda: _prepare_reduction(repo, effect_operation_id, state)
+        )
         if prepared_snapshot is not None:
             return prepared_snapshot
         assert reducing is not None
@@ -310,70 +394,17 @@ async def _resolve_claimed(
             broker=broker,
             run=run,
         )
-    elif not _is_terminal(state.reducing.broker_state):
+    elif not _is_terminal(reducing.broker_state):
         await _refresh_or_resume_reducing_order(
             repo,
             effect_operation_id=effect_operation_id,
-            reducing=state.reducing,
+            reducing=reducing,
             broker=broker,
             run=run,
         )
-
-    # Whichever reducing order this attempt ended up driving: the one this
-    # pass created, or the one the claimed state already carried.
-    submitted_reducing = reducing if state.reducing is None else state.reducing
-
-    def _finalize() -> ExitSubmission:
-        refreshed = repo.order(submitted_reducing.order_ref)
-        assert refreshed is not None
-        if not _is_terminal(refreshed.broker_state):
-            return _snapshot(repo, effect_operation_id)
-        final_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
-        if not position_quantity_is_nonzero(final_qty):
-            _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
-            return _snapshot(repo, effect_operation_id)
-        # A synchronous submit response can truthfully say the reducing order
-        # is terminal (``filled``/``replaced``) while its execution slice has
-        # not reached the websocket capture path yet.  That is incomplete
-        # custody evidence, not proof that an EXIT failed to flatten, so hold
-        # the effect unknown until an exact execution or labelled recovery
-        # observation can establish the economic delta.  A ``canceled`` /
-        # ``expired`` / ``rejected`` terminal snapshot with no recorded
-        # execution carries no such ambiguity — it is proven unfilled
-        # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
-        if (
-            not repo.fills_for_order(refreshed.order_ref)
-            and (refreshed.broker_state or "").lower() not in UNFILLED_TERMINAL_STATES
-        ):
-            if state.effect.state != "unknown":
-                fold_uncertain(
-                    repo,
-                    effect_operation_id=effect_operation_id,
-                    order_ref=refreshed.order_ref,
-                    why=(
-                        "Reducing order is terminal but no execution slice has been "
-                        "recorded; awaiting websocket or recovery evidence."
-                    ),
-                )
-            return _snapshot(repo, effect_operation_id)
-        _fold_exit_not_flat(
-            repo,
-            effect_operation_id=effect_operation_id,
-            order_ref=refreshed.order_ref,
-            symbol=state.symbol,
-            attributed_qty=final_qty,
-            summary_code="EXIT_NOT_FLAT",
-            reason="The reducing order resolved without flattening the position.",
-            headline="A completed EXIT left attributed exposure",
-            explanation=(
-                f"The reducing order became terminal while {final_qty:g} {state.symbol} "
-                "remained attributed to this strategy."
-            ),
-            next_step="Run another EXIT or reconcile until attributed exposure is flat.",
-        )
-        return _snapshot(repo, effect_operation_id)
-
-    return await run(_finalize)
+    return await run(
+        lambda: _finalize_claimed_exit(repo, effect_operation_id, state, reducing)
+    )
 
 
 def _fold_exit_not_flat(

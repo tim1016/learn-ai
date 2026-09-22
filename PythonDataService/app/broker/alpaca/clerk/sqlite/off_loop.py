@@ -21,6 +21,14 @@ created once per process instead of once per event loop: pytest runs a fresh
 loop per test, and a default executor per loop churned threads through every
 one of them.
 
+Cancellation discipline for both shapes lives here too. A cancelled await
+cannot stop a worker already inside a fold, so whoever owns the exclusion the
+fold runs under — the intake fence, or an operation claim — must hold that
+exclusion until the worker finishes (:func:`finish_abandoned_hop` is that
+bounded wait). :func:`claim_scoped` wraps a runner so the claim release in a
+resolver's ``finally`` can never interleave with its own abandoned worker's
+writes.
+
 New module rather than a home in an existing one: the type is shared by
 ``exit_resolution``, ``order_evidence``, ``manual_order_cancellation``,
 ``exit_watchdog``, and ``reconcile``, whose only common dependencies are
@@ -31,13 +39,18 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 type OffLoop[T] = Callable[[Callable[[], T]], Awaitable[T]]
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sqlite-clerk-off-loop")
+
+ABANDONED_WORKER_TIMEOUT_S = 30.0
 
 
 async def run_inline[T](operation: Callable[[], T]) -> T:
@@ -72,4 +85,109 @@ def off_loop_future[T](
     return loop.run_in_executor(_EXECUTOR, run_unit)
 
 
-__all__ = ["OffLoop", "off_loop_future", "run_inline", "to_thread"]
+async def finish_abandoned_hop(
+    hop: asyncio.Future[Any],
+    *,
+    timeout_s: float,
+    log_outcome: Callable[[BaseException | None], None],
+) -> str:
+    """Let a worker whose caller was cancelled reach its outcome, bounded.
+
+    Returns ``"completed"`` once the worker finished (its exception, if any,
+    is handed to ``log_outcome``), ``"timeout"`` when the bound elapsed with
+    the worker still running, and ``"recancelled"`` when a second
+    cancellation interrupted the wait. For the latter two the worker keeps
+    running on the loop and its eventual outcome is still routed to
+    ``log_outcome`` via a done-callback, so a failure is logged rather than
+    dropped as an unretrieved task exception. The caller decides what an
+    unfinished worker means for its exclusion — the fence poisons itself
+    (:class:`ReentrantAsyncLock`), a claim scope can only log.
+    """
+    try:
+        await asyncio.wait_for(asyncio.shield(hop), timeout=timeout_s)
+    except asyncio.CancelledError:
+        hop.add_done_callback(_outcome_retriever(log_outcome))
+        return "recancelled"
+    except TimeoutError:
+        hop.add_done_callback(_outcome_retriever(log_outcome))
+        return "timeout"
+    except Exception as error:
+        log_outcome(error)
+        return "completed"
+    log_outcome(None)
+    return "completed"
+
+
+def _outcome_retriever(
+    log_outcome: Callable[[BaseException | None], None],
+) -> Callable[[asyncio.Future[Any]], None]:
+    def retrieve(hop: asyncio.Future[Any]) -> None:
+        if hop.cancelled():
+            log_outcome(None)
+            return
+        log_outcome(hop.exception())
+
+    return retrieve
+
+
+def claim_scoped(
+    run: OffLoop,
+    *,
+    abandoned_timeout_s: float = ABANDONED_WORKER_TIMEOUT_S,
+) -> OffLoop:
+    """Wrap a runner so a cancelled await waits out its in-flight worker.
+
+    The claim-scoped twin of the intake fence's abandoned-hop rule (#1993):
+    a resolver's ``finally: release_operation_claim`` runs in the cancelled
+    task's unwind, and releasing while the abandoned worker may still be
+    folding lets the next claimant interleave with writes it cannot see.
+    The wait is bounded by ``abandoned_timeout_s``; a worker that outlives
+    it is logged CRITICAL and the claim is released anyway — unlike the
+    fence, a claim scope has no way to refuse the next claimant, so the
+    record is the best fail-loud available.
+    """
+
+    async def guarded[T](operation: Callable[[], T]) -> T:
+        hop = asyncio.ensure_future(run(operation))
+        try:
+            return await asyncio.shield(hop)
+        except asyncio.CancelledError:
+            status = await finish_abandoned_hop(
+                hop,
+                timeout_s=abandoned_timeout_s,
+                log_outcome=_log_claim_scoped_outcome,
+            )
+            if status != "completed":
+                logger.critical(
+                    "SQLite Clerk claim-scoped fold still running after its caller "
+                    "was cancelled; releasing the claim with the worker unfinished",
+                    extra={
+                        "off_loop_event": "claim_scoped_abandoned_timeout",
+                        "abandoned_timeout_s": abandoned_timeout_s,
+                    },
+                )
+            raise
+
+    return guarded
+
+
+def _log_claim_scoped_outcome(error: BaseException | None) -> None:
+    if error is None:
+        return
+    logger.error(
+        "SQLite Clerk claim-scoped fold errored after its caller was cancelled",
+        extra={"off_loop_event": "claim_scoped_abandoned_error"},
+        exc_info=error,
+    )
+
+
+__all__ = [
+    "ABANDONED_WORKER_TIMEOUT_S",
+    "OffLoop",
+    "claim_scoped",
+    "finish_abandoned_hop",
+    "off_loop_future",
+    "run_inline",
+    "to_thread",
+]
+

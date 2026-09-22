@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -35,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
     NoActiveRunError,
     UnknownEntryOrderError,
 )
+from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -2170,3 +2173,109 @@ async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_
     # Retained, not released: the identity question outranks the session clock.
     assert effect is not None and effect.state not in ("succeeded", "failed", "rejected")
     assert repo.active_exit_for_order(entry_ref) is not None
+
+
+# ── resolve_exit claim-scope cancellation (#1993 review) ─────────────────────
+
+
+class _ClaimLedgerRepo:
+    """A repo stub whose claim lifecycle and worker gates are observable.
+
+    The full custody graph (acceptance facts, symbols) is beyond what these
+    tests need: cancellation settles the gated worker before the machine
+    ever gets there, and the worker is allowed to settle with the sentinel
+    below once it finishes — what is asserted is the *ordering* of the claim
+    release against the worker's settlement.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.claims: list[str] = []
+        self.read_started = threading.Event()
+        self.read_release = threading.Event()
+        self.state_started = threading.Event()
+        self.state_release = threading.Event()
+        self.effect = SimpleNamespace(
+            effect_operation_id="effect-1",
+            strategy_instance_id="sid",
+            state="unknown",
+            kind="EXIT",
+        )
+
+    def effect_operation(self, effect_operation_id: str) -> object:
+        if self.read_started.is_set():
+            return self.effect
+        self.events.append("read-start")
+        self.read_started.set()
+        self.read_release.wait(timeout=10)
+        self.events.append("read-end")
+        return self.effect
+
+    def claim_before_broker_contact(self, effect_operation_id: str) -> object:
+        self.events.append("claim")
+        token = f"token-{len(self.claims)}"
+        self.claims.append(token)
+        return SimpleNamespace(token=token)
+
+    def release_operation_claim(self, *, effect_operation_id: str, token: str) -> None:
+        self.events.append("release")
+
+    def orders_for_effect_operation(self, effect_operation_id: str) -> list[object]:
+        self.events.append("state-start")
+        self.state_started.set()
+        self.state_release.wait(timeout=10)
+        self.events.append("state-end")
+        raise AssertionError("controlled settlement: stub has no custody graph")
+
+
+async def test_resolve_exit_cancellation_during_the_prologue_read_leaves_no_claim() -> None:
+    """A claim taken by no one: the prologue read precedes the claim.
+
+    The claim is acquired on the caller's thread only after the read returns,
+    so cancelling while the read's worker runs strands nothing (#1993
+    review: the withdrawn shape leaked a claim the worker had already
+    taken).
+    """
+    repo = _ClaimLedgerRepo()
+    task = asyncio.create_task(
+        resolve_exit(repo, effect_operation_id="effect-1", trade=None, off_loop=to_thread)
+    )
+    await asyncio.get_running_loop().run_in_executor(None, repo.read_started.wait, 10)
+    task.cancel()
+    repo.read_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert repo.events == ["read-start", "read-end"]
+    assert repo.claims == []
+
+
+async def test_resolve_exit_cancellation_inside_the_claim_waits_out_the_worker() -> None:
+    """The claim release cannot interleave with the abandoned worker's write.
+
+    Cancelling mid-read inside the claim scope must let the in-flight worker
+    settle first (#1993 review: the withdrawn shape released the claim while
+    the read was still running).
+    """
+    repo = _ClaimLedgerRepo()
+    repo.read_release.set()  # the prologue read passes straight through
+    task = asyncio.create_task(
+        resolve_exit(repo, effect_operation_id="effect-1", trade=None, off_loop=to_thread)
+    )
+    await asyncio.get_running_loop().run_in_executor(None, repo.state_started.wait, 10)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert repo.events.count("release") == 0  # the gated worker still holds the scope
+    repo.state_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert repo.events == [
+        "read-start",
+        "read-end",
+        "claim",
+        "state-start",
+        "state-end",
+        "release",
+    ]
+    assert len(repo.claims) == 1

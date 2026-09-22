@@ -32,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
+from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, claim_scoped, run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     fold_submit_absence_void,
@@ -565,19 +565,23 @@ async def resolve_manual_order_cancellation(
     """
     run = off_loop if off_loop is not None else run_inline
 
-    def _read_and_claim() -> tuple[ManualOrderCancellationResource, EffectOperationResource, str | None]:
+    def _read_resolution_state() -> tuple[ManualOrderCancellationResource, bool]:
         cancellation = repo.manual_order_cancellation_for_effect(effect_operation_id=effect_operation_id)
         if cancellation is None:
             raise ManualOrderCancelOwnershipError("Cancellation recovery has no owned manual target.")
         effect = repo.effect_operation(effect_operation_id)
         if effect is None:
             raise RuntimeError("manual cancellation effect disappeared")
-        if effect.state in {"succeeded", "failed", "rejected"}:
-            return cancellation, effect, None
-        return cancellation, effect, repo.claim_before_broker_contact(effect_operation_id).token
+        return cancellation, effect.state in {"succeeded", "failed", "rejected"}
 
-    cancellation, _effect, claim_token = await run(_read_and_claim)
-    if claim_token is not None:
+    cancellation, already_terminal = await run(_read_resolution_state)
+    if not already_terminal:
+        # The claim is taken on the caller's thread with no await between
+        # the read and the claim, and the claimed body runs claim_scoped: a
+        # cancellation can neither strand a claim taken by an abandoned
+        # worker nor release this one around a still-running fold (#1993
+        # review).
+        claim_token = repo.claim_before_broker_contact(effect_operation_id).token
         broker = ClaimedBrokerIO(
             repo=repo,
             effect_operation_id=effect_operation_id,
@@ -589,12 +593,9 @@ async def resolve_manual_order_cancellation(
                 repo,
                 cancellation=cancellation,
                 broker=broker,
-                run=run,
+                run=claim_scoped(run),
             )
         finally:
-            # Claim release stays on the caller's thread: one bounded append,
-            # and hopping it inside a cancellation unwind would trade a
-            # sub-millisecond write for a second abandonable worker (#1993).
             repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim_token)
     return await run(
         lambda: _submission(
