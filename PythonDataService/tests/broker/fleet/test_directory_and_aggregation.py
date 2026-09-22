@@ -309,8 +309,11 @@ def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(
 
     lane = _live(fleet_service, control_dir.parent, "fake_alpha", "anomalous")
     # Corrupt the registry directly: a second effective assignment for the
-    # same clerk is a state only a broken writer could produce.
+    # same clerk is a state only a broken writer could produce. Since v7 the
+    # schema refuses it (test below), so the corruption first removes that
+    # fence — the projection stays a second line behind it.
     with fleet_service._store.transaction() as conn:
+        conn.execute("DROP INDEX ix_account_assignments_owner")
         conn.execute(
             "INSERT INTO account_assignments (broker, canonical_external_account_id, "
             "clerk_id, assignment_generation, state, confirmed_binding_generation, "
@@ -337,6 +340,26 @@ def test_a_clerk_holding_multiple_effective_assignments_is_surfaced_degraded(
         clerk_id=lane.clerk_id,
         readiness=OperationReadiness.CONFIGURATION_ACCESS,
     )
+
+
+def test_the_schema_refuses_a_second_live_assignment_for_one_clerk(
+    control_dir: Path, fleet_service
+) -> None:
+    """v7 (#2154): one live assignment per clerk is structural, so a
+    lane-quiet confirmation — which names no account — covers exactly one."""
+    import sqlite3
+
+    lane = _live(fleet_service, control_dir.parent, "fake_alpha", "single")
+    with (
+        pytest.raises(sqlite3.IntegrityError, match=r"account_assignments\.clerk_id"),
+        fleet_service._store.transaction() as conn,
+    ):
+        conn.execute(
+            "INSERT INTO account_assignments (broker, canonical_external_account_id, "
+            "clerk_id, assignment_generation, state, recorded_at_ms, updated_at_ms) "
+            "VALUES ('fake_alpha', 'ACCT-SECOND', ?, 1, 'reserved', 1, 1)",
+            (lane.clerk_id,),
+        )
 
 
 # ---- HTTP: GET /broker-clerks/aggregate/directory (PRD FR-083/084) --------

@@ -521,6 +521,8 @@ host CLI, in order:
 #     unresolved intents and confirms lane quiet to the coordinator. You do not
 #     attest it. The plain `retire` in step 3 refuses, naming each outstanding
 #     item, until the lane's latest answer is quiet and under 90 s old.
+#     `manage_broker_fleet lane-quiet --clerk-id <clerk-id>` shows the same
+#     answer read-only, at any point.
 #
 #     A lane that CANNOT answer — its process restarted during the drain, its
 #     host is gone, or it has no clerk — never confirms. For it this step is
@@ -555,17 +557,37 @@ host CLI, in order:
   --operator <named-operator> --change-ref <restricted-record>
 ```
 
-Lane-to-lane reassignment remains blocked until the handover half of #2154
-ships — the lane-quiet confirmation now opens retirement, but release,
-re-reservation and reassignment do not consume it yet. #2155's resurrection hole is closed for every lane
-that learns its drain, but a lane unreachable for the entire drain keeps
-unmarked evidence, and without lane quiet the coordinator cannot tell that
-residual population from a quiet one; whole-machine migration is the
-preferred lane move. Since #2157 closed (2026-09-22) the two-step reach of
-the same handover carries the same gate: a released assignment cannot be
-re-reserved by any lane — including to re-onboard the account onto a new
-lane after its old lane retired — until that handover half ships. Do not delete registry
-rows, reuse the old volume for another account, or run `down -v`.
+**Moving the account to another lane.** Whole-machine migration (#2151) is
+still the preferred lane move and needs none of this. When an account must go
+to a different lane, it moves only on the old lane's own lane-quiet proof
+(#2154):
+
+- **Release, then re-onboard.** Clear the account and let the draining lane
+  confirm quiet (step 1c) *before* running `release-assignment`. The release
+  prints `lane_confirmation`: `present` means the lane's fresh, quiet answer
+  covered it. Then `retire` the old lane (it still confirms quiet on its
+  heartbeat), and then run `reassign-assignment` with the new lane's
+  `--successor-clerk-id` and `--successor-volume-root`: it takes the account
+  at the next generation, recording your `--operator`/`--change-ref`. (A new
+  lane booting against the coordinator over HTTP cannot take a released
+  account by itself — its reservation carries no volume proof — so the host
+  ceremony is the path.) It refuses while the old lane is still draining.
+  `absent` means the release was not covered, and **that account never moves
+  to another lane** — nothing proves the old lane stopped writing.
+  A release cannot be redone, so check first, read-only:
+  `.venv/bin/python -m scripts.manage_broker_fleet lane-quiet --control-dir
+  <coordinator-control-root> --clerk-id <clerk-id>` answers `quiet: true`
+  (exit 0) exactly when the release would record `present`, and otherwise
+  refuses (exit 2) naming what is outstanding.
+- **Direct reassignment.** `reassign-assignment` releases the account,
+  retires the old lane and reserves it for the successor in one transaction.
+  It refuses, naming what is missing, unless the drained lane's current
+  session holds a fresh, quiet confirmation.
+
+A lane that cannot answer (restarted mid-drain, host lost, no clerk) never
+hands its account to another lane; its account is released `absent`. Do not
+delete registry rows, reuse the old volume for another account, or run
+`down -v`.
 
 Closing the actual brokerage account is a separate action in Alpaca, outside
 this application. This runbook deliberately does not claim that a saved-profile

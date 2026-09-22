@@ -69,6 +69,17 @@ gate must read the last answer *recorded*, which is the registry's own fact,
 not the last one a lane host's clock claims to have observed. The upgrade is
 purely additive (one CREATE TABLE, one index, two triggers), so it is
 non-destructive against a live registry.
+
+Schema v7 (ADR 0063 §4.1's 2026-09-21 amendment, #2154) makes "one live
+assignment per clerk" structural: ``ix_account_assignments_owner`` becomes a
+UNIQUE partial index over the non-released rows. That is what lets a
+lane-quiet confirmation, which carries no account identity, authorize moving
+one *named* account — a draining clerk reserves nothing new, so its one live
+assignment when the drain began is the only account its confirmation can be
+about. The upgrade replaces the index in place; a registry that already
+holds two live assignments for one clerk fails the upgrade and rolls back
+rather than being repaired, because which of the two is real is not the
+schema's to decide.
 """
 
 from __future__ import annotations
@@ -78,7 +89,7 @@ import sqlite3
 from app.broker.fleet.schema_migrations import SCHEMA_DDL_V1, SCHEMA_MIGRATIONS
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 #: Every ``*_ms`` column carries this bound in the schema, so a corrupt or
 #: hostile write cannot persist a negative or out-of-range instant as fleet
@@ -259,7 +270,9 @@ CREATE TABLE account_assignments (
     CHECK ((effective_profile_id IS NULL) = (effective_revision IS NULL))
 );
 
-CREATE INDEX ix_account_assignments_owner
+-- One live assignment per clerk (v7, #2154): a lane-quiet confirmation
+-- names no account, so the account it covers must be unambiguous.
+CREATE UNIQUE INDEX ix_account_assignments_owner
     ON account_assignments(clerk_id) WHERE state <> 'released';
 
 -- ============================================================

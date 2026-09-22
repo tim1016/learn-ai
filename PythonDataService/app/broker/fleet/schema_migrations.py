@@ -511,6 +511,14 @@ BEGIN
 END""",
 )
 
+#: v6 -> v7 (#2154): one live assignment per clerk becomes structural. The
+#: create fails the whole upgrade if a registry already breaks the rule.
+_MIGRATION_V6_TO_V7: tuple[str, ...] = (
+    "DROP INDEX ix_account_assignments_owner",
+    """CREATE UNIQUE INDEX ix_account_assignments_owner
+    ON account_assignments(clerk_id) WHERE state <> 'released'""",
+)
+
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: tuple(
@@ -527,6 +535,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         statement.replace("MAX_TIMESTAMP_MS", str(MAX_TIMESTAMP_MS))
         for statement in _MIGRATION_V5_TO_V6_TEMPLATE
     ),
+    6: _MIGRATION_V6_TO_V7,
 }
 
 

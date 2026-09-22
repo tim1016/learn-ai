@@ -607,36 +607,20 @@ re-arms the server-authored timeframe auto-correct, and numeric
 
 ## Fleet account retirement — verified 2026-09-21
 
-- **P1: lane quiet opens retirement but not handover yet (#2154).** ADR
-  0063's ceremony core ships (schema v5; `drain`, `force-retire`,
-  attributed `release-assignment`, the never-served predicate, the
-  calendar-derived deadline; `RELEASE_PROOF_TOKEN` deleted), and so does
-  lane quiet for retirement: schema v6's append-only
-  `clerk_lane_confirmations`, the fenced `confirm_lane_quiet`, and — as of
-  2026-09-22 — the Alpaca lane's own answer. A draining lane re-reads its
-  account's open orders and positions (twice, since the two lists carry no
-  consistency fence), its unresolved intents and its bot runner on every
-  heartbeat and confirms over `/internal/fleet/lanes/confirm-quiet`, so a
-  lane an operator has stopped, cancelled and flattened retires on the plain
-  `retire` with `lane_confirmation: present`. `force-retire` stays the exit
-  for a lane that cannot answer — its process restarted during the drain
-  (#2155 refuses its re-registration), its host is gone, or it has no clerk
-  — so the forced count falls but not to zero. **What is still open is the
-  handover half:** `release_assignment` still records
-  `lane_confirmation: absent`, `reserve_assignment`'s released branch and
-  `reassign_assignment` still refuse outright, and a confirmation carries no
-  account identity yet (the precondition ADR 0063 §4.1's amendment names
-  before those paths may consume it). So reassignment is blocked outright,
-  and since #2157 (2026-09-22) an account whose assignment is RELEASED
-  cannot be re-reserved by any lane — including to re-onboard it onto a new
-  lane — until that half ships. Whole-machine migration (#2151) is the
-  preferred lane move and is unaffected. Operators retiring a served lane
-  run: `drain`, clear the account (panel controls, and the Alpaca dashboard
-  for anything opened by hand), wait out the printed deadline,
-  `release-assignment --operator --change-ref` per assigned account, then
-  `retire` — or `force-retire --operator --change-ref` for a lane that
-  cannot answer, after closing its account at the broker by hand. Do not
-  substitute direct registry edits.
+- **P2: an account released without lane quiet has no way to another lane.**
+  A lane that cannot answer lane quiet — its process restarted during the
+  drain (#2155 refuses its re-registration), its host is gone, or it has no
+  clerk — retires only through `force-retire`, and its account is released
+  `lane_confirmation: absent`. Every handover path refuses such an account
+  (re-reservation and `reassign-assignment` both require a `present`
+  release and a retired old lane; ADR 0063's #2154 consequence), and that
+  refusal is deliberate: nothing proves the old lane stopped writing. What
+  is missing is a recovery ceremony for the case where the operator *knows*
+  the old lane is gone — re-onboarding the account would need a separately
+  attested proof that the old lane's volume and credentials are destroyed.
+  Until one exists the account stays released and unassigned (its positions,
+  if any, remain at the broker). Whole-machine migration (#2151) never
+  releases and is unaffected.
 - **P2: a lane unreachable for the entire drain keeps resurrection-capable
   evidence (#2155 residual window).** A drained lane learns its drain and
   tombstones its confirmation evidence through exactly two channels: the

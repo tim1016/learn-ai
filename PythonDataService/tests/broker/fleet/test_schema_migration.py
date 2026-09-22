@@ -160,6 +160,21 @@ def _build_v5_registry(control_dir: Path) -> None:
         conn.close()
 
 
+def _build_v6_registry(control_dir: Path) -> None:
+    """A populated v6 registry: the v5 shape plus the registered v5 → v6 upgrade."""
+    _build_v5_registry(control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        schema.configure_connection(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for statement in schema.SCHEMA_MIGRATIONS[5]:
+            conn.execute(statement)
+        conn.execute("UPDATE fleet_meta SET schema_version = 6 WHERE id = 1")
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
 _INSERT_CLERK_SQL = (
     "INSERT INTO clerks (clerk_id, broker, worker_key, display_label, volume_id, "
     "volume_root, deployment_namespace, volume_attestation_kind, "
@@ -682,3 +697,60 @@ def test_a_v5_registry_gains_the_lane_quiet_confirmation_table_and_data_survives
         assert store.read_latest_lane_quiet_confirmation(clerk.clerk_id) is None
     finally:
         store.close()
+
+
+def _owner_index_sql(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'ix_account_assignments_owner'"
+    ).fetchone()
+    return " ".join(str(row[0]).split())
+
+
+def test_a_v6_registry_gains_one_live_assignment_per_clerk_and_data_survives(
+    control_dir: Path, tmp_path: Path
+) -> None:
+    """#2154: v6 → v7 makes the owner index UNIQUE, byte-identical to a fresh
+    v7 build, and the legacy clerk's one live assignment survives."""
+    _build_v6_registry(control_dir)
+    store = FleetRegistryStore.open(control_dir=control_dir)
+    try:
+        assert store.schema_version == schema.SCHEMA_VERSION == 7
+        fresh = FleetRegistryStore.open(control_dir=tmp_path / "fresh-v7")
+        try:
+            assert _owner_index_sql(store._conn) == _owner_index_sql(fresh._conn)
+        finally:
+            fresh.close()
+        assert _owner_index_sql(store._conn).startswith("CREATE UNIQUE INDEX")
+        assignment = store.read_assignment(broker="fake_alpha", canonical_account_id="ACCT-LEGACY")
+        assert assignment is not None
+        assert assignment.clerk_id == "clrk_aaaaaaaaaaaaaaaaaaaaaaaa"
+    finally:
+        store.close()
+
+
+def test_a_v6_registry_with_two_live_assignments_for_one_clerk_refuses_to_upgrade(
+    control_dir: Path,
+) -> None:
+    """Which of the two is real is not the schema's to decide: the upgrade
+    rolls back and the registry stays at v6, untouched."""
+    _build_v6_registry(control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        conn.execute(
+            "INSERT INTO account_assignments (broker, canonical_external_account_id, clerk_id, "
+            "assignment_generation, state, recorded_at_ms, updated_at_ms) VALUES "
+            "('fake_alpha', 'ACCT-SECOND', 'clrk_aaaaaaaaaaaaaaaaaaaaaaaa', 1, 'reserved', 60, 60)"
+        )
+    finally:
+        conn.close()
+    from app.broker.fleet.errors import FleetRegistryUnavailable
+
+    with pytest.raises(FleetRegistryUnavailable, match=r"account_assignments\.clerk_id"):
+        FleetRegistryStore.open(control_dir=control_dir)
+    conn = sqlite3.connect(registry_database_path(control_dir), isolation_level=None)
+    try:
+        assert conn.execute("SELECT schema_version FROM fleet_meta").fetchone()[0] == 6
+        assert _owner_index_sql(conn).startswith("CREATE INDEX")
+        assert conn.execute("SELECT count(*) FROM account_assignments").fetchone()[0] == 2
+    finally:
+        conn.close()
