@@ -859,6 +859,17 @@ async def _service_lifespan(
         if bot_task_registry is not None:
             await bot_task_registry.run_boot_recovery()
 
+    # #2154: once draining, the beat answers lane quiet from the runner's own
+    # tasks and the account's clerk. Installed only when both exist; a lane
+    # without a clerk never confirms and exits through force-retire.
+    if fleet_lane is not None and _boot_clerk is not None and bot_task_registry is not None:
+        from app.broker.alpaca.clerk.fleet_boot import lane_quiet_probe
+
+        fleet_lane.lane_quiet_probe = lane_quiet_probe(
+            bots_running=bot_task_registry.any_running,
+            observe_account=_boot_clerk.observe_account_quiet,
+        )
+
     # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
     # sweep cannot race the boot reconciliation pass (both call reconcile_once).
     _pending_sweep = (

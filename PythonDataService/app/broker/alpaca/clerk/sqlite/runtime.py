@@ -84,6 +84,10 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import (
     IntakeFenceYieldError,
     ReentrantAsyncLock,
 )
+from app.broker.alpaca.clerk.sqlite.lane_quiet import (
+    AccountQuietObservation,
+    observe_account_quiet,
+)
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
     submit_manual_order_cancellation,
@@ -1264,6 +1268,16 @@ class SqliteAlpacaClerkFacade:
         which is what the boot-recovery report records.
         """
         return len(self._repo.reconcilable_effect_operations(subject_id=subject_id))
+
+    async def observe_account_quiet(self) -> AccountQuietObservation | None:
+        """The account half of this lane's lane-quiet answer (#2154).
+
+        Read-only against the ledger and the broker: it neither reconciles
+        nor records an uncertainty when the broker is unreadable, because
+        the answer it feeds is a claim about the account and an unreadable
+        broker is simply no claim.
+        """
+        return await observe_account_quiet(self._repo, self._read)
 
     async def prove_instance_custody(self, strategy_instance_id: str) -> InstanceCustodyProof:
         result = await self._reconcile()

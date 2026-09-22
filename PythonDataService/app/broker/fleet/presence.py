@@ -160,6 +160,25 @@ class FleetPresence(Protocol):
         """
         ...
 
+    async def confirm_lane_quiet(
+        self,
+        *,
+        clerk_id: str,
+        agent_instance_id: str,
+        routing_epoch: int,
+        observed_at_ms: int,
+        runner_idle: bool,
+        broker_work_ended: bool,
+        account_flat: bool,
+        intents_resolved: bool,
+    ) -> None:
+        """Record this draining lane's answer about its own quiescence (#2154).
+
+        A confirmation, fenced by the session that prepared it; an answer that
+        leaves a condition outstanding is recorded exactly as a quiet one is.
+        """
+        ...
+
     async def close(self) -> None:
         """Release the transport."""
         ...
@@ -289,6 +308,30 @@ class LocalPresence:
         if not observation.touched:
             raise _superseded_beat(clerk_id, agent_instance_id)
         return observation.lifecycle_state.value
+
+    async def confirm_lane_quiet(
+        self,
+        *,
+        clerk_id: str,
+        agent_instance_id: str,
+        routing_epoch: int,
+        observed_at_ms: int,
+        runner_idle: bool,
+        broker_work_ended: bool,
+        account_flat: bool,
+        intents_resolved: bool,
+    ) -> None:
+        """Confirm through the service."""
+        self._service.confirm_lane_quiet(
+            clerk_id=clerk_id,
+            agent_instance_id=agent_instance_id,
+            routing_epoch=routing_epoch,
+            observed_at_ms=observed_at_ms,
+            runner_idle=runner_idle,
+            broker_work_ended=broker_work_ended,
+            account_flat=account_flat,
+            intents_resolved=intents_resolved,
+        )
 
     async def close(self) -> None:
         """The service's lifetime is the caller's, not ours."""
@@ -543,6 +586,34 @@ class RemotePresence:
                 "for /internal/fleet/sessions/observe.",
             )
         return lifecycle
+
+    async def confirm_lane_quiet(
+        self,
+        *,
+        clerk_id: str,
+        agent_instance_id: str,
+        routing_epoch: int,
+        observed_at_ms: int,
+        runner_idle: bool,
+        broker_work_ended: bool,
+        account_flat: bool,
+        intents_resolved: bool,
+    ) -> None:
+        """Confirm over the internal surface."""
+        await self._post(
+            "/internal/fleet/lanes/confirm-quiet",
+            clerk_id=clerk_id,
+            payload={
+                "clerk_id": clerk_id,
+                "agent_instance_id": agent_instance_id,
+                "routing_epoch": routing_epoch,
+                "observed_at_ms": observed_at_ms,
+                "runner_idle": runner_idle,
+                "broker_work_ended": broker_work_ended,
+                "account_flat": account_flat,
+                "intents_resolved": intents_resolved,
+            },
+        )
 
     async def close(self) -> None:
         """Each call builds a client; nothing persists."""

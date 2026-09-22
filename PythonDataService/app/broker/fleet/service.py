@@ -580,9 +580,8 @@ class FleetControlService:
         a fresh lane-quiet confirmation from its current session (#2154). A
         lane that has genuinely gone quiet now retires here; a lane that has
         not, or that cannot answer, is refused by name and leaves through
-        ``force_retire_clerk``. No lane answers in production yet — #2154's
-        provider fact and transport are open — so every served retirement is
-        still a forced one until they land. The held
+        ``force_retire_clerk``. A draining Alpaca lane answers on every
+        heartbeat (``fleet_boot._confirm_lane_quiet_if_draining``). The held
         assignment check runs first in every branch, and each gate shares
         one write transaction with the transition it guards.
         """
@@ -1046,12 +1045,12 @@ class FleetControlService:
             raise ClerkLaneQuietUnproven(
                 f"Clerk {clerk.clerk_id}'s current session has not confirmed lane "
                 "quiet; silence is never read as quiet.",
-                next_step="No lane can confirm yet: #2154's provider fact and its "
-                "transport are still open, so force-retire is today's exit. Once they "
-                "land — stop the bots, cancel the working orders and flatten the "
-                "account, then let the lane confirm. A lane whose process restarted "
-                "during the drain can never confirm — #2155 refuses a draining "
-                "clerk's re-registration — so force-retire stays its exit.",
+                next_step="A draining lane confirms on its heartbeat once it has "
+                "learned its drain and can read its account; wait one beat and retry. "
+                "A lane whose process restarted during the drain can never confirm "
+                "— #2155 refuses a draining clerk's re-registration — and neither "
+                "can one with no clerk or an unreachable host, so force-retire is "
+                "their exit.",
             )
         age_ms = now - confirmation.observed_at_ms
         if age_ms > self._lane_quiet_valid_for_ms:
@@ -1066,8 +1065,10 @@ class FleetControlService:
             outstanding = "; ".join(confirmation.outstanding)
             raise ClerkLaneQuietUnproven(
                 f"Clerk {clerk.clerk_id} is not quiet — {outstanding}.",
-                next_step="Clear every item above in the bot panel, let the lane "
-                "re-confirm, then retire.",
+                next_step="Clear every item above: stop the bots, cancel the "
+                "working orders and flatten in the bot panel, and close anything "
+                "opened by hand directly at the broker. The lane re-confirms on its "
+                "next beat; then retire.",
             )
 
     # ---- approved endpoints (host ceremony) --------------------------------

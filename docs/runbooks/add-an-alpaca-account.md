@@ -503,29 +503,33 @@ host CLI, in order:
 #     wait for it beyond the printed deadline; continue with steps 2 and 3,
 #     which record the lane confirmation as absent.
 
-# 1c. Clear the account at the broker, by hand, in the Alpaca dashboard.
-#     THIS STEP IS NOT ENFORCED BY ANY COMMAND BELOW. `force-retire` records
-#     `lane_confirmation: absent` precisely because nothing proved the lane
-#     quiet, and the fleet layer reads no order and no position (ADR 0063 §8),
-#     so it cannot refuse a lane whose account still has work outstanding.
-#     Skipping this retires a lane while an order can still fill or a position
-#     stays open, with no owner left watching either.
-#
-#     Order matters, and "cancel sent" is not an ending (owner decision
-#     2026-09-19):
+# 1c. Clear the account. Order matters, and "cancel sent" is not an ending
+#     (owner decision 2026-09-19):
 #       i.   stop every bot on the lane;
 #       ii.  cancel every working order on the account — including a resting
 #            GTC, and including orders no bot placed;
 #       iii. flatten every open position, including any opened by hand;
 #       iv.  wait for the flatten orders THEMSELVES to reach a terminal state
-#            at the broker — a cancel can lose the race to a fill;
-#       v.   re-read the account and confirm zero open orders and zero
-#            positions before continuing.
-#     If the lane is still reachable, prefer its own panel controls (`stop`,
+#            at the broker — a cancel can lose the race to a fill.
+#     On a reachable lane use its panel controls (`stop`,
 #     `cancel_verified_working_orders`, `flatten_stop`) so its custody records
-#     follow along; the dashboard is the path for a lane that cannot answer.
-#     Once #2154's provider fact ships, the normal `retire` proves this
-#     instead of asking an operator to attest it by hand.
+#     follow along. Those controls deliberately refuse legs no bot opened: a
+#     position or order opened by hand is closed in the Alpaca dashboard.
+#
+#     A reachable, draining lane then PROVES the result itself (#2154): every
+#     heartbeat it re-reads the account's own order and position lists and its
+#     unresolved intents and confirms lane quiet to the coordinator. You do not
+#     attest it. The plain `retire` in step 3 refuses, naming each outstanding
+#     item, until the lane's latest answer is quiet and under 90 s old.
+#
+#     A lane that CANNOT answer — its process restarted during the drain, its
+#     host is gone, or it has no clerk — never confirms. For it this step is
+#     NOT ENFORCED BY ANY COMMAND BELOW: do all of i–iv in the Alpaca
+#     dashboard and re-read the account to zero open orders and zero positions
+#     yourself, because `force-retire` records `lane_confirmation: absent` and
+#     the fleet layer reads no order and no position (ADR 0063 §8). Skipping it
+#     retires a lane while an order can still fill or a position stays open,
+#     with no owner left watching either.
 
 # 2. Wait out the printed deadline, then release each assigned account under
 #    a bounded attribution (who acted, and the incident/change record naming
@@ -536,24 +540,31 @@ host CLI, in order:
   --expected-generation <observed-generation> \
   --operator <named-operator> --change-ref <restricted-record>
 
-# 3. Retire. Until the lane-quiet provider ships (#2154) the plain retire
-#    refuses naming the outstanding item; force-retire is the named exit —
-#    deadline-bound, operator-attributed, and it settles any lost dispatches
-#    as outcome-unknown in a durable ledger beside the registry.
+# 3. Retire. A lane that confirmed lane quiet retires on the normal path and
+#    records `lane_confirmation: present`. If it refuses, it names what is
+#    outstanding (a running bot, a working order, a position, an unresolved
+#    intent) or says the lane has not confirmed; clear it and retry.
+.venv/bin/python -m scripts.manage_broker_fleet retire \
+  --control-dir <coordinator-control-root> --clerk-id <clerk-id>
+
+# 3b. Only for a lane that cannot answer (see 1c): force-retire is the named
+#     exit — deadline-bound, operator-attributed, and it settles any lost
+#     dispatches as outcome-unknown in a durable ledger beside the registry.
 .venv/bin/python -m scripts.manage_broker_fleet force-retire \
   --control-dir <coordinator-control-root> --clerk-id <clerk-id> \
   --operator <named-operator> --change-ref <restricted-record>
 ```
 
-Lane-to-lane reassignment remains blocked until #2154's lane-quiet
-confirmation ships — #2155's resurrection hole is closed for every lane
+Lane-to-lane reassignment remains blocked until the handover half of #2154
+ships — the lane-quiet confirmation now opens retirement, but release,
+re-reservation and reassignment do not consume it yet. #2155's resurrection hole is closed for every lane
 that learns its drain, but a lane unreachable for the entire drain keeps
 unmarked evidence, and without lane quiet the coordinator cannot tell that
 residual population from a quiet one; whole-machine migration is the
 preferred lane move. Since #2157 closed (2026-09-22) the two-step reach of
 the same handover carries the same gate: a released assignment cannot be
 re-reserved by any lane — including to re-onboard the account onto a new
-lane after its old lane retired — until #2154 ships. Do not delete registry
+lane after its old lane retired — until that handover half ships. Do not delete registry
 rows, reuse the old volume for another account, or run `down -v`.
 
 Closing the actual brokerage account is a separate action in Alpaca, outside
