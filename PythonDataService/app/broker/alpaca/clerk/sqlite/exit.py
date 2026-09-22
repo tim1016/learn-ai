@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     entry_never_accepted_durably,
     entry_order_symbol,
@@ -364,6 +365,7 @@ async def resolve_accepted_exit(
     *,
     accepted: ExitSubmission,
     trade: BrokerTradePort,
+    off_loop: OffLoop | None = None,
 ) -> ExitSubmission:
     """Drive a previously accepted EXIT outside the intake decision segment.
 
@@ -378,6 +380,9 @@ async def resolve_accepted_exit(
     No leg shape is threaded here: the reducing order is built from the shape
     the EXIT's own acceptance recorded (ADR 0059 D5.3), so this call and the
     sweep's re-drive of the very same EXIT cannot produce different legs.
+
+    ``off_loop`` is the sweep's worker-thread seam for the resolution spine
+    (#1993); the default keeps the pre-#1993 inline behavior.
     """
     assert accepted.effect_operation_id is not None
     try:
@@ -385,6 +390,7 @@ async def resolve_accepted_exit(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            off_loop=off_loop,
         )
     except OperationClaimError:
         if accepted.created:

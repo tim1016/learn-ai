@@ -29,8 +29,10 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
 )
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
+    OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     resolve_order_submission,
@@ -119,9 +121,8 @@ async def _under_intake[LocalResult](
     *args: object,
     **kwargs: object,
 ) -> LocalResult:
-    """Run one bounded repository fold in the shared intake domain."""
-    async with intake:
-        return operation(*args, **kwargs)
+    """Run one bounded repository fold off the loop, in the shared intake domain."""
+    return await intake.off_loop(operation, *args, **kwargs)
 
 
 def plan_account_reconciliation(
@@ -208,8 +209,8 @@ async def _reconcile_effect(
     if effect.kind == "EXIT":
         entry_orders = [
             item
-            for item in await asyncio.to_thread(
-                repo.orders_for_effect_operation, effect.effect_operation_id
+            for item in await to_thread(
+                lambda: repo.orders_for_effect_operation(effect.effect_operation_id)
             )
             if item.role == "ENTRY"
         ]
@@ -222,39 +223,51 @@ async def _reconcile_effect(
             repo,
             effect_operation_id=effect.effect_operation_id,
             trade=trade,
+            off_loop=to_thread,
         )
     elif effect.kind == "CANCEL":
-        cancellation = repo.manual_order_cancellation_for_effect(
-            effect_operation_id=effect.effect_operation_id
-        )
-        if cancellation is None:
-            raise ReconciliationInvariantError(
-                f"CANCEL effect {effect.effect_operation_id!r} has no manual cancellation target"
+
+        def _cancel_branch_target() -> OrderResource:
+            cancellation = repo.manual_order_cancellation_for_effect(
+                effect_operation_id=effect.effect_operation_id
             )
-        order = repo.order(cancellation.order_ref)
-        if order is None:
-            raise ReconciliationInvariantError(
-                f"CANCEL effect {effect.effect_operation_id!r} has no captured target order"
-            )
+            if cancellation is None:
+                raise ReconciliationInvariantError(
+                    f"CANCEL effect {effect.effect_operation_id!r} has no manual cancellation target"
+                )
+            target = repo.order(cancellation.order_ref)
+            if target is None:
+                raise ReconciliationInvariantError(
+                    f"CANCEL effect {effect.effect_operation_id!r} has no captured target order"
+                )
+            return target
+
+        order = await to_thread(_cancel_branch_target)
         await resolve_manual_order_cancellation(
             repo,
             effect_operation_id=effect.effect_operation_id,
             trade=trade,
+            off_loop=to_thread,
         )
     else:
-        order = await asyncio.to_thread(repo.order_for_effect_operation, effect.effect_operation_id)
+        order = await to_thread(lambda: repo.order_for_effect_operation(effect.effect_operation_id))
         if order is None:
             raise ReconciliationInvariantError(
                 f"ENTER effect {effect.effect_operation_id!r} has no captured order"
             )
-        await resolve_order_submission(repo, order_ref=order.order_ref, trade=trade)
+        await resolve_order_submission(
+            repo,
+            order_ref=order.order_ref,
+            trade=trade,
+            off_loop=to_thread,
+        )
 
-    effect_after = await asyncio.to_thread(repo.effect_operation, effect.effect_operation_id)
+    effect_after = await to_thread(lambda: repo.effect_operation(effect.effect_operation_id))
     if effect_after is None:
         raise ReconciliationInvariantError(
             f"effect {effect.effect_operation_id!r} disappeared during reconciliation"
         )
-    order_after = await asyncio.to_thread(repo.order, order.order_ref)
+    order_after = await to_thread(lambda: repo.order(order.order_ref))
     if order_after is None:
         raise ReconciliationInvariantError(
             f"order {order.order_ref!r} disappeared during reconciliation"
@@ -536,7 +549,7 @@ async def _recover_operations(
     intake: ReentrantAsyncLock,
 ) -> int:
     resolved_count = 0
-    effects = await asyncio.to_thread(repo.reconcilable_effect_operations)
+    effects = await to_thread(repo.reconcilable_effect_operations)
     for effect in effects:
         try:
             outcome = await _reconcile_effect(
@@ -547,8 +560,9 @@ async def _recover_operations(
                 intake=intake,
             )
         except ReconciliationInvariantError as exc:
-            linked_orders = await asyncio.to_thread(
-                repo.orders_for_effect_operation, effect.effect_operation_id
+            invariant_effect_id = effect.effect_operation_id
+            linked_orders = await to_thread(
+                lambda effect_id=invariant_effect_id: repo.orders_for_effect_operation(effect_id)
             )
             outcome = _invariant_failure_outcome(effect.kind)
             await _under_intake(
@@ -774,7 +788,7 @@ async def _reconcile_account_serialized(
     )
 
     await redrive_or_escalate_stale_exits(
-        repo, trade=trade, intake=intake, pricing=pricing
+        repo, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
     )
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.

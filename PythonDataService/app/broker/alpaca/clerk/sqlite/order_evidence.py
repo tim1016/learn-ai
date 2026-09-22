@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
@@ -742,80 +743,108 @@ async def resolve_order_submission(
     *,
     order_ref: str,
     trade: BrokerTradePort,
+    off_loop: OffLoop | None = None,
 ) -> None:
     """Recover any captured order by its exact client identity.
 
     This belongs with shared order evidence rather than an ENTER-only module:
     manual custody, ENTER, and a future reducing order all use the same R4/R7
     claim, exact lookup, grace-window, and monotonic fold discipline.
-    """
-    order_row = repo.order(order_ref)
-    assert order_row is not None
-    effect = repo.effect_operation(order_row.effect_operation_id)
-    assert effect is not None
 
-    if effect.state in ("succeeded", "failed", "rejected"):
-        return
+    ``off_loop`` moves each synchronous repository run onto a worker thread
+    (#1993); the default keeps the pre-#1993 inline behavior for every
+    non-sweep caller.
+    """
+    run = off_loop if off_loop is not None else run_inline
+
+    def _read_and_claim() -> tuple[EffectOperationResource | None, str | None, int | None, str | None]:
+        order_row = repo.order(order_ref)
+        assert order_row is not None
+        effect = repo.effect_operation(order_row.effect_operation_id)
+        assert effect is not None
+        if effect.state in ("succeeded", "failed", "rejected"):
+            return None, None, None, None
+        return (
+            effect,
+            repo.claim_before_broker_contact(effect.effect_operation_id).token,
+            _uncertain_since_ms(repo, order_ref),
+            order_row.broker_order_id,
+        )
 
     # ClaimedBrokerIO itself uses ``fold_uncertain`` above. Importing it only
     # after this module is fully initialized preserves that shared dependency
     # direction without an import-time cycle.
     from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 
-    claim = repo.claim_before_broker_contact(effect.effect_operation_id)
+    effect, claim_token, uncertain_since_ms, captured_broker_order_id = await run(_read_and_claim)
+    if effect is None:
+        return
     broker = ClaimedBrokerIO(
         repo=repo,
         effect_operation_id=effect.effect_operation_id,
-        claim_token=claim.token,
+        claim_token=claim_token,
         trade=trade,
     )
-    uncertain_since_ms = _uncertain_since_ms(repo, order_ref)
     try:
         try:
             order = await broker.lookup(order_ref)
         except BrokerError as exc:
-            fold_uncertain(
-                repo,
-                effect_operation_id=effect.effect_operation_id,
-                order_ref=order_ref,
-                why=f"Exact broker lookup failed before outcome proof: {exc}",
+            lookup_failed_why = f"Exact broker lookup failed before outcome proof: {exc}"
+            await run(
+                lambda: fold_uncertain(
+                    repo,
+                    effect_operation_id=effect.effect_operation_id,
+                    order_ref=order_ref,
+                    why=lookup_failed_why,
+                )
             )
             return
 
         if order is not None and order.client_order_id != order_ref:
-            fold_uncertain(
-                repo,
-                effect_operation_id=effect.effect_operation_id,
-                order_ref=order_ref,
-                why=(
-                    f"broker lookup returned client_order_id={order.client_order_id!r}, "
-                    f"expected {order_ref!r}"
-                ),
+            await run(
+                lambda: fold_uncertain(
+                    repo,
+                    effect_operation_id=effect.effect_operation_id,
+                    order_ref=order_ref,
+                    why=(
+                        f"broker lookup returned client_order_id={order.client_order_id!r}, "
+                        f"expected {order_ref!r}"
+                    ),
+                )
             )
             return
 
         if order is None:
-            if order_row.broker_order_id is not None:
-                return
-            grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
-            if grace_active:
-                return
-            fold_submit_absence_void(
-                repo,
-                effect_operation_id=effect.effect_operation_id,
-                order_ref=order_ref,
-            )
+
+            def _fold_absence_if_past_grace() -> None:
+                if captured_broker_order_id is not None:
+                    return
+                grace_active = (repo.clock() - uncertain_since_ms) < submit_absence_grace_ms()
+                if grace_active:
+                    return
+                fold_submit_absence_void(
+                    repo,
+                    effect_operation_id=effect.effect_operation_id,
+                    order_ref=order_ref,
+                )
+
+            await run(_fold_absence_if_past_grace)
         else:
-            fold_order_evidence(
-                repo,
-                effect_operation_id=effect.effect_operation_id,
-                order=order,
-                simulated_authority=trade_port_folds_simulated_evidence(trade),
+            await run(
+                lambda: fold_order_evidence(
+                    repo,
+                    effect_operation_id=effect.effect_operation_id,
+                    order=order,
+                    simulated_authority=trade_port_folds_simulated_evidence(trade),
+                )
             )
     finally:
+        # Claim release stays on the caller's thread: one bounded append, and
+        # hopping it inside a cancellation unwind would trade a sub-
+        # millisecond write for a second abandonable worker (#1993).
         repo.release_operation_claim(
             effect_operation_id=effect.effect_operation_id,
-            token=claim.token,
+            token=claim_token,
         )
 
 

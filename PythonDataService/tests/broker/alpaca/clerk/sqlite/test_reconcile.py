@@ -3081,3 +3081,48 @@ async def test_heartbeat_survives_a_transient_renewal_error(tmp_path: Path) -> N
         hold_heartbeat.set()
         await sweep.stop()
         clerk_repo.close()
+
+
+# ── the pass runs its repository spine off the event loop (#1993) ─────────────
+
+
+async def test_clean_pass_emits_no_fence_yield_warnings_under_strict_detection(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Strict yield detection is enableable where it matters: a clean pass's
+    sanctioned hops are the only yields under intake, and none of them count.
+
+    This is the acceptance bar #1993 set against the withdrawn approach, where
+    an ``asyncio.to_thread`` inside ``async with intake`` made one clean pass
+    emit five "yielded while held" warnings and strict mode raise."""
+    intake = ReentrantAsyncLock(strict_yield_detection=True)
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), intake=intake)
+
+    assert result.verdict == "clean"
+    assert intake.yielded_fence_count == 0
+
+
+async def test_reconciliation_folds_run_off_the_event_loop_thread(
+    repo: ClerkSqliteRepository,
+) -> None:
+    fold_threads: dict[str, threading.Thread] = {}
+    inner_begin = repo.begin_reconciliation
+    inner_end = repo.end_reconciliation
+
+    def recording_begin() -> None:
+        fold_threads["begin"] = threading.current_thread()
+        inner_begin()
+
+    def recording_end() -> None:
+        fold_threads["end"] = threading.current_thread()
+        inner_end()
+
+    repo.begin_reconciliation = recording_begin  # type: ignore[method-assign]
+    repo.end_reconciliation = recording_end  # type: ignore[method-assign]
+
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+
+    assert result.verdict == "clean"
+    main_thread = threading.current_thread()
+    assert fold_threads["begin"] is not main_thread
+    assert fold_threads["end"] is not main_thread
