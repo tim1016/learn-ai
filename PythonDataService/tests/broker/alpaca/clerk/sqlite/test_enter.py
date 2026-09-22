@@ -1554,3 +1554,38 @@ async def test_resolve_enter_submission_fails_closed_when_operation_claimed_else
     with pytest.raises(OperationClaimError):
         await resolve_enter_submission(repo, order_ref=accepted.order_ref, trade=trade)
     assert len(trade.lookup_calls) == 0
+
+
+async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(repo: ClerkSqliteRepository) -> None:
+    from app.broker.alpaca.clerk.sqlite.enter import submit_accepted_enter
+
+    leg = _leg()
+    accepted = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, decision_id="market-expired", leg=leg,
+    )
+    trade = _FakeTrade()
+
+    def refuse() -> None:
+        raise BrokerError("Market data expired before submission.")
+
+    result = await submit_accepted_enter(
+        repo, accepted=accepted, leg=leg, trade=trade, before_submit=refuse,
+    )
+
+    assert result.command.state == "failed"
+    assert trade.submit_calls == []
+    assert trade.lookup_calls == []
+
+
+def test_working_order_keeps_market_data_demand_until_failed(repo: ClerkSqliteRepository) -> None:
+    from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
+
+    accepted = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, decision_id="monitored-order", leg=_leg(),
+    )
+    assert repo.market_data_symbols() == ("SPY",)
+    fold_failed(repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+                summary_code="ORDER_SUBMIT_FAILED", reason="test refusal", why="test")
+    assert repo.market_data_symbols() == ()

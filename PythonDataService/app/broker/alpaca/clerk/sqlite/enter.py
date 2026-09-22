@@ -70,6 +70,7 @@ reservation commits with the same transition.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
@@ -342,6 +343,7 @@ async def submit_accepted_enter(
     accepted: EnterSubmission,
     leg: BrokerOrderLeg,
     trade: BrokerTradePort,
+    before_submit: Callable[[], None] | None = None,
 ) -> EnterSubmission:
     """Drive a previously accepted ENTER outside the intake decision segment."""
     if not accepted.created:
@@ -358,6 +360,8 @@ async def submit_accepted_enter(
     resolve_why: str | None = None
     try:
         try:
+            if before_submit is not None:
+                before_submit()
             order = await broker.submit(leg, client_order_id=accepted.order_ref)
         except BrokerUnavailable as exc:
             resolve_why = str(exc)

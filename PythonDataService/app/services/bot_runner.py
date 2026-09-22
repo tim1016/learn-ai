@@ -1347,6 +1347,15 @@ class BotTaskRegistry:
         """
         return self._bindings.list_for_broker(broker)
 
+    def market_data_symbols(self) -> tuple[str, ...]:
+        """Server-owned demand, including deployments awaiting Start/Resume."""
+        symbols: set[str] = set()
+        for binding in self._bindings.list_for_broker("alpaca"):
+            lifecycle = self._lifecycle_repo(binding.strategy_instance_id).read()
+            if lifecycle is None or (lifecycle.on_roster and lifecycle.retired_at_ms is None):
+                symbols.add(binding.symbol)
+        return tuple(sorted(symbols))
+
     def current_run(self, broker: str, strategy_instance_id: str) -> BotRunView:
         """Return the backend-owned current-run projection."""
         binding = self.binding_for_control(broker, strategy_instance_id)

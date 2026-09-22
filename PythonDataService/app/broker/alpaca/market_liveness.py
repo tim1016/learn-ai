@@ -396,15 +396,26 @@ class AlpacaMarketLivenessConsumer:
         from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 
         def watched_symbols() -> tuple[str, ...]:
+            from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
             from app.marketdata.ibkr_feed import get_market_data_feed
+            from app.services.bot_runner import get_bot_task_registry
 
             feed = get_market_data_feed()
-            # A slow strategy still needs continuously observed halt/resume
-            # evidence between decisions, even with every browser tab closed.
             active = () if feed is None else feed.active_symbols()
-            return tuple(sorted(set(store.requested_symbols()) | set(active)))
+            registry = get_bot_task_registry()
+            # Durable deployments prewarm stopped/resumable bots as well as
+            # running/paused tasks. Browser demand can never evict these.
+            deployed = () if registry is None else registry.market_data_symbols()
+            runtime = get_active_clerk_runtime()
+            repo = None if runtime is None else runtime.sqlite_repository
+            custody = () if repo is None else repo.market_data_symbols()
+            return tuple(dict.fromkeys((*active, *custody, *deployed, *store.requested_symbols())))
 
-        local_source = IbkrMarketStatusSource(symbols=watched_symbols)
+        local_source = IbkrMarketStatusSource(
+            symbols=watched_symbols,
+            publish=lambda snapshot: store.apply_status_snapshot(snapshot, now_ms=now_ms_utc()),
+            halt_path=resolved.clerk_dir / "market_data_halts.json",
+        )
         status_source = local_source
         if resolved.market_status_upstream_url is not None:
             from app.config import settings as service_settings

@@ -564,3 +564,38 @@ async def test_a_closed_clock_refuses_an_extended_enter_on_an_unhealthy_market_d
     assert state is EffectOperationState.REJECTED
     assert explanation.startswith(f"{STREAM_HEALTH_REASON_CODE}:")
     assert trade.submitted_legs == []
+
+
+@pytest.mark.parametrize("change", ["disconnect", "generation"])
+async def test_market_loss_between_admission_and_contact_refuses_the_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    calls = 0
+
+    def liveness(symbol: str, at: int) -> MarketLivenessFact:
+        nonlocal calls
+        calls += 1
+        clock = MarketClockLivenessEvidence(state="OPEN", source="test.clock", observed_at_ms=at)
+        from app.schemas.market_liveness import SymbolMarketDataEvidence
+
+        data = SymbolMarketDataEvidence(
+            symbol=symbol, generation=str(calls) if change == "generation" else "same",
+            state="READY", observed_at_ms=at, valid_until_ms=at + 5_000,
+            reason_code="MARKET_DATA_READY", reason="Current test evidence.",
+        )
+        return compose_market_liveness(
+            symbol, now_ms=at, market_clock=clock,
+            connected=calls == 1 or change == "generation", connection_changed_at_ms=at,
+            symbol_status=None, market_data=data, require_market_data=True,
+        ).model_copy(update={"market_data": data})
+
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", liveness)
+    trade, state, _ = await _enter(
+        tmp_path, use_rth=True, policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(10, 30, phase="RTH"),
+        stream_health=_stream_health(market_data_healthy=True),
+    )
+
+    assert calls == 2
+    assert trade.submitted_legs == []
+    assert state is EffectOperationState.REJECTED

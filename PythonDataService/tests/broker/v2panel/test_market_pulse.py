@@ -432,3 +432,27 @@ def test_closed_liveness_during_a_proven_extended_phase_with_a_dead_feed_still_s
     )
 
     assert pulse.market_state == "CLOSED"
+
+
+def test_preparing_data_has_an_operator_reason_without_generic_stale_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch, "RTH")
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=121_000)
+    liveness = compose_market_liveness(
+        "SPY", now_ms=121_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="OPEN", source="alpaca.clock", observed_at_ms=121_000,
+        ),
+        connected=True, connection_changed_at_ms=1_000,
+        symbol_status=None, require_market_data=True,
+    )
+    monkeypatch.setattr(market_pulse, "market_liveness_fact", lambda *_args: liveness)
+
+    pulse = market_pulse.build_market_pulse(
+        None, symbol="SPY", now_ms=121_000, use_rth=True, bot_running=False,
+    )
+
+    assert pulse.headline == "Preparing live market data"
+    assert pulse.explanation == liveness.reason
+    assert pulse.attention_required

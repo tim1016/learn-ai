@@ -33,7 +33,7 @@ from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
-from app.services.market_liveness import market_liveness_fact
+from app.services.market_liveness import get_market_liveness_store, market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.session_authority import session_state_at_ms
 from app.services.signal_program_admission import (
@@ -511,6 +511,7 @@ class BotStartAdmission:
             async with self._custody_guard(binding) as custody:
                 binding = seal_binding_to_custody_snapshot(binding, custody)
                 observed_at_ms = self._now_ms()
+                get_market_liveness_store().request_symbol(binding.symbol, now_ms=observed_at_ms)
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
                 # Re-captured after the await: the market clock refreshes on
                 # its own cadence (~1s) independent of this coroutine, so the

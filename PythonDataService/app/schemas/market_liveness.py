@@ -10,13 +10,43 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MarketLivenessState = Literal["TRADABLE", "HALTED", "CLOSED", "UNKNOWN"]
 MarketClockState = Literal["OPEN", "CLOSED", "UNKNOWN"]
 SymbolTradingState = Literal["TRADABLE", "HALTED", "UNKNOWN"]
+
+
+class SymbolMarketDataEvidence(BaseModel):
+    """Subscription readiness, separate from reported halt state and prices.
+
+    Publication does not extend ``valid_until_ms``. Only a live quote or
+    vendor-timestamped trade received on this generation can do that.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str
+    generation: str = Field(min_length=1)
+    state: Literal["STARTING", "READY", "RECOVERING", "UNAVAILABLE"]
+    observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    valid_until_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    last_received_at_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    quote_received_at_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    trade_timestamp_ms: int | None = Field(default=None, strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    reason_code: str
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_readiness(self) -> SymbolMarketDataEvidence:
+        if self.state == "READY":
+            if self.valid_until_ms is None or self.valid_until_ms < self.observed_at_ms:
+                raise ValueError("Ready market data requires an unexpired evidence deadline.")
+        elif self.valid_until_ms is not None:
+            raise ValueError("Unavailable market data cannot carry a trading deadline.")
+        return self
 
 
 class MarketClockLivenessEvidence(BaseModel):
@@ -68,15 +98,14 @@ class MarketLivenessFact(BaseModel):
     symbol_status: SymbolTradingStatusEvidence | None
     reason_code: str
     reason: str
+    market_data: SymbolMarketDataEvidence | None = None
 
 
 class TopOfBookQuote(BaseModel):
     """One symbol's live IBKR best bid and ask, as the status source last read them.
 
-    ``observed_at_ms`` is the poll that read the live subscription on a
-    connected source -- IBKR sends quote ticks only on change, so a quiet book
-    is still current while its subscription is. It is the instant an operator's
-    confirmed extended-hours limit is judged stale against (#2007).
+    ``observed_at_ms`` is the older receipt of the current bid and ask.
+    Reading or publishing this value never advances its freshness.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -105,3 +134,4 @@ class MarketStatusSnapshot(BaseModel):
     connection_changed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
     symbol_statuses: tuple[SymbolTradingStatusEvidence, ...]
     quotes: tuple[TopOfBookQuote, ...] = ()
+    subscriptions: tuple[SymbolMarketDataEvidence, ...] = ()

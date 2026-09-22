@@ -103,9 +103,15 @@ def build_market_pulse(
         next_step = "Keep new exposure blocked until a fresh trading-status resume arrives."
         attention_required = True
     elif liveness.state == "UNKNOWN":
-        headline = "Market liveness unproven"
+        headline = {
+            "MARKET_DATA_STARTING": "Preparing live market data",
+            "MARKET_DATA_RECOVERING": "Market data recovering",
+            "MARKET_DATA_DISCONNECTED": "Market data disconnected",
+            "MARKET_DATA_UNAVAILABLE": "Market data unavailable",
+            "MARKET_DATA_NOT_LIVE": "Live market data required",
+        }.get(liveness.reason_code, "Market liveness unproven")
         explanation = liveness.reason
-        next_step = "Restore fresh market-wide and symbol trading-status evidence."
+        next_step = "Wait for current market data; the trading service maintains the subscription."
         attention_required = True
     elif liveness.state == "CLOSED" and not live_closed_is_actually_extended_hours:
         headline = "Market closed by live broker evidence"

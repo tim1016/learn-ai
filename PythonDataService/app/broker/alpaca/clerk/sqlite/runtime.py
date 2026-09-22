@@ -1135,11 +1135,29 @@ class SqliteAlpacaClerkFacade:
             trade = self._trade
 
         if purpose is EffectPurpose.ENTER:
+            def before_submit() -> None:
+                if self.authority_kind not in _LIVE_MARKET_CLOCK_AUTHORITIES:
+                    return
+                current = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
+                if (
+                    liveness.market_data is not None
+                    and (current.market_data is None or current.market_data.generation != liveness.market_data.generation)
+                ) or liveness_blocks_entry(
+                    current, use_rth=use_rth,
+                    extended_phase_proven=lambda: extended_phase_proven_at_ms(
+                        now_ms=self._repo.clock(), symbol=entry.instrument.underlying,
+                        account_id=capability_account_id, extended_window=self._program_leg_policy.window,
+                    ),
+                    extended_session_live=lambda: self._stream_health is not None and self._stream_health.market_data_live(entry.instrument.underlying),
+                ):
+                    raise BrokerError("Market evidence changed before submission; no order was sent.")
+
             submitted_enter = await submit_accepted_enter(
                 self._repo,
                 accepted=accepted_enter,
                 leg=operation_leg,
                 trade=trade,
+                before_submit=before_submit,
             )
             order_refs = (
                 (submitted_enter.order_ref,) if submitted_enter.order_ref is not None else ()
@@ -1544,8 +1562,10 @@ def _durable_decision_id(decision_id: str) -> str:
 
 
 def _live_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
-    """The process's fresh IBKR bid/ask for ``symbol``; asking subscribes it."""
-    return get_market_liveness_store().top_of_book(symbol, now_ms=now_ms)
+    """Prepare explicit limit-price demand, then read its current receipt."""
+    store = get_market_liveness_store()
+    store.request_symbol(symbol, now_ms=now_ms)
+    return store.top_of_book(symbol, now_ms=now_ms)
 
 
 def _is_working_order(order: OrderResource) -> bool:

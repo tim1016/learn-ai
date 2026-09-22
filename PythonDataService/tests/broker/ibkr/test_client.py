@@ -50,6 +50,7 @@ def _patched_ib_class() -> tuple:
     fake_ib.disconnect = MagicMock(return_value=None)
     fake_ib.isConnected = MagicMock(return_value=True)
     fake_ib.client = MagicMock()
+    fake_ib.wrapper = MagicMock()
     fake_ib.client.serverVersion = MagicMock(return_value=178)
     fake_ib.managedAccounts = MagicMock(return_value=[])
     fake_class = MagicMock(return_value=fake_ib)
@@ -494,6 +495,7 @@ async def test_disconnect_calls_sync_ib_disconnect_when_connected(
     # ``IB.client`` is also initialized on each instance rather than declared
     # on the class; IbkrClient pins its transport pacing during construction.
     fake_ib.client = MagicMock()
+    fake_ib.wrapper = MagicMock()
     fake_ib.isConnected.return_value = True
     fake_ib.disconnect.return_value = "Disconnected"
     fake_class = MagicMock(return_value=fake_ib)

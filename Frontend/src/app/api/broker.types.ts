@@ -17833,6 +17833,11 @@ export interface components {
              * @enum {string}
              */
             source?: "alpaca.stock_data.status" | "ibkr.market_data.status";
+            /**
+             * Subscriptions
+             * @default []
+             */
+            subscriptions?: components["schemas"]["SymbolMarketDataEvidence"][];
             /** Symbol Statuses */
             symbol_statuses: components["schemas"]["SymbolTradingStatusEvidence"][];
         };
@@ -24694,6 +24699,38 @@ export interface components {
             symbol: string;
         };
         /**
+         * SymbolMarketDataEvidence
+         * @description Subscription readiness, separate from reported halt state and prices.
+         *
+         *     Publication does not extend ``valid_until_ms``. Only a live quote or
+         *     vendor-timestamped trade received on this generation can do that.
+         */
+        SymbolMarketDataEvidence: {
+            /** Generation */
+            generation: string;
+            /** Last Received At Ms */
+            last_received_at_ms?: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Quote Received At Ms */
+            quote_received_at_ms?: number | null;
+            /** Reason */
+            reason: string;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "STARTING" | "READY" | "RECOVERING" | "UNAVAILABLE";
+            /** Symbol */
+            symbol: string;
+            /** Trade Timestamp Ms */
+            trade_timestamp_ms?: number | null;
+            /** Valid Until Ms */
+            valid_until_ms?: number | null;
+        };
+        /**
          * SymbolTradingStatusEvidence
          * @description One symbol-scoped live trading-status observation.
          *
@@ -25071,10 +25108,8 @@ export interface components {
          * TopOfBookQuote
          * @description One symbol's live IBKR best bid and ask, as the status source last read them.
          *
-         *     ``observed_at_ms`` is the poll that read the live subscription on a
-         *     connected source -- IBKR sends quote ticks only on change, so a quiet book
-         *     is still current while its subscription is. It is the instant an operator's
-         *     confirmed extended-hours limit is judged stale against (#2007).
+         *     ``observed_at_ms`` is the older receipt of the current bid and ask.
+         *     Reading or publishing this value never advances its freshness.
          */
         TopOfBookQuote: {
             /** Ask */

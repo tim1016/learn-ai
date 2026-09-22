@@ -24142,6 +24142,14 @@
             "title": "Source",
             "type": "string"
           },
+          "subscriptions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SymbolMarketDataEvidence"
+            },
+            "title": "Subscriptions",
+            "type": "array"
+          },
           "symbol_statuses": {
             "items": {
               "$ref": "#/components/schemas/SymbolTradingStatusEvidence"
@@ -39959,6 +39967,107 @@
         "title": "SymbolCoverageSpan",
         "type": "object"
       },
+      "SymbolMarketDataEvidence": {
+        "additionalProperties": false,
+        "description": "Subscription readiness, separate from reported halt state and prices.\n\nPublication does not extend ``valid_until_ms``. Only a live quote or\nvendor-timestamped trade received on this generation can do that.",
+        "properties": {
+          "generation": {
+            "minLength": 1,
+            "title": "Generation",
+            "type": "string"
+          },
+          "last_received_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Received At Ms"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "quote_received_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Received At Ms"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "STARTING",
+              "READY",
+              "RECOVERING",
+              "UNAVAILABLE"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "trade_timestamp_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Timestamp Ms"
+          },
+          "valid_until_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until Ms"
+          }
+        },
+        "required": [
+          "symbol",
+          "generation",
+          "state",
+          "observed_at_ms",
+          "reason_code",
+          "reason"
+        ],
+        "title": "SymbolMarketDataEvidence",
+        "type": "object"
+      },
       "SymbolTradingStatusEvidence": {
         "additionalProperties": false,
         "description": "One symbol-scoped live trading-status observation.\n\nA status stream sends state transitions rather than scheduled-calendar\nwindows. Its connection epoch is recorded separately so reconnection can\ninvalidate every previously remembered symbol state before new evidence is\naccepted.",
@@ -40854,7 +40963,7 @@
       },
       "TopOfBookQuote": {
         "additionalProperties": false,
-        "description": "One symbol's live IBKR best bid and ask, as the status source last read them.\n\n``observed_at_ms`` is the poll that read the live subscription on a\nconnected source -- IBKR sends quote ticks only on change, so a quiet book\nis still current while its subscription is. It is the instant an operator's\nconfirmed extended-hours limit is judged stale against (#2007).",
+        "description": "One symbol's live IBKR best bid and ask, as the status source last read them.\n\n``observed_at_ms`` is the older receipt of the current bid and ask.\nReading or publishing this value never advances its freshness.",
         "properties": {
           "ask": {
             "exclusiveMinimum": 0.0,
