@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     cancel_and_prove_owned_entry,
     resolve_exit,
 )
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence, fold_uncertain
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -316,6 +316,56 @@ async def test_an_exit_owned_entry_fold_is_idempotent_across_routes(
         fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=dead)
 
     assert len(_enter_unfilled_rows(repo, entry.effect_operation_id)) == 1
+
+
+async def test_an_unknown_enter_is_left_to_its_own_route_so_its_episode_resolves(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """The EXIT-side receipt carries no ``order_ref``, so it cannot resolve an
+    unknown-outcome episode naming ``(ENTER, entry_ref)``. Terminalizing the
+    ENTER there would drop it out of every reconciliation read and strand the
+    episode, blocking new exposure for good. It declines instead, and the
+    ENTER's own route closes both once the EXIT has ended."""
+    entry_ref = await _make_entry(repo)
+    entry = repo.order(entry_ref)
+    assert entry is not None
+    enter_effect_id = entry.effect_operation_id
+    fold_uncertain(
+        repo, effect_operation_id=enter_effect_id, order_ref=entry_ref, why="lost response"
+    )
+    assert repo.effect_operation(enter_effect_id).state == "unknown"  # type: ignore[union-attr]
+
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    dead = _broker_order(entry_ref, status="canceled", filled_quantity=0.0)
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(lookup_results=[dead] * 5),
+    )
+    assert repo.active_exit_for_order(entry_ref) is None
+
+    assert repo.effect_operation(enter_effect_id).state == "unknown"  # type: ignore[union-attr]
+    assert not _enter_unfilled_rows(repo, enter_effect_id)
+    assert enter_effect_id in {
+        effect.effect_operation_id for effect in repo.reconcilable_effect_operations()
+    }, "the ENTER must stay reconcilable so its own route can resolve the episode"
+
+    fold_order_evidence(repo, effect_operation_id=enter_effect_id, order=dead)
+
+    assert repo.effect_operation(enter_effect_id).state == "failed"  # type: ignore[union-attr]
+    assert decide_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        strategy_instance_id=SID,
+    ).allowed
 
 
 async def test_a_partially_filled_entry_an_exit_cancels_keeps_its_enter_open(
