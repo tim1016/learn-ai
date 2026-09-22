@@ -94,6 +94,11 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     message: "This session's identity facts contradict the clerk's registry record.",
     nextStep: "Refresh the clerk's registry identity before retrying.",
   },
+  clerk_lane_draining: {
+    outcome: 'conflict',
+    message: 'This lane is draining; registration and confirmation refuse.',
+    nextStep: 'Finish the drain ceremony; this lane marks its own evidence and stays down.',
+  },
   clerk_lane_quiet_unproven: {
     outcome: 'conflict',
     message: "No lane-quiet confirmation answers this lane's retirement gate.",
@@ -106,7 +111,7 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
   },
   clerk_reassignment_blocked: {
     outcome: 'conflict',
-    message: 'Lane-to-lane reassignment is blocked while a drained lane can resurrect its binding.',
+    message: "Lane-to-lane reassignment is blocked until the drain ceremony proves the drained lane's quiet.",
     nextStep: 'Use whole-machine migration, which moves the volume with the lane.',
   },
   clerk_routing_attempt_conflict: {
@@ -193,6 +198,11 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     outcome: 'failure',
     message: "A required fleet control-plane component is not configured on this process.",
     nextStep: 'This needs host operator action; it will not clear by retrying alone.',
+  },
+  fleet_lane_draining: {
+    outcome: 'conflict',
+    message: 'The coordinator refused this presence call because the lane itself is drained.',
+    nextStep: 'Finish the drain ceremony; this lane marks its own evidence and stays down.',
   },
   fleet_lane_capacity_exhausted: {
     outcome: 'failure',

@@ -492,7 +492,7 @@ def test_same_owner_restart_preserves_identity_and_reassignment_is_blocked(
     drained = fleet_service.drain_clerk(clerk_id=original.clerk_id)
     assert drained.drain_deadline_at_ms is not None
     clock.advance(drained.drain_deadline_at_ms - clock() + 1)
-    with pytest.raises(ClerkReassignmentBlocked, match="#2155"):
+    with pytest.raises(ClerkReassignmentBlocked, match="#2154"):
         fleet_service.reassign_assignment(
             broker="fake_alpha",
             external_account_id="ACCOUNT",

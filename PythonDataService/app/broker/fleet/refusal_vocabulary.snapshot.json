@@ -53,6 +53,10 @@
       "status_code": 409,
       "meaning": "A session presented facts that contradict the clerk's registry identity."
     },
+    "clerk_lane_draining": {
+      "status_code": 409,
+      "meaning": "The clerk is draining; registration and confirmation refuse so the lane can learn its drain."
+    },
     "clerk_lane_quiet_unproven": {
       "status_code": 409,
       "meaning": "No lane-quiet confirmation answers the retirement gate; force-retire is the named exit."
@@ -63,7 +67,7 @@
     },
     "clerk_reassignment_blocked": {
       "status_code": 409,
-      "meaning": "Lane-to-lane reassignment is blocked until a drained lane cannot resurrect its binding."
+      "meaning": "Lane-to-lane reassignment is blocked until the drain ceremony can prove the drained lane's quiet."
     },
     "clerk_routing_attempt_conflict": {
       "status_code": 409,
@@ -136,6 +140,10 @@
     "fleet_lane_capacity_exhausted": {
       "status_code": 503,
       "meaning": "A lane's bounded request or stream budget could not admit the caller."
+    },
+    "fleet_lane_draining": {
+      "status_code": 409,
+      "meaning": "The coordinator refused this presence call because the lane itself is drained."
     },
     "fleet_presence_unavailable": {
       "status_code": 503,

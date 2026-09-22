@@ -286,12 +286,18 @@ async def observe_session(
     x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
     x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
 ) -> dict[str, Any] | Response:
-    """Record one heartbeat; observations never confirm anything."""
+    """Record one heartbeat; observations never confirm anything.
+
+    The answer carries the clerk's lifecycle (``lifecycle_state``) so a live
+    lane learns it was drained and marks its evidence (#2155); an older
+    coordinator that never sends the key is simply one with no news, and the
+    agent treats absence as such.
+    """
     _authorized_agent(
         request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
     )
     try:
-        touched = _service(request).observe_session(
+        observation = _service(request).observe_session(
             clerk_id=payload.clerk_id,
             agent_instance_id=payload.agent_instance_id,
             reported_binding_generation=payload.reported_binding_generation,
@@ -301,7 +307,10 @@ async def observe_session(
         )
     except FleetControlError as exc:
         return _refuse(exc)
-    return {"observed": touched}
+    return {
+        "observed": observation.touched,
+        "lifecycle_state": observation.lifecycle_state.value,
+    }
 
 
 @router.post("/assignments/reserve", response_model=None)

@@ -50,6 +50,12 @@ With the coordinator unreachable mid-boot, the offline rule is FR-066: only
 a recovered binding that exactly matches the confirmation evidence boots
 (last-effective recovery); a first assignment or a changed binding waits for
 the coordinator, failing closed.
+
+The lane's own drain is learned, never assumed (#2155): a heartbeat's
+lifecycle answer, or the coordinator's typed refusal at registration,
+re-authors the volume's confirmation evidence into a drained tombstone
+(``_learn_drain``), and that file then refuses the FR-066 offline boot that
+would otherwise resurrect the binding during the next coordinator outage.
 """
 
 from __future__ import annotations
@@ -67,6 +73,7 @@ from app.broker.fleet.confirmation import (
     ConfirmationEvidence,
     confirmation_evidence_path,
     evidence_vouches_for,
+    mark_confirmation_evidence_draining,
     read_confirmation_evidence,
     write_confirmation_evidence,
 )
@@ -74,6 +81,7 @@ from app.broker.fleet.errors import FleetControlError
 from app.broker.fleet.identity import new_agent_instance_id
 from app.broker.fleet.internal_http import FleetTransportRefused
 from app.broker.fleet.presence import (
+    FleetLaneDraining,
     FleetPresence,
     FleetPresenceError,
     LocalPresence,
@@ -81,7 +89,11 @@ from app.broker.fleet.presence import (
     SessionInfo,
 )
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
-from app.broker.fleet.records import _ACCOUNT_NICKNAME_MAX_CHARS, AccountAssignmentRecord
+from app.broker.fleet.records import (
+    _ACCOUNT_NICKNAME_MAX_CHARS,
+    AccountAssignmentRecord,
+    StoredLifecycleState,
+)
 from app.broker.fleet.service import FleetControlService, FleetRegistryStore
 from app.config import FleetSettings
 from app.utils.timestamps import now_ms_utc
@@ -168,6 +180,12 @@ class FleetLaneBoot:
     #: everywhere either changes; ``None`` alongside ``confirmed_grant is
     #: None`` means "nothing confirmed".
     confirmed_grant_session: SessionInfo | None = None
+    #: Whether this lane has learned it is drained (#2155): set once, never
+    #: cleared, by ``_learn_drain`` — from a heartbeat's lifecycle answer or
+    #: the coordinator's typed registration refusal — and read by the
+    #: bot-start gate and the re-confirmation retry so a drained lane serves
+    #: nothing new and re-presents no grant while it winds down.
+    draining: bool = False
     heartbeat: asyncio.Task | None = field(default=None, repr=False)
 
     @property
@@ -317,6 +335,18 @@ async def open_fleet_lane(
         # Kept on the boot so a re-registration presents the same reference:
         # it is the lane's for its whole lifetime, not this one call's.
         boot.endpoint_ref = settings.AGENT_ENDPOINT_REF
+    except FleetLaneDraining as exc:
+        # The lesson, not a transport failure (#2155): mark the evidence on
+        # this volume so no later offline boot can present the drained
+        # binding, then refuse — a drained lane never re-enrols.
+        _learn_drain(boot)
+        await close_fleet_lane(boot)
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane's registration because "
+            f"it is drained: {exc.message}",
+            next_step="Finish the drain ceremony on the coordinator; this "
+            "volume's evidence is marked drained and boots nothing.",
+        ) from exc
     except FleetPresenceError as exc:
         # Offline rule (FR-066): the evidence must name THIS volume's
         # enrolled identity — a foreign or hand-copied evidence file does
@@ -342,6 +372,20 @@ async def open_fleet_lane(
                 f"confirmation evidence: {exc.message}",
                 next_step="A first enrolment or a never-confirmed binding waits "
                 "for the coordinator; it never boots unfenced.",
+            ) from exc
+        if evidence.lifecycle_state != StoredLifecycleState.PROVISIONED.value:
+            # The resurrection block (#2155): a coordinator outage is exactly
+            # when a drained lane must NOT fall back to its last-effective
+            # binding. The lane itself marked this file when it learned the
+            # drain; the mark, not the coordinator's availability, decides.
+            await close_fleet_lane(boot)
+            raise FleetBootRefused(
+                "The confirmation evidence on this volume is marked drained; "
+                "a drained lane boots nothing, with or without the "
+                "coordinator.",
+                next_step="Finish the drain ceremony on the coordinator and "
+                "decommission this volume; a drained lane never returns to "
+                "service.",
             ) from exc
         boot.session = None
         boot.offline_reason = exc.message
@@ -439,7 +483,12 @@ def offline_boot_matches(
     effective_revision: int | None,
     binding_generation: int | None = None,
 ) -> bool:
-    """FR-066: only the evidence-confirmed exact grant may boot offline."""
+    """FR-066: only the evidence-confirmed exact grant may boot offline.
+
+    Drained evidence never matches, whatever the tuple (#2155): the lane
+    marked its own file when it learned the drain, and the mark survives the
+    coordinator outage that follows.
+    """
     evidence = read_confirmation_evidence(boot.volume_root)
     if evidence is not None and boot.registry_id == "":
         boot.registry_id = evidence.registry_id
@@ -539,6 +588,35 @@ def _summary_with_live_nickname(
     return refreshed
 
 
+def _learn_drain(boot: FleetLaneBoot) -> None:
+    """Record, exactly once, that this lane learned it is drained (#2155).
+
+    The two ways a lane learns are both routed here: a heartbeat whose answer
+    carries ``lifecycle_state: draining``, and the coordinator's typed
+    ``FleetLaneDraining`` refusal at registration. The durable act is
+    re-authoring the volume's confirmation evidence into its tombstone, so
+    the very outage that hides the coordinator cannot conjure the binding
+    back through FR-066's offline boot; the in-process acts — stopping new
+    bot starts and grant re-presentations — read ``boot.draining``.
+    """
+    if boot.draining:
+        return
+    # The latch flips only after the durable mark succeeds: an I/O failure on
+    # the evidence write must leave this call retryable, or the surviving
+    # provisioned evidence would vouch for a later offline boot forever.
+    marked = mark_confirmation_evidence_draining(boot.volume_root)
+    boot.draining = True
+    logger.warning(
+        "This lane learned it is drained; its confirmation evidence is "
+        "marked and new bot starts refuse while the drain completes.",
+        extra={
+            "clerk_id": boot.clerk_id,
+            "action": "fleet_lane_drain_learned",
+            "evidence_marked": marked,
+        },
+    )
+
+
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     """Observe on a cadence; a refused beat repairs the lane.
 
@@ -587,7 +665,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     ),
                 )
                 try:
-                    await boot.presence.observe(
+                    learned_lifecycle = await boot.presence.observe(
                         clerk_id=boot.clerk_id,
                         agent_instance_id=boot.session.agent_instance_id,
                         reported_binding_generation=reported.get("reported_binding_generation"),
@@ -595,12 +673,19 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         reported_state=reported.get("reported_state"),
                         reported_summary=live_summary,
                     )
+                except FleetLaneDraining:
+                    # The typed refusal is news about this lane, not a broken
+                    # beat: learn it and keep beating — no repair is possible
+                    # for a lane the coordinator will not re-register.
+                    _learn_drain(boot)
                 except FleetControlError as exc:
                     logger.warning(
                         "Fleet heartbeat refused: %s", exc.message, extra={"clerk_id": boot.clerk_id}
                     )
                     await _repair_lane_after_refused_beat(boot)
                 else:
+                    if learned_lifecycle == StoredLifecycleState.DRAINING.value:
+                        _learn_drain(boot)
                     # The common case is a no-op: `confirmed_grant_session`
                     # already names this session. It only does work when a
                     # prior re-registration's immediate re-confirmation
@@ -860,6 +945,12 @@ async def _repair_lane_after_refused_beat(boot: FleetLaneBoot) -> None:
             adapter_version=_ADAPTER.adapter_version,
             fleet_protocol_version=FLEET_PROTOCOL_VERSION,
         )
+    except FleetLaneDraining:
+        # Not repairable by re-registration: the refusal is the drain lesson
+        # itself. Mark the evidence, leave the beat to keep observing what
+        # it can, and stop trying to rebuild a session.
+        _learn_drain(boot)
+        return
     except FleetControlError as exc:
         logger.warning(
             "Fleet re-registration refused: %s",
@@ -897,6 +988,11 @@ async def _reconfirm_grant_if_stale(boot: FleetLaneBoot) -> None:
     grant = boot.confirmed_grant
     session = boot.session
     if grant is None or session is None or boot.confirmed_grant_session == session:
+        return
+    if boot.draining:
+        # A drained lane re-presents no grant (#2155): the coordinator's
+        # confirmation gate refuses it anyway, and a retry loop against a
+        # refusal that is news — not breakage — is noise.
         return
     try:
         await confirm_binding(

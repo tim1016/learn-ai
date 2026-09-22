@@ -237,6 +237,23 @@ class ClerkSessionRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionObservation:
+    """One heartbeat's answer: what landed, and what the lane must learn.
+
+    ``touched`` is the pre-#2155 fact (the beat reached the current session).
+    ``lifecycle_state`` is the lane's own durable state as the coordinator
+    holds it — the channel by which a live lane learns it was drained and
+    marks its evidence before any offline boot can present that binding as
+    effective again (#2155). A lane that never observes (or never hears) its
+    drain is the residual window the ADR names, not a state this record can
+    repair after the fact.
+    """
+
+    touched: bool
+    lifecycle_state: StoredLifecycleState
+
+
+@dataclass(frozen=True, slots=True)
 class AccountAssignmentRecord:
     broker: str
     canonical_external_account_id: str

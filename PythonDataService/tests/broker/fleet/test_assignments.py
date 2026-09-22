@@ -239,7 +239,12 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
     )
     owner_session = fleet_service._store.read_session(owner.clerk_id)
     assert owner_session is not None
-    with pytest.raises(ClerkAssignmentConflict):
+    # Since #2155 the drained-owner refusal names the root cause — the lane
+    # is draining, so it confirms nothing. The released-assignment fence
+    # stays inside the transaction as the in-order defense it always was.
+    from app.broker.fleet.errors import ClerkLaneDraining
+
+    with pytest.raises(ClerkLaneDraining):
         fleet_service.confirm_assignment(
             broker="fake_alpha",
             clerk_id=owner.clerk_id,
