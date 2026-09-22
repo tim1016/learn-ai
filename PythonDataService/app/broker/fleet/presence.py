@@ -226,17 +226,27 @@ class LocalPresence:
         effective_profile_id: str | None,
         effective_revision: int | None,
     ) -> AccountAssignmentRecord:
-        """Confirm through the service."""
-        return self._service.confirm_assignment(
-            broker=broker,
-            clerk_id=clerk_id,
-            external_account_id=external_account_id,
-            binding_generation=binding_generation,
-            agent_instance_id=agent_instance_id,
-            routing_epoch=routing_epoch,
-            effective_profile_id=effective_profile_id,
-            effective_revision=effective_revision,
-        )
+        """Confirm through the service, translating the drain lesson.
+
+        Same translation as ``register``: a draining refusal arrives as the
+        lane-learnable type on both transports, so ``confirm_binding`` can
+        mark the volume's evidence wherever the drain is first heard.
+        """
+        from app.broker.fleet.errors import ClerkLaneDraining
+
+        try:
+            return self._service.confirm_assignment(
+                broker=broker,
+                clerk_id=clerk_id,
+                external_account_id=external_account_id,
+                binding_generation=binding_generation,
+                agent_instance_id=agent_instance_id,
+                routing_epoch=routing_epoch,
+                effective_profile_id=effective_profile_id,
+                effective_revision=effective_revision,
+            )
+        except ClerkLaneDraining as exc:
+            raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
 
     async def observe(
         self,

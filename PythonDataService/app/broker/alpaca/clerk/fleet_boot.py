@@ -430,7 +430,9 @@ async def confirm_binding(
     in-process record the beat re-presents (``boot.confirmed_grant``) — and
     the session it was confirmed under (``boot.confirmed_grant_session``) —
     is written here beside the durable evidence, and by the same rule: only
-    after the coordinator has accepted it.
+    after the coordinator has accepted it. A drained refusal is the mirror
+    of that rule: the volume's evidence is *un*-written into its tombstone
+    before the refusal re-raises (#2155).
     """
     session = boot.session
     if session is None:
@@ -438,16 +440,31 @@ async def confirm_binding(
             "A binding confirmation requires the coordinator; an offline boot "
             "confirms nothing and stays unrouted.",
         )
-    confirmed = await boot.presence.confirm(
-        broker=boot.broker,
-        clerk_id=boot.clerk_id,
-        external_account_id=external_account_id,
-        binding_generation=binding_generation,
-        agent_instance_id=session.agent_instance_id,
-        routing_epoch=session.routing_epoch,
-        effective_profile_id=effective_profile_id,
-        effective_revision=effective_revision,
-    )
+    try:
+        confirmed = await boot.presence.confirm(
+            broker=boot.broker,
+            clerk_id=boot.clerk_id,
+            external_account_id=external_account_id,
+            binding_generation=binding_generation,
+            agent_instance_id=session.agent_instance_id,
+            routing_epoch=session.routing_epoch,
+            effective_profile_id=effective_profile_id,
+            effective_revision=effective_revision,
+        )
+    except FleetLaneDraining as exc:
+        # The confirmation can be the lane's FIRST news of its drain — the
+        # coordinator closed the door between this lane's reserve and its
+        # confirm — and this is the last point the lesson can arrive before
+        # the evidence write below: mark the volume, refuse the binding, and
+        # let the caller surface it (#2155). Without this handler the refusal
+        # escapes unlearned and the provisioned evidence stays FR-066-usable.
+        _learn_drain(boot)
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane's binding confirmation "
+            f"because it is drained: {exc.message}",
+            next_step="Finish the drain ceremony on the coordinator; this "
+            "volume's evidence is marked drained and confirms nothing.",
+        ) from exc
     write_confirmation_evidence(
         boot.volume_root,
         ConfirmationEvidence(

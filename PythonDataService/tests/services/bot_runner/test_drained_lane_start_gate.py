@@ -8,6 +8,7 @@ as one, and a non-fleet deployment (no gate) is untouched.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ from app.services.bot_runner import (
 from tests._helpers.bot_runner.custody import _SID
 
 
-def _registry(tmp_path: Path, gate) -> BotTaskRegistry:
+def _registry(tmp_path: Path, gate: Callable[[], bool] | None) -> BotTaskRegistry:
     return BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: None,
