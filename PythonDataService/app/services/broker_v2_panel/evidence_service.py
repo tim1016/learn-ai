@@ -67,6 +67,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Exit remains open",
         "The exit finished without proof that attributed exposure is flat.",
     ),
+    "ENTER_UNFILLED": (
+        "Entry ended unfilled",
+        "The broker ended this entry order without filling any of it, so no position was opened.",
+    ),
     "ORDER_SUBMIT_REQUESTED": (
         "Order submission requested",
         "The Account Clerk recorded the broker-write attempt before contact.",

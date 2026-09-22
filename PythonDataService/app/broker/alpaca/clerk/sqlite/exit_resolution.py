@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    UNFILLED_TERMINAL_STATES,
     entry_never_accepted_durably,
     entry_order_symbol,
     fold_entry_never_accepted,
@@ -273,7 +274,7 @@ async def _resolve_claimed(
         # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
         if (
             not repo.fills_for_order(reducing.order_ref)
-            and (reducing.broker_state or "").lower() not in _UNFILLED_TERMINAL_STATES
+            and (reducing.broker_state or "").lower() not in UNFILLED_TERMINAL_STATES
         ):
             if effect.state != "unknown":
                 fold_uncertain(
@@ -1092,13 +1093,6 @@ def _deterministic_intent_id(effect_operation_id: str) -> str:
 
 def _is_terminal(broker_state: str | None) -> bool:
     return broker_state is not None and broker_state.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
-
-
-_UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
-"""Terminal broker states that, with no recorded execution, are proven
-unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
-terminal snapshot can truthfully precede its execution slice on the
-websocket."""
 
 
 def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubmission:

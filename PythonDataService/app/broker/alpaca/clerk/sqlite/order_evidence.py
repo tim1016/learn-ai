@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
@@ -51,7 +52,20 @@ def submit_absence_grace_ms() -> int:
     return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
 
 
+UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
+"""Terminal broker states that, with no recorded execution, are proven
+unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
+terminal snapshot can truthfully precede its execution slice on the
+websocket.
+
+Lives here rather than in either domain module because both read it: EXIT
+falls through to ``EXIT_NOT_FLAT`` on it (R12) and ENTER folds
+``ENTER_UNFILLED`` on it (#2006, the same ruling mirrored).
+"""
+
+
 __all__ = [
+    "UNFILLED_TERMINAL_STATES",
     "entry_never_accepted_durably",
     "entry_order_symbol",
     "fold_entry_never_accepted",
@@ -371,6 +385,69 @@ def fold_order_acknowledgement(
                 facts_json=canonicalize({}),
             )
         )
+    _fold_enter_unfilled_if_proven(
+        repo, effect=effect, effect_operation_id=effect_operation_id, order=order, order_ref=order_ref
+    )
+
+
+def _fold_enter_unfilled_if_proven(
+    repo: ClerkSqliteRepository,
+    *,
+    effect: EffectOperationResource,
+    effect_operation_id: str,
+    order: BrokerOrder,
+    order_ref: str,
+) -> None:
+    """Mirror R12 for ENTER: a proven-zero-fill terminal ENTER reaches ``failed``.
+
+    The ack above records ``in_progress`` because an acknowledged order is
+    normally still working. A vendor ``canceled``/``expired``/``rejected`` with
+    no recorded execution is not still working and never will be — it is proven
+    unfilled (ADR 0059 D5.4), exactly the evidence EXIT already reads to fall
+    through to ``EXIT_NOT_FLAT``. Without this the effect stayed ``in_progress``
+    forever, holding its instance in the nonterminal set
+    ``strategy_instances_with_live_custody`` reads while the strategy was
+    provably flat. In extended hours an unfilled ENTER cancelled at 20:00 ET is
+    a daily event, so that residue accumulated (#2006).
+
+    Unlike EXIT's mirror this raises no uncertainty and needs no operator: a
+    zero-fill ENTER opened nothing, so there is no stranded exposure to flag.
+    The terminal fold resolves any open unknown-outcome episode for the order on
+    its way through.
+
+    Every clause of the guard is load-bearing:
+
+    - **Still nonterminal.** An effect that already reached an outcome is not
+      re-terminalized, and no second transition is appended over its receipt.
+    - **ENTER only.** EXIT and CANCEL reach their own outcomes through
+      ``exit_resolution``/``manual_order_cancellation``; MANUAL_ORDER settles
+      through its ticket. Terminalizing those here would race their owners.
+    - **Proven zero fill**, read twice — no durable fill row *and* a snapshot
+      reporting no filled quantity. A partial fill that the vendor then
+      cancelled opened real exposure, and calling that ENTER ``failed`` would
+      declare it dead while the strategy still holds shares.
+    - **Folded once.** A poll, the reconciliation sweep and a trade-update frame
+      all re-deliver the same dead order; the transition is appended to a hash
+      chain, so a repeat observation must not append a second one.
+    """
+    if (
+        effect.kind != "ENTER"
+        or effect.state not in NONTERMINAL_EFFECT_STATES
+        or (order.status or "").lower() not in UNFILLED_TERMINAL_STATES
+        or order.filled_quantity >= FILL_QTY_EPSILON
+        or repo.fills_for_order(order_ref)
+        or repo.has_order_transition(order_ref=order_ref, transition_kind="ENTER_UNFILLED")
+    ):
+        return
+    fold_failed(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        summary_code="ENTER_UNFILLED",
+        reason="The broker ended the entry order without filling it.",
+        why=f"broker_state={(order.status or '').lower()!r} with no recorded execution.",
+        transition_kind="ENTER_UNFILLED",
+    )
 
 
 def fold_order_submission_acknowledgement(
