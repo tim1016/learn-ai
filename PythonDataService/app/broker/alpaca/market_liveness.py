@@ -27,7 +27,7 @@ from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.capture.journal import CaptureEndpoint, CaptureJournal, get_capture_journal
 from app.broker.contract.ports import BrokerReadPort
-from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
+from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, SymbolTradingStatusEvidence
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.services.market_liveness import MarketLivenessStore, get_market_liveness_store
 from app.utils.timestamps import Clock, now_ms_utc
@@ -38,7 +38,7 @@ type FrameSource = Callable[[], AsyncIterator[bytes | str]]
 type Backoff = Callable[[int], Awaitable[None]]
 type StatusSnapshotSource = Callable[[], Awaitable[MarketStatusSnapshot]]
 
-_STATUS_SOURCE = "alpaca.stock_data.status"
+_STATUS_SOURCE = MarketStatusSource.ALPACA
 _STATUS_STREAM = "market_statuses"
 _CLOCK_POLL_INTERVAL_S = 1.0
 _MAX_RECONNECT_BACKOFF_S = 30.0
@@ -395,16 +395,41 @@ class AlpacaMarketLivenessConsumer:
 
         from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 
-        def watched_symbols() -> tuple[str, ...]:
+        cached_demand: tuple[str, ...] = ()
+        cached_revision: tuple[object, int] | None = None
+
+        async def watched_symbols() -> tuple[str, ...]:
+            from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+            from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
             from app.marketdata.ibkr_feed import get_market_data_feed
 
-            feed = get_market_data_feed()
-            # A slow strategy still needs continuously observed halt/resume
-            # evidence between decisions, even with every browser tab closed.
-            active = () if feed is None else feed.active_symbols()
-            return tuple(sorted(set(store.requested_symbols()) | set(active)))
+            runtime = get_active_clerk_runtime()
+            repo = None if runtime is None else runtime.sqlite_repository
 
-        local_source = IbkrMarketStatusSource(symbols=watched_symbols)
+            def durable_demand() -> tuple[str, ...]:
+                nonlocal cached_demand, cached_revision
+                if repo is None:
+                    return ()
+                revision = (repo, repo.control_meta_snapshot().control_revision)
+                if revision != cached_revision:
+                    cached_demand = repo.market_data_symbols()
+                    cached_revision = revision
+                return cached_demand
+
+            # SQLite's write coordinator and durable reads use #1993's worker
+            # seam. The stable projection is invalidated by custody/lifecycle
+            # commits; no per-bot files are read by the market-data loop.
+            durable = await to_thread(durable_demand)
+            feed = get_market_data_feed()
+            active = () if feed is None else feed.active_symbols()
+            return tuple(dict.fromkeys((*active, *durable, *store.requested_symbols())))
+
+        store.require_source(MarketStatusSource.IBKR)
+        local_source = IbkrMarketStatusSource(
+            symbols=watched_symbols,
+            publish=lambda snapshot: store.apply_status_snapshot(snapshot, now_ms=now_ms_utc()),
+            halt_path=resolved.clerk_dir / "market_data_halts.json",
+        )
         status_source = local_source
         if resolved.market_status_upstream_url is not None:
             from app.config import settings as service_settings
@@ -418,7 +443,7 @@ class AlpacaMarketLivenessConsumer:
                     control_secret=service_settings.DATA_PLANE_CONTROL_SECRET,
                     journal=journal or get_capture_journal(),
                 )
-                if snapshot.source != "ibkr.market_data.status":
+                if MarketStatusSource(snapshot.source) is not MarketStatusSource.IBKR:
                     raise ValueError("The shared market-status source must be IBKR.")
                 return snapshot
 

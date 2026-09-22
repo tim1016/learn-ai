@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -298,3 +300,39 @@ def test_neither_extended_predicate_is_consulted_off_the_closed_branch() -> None
         )
         is True
     )
+
+
+def test_composer_always_retains_the_subscription_evidence_it_evaluates() -> None:
+    from app.schemas.market_liveness import SymbolMarketDataEvidence
+
+    data = SymbolMarketDataEvidence(
+        symbol="SPY", generation="one", state="READY", observed_at_ms=1000,
+        valid_until_ms=6000, reason_code="MARKET_DATA_READY", reason="Live",
+    )
+    for state in ("OPEN", "CLOSED", "UNKNOWN"):
+        for at in (1000, 6001):
+            result = compose_market_liveness(
+                "SPY", now_ms=at,
+                market_clock=MarketClockLivenessEvidence(state=state, source="test.clock", observed_at_ms=at),
+                connected=True, connection_changed_at_ms=0, symbol_status=None,
+                market_data=data, require_market_data=True,
+            )
+            assert result.market_data == data
+
+
+def test_configured_ibkr_provider_cannot_be_downgraded_by_a_snapshot() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource
+    from app.services.market_liveness import MarketLivenessStore
+
+    store = MarketLivenessStore()
+    store.require_source(MarketStatusSource.IBKR)
+    snapshot = MarketStatusSnapshot(
+        source=MarketStatusSource.ALPACA, connected=True, observed_at_ms=1000,
+        connection_changed_at_ms=1000, symbol_statuses=(),
+    )
+    with pytest.raises(ValueError, match="configured provider"):
+        store.apply_status_snapshot(snapshot, now_ms=1000)
+    with pytest.raises(ValidationError):
+        MarketStatusSnapshot.model_validate({**snapshot.model_dump(), "source": "ibkr.market_data.statu"})

@@ -173,6 +173,36 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
     return {str(row["strategy_instance_id"]) for row in rows}
 
 
+def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """One projection of deployments and custody using the canonical live sets.
+
+    Strategy identity supplies bot symbols without decoding historical order
+    legs or fills. Only manual orders need their immutable acceptance symbol.
+    Retired strategies remain watched while they still have custody.
+    """
+    working = ",".join("?" for _ in WORKING_BROKER_STATES)
+    pending = ",".join("?" for _ in NONTERMINAL_EFFECT_STATES)
+    rows = conn.execute(
+        "WITH live_effects AS ("
+        "SELECT effect_operation_id, strategy_instance_id FROM effect_operations "
+        f"WHERE state IN ({pending}) UNION "
+        "SELECT e.effect_operation_id, e.strategy_instance_id FROM effect_operations e "
+        "JOIN orders o ON o.effect_operation_id = e.effect_operation_id "
+        f"WHERE lower(o.broker_state) IN ({working})), demand AS ("
+        "SELECT symbol, 1 AS priority FROM strategy_instances WHERE retired_at_ms IS NULL "
+        "UNION ALL SELECT symbol, 0 FROM positions WHERE attributed_qty != 0 "
+        "UNION ALL SELECT i.symbol, 0 FROM strategy_instances i "
+        "JOIN live_effects e ON e.strategy_instance_id = i.strategy_instance_id "
+        "UNION ALL SELECT json_extract(t.facts_json, '$.leg.symbol') AS symbol, 0 "
+        "FROM live_effects e JOIN custody_transitions t "
+        "ON t.effect_operation_id = e.effect_operation_id "
+        "WHERE e.strategy_instance_id IS NULL AND t.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
+        "SELECT symbol FROM demand GROUP BY symbol ORDER BY min(priority), symbol",
+        (*sorted(NONTERMINAL_EFFECT_STATES), *sorted(WORKING_BROKER_STATES)),
+    ).fetchall()
+    return tuple(row["symbol"] for row in rows)
+
+
 def strategy_instance(conn: sqlite3.Connection, strategy_instance_id: str) -> dict | None:
     row = conn.execute(
         "SELECT strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms "

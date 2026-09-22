@@ -371,7 +371,7 @@ async def test_production_status_watch_keeps_active_runners_between_slow_decisio
     watched = []
 
     async def ibkr_status(self):
-        watched.extend(self._symbols())
+        watched.extend(await self._symbols())
         return MarketStatusSnapshot(
             source="ibkr.market_data.status", connected=False,
             observed_at_ms=_NOW, connection_changed_at_ms=_NOW, symbol_statuses=(),
@@ -729,3 +729,40 @@ async def test_reconnect_backoff_resets_after_a_healthy_connection(tmp_path: Pat
         "reset this reads [1, 2, 3, 4] and keeps climbing to the 30s ceiling, "
         "where every blip costs a full blackout with new exposure blocked."
     )
+
+
+async def test_production_durable_demand_reads_never_run_on_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    from types import SimpleNamespace
+
+    from app.broker.alpaca.config import AlpacaSettings
+
+    event_loop_thread = threading.get_ident()
+    reads = []
+
+    def symbols() -> tuple[str, ...]:
+        reads.append(threading.get_ident())
+        return ("SPY",)
+
+    revision = SimpleNamespace(control_revision=1)
+    repo = SimpleNamespace(market_data_symbols=symbols, control_meta_snapshot=lambda: revision)
+    monkeypatch.setattr("app.services.bot_runner.get_bot_task_registry", lambda: pytest.fail("Demand must not scan per-bot files"))
+    monkeypatch.setattr("app.broker.alpaca.clerk.active_authority.get_active_clerk_runtime", lambda: SimpleNamespace(sqlite_repository=repo))
+    monkeypatch.setattr("app.marketdata.ibkr_feed.get_market_data_feed", lambda: None)
+    monkeypatch.setattr("app.broker.ibkr.market_liveness.get_client", lambda: None)
+    consumer = AlpacaMarketLivenessConsumer.for_alpaca(
+        read=_Read(), settings=AlpacaSettings(api_key_id="key", api_secret_key="secret", clerk_dir=tmp_path),
+        store=MarketLivenessStore(), journal=CaptureJournal(capture_dir=tmp_path / "capture"),
+    )
+    consumer._status_snapshot_source._client = lambda: None
+    await consumer.refresh_shared_status()
+    for _ in range(5):
+        await consumer.refresh_shared_status()
+    assert len(reads) == 1
+    revision.control_revision += 1
+    await consumer.refresh_shared_status()
+    assert len(reads) == 2
+    assert all(thread != event_loop_thread for thread in reads)
+    await consumer.stop()

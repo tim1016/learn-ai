@@ -16,6 +16,22 @@ from app.services.market_liveness import market_liveness_fact
 _EXPECTED_CADENCE_MS = 60_000
 
 
+_LIVENESS_COPY = {
+    "MARKET_DATA_STARTING": ("Preparing live market data", "Wait for the first live quote or trade; the service is preparing the subscription."),
+    "MARKET_DATA_RECOVERING": ("Market data recovering", "The service is repairing the subscription. If recovery persists, check Gateway and the symbol's live-data entitlement."),
+    "MARKET_DATA_DISCONNECTED": ("Market data disconnected", "Restore the read-only Gateway connection and verify live data delivery."),
+    "STATUS_STREAM_DISCONNECTED": ("Market data disconnected", "Restore the read-only Gateway connection and verify live data delivery."),
+    "MARKET_DATA_UNAVAILABLE": ("Market data unavailable", "Check Gateway subscription capacity, instrument availability and live-data permissions."),
+    "MARKET_HALT_PERSISTENCE_FAILED": ("Market status storage unavailable", "Restore clerk storage; the service retries the halt write before admitting new exposure."),
+    "MARKET_DATA_NOT_LIVE": ("Live market data required", "Restore live IBKR data and verify entitlements; delayed or frozen prices cannot authorize entry."),
+    "MARKET_CLOCK_UNAVAILABLE": ("Broker clock unavailable", "Restore Alpaca account API connectivity so the broker clock can be read."),
+    "MARKET_CLOCK_STALE": ("Broker clock stale", "Check Alpaca account API connectivity and the broker-clock polling service."),
+    "MARKET_CLOCK_INVALID": ("Broker clock invalid", "Check system time synchronization and the broker-clock timestamps."),
+    "MARKET_CLOCK_UNKNOWN": ("Broker clock unproven", "Check the Alpaca account API clock response before trading."),
+    "SYMBOL_STATUS_UNKNOWN": ("Symbol trading status unavailable", "Check IBKR's trading-status report and entitlement for this instrument."),
+}
+
+
 def build_market_pulse(
     feed: MarketDataFeed | None,
     *,
@@ -94,7 +110,11 @@ def build_market_pulse(
     # whether extended-hours capability happens to be proven. A CLOSED fact
     # that extended hours actually cover is exempted (above) and falls
     # through to the feed-state branches below instead.
-    if liveness.state == "HALTED":
+    if liveness.market_data is not None and liveness.market_data.reason_code == "MARKET_HALT_PERSISTENCE_FAILED":
+        headline, next_step = _LIVENESS_COPY["MARKET_HALT_PERSISTENCE_FAILED"]
+        explanation = liveness.market_data.reason
+        attention_required = True
+    elif liveness.state == "HALTED":
         # The symbol is never interpolated into this prose — it renders
         # separately as structured data (``halted_symbol`` below) through
         # the canonical app-asset-identity component.
@@ -103,9 +123,11 @@ def build_market_pulse(
         next_step = "Keep new exposure blocked until a fresh trading-status resume arrives."
         attention_required = True
     elif liveness.state == "UNKNOWN":
-        headline = "Market liveness unproven"
+        headline, next_step = _LIVENESS_COPY.get(
+            liveness.reason_code,
+            ("Market liveness unproven", "Inspect the broker clock, Gateway connection and symbol-status evidence before trading."),
+        )
         explanation = liveness.reason
-        next_step = "Restore fresh market-wide and symbol trading-status evidence."
         attention_required = True
     elif liveness.state == "CLOSED" and not live_closed_is_actually_extended_hours:
         headline = "Market closed by live broker evidence"

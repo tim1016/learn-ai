@@ -2171,3 +2171,9 @@ How an operator moves around one broker account's pages. The account, not the pa
 - **Bot panel** (in the workspace) — one bot's page sits inside its account's workspace, under the tab it was opened from (Bots or Gallery), and its way back returns to that tab. With no origin it belongs to Bots.
 - **Account list** — the broker's entry page and the only page that shows every account at once: each account by name, mode, readiness, equity and running-bot count, opening into that account's workspace. An account that is not ready still appears, says why, and opens with only its configuration usable. Lane mechanics (authority, binding generation, endpoint) are not shown here.
   _Avoid_: lane directory (the **fleet directory** is the underlying listing, not this page), surface chooser, account selection (that is the configuration act of choosing, staging and applying which account a lane serves — opening an account from this list selects nothing).
+
+## Market-data readiness (resolved 2026-09-22)
+
+- **Market-data readiness** — current evidence that the symbol's live data is usable for a trading decision. It is distinct from connection health and the venue's reported halt status.
+- **Reported halt status** — the data provider's explicit halted, not-halted, or unavailable report for one instrument; an absent initial report remains absent.
+- **Decision-data freshness** — whether the price evidence used for a decision is within that decision's allowed age. Observing it again does not make it younger.

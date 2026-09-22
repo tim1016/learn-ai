@@ -19,11 +19,12 @@ required even when the code retains a historical `IBKR_BROKER_ENABLED` name.
 
 Each clerk retains a read-only Gateway connection with a distinct client ID.
 Its bars and symbol status evidence come from IBKR. A connected socket alone
-does not prove symbol tradability: an explicit tick-49 not-halted observation
-or a real-time trade no older than five seconds is required; delayed/frozen
-data and explicit unavailable status refuse. A reported halt stays latched
-across reconnects until IBKR explicitly reports not halted. The Alpaca execution
-clock remains an account-side market-open check, not a market-data subscription.
+does not prove symbol tradability. [ADR 0067](0067-market-data-readiness-and-subscription-ownership.md)
+supersedes the original not-halted-or-recent-trade rule with server-owned
+subscriptions, callback receipts and separate data-readiness and halt evidence.
+A reported halt stays latched across reconnects and process restarts until
+IBKR explicitly reports not halted. The Alpaca execution clock remains an
+account-side market-open check, not a market-data subscription.
 Scheduled phases remain calendar-owned. An outage never activates a paid
 Alpaca fallback or weakens these checks.
 

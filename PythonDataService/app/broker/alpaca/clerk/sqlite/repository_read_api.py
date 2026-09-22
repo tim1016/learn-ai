@@ -530,6 +530,11 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.attributed_positions_by_symbol(self._conn)
 
+    def market_data_symbols(self: ClerkSqliteRepository) -> tuple[str, ...]:
+        """Server-owned demand from deployed strategies and live custody."""
+        with self._write_lock:
+            return reads.market_data_symbols(self._conn)
+
     def attributed_positions_for_strategy(
         self: ClerkSqliteRepository,
         strategy_instance_id: str,

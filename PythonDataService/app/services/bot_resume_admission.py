@@ -40,7 +40,7 @@ from app.services.bot_start_admission import (
 )
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
 from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
-from app.services.market_liveness import market_liveness_fact
+from app.services.market_liveness import get_market_liveness_store, market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.signal_program_admission import (
     LegacyProgramUnreconstructibleError,
@@ -282,6 +282,7 @@ class BotResumeAdmission:
                     }
                 )
                 observed_at_ms = self._now_ms()
+                get_market_liveness_store().request_symbol(prior.symbol, now_ms=observed_at_ms)
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)
                 runtime = await self._runtime_fact(

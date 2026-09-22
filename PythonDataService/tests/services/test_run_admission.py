@@ -1266,3 +1266,22 @@ def test_an_armed_or_not_applicable_launch_carries_no_arming_note() -> None:
         assert decision.allowed is True
         assert ARMING_REQUIRED_ADMITTED_NOTE not in decision.explanation
         assert decision.next_step is None
+
+
+def test_resume_reports_current_data_refusal_without_aging_the_connection() -> None:
+    liveness = compose_market_liveness(
+        "SPY", now_ms=_NOW,
+        market_clock=MarketClockLivenessEvidence(
+            state="OPEN", source="alpaca.clock", observed_at_ms=_NOW,
+        ),
+        connected=True, connection_changed_at_ms=_NOW - 60_000,
+        symbol_status=None, require_market_data=True,
+    )
+    bot = _resume_bot().model_copy(update={"market_liveness": liveness})
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert not decision.allowed
+    assert decision.reason_code == "MARKET_LIVENESS_UNKNOWN"
+    assert liveness.reason_code == "MARKET_DATA_STARTING"
+    assert liveness.observed_at_ms == _NOW

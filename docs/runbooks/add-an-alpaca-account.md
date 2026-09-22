@@ -571,7 +571,7 @@ archive or a stopped container has closed it.
 | Apply refused because bots remain bound | The proposed change would replace an account still used by bots | Keep the current binding. Inspect its bot list and the exact refusal; do not force a profile swap. |
 | Shared market-data feed not installed | IBKR disabled on that worker | Restore enabled/read-only settings in every effective overlay, then recreate. |
 | Feed disconnected | Gateway logged out, wrong host/port/mode, or duplicate client ID | Restore Gateway and matching settings; unique IDs per lane. Wait for reconnect. |
-| Market liveness unknown/stale | No fresh, usable symbol evidence yet | Keep Gateway connected and open the bot panel. IBKR must deliver live data; frozen/delayed data or missing entitlement does not count. A symbol halt needs a genuine resume report. |
+| Market liveness unknown/stale | No fresh, usable symbol evidence yet | Keep Gateway connected and inspect the reported preparation/recovery reason. Subscriptions are server-owned; opening a panel is not a remedy. IBKR must deliver live data; frozen/delayed data or missing entitlement does not count. A symbol halt needs a genuine resume report. |
 | Accepted strategy, access Off | Validation and account permission are separate | Section 5's reviewed enable flow. |
 | Account ready, old bot Resume blocked | That bot's seal, custody, build, or permission has its own refusal | Read its admission diagnosis. Do not bypass it with account-level readiness. |
 | Stale cutover plan/evidence | The review window expired | Fresh plan capture → new plan → review → apply within two minutes. |
@@ -591,9 +591,16 @@ misleading “restart required” receipt indefinitely.
 
 The IBKR status mapping follows the vendor's [tick-type definitions](https://interactivebrokers.github.io/tws-api/tick_types.html#halted):
 49 reports halt state; generic 233 supplies RTVolume trade timestamps. Missing
-initial not-halted ticks are normal outside a TWS watchlist. Missing status
-alone never authorizes trading: the fallback requires a real-time trade within
-five seconds and no latched halt; delayed/frozen/stale observations refuse.
+initial not-halted ticks are normal outside a TWS watchlist. Under
+[ADR 0067](../architecture/adrs/0067-market-data-readiness-and-subscription-ownership.md),
+a fresh live two-sided quote or trade proves data readiness independently of
+reported halt status. Missing status alone never authorizes trading, and a
+clear status alone cannot authorize stale prices. Halt evidence survives
+restart until an explicit live resume report. Frozen/delayed data and explicit
+unavailable status refuse. Deployed bots and custody positions/orders keep
+subscriptions without an open panel. A stalled subscription is repaired by the
+server; repair waits do not extend a price's trading deadline.
+
 
 Implementation checks: `scripts/test_alpaca_onboarding_gates.py`, worker-lifecycle
 regressions, durable permission regressions, IBKR liveness regressions, and the

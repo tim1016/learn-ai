@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -1554,3 +1555,89 @@ async def test_resolve_enter_submission_fails_closed_when_operation_claimed_else
     with pytest.raises(OperationClaimError):
         await resolve_enter_submission(repo, order_ref=accepted.order_ref, trade=trade)
     assert len(trade.lookup_calls) == 0
+
+
+async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(repo: ClerkSqliteRepository) -> None:
+    from app.broker.alpaca.clerk.sqlite.enter import submit_accepted_enter
+
+    leg = _leg()
+    accepted = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, decision_id="market-expired", leg=leg,
+    )
+    trade = _FakeTrade()
+
+    def refuse() -> str:
+        return "Market data expired before submission."
+
+    result = await submit_accepted_enter(
+        repo, accepted=accepted, leg=leg, trade=trade, before_submit=refuse,
+    )
+
+    assert result.command.state == "failed"
+    assert trade.submit_calls == []
+    assert trade.lookup_calls == []
+    transition = repo.transitions_for_order(accepted.order_ref)[-1]
+    assert transition["transition_kind"] == "ENTER_SUBMISSION_REFUSED"
+    assert transition["summary_code"] == "MARKET_LIVENESS_BLOCKED"
+    assert "Clerk" in json.loads(transition["facts_json"])["reason"]
+
+
+def test_working_order_keeps_market_data_demand_until_failed(repo: ClerkSqliteRepository) -> None:
+    from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
+
+    accepted = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, decision_id="monitored-order", leg=_leg(),
+    )
+    from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance
+
+    # A retired deployment with outstanding custody must stay monitored.
+    submit_retire_strategy_instance(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, retired_at_ms=repo.clock(),
+    )
+    assert repo.market_data_symbols() == ("SPY",)
+    fold_failed(repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref,
+                summary_code="ORDER_SUBMIT_FAILED", reason="test refusal", why="test")
+    assert repo.market_data_symbols() == ()
+
+
+async def test_preflight_exception_is_a_known_local_refusal(repo: ClerkSqliteRepository) -> None:
+    from app.broker.alpaca.clerk.sqlite.enter import submit_accepted_enter
+
+    accepted = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, decision_id="preflight-error", leg=_leg(),
+    )
+    trade = _FakeTrade()
+
+    def broken_guard() -> str | None:
+        raise UnboundLocalError("test guard failed before contact")
+
+    result = await submit_accepted_enter(
+        repo, accepted=accepted, leg=_leg(), trade=trade, before_submit=broken_guard,
+    )
+    assert result.command.state == "failed"
+    assert trade.submit_calls == []
+    assert repo.transitions_for_order(accepted.order_ref)[-1]["transition_kind"] == "ENTER_SUBMISSION_REFUSED"
+    # The claim can be acquired by recovery after the terminal fold.
+    repo.claim_effect_operation(effect_operation_id=accepted.effect_operation_id, owner="test-recovery")
+
+
+def test_deployed_symbol_demand_survives_stop_until_retirement(repo: ClerkSqliteRepository) -> None:
+    from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance, submit_stop_run
+
+    assert repo.market_data_symbols() == ("SPY",)
+    submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    assert repo.market_data_symbols() == ("SPY",)
+    submit_retire_strategy_instance(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, retired_at_ms=repo.clock())
+    assert repo.market_data_symbols() == ()
+
+
+def test_live_custody_demand_precedes_idle_deployments(repo: ClerkSqliteRepository) -> None:
+    repo.register_strategy_instance(strategy_instance_id="idle-bot", symbol="AAA", config_hash="h")
+    accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, decision_id="custody-priority", leg=_leg(),
+    )
+    assert repo.market_data_symbols() == ("SPY", "AAA")
