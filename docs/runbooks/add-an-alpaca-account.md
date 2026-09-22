@@ -566,11 +566,14 @@ to a different lane, it moves only on the old lane's own lane-quiet proof
   confirm quiet (step 1c) *before* running `release-assignment`. The release
   prints `lane_confirmation`: `present` means the lane's fresh, quiet answer
   covered it. Then `retire` the old lane (it still confirms quiet on its
-  heartbeat), and only then boot the new lane: its reservation takes the
-  account at the next generation, and refuses while the old lane is still
-  draining. `absent` means the release was not covered, and **that release is
-  never re-reserved by any lane** — nothing proves the old lane stopped
-  writing.
+  heartbeat), and then run `reassign-assignment` with the new lane's
+  `--successor-clerk-id` and `--successor-volume-root`: it takes the account
+  at the next generation, recording your `--operator`/`--change-ref`. (A new
+  lane booting against the coordinator over HTTP cannot take a released
+  account by itself — its reservation carries no volume proof — so the host
+  ceremony is the path.) It refuses while the old lane is still draining.
+  `absent` means the release was not covered, and **that account never moves
+  to another lane** — nothing proves the old lane stopped writing.
   A release cannot be redone, so check first, read-only:
   `.venv/bin/python -m scripts.manage_broker_fleet lane-quiet --control-dir
   <coordinator-control-root> --clerk-id <clerk-id>` answers `quiet: true`

@@ -607,27 +607,20 @@ re-arms the server-authored timeframe auto-correct, and numeric
 
 ## Fleet account retirement — verified 2026-09-21
 
-- **P2: an account released without lane quiet cannot move to another lane
-  (#2154, closed 2026-09-22).** Lane quiet now gates retirement and every
-  handover. A draining Alpaca lane confirms on each heartbeat (the account's
-  open orders and positions read twice, its unresolved intents and its bot
-  runner); the plain `retire` completes on it with
-  `lane_confirmation: present`; `release-assignment` records `present` when a
-  fresh quiet confirmation covers the release and `absent` otherwise;
-  re-reserving a released account succeeds only when its release recorded
-  `present` and the old lane has since been retired; and
-  `reassign-assignment` requires the drained lane's fresh, quiet
-  confirmation and releases, retires the old lane and reserves for the
-  successor in one transaction. Schema v7
-  makes one live assignment per clerk structural, which is what lets an
-  identity-free confirmation cover exactly one account. **What remains:** a
-  lane that cannot answer — restarted during its drain, host gone, no clerk —
-  still retires only through `force-retire`, and its account, released
-  `absent`, cannot be re-reserved by any lane. That is deliberate (nothing
-  proves such a lane stopped writing), but it has no recovery ceremony yet:
-  re-onboarding that account onto a new lane would need a separately attested
-  proof that the old lane's volume and credentials are gone. Whole-machine
-  migration (#2151) is unaffected.
+- **P2: an account released without lane quiet has no way to another lane.**
+  A lane that cannot answer lane quiet — its process restarted during the
+  drain (#2155 refuses its re-registration), its host is gone, or it has no
+  clerk — retires only through `force-retire`, and its account is released
+  `lane_confirmation: absent`. Every handover path refuses such an account
+  (re-reservation and `reassign-assignment` both require a `present`
+  release and a retired old lane; ADR 0063's #2154 consequence), and that
+  refusal is deliberate: nothing proves the old lane stopped writing. What
+  is missing is a recovery ceremony for the case where the operator *knows*
+  the old lane is gone — re-onboarding the account would need a separately
+  attested proof that the old lane's volume and credentials are destroyed.
+  Until one exists the account stays released and unassigned (its positions,
+  if any, remain at the broker). Whole-machine migration (#2151) never
+  releases and is unaffected.
 - **P2: a lane unreachable for the entire drain keeps resurrection-capable
   evidence (#2155 residual window).** A drained lane learns its drain and
   tombstones its confirmation evidence through exactly two channels: the

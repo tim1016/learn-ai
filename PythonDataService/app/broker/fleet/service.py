@@ -1532,6 +1532,7 @@ class FleetControlService:
         clerk_id: str,
         volume_root: Path | None,
         now: int,
+        attestation: tuple[str, str] | None = None,
     ) -> AccountAssignmentRecord:
         """Reserve a released account for a new clerk — a transfer (#2157, #2154).
 
@@ -1603,7 +1604,9 @@ class FleetControlService:
         self._require_no_live_assignment(conn, clerk_id)
         if not self._store.cas_update_assignment(
             conn,
-            self._successor_reservation(existing, clerk_id=clerk_id, now=now),
+            self._successor_reservation(
+                existing, clerk_id=clerk_id, now=now, attestation=attestation
+            ),
             previous_generation=existing.assignment_generation,
             previous_state=AssignmentState.RELEASED,
         ):
@@ -1629,9 +1632,19 @@ class FleetControlService:
 
     @staticmethod
     def _successor_reservation(
-        released: AccountAssignmentRecord, *, clerk_id: str, now: int
+        released: AccountAssignmentRecord,
+        *,
+        clerk_id: str,
+        now: int,
+        attestation: tuple[str, str] | None = None,
     ) -> AccountAssignmentRecord:
-        """The next generation's reservation of an account, for a new clerk."""
+        """The next generation's reservation of an account, for a new clerk.
+
+        ``attestation`` is the host ceremony's bounded ``(operator,
+        change_ref)``, recorded on the reservation's history row when an
+        operator moved the account; a lane's own reservation has none.
+        """
+        operator, change_ref = attestation if attestation is not None else (None, None)
         return AccountAssignmentRecord(
             broker=released.broker,
             canonical_external_account_id=released.canonical_external_account_id,
@@ -1640,6 +1653,9 @@ class FleetControlService:
             state=AssignmentState.RESERVED,
             recorded_at_ms=now,
             updated_at_ms=now,
+            attested_operator=operator,
+            attested_change_ref=change_ref,
+            attested_at_ms=None if attestation is None else now,
         )
 
     def _require_no_live_assignment(self, conn: sqlite3.Connection, clerk_id: str) -> None:
@@ -1962,6 +1978,12 @@ class FleetControlService:
         otherwise resurrect, so a confirming lane is exactly one the drain
         reached. A lane that cannot answer is never reassigned.
 
+        An account already released moves through the same transfer a
+        co-located successor's reservation makes (``_reserve_released_account``:
+        the release recorded ``present`` and the old lane is retired). This is
+        the reachable path for it in the remote topology, where a lane's own
+        boot carries no volume proof.
+
         The release, the successor's reservation and the old lane's
         retirement (``lane_confirmation: present``) commit together, so no
         split handover is ever observable and the old lane is never left
@@ -2013,51 +2035,62 @@ class FleetControlService:
                         "an ownership change.",
                     )
                 if existing.state == AssignmentState.RELEASED:
-                    raise ClerkAssignmentConflict(
-                        f"Account {canonical} under broker {broker!r} is already released; "
-                        "a completed ceremony is never silently continued.",
+                    # Already released, so the release recorded its evidence;
+                    # this is the transfer a co-located successor's own boot
+                    # would make, reached from the host because this ceremony
+                    # carries the successor's volume proof and a remote boot
+                    # (``RemotePresence``) never can. Same gate: the release
+                    # recorded ``present`` and the old lane is retired.
+                    moved = self._reserve_released_account(
+                        conn,
+                        existing=existing,
+                        clerk_id=successor_clerk_id,
+                        volume_root=successor_volume_root,
+                        now=now,
+                        attestation=(bounded_operator, bounded_change_ref),
                     )
-                # §4.1's predecessor preconditions, in order, each naming the
-                # first outstanding item.
-                predecessor = self._require_draining_predecessor_past_deadline(
-                    conn, existing.clerk_id, now=now
-                )
-                self._require_command_quiet(conn, existing.clerk_id)
-                self._require_lane_quiet(conn, predecessor, now=now)
-                released = replace(
-                    existing,
-                    state=AssignmentState.RELEASED,
-                    updated_at_ms=now,
-                    lane_confirmation=LaneConfirmationState.PRESENT,
-                    attested_operator=bounded_operator,
-                    attested_change_ref=bounded_change_ref,
-                    attested_at_ms=now,
-                )
-                self._store.reassign_assignment(
-                    conn,
-                    released=released,
-                    reserved_successor=self._successor_reservation(
-                        existing, clerk_id=successor_clerk_id, now=now
-                    ),
-                    previous_state=existing.state,
-                )
-                # The handover ends the old lane in the same commit, on the
-                # quiet answer just accepted: it holds nothing now (one live
-                # assignment per clerk), and once the successor trades, its
-                # account would never read quiet to it again.
-                if not self._store.retire_clerk_row(
-                    conn,
-                    clerk_id=existing.clerk_id,
-                    retired_at_ms=now,
-                    lane_confirmation=LaneConfirmationState.PRESENT,
-                ):
-                    raise ClerkAssignmentConflict(
-                        f"Clerk {existing.clerk_id} changed while reassigning; "
-                        "re-read and retry.",
+                else:
+                    # §4.1's predecessor preconditions, in order, each naming the
+                    # first outstanding item.
+                    predecessor = self._require_draining_predecessor_past_deadline(
+                        conn, existing.clerk_id, now=now
                     )
-                moved = self._persisted_assignment_on(
-                    conn, broker=broker, canonical=canonical
-                )
+                    self._require_command_quiet(conn, existing.clerk_id)
+                    self._require_lane_quiet(conn, predecessor, now=now)
+                    released = replace(
+                        existing,
+                        state=AssignmentState.RELEASED,
+                        updated_at_ms=now,
+                        lane_confirmation=LaneConfirmationState.PRESENT,
+                        attested_operator=bounded_operator,
+                        attested_change_ref=bounded_change_ref,
+                        attested_at_ms=now,
+                    )
+                    self._store.reassign_assignment(
+                        conn,
+                        released=released,
+                        reserved_successor=self._successor_reservation(
+                            existing, clerk_id=successor_clerk_id, now=now
+                        ),
+                        previous_state=existing.state,
+                    )
+                    # The handover ends the old lane in the same commit, on the
+                    # quiet answer just accepted: it holds nothing now (one live
+                    # assignment per clerk), and once the successor trades, its
+                    # account would never read quiet to it again.
+                    if not self._store.retire_clerk_row(
+                        conn,
+                        clerk_id=existing.clerk_id,
+                        retired_at_ms=now,
+                        lane_confirmation=LaneConfirmationState.PRESENT,
+                    ):
+                        raise ClerkAssignmentConflict(
+                            f"Clerk {existing.clerk_id} changed while reassigning; "
+                            "re-read and retry.",
+                        )
+                    moved = self._persisted_assignment_on(
+                        conn, broker=broker, canonical=canonical
+                    )
         except sqlite3.IntegrityError as exc:
             raise ClerkAssignmentConflict(
                 f"Account {canonical} under broker {broker!r} changed while reassignment "

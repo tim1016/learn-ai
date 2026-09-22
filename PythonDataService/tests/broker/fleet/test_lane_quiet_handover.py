@@ -291,3 +291,63 @@ def test_reassignment_refuses_without_fresh_quiet_evidence_and_moves_nothing(
     assert current.state == AssignmentState.EFFECTIVE
     still = fleet_service._store.read_clerk(lane.clerk_id)
     assert still is not None and still.lifecycle_state == StoredLifecycleState.DRAINING
+
+
+# ---- the host ceremony moves an already-released account --------------------------
+
+
+def test_the_host_ceremony_moves_a_quiet_released_account_from_a_retired_lane(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """A lane booting over ``RemotePresence`` carries no volume proof, so its
+    own reservation cannot take a released account; ``reassign-assignment``
+    carries the successor's proof and is the path that can. Same gate, and
+    the operator's attribution lands on the transfer."""
+    lane, session = _drained(fleet_service, clock, control_dir, "h1")
+    _confirm(fleet_service, lane, session, observed_at_ms=clock())
+    _release(fleet_service)
+    fleet_service.retire_clerk(clerk_id=lane.clerk_id)
+    successor = _successor(fleet_service, control_dir, "h1-next")
+
+    moved = _reassign(fleet_service, successor)
+
+    assert moved.clerk_id == successor.clerk_id
+    assert moved.state == AssignmentState.RESERVED
+    assert moved.assignment_generation == 2
+    reserved_row = fleet_service._store.list_assignment_history(
+        broker="fake_alpha", canonical_account_id=ACCOUNT
+    )[-1]
+    assert reserved_row.clerk_id == successor.clerk_id
+    assert reserved_row.attested_operator == TEST_OPERATOR
+    assert reserved_row.attested_change_ref == TEST_CHANGE_REF
+
+
+@pytest.mark.parametrize(
+    ("setup", "error", "match"),
+    [
+        ("absent", ClerkReassignmentBlocked, "without a lane-quiet confirmation"),
+        ("still_draining", ClerkAssignmentConflict, "still draining"),
+    ],
+)
+def test_the_host_ceremony_holds_a_released_account_to_the_same_gate(
+    setup: str,
+    error: type[Exception],
+    match: str,
+    fleet_service: FleetControlService,
+    clock: FrozenClock,
+    control_dir: Path,
+) -> None:
+    lane, session = _drained(fleet_service, clock, control_dir, f"h-{setup}")
+    if setup == "still_draining":
+        _confirm(fleet_service, lane, session, observed_at_ms=clock())
+    _release(fleet_service)
+    successor = _successor(fleet_service, control_dir, f"h-{setup}-next")
+
+    with pytest.raises(error, match=match):
+        _reassign(fleet_service, successor)
+
+    current = fleet_service._store.read_assignment(
+        broker="fake_alpha", canonical_account_id=ACCOUNT
+    )
+    assert current is not None and current.clerk_id == lane.clerk_id
+    assert current.state == AssignmentState.RELEASED
