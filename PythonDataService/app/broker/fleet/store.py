@@ -1062,10 +1062,12 @@ class FleetRegistryStore:
     ) -> None:
         """Append one lane-quiet answer (ADR 0063 Decision 2, #2154).
 
-        ``INSERT OR REPLACE`` is deliberately not used: the append-only
-        trigger forbids the rewrite it would perform, and a lane re-answering
-        at the same instant under the same session is asserting the same
-        thing, so the plain insert's conflict is the honest outcome.
+        A plain insert with no conflict to resolve: the row is identified by
+        the append sequence the registry assigns, so nothing the lane sends
+        can collide. A re-sent answer after a lost response appends a second
+        row saying the same thing, and a lane correcting itself within the
+        same millisecond records that correction — both of which the old
+        instant-keyed identity turned into an integrity error.
         """
         conn.execute(
             f"INSERT INTO clerk_lane_confirmations ({self._LANE_CONFIRMATION_COLUMNS}) "
@@ -1102,7 +1104,7 @@ class FleetRegistryStore:
         row = conn.execute(
             f"SELECT {self._LANE_CONFIRMATION_COLUMNS} FROM clerk_lane_confirmations "
             "WHERE clerk_id = ? AND agent_instance_id = ? AND routing_epoch = ? "
-            "ORDER BY observed_at_ms DESC LIMIT 1",
+            "ORDER BY confirmation_seq DESC LIMIT 1",
             (clerk_id, agent_instance_id, routing_epoch),
         ).fetchone()
         return None if row is None else self._lane_confirmation(row)
@@ -1118,7 +1120,7 @@ class FleetRegistryStore:
         """
         rows = self._query(
             f"SELECT {self._LANE_CONFIRMATION_COLUMNS} FROM clerk_lane_confirmations "
-            "WHERE clerk_id = ? ORDER BY observed_at_ms DESC, routing_epoch DESC LIMIT 1",
+            "WHERE clerk_id = ? ORDER BY confirmation_seq DESC LIMIT 1",
             (clerk_id,),
         )
         return None if not rows else self._lane_confirmation(rows[0])

@@ -123,14 +123,18 @@ DEFAULT_SESSION_STALE_AFTER_MS = 30_000
 #: cadence (``HEARTBEAT_INTERVAL_S``, 10 s by default), so this is nine
 #: beats: long enough to ride out a refused beat and the lane repair that
 #: follows it, short enough that a gate reading "quiet" is reading a claim
-#: made minutes ago rather than hours. Derived from the push interval and
-#: deliberately **not** from ``DEFAULT_SESSION_STALE_AFTER_MS`` — that
-#: constant measures heartbeat-staleness *detection latency*, a different
-#: quantity, and Decision 5 already forbids reasoning from it for the drain
-#: deadline. What goes stale here is the evidence, never the lane: a lane
-#: beating steadily but no longer confirming refuses exactly as a dead one
-#: does, which is what keeps this clear of Decision 5's rule that silence
-#: never *moves* anything.
+#: made minutes ago rather than hours. Sized from that push cadence but
+#: written as a literal: the cadence is a deployment setting, and a registry
+#: constant must not reach into application settings to compute itself.
+#: Deliberately **not** reasoned from ``DEFAULT_SESSION_STALE_AFTER_MS`` —
+#: that constant measures heartbeat-staleness *detection latency*, a
+#: different quantity, and Decision 5 already forbids reasoning from it for
+#: the drain deadline. Note the trap: three times that constant happens to
+#: equal this value today, so no test can catch a re-derivation from it and
+#: the ban is a review-time rule. What goes stale here is the evidence,
+#: never the lane: a lane beating steadily but no longer confirming refuses
+#: exactly as a dead one does, which is what keeps this clear of Decision
+#: 5's rule that silence never *moves* anything.
 DEFAULT_LANE_QUIET_VALID_FOR_MS = 90_000
 
 #: The drain ceremony's deployment-owned duration (ADR 0063 Decision 5): the
@@ -573,9 +577,12 @@ class FleetControlService:
         live session row — retires directly. A clerk that has ever served
         must pass through the drain: it must be ``draining``, command-quiet
         (zero dispatches whose outcome the coordinator lost), and covered by
-        a lane-quiet confirmation no provider can answer yet (#2154) — so
-        the normal path refuses, naming the outstanding item, and
-        ``force_retire_clerk`` is the separately named exit. The held
+        a fresh lane-quiet confirmation from its current session (#2154). A
+        lane that has genuinely gone quiet now retires here; a lane that has
+        not, or that cannot answer, is refused by name and leaves through
+        ``force_retire_clerk``. No lane answers in production yet — #2154's
+        provider fact and transport are open — so every served retirement is
+        still a forced one until they land. The held
         assignment check runs first in every branch, and each gate shares
         one write transaction with the transition it guards.
         """
@@ -621,11 +628,13 @@ class FleetControlService:
                         "deadline and retire.",
                     )
                 self._require_command_quiet(conn, clerk_id)
-                # Read inside the write transaction for the reason every
-                # other fence here is: a session replacement committing
-                # between a lock-free read and this BEGIN IMMEDIATE would
-                # otherwise retire a lane on a confirmation its current
-                # session never gave.
+                # Read inside the write transaction because every other
+                # fence here is. It cannot be raced today — #2155 refuses a
+                # draining clerk's re-registration, so the session this
+                # scopes to cannot be replaced mid-ceremony — and it is held
+                # as the file's standing pattern against that rule relaxing,
+                # not as a live race. The store-level tests pin the scoping
+                # where it can still fail.
                 self._require_lane_quiet(conn, live, now=now)
                 updated = self._store.retire_clerk_row(
                     conn,
@@ -951,9 +960,10 @@ class FleetControlService:
             session = self._store.read_session_on(conn, clerk_id)
             if session is None:
                 raise ClerkUnreachable(
-                    f"Clerk {clerk_id} has no registered agent session.",
-                    next_step="Have the agent register a session before confirming; "
-                    "retry once registration completes.",
+                    f"Clerk {clerk_id} has no registered agent session, so there "
+                    "is no session for this confirmation to be fenced to.",
+                    next_step="A draining lane cannot obtain one — #2155 refuses a "
+                    "draining clerk's registration — so force-retire is its exit.",
                 )
             if (
                 session.agent_instance_id != agent_instance_id
@@ -964,8 +974,9 @@ class FleetControlService:
                     f"session {agent_instance_id}/{routing_epoch}, but the current "
                     f"session is {session.agent_instance_id}/{session.routing_epoch}; a "
                     "superseded session cannot confirm.",
-                    next_step="The replacement session re-observes and confirms its "
-                    "own answer.",
+                    next_step="Confirm under the lane's current session. A draining "
+                    "clerk's session is never replaced (#2155), so a lane that lost "
+                    "its own exits through force-retire instead.",
                 )
             self._store.record_lane_quiet_confirmation(conn, confirmation)
         logger.info(
@@ -1035,10 +1046,12 @@ class FleetControlService:
             raise ClerkLaneQuietUnproven(
                 f"Clerk {clerk.clerk_id}'s current session has not confirmed lane "
                 "quiet; silence is never read as quiet.",
-                next_step="Stop the bots, cancel the working orders and flatten the "
+                next_step="No lane can confirm yet: #2154's provider fact and its "
+                "transport are still open, so force-retire is today's exit. Once they "
+                "land — stop the bots, cancel the working orders and flatten the "
                 "account, then let the lane confirm. A lane whose process restarted "
-                "during the drain cannot confirm at all — #2155 refuses a draining "
-                "clerk's re-registration — so force-retire is its exit.",
+                "during the drain can never confirm — #2155 refuses a draining "
+                "clerk's re-registration — so force-retire stays its exit.",
             )
         age_ms = now - confirmation.observed_at_ms
         if age_ms > self._lane_quiet_valid_for_ms:

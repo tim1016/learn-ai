@@ -27,7 +27,7 @@ from app.broker.fleet.errors import (
     ClerkLaneQuietUnproven,
 )
 from app.broker.fleet.records import LaneConfirmationState, StoredLifecycleState
-from app.broker.fleet.service import FleetControlService
+from app.broker.fleet.service import DEFAULT_LANE_QUIET_VALID_FOR_MS, FleetControlService
 from tests.broker.fleet.conftest import (
     FrozenClock,
     Lane,
@@ -428,3 +428,181 @@ def test_the_confirmation_table_is_append_only(
         conn.execute("UPDATE clerk_lane_confirmations SET account_flat = 0")
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute("DELETE FROM clerk_lane_confirmations")
+
+
+# ---- the gate reads the lane's LAST answer, on the coordinator's own clock ----
+
+
+def test_a_lane_whose_clock_steps_back_still_closes_the_gate_it_opened(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """The lane supplies ``observed_at_ms``; it must never decide which answer
+    the gate reads.
+
+    A lane host whose clock steps back — an NTP correction is enough — re-observes
+    a working order and answers "not quiet" bearing an *earlier* instant than the
+    quiet answer it gave a moment ago. Ordering the gate's read on that instant
+    would hand the lane a way to retire itself while its own latest knowledge says
+    a working order is live. The registry orders on its own append sequence
+    instead, so the last answer recorded is the one the gate reads.
+    """
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q18")
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=clock())
+    confirm_quiet(
+        fleet_service,
+        lane,
+        session,
+        observed_at_ms=clock() - 2_000,
+        broker_work_ended=False,
+    )
+
+    with pytest.raises(ClerkLaneQuietUnproven, match="has not ended"):
+        fleet_service.retire_clerk(clerk_id=lane.clerk_id)
+
+
+def test_a_retried_confirmation_is_recorded_rather_than_colliding(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """A lane whose response was lost re-sends the same answer.
+
+    That retry is the ceremony's ordinary path once the transport ships, so it
+    must not surface the registry's primary key as an unhandled error. Nothing
+    lane-supplied is part of the row's identity, so the re-send simply appends.
+    """
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q19")
+    at = clock()
+    first = confirm_quiet(fleet_service, lane, session, observed_at_ms=at)
+    again = confirm_quiet(fleet_service, lane, session, observed_at_ms=at)
+
+    assert again == first
+    assert fleet_service.retire_clerk(clerk_id=lane.clerk_id).lane_confirmation is not None
+
+
+def test_a_retraction_at_the_same_instant_is_recorded_and_closes_the_gate(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """A lane correcting itself within the same millisecond must be able to say
+    so. If the same-instant answer were rejected the gate would stay open on the
+    quiet claim the lane has just withdrawn."""
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q20")
+    at = clock()
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=at)
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=at, runner_idle=False)
+
+    with pytest.raises(ClerkLaneQuietUnproven, match="bot is still running"):
+        fleet_service.retire_clerk(clerk_id=lane.clerk_id)
+
+
+def test_the_scoped_read_ignores_a_successor_that_differs_only_in_epoch(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """One predicate per test, so neither can rot behind the other.
+
+    A single case whose successor differs in both instance and epoch passes
+    with either predicate deleted — it only proves that *one* of them survives.
+    """
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q21")
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=clock())
+    store = fleet_service._store
+    current = store.read_lane_quiet_confirmation_on(
+        store._conn,
+        lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
+    assert current is not None
+    with store.transaction() as conn:
+        store.record_lane_quiet_confirmation(
+            conn, replace(current, routing_epoch=session.routing_epoch + 1, account_flat=False)
+        )
+
+    scoped = store.read_lane_quiet_confirmation_on(
+        store._conn,
+        lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
+
+    assert scoped == current
+
+
+def test_the_scoped_read_ignores_a_successor_that_differs_only_in_instance(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """The other half of the fence, for the same reason."""
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q22")
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=clock())
+    store = fleet_service._store
+    current = store.read_lane_quiet_confirmation_on(
+        store._conn,
+        lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
+    assert current is not None
+    with store.transaction() as conn:
+        store.record_lane_quiet_confirmation(
+            conn,
+            replace(current, agent_instance_id="agnt_successor00000000000000", account_flat=False),
+        )
+
+    scoped = store.read_lane_quiet_confirmation_on(
+        store._conn,
+        lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
+
+    assert scoped == current
+
+
+def test_the_retirement_gate_reads_the_scoped_answer_not_the_latest_one(
+    fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
+) -> None:
+    """The gate's *choice* of read, pinned where its consequence is visible.
+
+    Both store reads exist and return different rows here, so a gate wired to
+    the unscoped audit read would retire this lane on a dead session's quiet
+    answer while its own session says a bot is still running.
+    """
+    lane, session, _drained = drained_lane(fleet_service, clock, control_dir, "q23")
+    confirm_quiet(fleet_service, lane, session, observed_at_ms=clock(), runner_idle=False)
+    store = fleet_service._store
+    current = store.read_lane_quiet_confirmation_on(
+        store._conn,
+        lane.clerk_id,
+        agent_instance_id=session.agent_instance_id,
+        routing_epoch=session.routing_epoch,
+    )
+    assert current is not None
+    with store.transaction() as conn:
+        store.record_lane_quiet_confirmation(
+            conn,
+            replace(
+                current,
+                agent_instance_id="agnt_successor00000000000000",
+                routing_epoch=session.routing_epoch + 1,
+                runner_idle=True,
+            ),
+        )
+    # The audit read genuinely sees the superseded session's quiet answer.
+    latest = store.read_latest_lane_quiet_confirmation(lane.clerk_id)
+    assert latest is not None and latest.is_quiet
+
+    with pytest.raises(ClerkLaneQuietUnproven, match="bot is still running"):
+        fleet_service.retire_clerk(clerk_id=lane.clerk_id)
+
+
+def test_the_validity_window_is_sized_from_the_push_cadence(
+    fleet_service: FleetControlService,
+) -> None:
+    """The window's magnitude is the decision, so it is pinned rather than left
+    to whatever every other test reads back off the service.
+
+    Its numeric equality with three times ``DEFAULT_SESSION_STALE_AFTER_MS`` is
+    a coincidence of the current numbers and nothing can test it away: the ban
+    on re-deriving it from heartbeat staleness is a review-time rule, because
+    any such derivation today produces this very value.
+    """
+    assert DEFAULT_LANE_QUIET_VALID_FOR_MS == 90_000
+    assert fleet_service.lane_quiet_valid_for_ms == DEFAULT_LANE_QUIET_VALID_FOR_MS

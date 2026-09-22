@@ -57,6 +57,18 @@ upgraded to v5 refuses a direct retirement it accepted at v4, which is the
 point of Decision 6. Existing history rows keep NULL attestation columns
 forever (the immutability trigger forbids the backfill UPDATE), so a reader
 treats NULL as "recorded before v5", never as "absent confirmation".
+
+Schema v6 (ADR 0063 Decision 2's 2026-09-19 amendment, #2154) adds
+``clerk_lane_confirmations``, the durable evidence behind the retirement
+gate: one row per answer a lane gives about its own quiescence, fenced by
+the session that prepared it. ``clerks.lane_confirmation`` already recorded
+the retirement *outcome*; it never held the evidence, so the gate had
+nothing to read. The table is append-only like its siblings and keyed on an
+append sequence rather than on the lane-supplied observation instant — the
+gate must read the last answer *recorded*, which is the registry's own fact,
+not the last one a lane host's clock claims to have observed. The upgrade is
+purely additive (one CREATE TABLE, one index, two triggers), so it is
+non-destructive against a live registry.
 """
 
 from __future__ import annotations
@@ -334,15 +346,25 @@ END;
 -- 5 assert, so the row survives a session change while its authority
 -- does not.
 --
+-- Keyed on an append sequence, not on anything the lane supplies.
+-- ``observed_at_ms`` arrives from the lane host, so keying or
+-- ordering on it would let a host whose clock stepped back decide
+-- which of its own answers the gate reads — and retire itself on a
+-- quiet claim it had already withdrawn. Newest here means last
+-- appended, which is the registry's own fact. The instant is kept
+-- because freshness is measured against it (Decision 2's amendment),
+-- never to order or identify a row.
+--
 -- Append-only, like every other evidence table here: what a lane
 -- claimed, and when, stays auditable after the clerk is terminal.
--- Custody-free by construction — four booleans and an instant, never
--- a quantity, a symbol or an identifier. The condition names are
--- deliberately about the lane's state rather than the broker's
--- records, which is also what keeps them clear of the registry's
--- forbidden-fragment sweep.
+-- Custody-free by construction — four booleans and two instants,
+-- never a quantity, a symbol or an identifier. The conditions are
+-- nullity predicates about the lane's own state: "the account is
+-- flat" records no position, and "a working order has not ended"
+-- records no order.
 -- ============================================================
 CREATE TABLE clerk_lane_confirmations (
+    confirmation_seq  INTEGER PRIMARY KEY,
     clerk_id          TEXT NOT NULL CHECK (length(clerk_id) > 0),
     agent_instance_id TEXT NOT NULL CHECK (length(agent_instance_id) > 0),
     routing_epoch  INTEGER NOT NULL CHECK (routing_epoch >= 1),
@@ -351,12 +373,11 @@ CREATE TABLE clerk_lane_confirmations (
     runner_idle       INTEGER NOT NULL CHECK (runner_idle IN (0, 1)),
     broker_work_ended INTEGER NOT NULL CHECK (broker_work_ended IN (0, 1)),
     account_flat      INTEGER NOT NULL CHECK (account_flat IN (0, 1)),
-    intents_resolved  INTEGER NOT NULL CHECK (intents_resolved IN (0, 1)),
-    PRIMARY KEY (clerk_id, agent_instance_id, routing_epoch, observed_at_ms)
+    intents_resolved  INTEGER NOT NULL CHECK (intents_resolved IN (0, 1))
 );
 
 CREATE INDEX ix_clerk_lane_confirmations_latest
-    ON clerk_lane_confirmations(clerk_id, agent_instance_id, routing_epoch, observed_at_ms DESC);
+    ON clerk_lane_confirmations(clerk_id, agent_instance_id, routing_epoch, confirmation_seq DESC);
 
 CREATE TRIGGER trg_clerk_lane_confirmations_immutable
 BEFORE UPDATE ON clerk_lane_confirmations

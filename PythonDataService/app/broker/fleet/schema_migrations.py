@@ -486,6 +486,7 @@ END""",
 
 _MIGRATION_V5_TO_V6_TEMPLATE: tuple[str, ...] = (
     """CREATE TABLE clerk_lane_confirmations (
+    confirmation_seq  INTEGER PRIMARY KEY,
     clerk_id          TEXT NOT NULL CHECK (length(clerk_id) > 0),
     agent_instance_id TEXT NOT NULL CHECK (length(agent_instance_id) > 0),
     routing_epoch  INTEGER NOT NULL CHECK (routing_epoch >= 1),
@@ -494,11 +495,10 @@ _MIGRATION_V5_TO_V6_TEMPLATE: tuple[str, ...] = (
     runner_idle       INTEGER NOT NULL CHECK (runner_idle IN (0, 1)),
     broker_work_ended INTEGER NOT NULL CHECK (broker_work_ended IN (0, 1)),
     account_flat      INTEGER NOT NULL CHECK (account_flat IN (0, 1)),
-    intents_resolved  INTEGER NOT NULL CHECK (intents_resolved IN (0, 1)),
-    PRIMARY KEY (clerk_id, agent_instance_id, routing_epoch, observed_at_ms)
+    intents_resolved  INTEGER NOT NULL CHECK (intents_resolved IN (0, 1))
 )""",
     """CREATE INDEX ix_clerk_lane_confirmations_latest
-    ON clerk_lane_confirmations(clerk_id, agent_instance_id, routing_epoch, observed_at_ms DESC)""",
+    ON clerk_lane_confirmations(clerk_id, agent_instance_id, routing_epoch, confirmation_seq DESC)""",
     """CREATE TRIGGER trg_clerk_lane_confirmations_immutable
 BEFORE UPDATE ON clerk_lane_confirmations
 BEGIN

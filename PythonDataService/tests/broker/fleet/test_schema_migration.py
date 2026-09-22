@@ -645,9 +645,34 @@ def test_a_v5_registry_gains_the_lane_quiet_confirmation_table_and_data_survives
                 )
             }
 
+        def lane_quiet_ddl(conn: sqlite3.Connection) -> dict[str, str]:
+            return {
+                str(row[0]): " ".join(str(row[1]).split())
+                for row in conn.execute(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE sql IS NOT NULL AND tbl_name = 'clerk_lane_confirmations'"
+                )
+            }
+
         fresh = FleetRegistryStore.open(control_dir=tmp_path / "fresh-v6")
         try:
             assert objects(store._conn) == objects(fresh._conn)
+            # Not just the object names: the DDL text itself. This table is
+            # written twice — once as the fresh schema, once as the v5 -> v6
+            # migration — and nothing else would notice the two drifting
+            # apart. An upgraded registry would then quietly carry different
+            # constraints from a newly built one.
+            migrated_ddl = lane_quiet_ddl(store._conn)
+            assert migrated_ddl == lane_quiet_ddl(fresh._conn)
+            assert len(migrated_ddl) == 4
+            # The gate's ordering key is the registry's own append sequence,
+            # never the lane-supplied instant (#2154).
+            assert "confirmation_seq INTEGER PRIMARY KEY" in (
+                migrated_ddl["clerk_lane_confirmations"]
+            )
+            assert "confirmation_seq DESC" in (
+                migrated_ddl["ix_clerk_lane_confirmations_latest"]
+            )
         finally:
             fresh.close()
 
