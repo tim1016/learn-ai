@@ -48,8 +48,10 @@ terminal ``succeeded`` state in this module (that requires knowing an ENTER
 is "done" — fully filled vs. still working — which is EXIT/reconciliation
 territory, #1378/#1379). It does reach ``failed``, but not from here: a
 vendor ``canceled``/``expired``/``rejected`` with no recorded execution is
-proven unfilled and folds ``ENTER_UNFILLED`` wherever that evidence is
-observed, in ``order_evidence._fold_enter_unfilled_if_proven`` (#2006).
+proven unfilled and folds ``ENTER_UNFILLED`` when a *later* observation
+brings that evidence, in ``order_evidence._fold_enter_unfilled_if_proven``
+(#2006). Deliberately not on this module's own submit response: that would
+reach the strategy decision loop, which #2006 is not.
 
 ``fold_order_evidence``/``fold_uncertain``/``fold_failed`` moved to
 ``order_evidence.py`` for #1379: EXIT's cancel-the-entry and

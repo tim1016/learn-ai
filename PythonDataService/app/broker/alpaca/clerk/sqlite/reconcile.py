@@ -259,13 +259,23 @@ async def _reconcile_effect(
         raise ReconciliationInvariantError(
             f"order {order.order_ref!r} disappeared during reconciliation"
         )
-    if effect_after.state == "succeeded" or (
+    if effect_after.state == "succeeded":
+        outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
+    elif effect_after.state in ("failed", "rejected"):
+        # Ahead of the reached-the-broker heuristic below, not after it: since
+        # #2006 an ENTER can be terminally ``failed`` *and* carry a
+        # ``broker_order_id`` (the broker acknowledged it, then ended it
+        # unfilled). Ordered the other way, that effect records
+        # ``RESOLVED_SUCCESS`` for a failure — an audit row contradicting the
+        # receipt beside it. Before #2006 a ``failed`` ENTER only came from the
+        # submit-absence void, which has no broker id, so the old order was
+        # correct then and is not now.
+        outcome = "RESOLVED_FAILURE"
+    elif (
         effect_after.kind in {"ENTER", "MANUAL_ORDER"}
         and order_after.broker_order_id is not None
     ):
-        outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
-    elif effect_after.state in ("failed", "rejected"):
-        outcome = "RESOLVED_FAILURE"
+        outcome = "RESOLVED_SUCCESS"
     else:
         outcome = "STILL_UNKNOWN"
     await _under_intake(

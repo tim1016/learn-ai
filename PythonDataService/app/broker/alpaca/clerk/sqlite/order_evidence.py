@@ -201,6 +201,9 @@ def fold_order_evidence(
         order=order,
         append_stale_ack=append_stale_ack,
     )
+    _fold_enter_unfilled_if_proven(
+        repo, effect=effect, order=order, order_ref=order_ref
+    )
 
 
 #: The execution-id namespaces the deterministic no-submit worlds mint
@@ -385,16 +388,12 @@ def fold_order_acknowledgement(
                 facts_json=canonicalize({}),
             )
         )
-    _fold_enter_unfilled_if_proven(
-        repo, effect=effect, effect_operation_id=effect_operation_id, order=order, order_ref=order_ref
-    )
 
 
 def _fold_enter_unfilled_if_proven(
     repo: ClerkSqliteRepository,
     *,
     effect: EffectOperationResource,
-    effect_operation_id: str,
     order: BrokerOrder,
     order_ref: str,
 ) -> None:
@@ -410,38 +409,63 @@ def _fold_enter_unfilled_if_proven(
     provably flat. In extended hours an unfilled ENTER cancelled at 20:00 ET is
     a daily event, so that residue accumulated (#2006).
 
-    Unlike EXIT's mirror this raises no uncertainty and needs no operator: a
-    zero-fill ENTER opened nothing, so there is no stranded exposure to flag.
-    The terminal fold resolves any open unknown-outcome episode for the order on
-    its way through.
+    It raises no uncertainty and needs no operator: a zero-fill ENTER opened
+    nothing, so there is no stranded exposure to flag. The terminal fold
+    resolves any open unknown-outcome episode for the order on its way through.
 
-    Every clause of the guard is load-bearing:
+    **Scope: the ENTER must be the effect in charge of its own order.** Every
+    observation route hands this gate
+    ``active_exit_for_order(order) or order.effect_operation_id``, so while an
+    EXIT is cancelling the entry the effect in charge is the EXIT — and #1379's
+    operation-first timeline requires every transition appended against
+    ``entry_ref`` during an EXIT to carry *that EXIT's* ``effect_operation_id``
+    (pinned by ``test_exit.py::test_nested_timeline_carries_the_exit_effect_
+    operation_id_not_the_enters``). Terminalizing the ENTER from here would
+    have to append under the ENTER, which breaks that nesting; appending under
+    the EXIT would terminalize the EXIT, which did not fail. The repo has no
+    fold that writes under one effect and terminalizes another — the closest
+    shape, ``ENTRY_NEVER_ACCEPTED``, deliberately operates on the carrying
+    effect only. So an ENTER whose entry an EXIT cancels unfilled keeps its
+    residue here, and that route is tracked separately (#2251) rather than
+    closed by breaking the timeline invariant. Comparing the order's owning
+    effect against the one in hand states that boundary instead of leaving it
+    to a ``kind`` read that happened to produce it.
 
-    - **Still nonterminal.** An effect that already reached an outcome is not
-      re-terminalized, and no second transition is appended over its receipt.
-    - **ENTER only.** EXIT and CANCEL reach their own outcomes through
-      ``exit_resolution``/``manual_order_cancellation``; MANUAL_ORDER settles
-      through its ticket. Terminalizing those here would race their owners.
+    Reached from the observation gate only, never the submit response and
+    never under simulated execution authority (owner decision, 2026-09-21): a
+    terminal effect surfaces as an ``EffectOperationState.REJECTED`` receipt,
+    which ``bot_trade_strategy`` reads as "discard this evaluation", and
+    ``SyntheticBroker``'s ruling R9 cancels every non-marketable limit on the
+    spot with zero fills — folding there would flip Dry Run and Shadow from
+    commit to discard for a whole class of decisions. #2006 is a
+    custody-residue fix, not a decision-loop change.
+
+    The remaining conditions:
+
+    - **ENTER only.** CANCEL and MANUAL_ORDER reach their own outcomes through
+      ``manual_order_cancellation`` and the manual ticket.
+    - **Still nonterminal**, which is also what makes the fold idempotent: a
+      poll, the reconciliation sweep and a trade-update frame all re-deliver
+      the same dead order, and the second delivery finds it already ``failed``.
     - **Proven zero fill**, read twice — no durable fill row *and* a snapshot
-      reporting no filled quantity. A partial fill that the vendor then
-      cancelled opened real exposure, and calling that ENTER ``failed`` would
-      declare it dead while the strategy still holds shares.
-    - **Folded once.** A poll, the reconciliation sweep and a trade-update frame
-      all re-deliver the same dead order; the transition is appended to a hash
-      chain, so a repeat observation must not append a second one.
+      reporting no filled quantity. Either alone is insufficient: a partial
+      fill the vendor then cancelled opened real exposure, and a snapshot
+      reporting ``0`` over a recorded execution is not proof of nothing filled.
     """
+    owning = repo.order(order_ref)
     if (
-        effect.kind != "ENTER"
+        owning is None
+        or owning.effect_operation_id != effect.effect_operation_id
+        or effect.kind != "ENTER"
         or effect.state not in NONTERMINAL_EFFECT_STATES
         or (order.status or "").lower() not in UNFILLED_TERMINAL_STATES
         or order.filled_quantity >= FILL_QTY_EPSILON
         or repo.fills_for_order(order_ref)
-        or repo.has_order_transition(order_ref=order_ref, transition_kind="ENTER_UNFILLED")
     ):
         return
     fold_failed(
         repo,
-        effect_operation_id=effect_operation_id,
+        effect_operation_id=effect.effect_operation_id,
         order_ref=order_ref,
         summary_code="ENTER_UNFILLED",
         reason="The broker ended the entry order without filling it.",
