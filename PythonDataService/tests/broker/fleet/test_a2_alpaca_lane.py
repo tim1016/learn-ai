@@ -1762,6 +1762,90 @@ async def test_a_refused_beat_re_confirms_its_granted_binding_under_the_replacem
         service.close()
 
 
+async def test_a_beat_from_a_superseded_instance_re_registers_instead_of_passing_as_success(
+    control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2259: after a real outage both lanes beat 200 OK while going unreachable.
+
+    A re-registration reached the coordinator but its reply was lost, so the
+    coordinator stored an instance id this process never adopted. Every later
+    beat then matched no session row (``touched=False``), came back as a
+    success, and never reached the repair: the lane stayed unreachable, with
+    nothing logged, until a human restarted the container.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        _ADAPTER,
+        FLEET_PROTOCOL_VERSION,
+        close_fleet_lane,
+        confirm_and_report,
+        new_agent_instance_id,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+
+    account_id = "abcdef01-1234-abcd-5678-ef0123456789"
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    boot = None
+    try:
+        provisioned = _enrolled_lane(service, control_dir.parent, clock)
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        assert boot is not None and boot.online
+        await reserve_account(boot, external_account_id=account_id)
+        await confirm_and_report(
+            boot,
+            account_pin=account_id,
+            effective_binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            authority_kind="sqlite",
+            endpoint_mode="live",
+        )
+        stale_instance = boot.session.agent_instance_id
+
+        # The lost reply: the coordinator installs a session this process
+        # never hears about, so boot.session still names the old instance.
+        orphan = await boot.presence.register(
+            clerk_id=boot.clerk_id,
+            worker_key=boot.worker_key,
+            agent_instance_id=new_agent_instance_id(),
+            endpoint_ref=boot.endpoint_ref,
+            adapter_version=_ADAPTER.adapter_version,
+            fleet_protocol_version=FLEET_PROTOCOL_VERSION,
+        )
+        assert boot.session.agent_instance_id == stale_instance
+
+        clock.advance(1)
+        start_heartbeat(boot, interval_s=0.05)
+        beat = await _await_beat_at(
+            service, boot.clerk_id, clock, reported_state="binding_confirmed"
+        )
+
+        assert boot.session.agent_instance_id not in {stale_instance, orphan.agent_instance_id}
+        assert beat.agent_instance_id == boot.session.agent_instance_id
+        # Routable again, and ready: the repair re-presented the grant too.
+        service.resolve_route(broker="alpaca", clerk_id=boot.clerk_id)
+        assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
+    finally:
+        await close_fleet_lane(boot)
+        service.close()
+
+
 async def test_a_re_confirmation_refused_once_more_retries_on_a_later_beat_not_another_refusal(
     control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

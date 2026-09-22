@@ -77,6 +77,25 @@ class FleetLaneDraining(FleetControlError):
     status_code = 409
 
 
+def _superseded_beat(clerk_id: str, agent_instance_id: str) -> FleetPresenceError:
+    """A beat the coordinator accepted but that touched no session (#2259).
+
+    ``touch_session`` refreshes only the row naming this instance id, so a
+    beat from an instance the coordinator no longer holds — a re-registration
+    whose reply was lost in an outage stored an id this process never
+    adopted — lands as a 200 that refreshes nothing. Treating it as a
+    success left the lane beating while the coordinator projected it
+    unreachable until a restart. Raising the presence refusal routes it into
+    the heartbeat's existing repair, which re-registers and adopts a session.
+    """
+    return FleetPresenceError(
+        f"The fleet coordinator holds no session for clerk {clerk_id} "
+        f"instance {agent_instance_id}; the heartbeat refreshed nothing.",
+        next_step="Re-register so this process adopts the session the "
+        "coordinator routes to.",
+    )
+
+
 class FleetPresence(Protocol):
     """The one interface both transports present."""
 
@@ -267,6 +286,8 @@ class LocalPresence:
             reported_state=reported_state,
             reported_summary=reported_summary,
         )
+        if not observation.touched:
+            raise _superseded_beat(clerk_id, agent_instance_id)
         return observation.lifecycle_state.value
 
     async def close(self) -> None:
@@ -501,6 +522,14 @@ class RemotePresence:
                 "reported_summary": reported_summary,
             },
         )
+        observed = body.get("observed")
+        if observed is not None and not isinstance(observed, bool):
+            raise FleetPresenceError(
+                "The fleet coordinator returned an unexpected observed flag "
+                "for /internal/fleet/sessions/observe.",
+            )
+        if observed is False:
+            raise _superseded_beat(clerk_id, agent_instance_id)
         lifecycle = body.get("lifecycle_state")
         # An older coordinator sends no key — no news, not an error. Anything
         # that is present but not a string is the coordinator misbehaving on
