@@ -80,8 +80,14 @@ services:
     # alone: the endpoint mode and the six ALPACA_LIVE_* risk values are a saved
     # broker profile on the alpaca-clerk-data volume below. A cut-over worker
     # refuses to bind while any of those seven is still set here.
+    # Indirected like the fleet env files below, and for the same reason: the
+    # topology render points ${PYTHON_SERVICE_ENV_FILE} at the committed
+    # .env.example so its snapshot records this service's declared key set
+    # rather than whatever the rendering machine's gitignored .env happens to
+    # carry (#2235). Deployment behaviour is unchanged -- the default is the
+    # path it always read.
     env_file:
-      - path: ./PythonDataService/.env
+      - path: ${PYTHON_SERVICE_ENV_FILE:-./PythonDataService/.env}
         required: false
     restart: always
     ports:

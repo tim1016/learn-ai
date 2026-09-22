@@ -48,10 +48,21 @@ _RESOURCE_LIMIT_SOURCES = (("cpus", "cpus"), ("mem_limit", "memory"))
 # blank values, so pointing the render at them (only if the operator hasn't
 # already pointed at something else) makes the render deterministic,
 # secret-free, and reproducible anywhere without any host-side ceremony.
+#
+# compose.yaml's python-service env_file is the same hazard arriving from the
+# other direction (#2235). Its path was a literal, so there was nothing to
+# redirect: `required: false` meant the render simply absorbed the developer's
+# gitignored PythonDataService/.env when one existed and rendered without it
+# when it did not. The snapshot was then reproducible only on the machine that
+# wrote it, and a local `--check` on an untouched tree refused -- reading as
+# "master's snapshot is stale" when master was fine. The committed
+# .env.example declares the service's key set, so the render records the
+# declared contract on every machine.
 _ENV_FILE_DEFAULTS = {
     "FLEET_LIVE_ENV_FILE": "./deploy/fleet/env/live.env.example",
     "FLEET_PAPER_ENV_FILE": "./deploy/fleet/env/paper.env.example",
     "FLEET_COORDINATOR_ENV_FILE": "./deploy/fleet/env/coordinator.env.example",
+    "PYTHON_SERVICE_ENV_FILE": "./PythonDataService/.env.example",
 }
 
 # Non-secret fence facts worth checking without ever persisting a raw

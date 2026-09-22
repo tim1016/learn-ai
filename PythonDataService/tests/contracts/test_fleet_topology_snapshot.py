@@ -12,9 +12,13 @@ already answers to, and the snapshot never carries a value — only key names.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from pathlib import Path
 
 import yaml
+
+from tests.contracts.compose_files import render_module
 
 ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT = ROOT / "deploy" / "fleet" / "topology.snapshot.json"
@@ -133,3 +137,66 @@ def test_snapshot_pins_lake_catalog_access_for_every_clerk_lane() -> None:
             f"{lane} declares no env_file: POSTGRES_URL must reach the lane "
             "that way (#2166)"
         )
+
+
+_ENV_FILE_INDIRECTION = re.compile(r"^\$\{(?P<variable>[A-Z][A-Z0-9_]*):-(?P<default>[^}]+)\}$")
+
+
+def test_every_rendered_env_file_path_redirects_to_a_committed_example() -> None:
+    """#2235: a literal `env_file:` path makes the snapshot machine-dependent.
+
+    `compose config` merges every key an `env_file:` declares into the
+    rendered `environment:`, and the render projects those key *names* into
+    the snapshot. A path written as a literal therefore records whatever the
+    rendering machine's gitignored file happens to declare: `compose.yaml`
+    named `./PythonDataService/.env` directly, so a developer who had one
+    absorbed its keys while CI (which has no such file) did not. The snapshot
+    only that machine could reproduce then read as "master's snapshot is
+    stale" on an untouched tree.
+
+    The fix is the indirection the three fleet env files already use, and this
+    is the tripwire for the next one: every path the render reads must be a
+    `${VAR:-default}`, `VAR` must have a default in the render script's
+    `_ENV_FILE_DEFAULTS`, and that default must name a file the repo actually
+    commits. Scoped to the render's own `COMPOSE_FILES` because those are the
+    only files whose keys can reach the snapshot — and read off the module, so
+    adding an overlay there brings it under this contract automatically.
+
+    What this deliberately does not promise: an operator who exports `VAR`
+    themselves still renders from their own file. `setdefault` is the existing,
+    documented behaviour for the fleet paths and is left alone — the bug was a
+    path with no indirection to override, not an override that works.
+    """
+    render = render_module()
+    defaults: dict[str, str] = render._ENV_FILE_DEFAULTS
+    tracked = set(
+        subprocess.run(
+            ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.split()
+    )
+
+    for name in render.COMPOSE_FILES:
+        document = render.load_compose_document(ROOT / name)
+        for service, spec in (document.get("services") or {}).items():
+            for entry in spec.get("env_file") or []:
+                path = entry.get("path") if isinstance(entry, dict) else entry
+                match = _ENV_FILE_INDIRECTION.match(str(path))
+                assert match, (
+                    f"{name} service {service!r} declares env_file {path!r} as a literal "
+                    "path. Write it as ${VAR:-default} and give VAR a committed-example "
+                    "default in render_fleet_topology._ENV_FILE_DEFAULTS, or the render "
+                    "absorbs whatever that gitignored file declares on the rendering "
+                    "machine (#2235)."
+                )
+                variable = match.group("variable")
+                assert variable in defaults, (
+                    f"{name} service {service!r} indirects env_file through ${{{variable}}}, "
+                    f"but render_fleet_topology._ENV_FILE_DEFAULTS has no default for it, so "
+                    f"the render still resolves {match.group('default')!r} (#2235)."
+                )
+                example = defaults[variable].removeprefix("./")
+                assert example in tracked, (
+                    f"_ENV_FILE_DEFAULTS[{variable!r}] points at {defaults[variable]!r}, "
+                    "which this repo does not commit — the render would be reproducible "
+                    "only where that file happens to exist (#2235)."
+                )
