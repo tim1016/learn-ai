@@ -22,8 +22,8 @@ from typing import Any
 import pytest
 
 from app.routers import jobs as jobs_router
-from app.routers.engine import EngineBacktestResponse
 from app.routers.jobs import EngineBacktestJobRequest
+from app.schemas.engine_backtest import EngineBacktestResponse
 
 
 def _dispatch(monkeypatch: Any) -> dict[str, Any]:
@@ -100,7 +100,7 @@ def test_a_queued_run_is_cancelled_by_the_gates_poll(monkeypatch: Any) -> None:
 
 def test_the_engine_entry_point_offers_a_wait_hook() -> None:
     """The parameter the worker passes has to exist on the seam it passes it to."""
-    from app.routers.engine import execute_engine_backtest
+    from app.services.engine_backtest_service import execute_engine_backtest
 
     assert "while_waiting" in inspect.signature(execute_engine_backtest).parameters
 

@@ -45,7 +45,8 @@ from app.data_lake.path_policy import lake_subpath  # noqa: E402
 from app.engine.data.lean_format import write_lean_day_zip  # noqa: E402
 from app.engine.data.trade_bar import TradeBar  # noqa: E402
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_minute_et  # noqa: E402
-from app.routers.engine import EngineBacktestRequest, execute_engine_backtest  # noqa: E402
+from app.schemas.engine_backtest import EngineBacktestRequest  # noqa: E402
+from app.services.engine_backtest_service import execute_engine_backtest  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

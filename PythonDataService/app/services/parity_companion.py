@@ -44,7 +44,7 @@ from app.research.backtest_runs.service import mark_parity_failed_sync, record_p
 
 if TYPE_CHECKING:
     from app.engine.strategy.registry import StrategyRegistration
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
 logger = logging.getLogger(__name__)
 

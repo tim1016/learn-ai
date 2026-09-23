@@ -38,7 +38,7 @@ def _raw_policy() -> dict[str, object]:
 @pytest.mark.asyncio
 async def test_engine_backtest_request_accepts_data_policy_block() -> None:
     """A request including a ``data_policy`` block is accepted as-is."""
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     req = EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
@@ -71,7 +71,7 @@ def test_engine_backtest_request_pins_requested_engine_vocabulary() -> None:
     """The operator's Python/LEAN/Both choice is persisted, never inferred."""
     from pydantic import ValidationError
 
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     request = EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
@@ -100,22 +100,22 @@ def test_engine_backtest_request_pins_requested_engine_vocabulary() -> None:
 
 def test_python_only_request_has_no_parity_group_or_companion(monkeypatch) -> None:
     """Python-only runs persist without creating a misleading LEAN companion."""
-    from app.routers import engine as engine_router
+    from app.services import engine_backtest_service as engine_service
 
-    request = engine_router.EngineBacktestRequest(
+    request = engine_service.EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
         requested_engine="python",
     )
     dispatched: list[dict[str, object]] = []
     monkeypatch.setattr(
-        engine_router,
+        engine_service,
         "dispatch_parity_companion",
         lambda **kwargs: dispatched.append(kwargs),
     )
 
-    parity_group_id = engine_router._new_parity_group_id_for(request.requested_engine)
-    engine_router._dispatch_requested_parity_companion(
-        registration=engine_router._STRATEGY_REGISTRY[request.strategy_name],
+    parity_group_id = engine_service._new_parity_group_id_for(request.requested_engine)
+    engine_service._dispatch_requested_parity_companion(
+        registration=engine_service._STRATEGY_REGISTRY[request.strategy_name],
         request=request,
         parity_group_id=parity_group_id,
         study_id=1,
@@ -128,7 +128,7 @@ def test_python_only_request_has_no_parity_group_or_companion(monkeypatch) -> No
 @pytest.mark.asyncio
 async def test_engine_backtest_synthesizes_data_policy_from_legacy_fields() -> None:
     """A request without ``data_policy`` synthesizes it from symbol + resolution."""
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     req = EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
@@ -149,7 +149,7 @@ async def test_engine_backtest_synthesizes_data_policy_from_legacy_fields() -> N
 @pytest.mark.asyncio
 async def test_engine_backtest_synthesizes_data_policy_for_daily_resolution() -> None:
     """Daily resolution maps to ``timespan='day'`` in the synthesized BarsSpec."""
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     req = EngineBacktestRequest(
         strategy_name="sma_crossover",
@@ -178,7 +178,7 @@ async def test_engine_backtest_defers_data_policy_when_symbol_absent() -> None:
     ``None`` case by synthesizing a legacy policy block from the resolved
     symbol.
     """
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     req = EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
@@ -198,11 +198,8 @@ def test_resolved_snapshot_freezes_strategy_defaults_for_history() -> None:
     from app.engine.execution.portfolio import Portfolio
     from app.engine.strategy.base import StrategyContext
     from app.engine.strategy.registry import _STRATEGY_REGISTRY
-    from app.routers.engine import (
-        EngineBacktestRequest,
-        _resolve_legacy_data_policy,
-        _resolved_run_configuration,
-    )
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services.engine_backtest_service import _resolve_legacy_data_policy, _resolved_run_configuration
 
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     request = EngineBacktestRequest(strategy_name="ema_crossover_signal", params={})
@@ -233,7 +230,7 @@ def test_resolved_snapshot_freezes_strategy_defaults_for_history() -> None:
 
 
 def test_compatibility_profile_rejects_adjusted_input() -> None:
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     policy = _raw_policy()
     policy["adjusted"] = True
@@ -255,7 +252,8 @@ def test_compatibility_profile_wires_lean_sizing_fees_and_stale_fills(tmp_path) 
     from app.engine.execution.commission import IbkrEquityCommissionModel
     from app.engine.execution.execution_config import ExecutionConfig
     from app.engine.execution.sizing import LeanSetHoldingsSizing
-    from app.routers.engine import EngineBacktestRequest, _build_backtest_engine
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services.engine_backtest_service import _build_backtest_engine
 
     request = EngineBacktestRequest(
         strategy_name="ema_crossover_signal",
@@ -280,7 +278,8 @@ def test_compatibility_profile_wires_lean_sizing_fees_and_stale_fills(tmp_path) 
 
 
 def test_compatibility_profile_pins_exact_shared_bar_fixture(tmp_path) -> None:
-    from app.routers.engine import EngineBacktestRequest, _pin_compatibility_fixture
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services.engine_backtest_service import _pin_compatibility_fixture
 
     trade_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
     trade_dir.mkdir(parents=True)
@@ -316,7 +315,7 @@ def test_mismatched_params_and_policy_symbols_are_rejected() -> None:
     SPY in the other runs AAPL against a SPY companion and produces a parity
     verdict comparing different instruments.
     """
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     policy = _raw_policy() | {"symbol": "SPY"}
     with pytest.raises(ValidationError, match=r"disagrees with data_policy\.symbol"):
@@ -337,7 +336,7 @@ def test_symbol_agreement_ignores_case_and_surrounding_whitespace() -> None:
     applies when it derives a policy from ``params.symbol``, so a caller that
     hand-writes the policy is held to the same rule and not to a stricter one.
     """
-    from app.routers.engine import EngineBacktestRequest
+    from app.schemas.engine_backtest import EngineBacktestRequest
 
     request = EngineBacktestRequest(
         strategy_name="rsi_mean_reversion",

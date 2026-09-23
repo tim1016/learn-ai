@@ -84,7 +84,7 @@ class TestTradeDollarPnl:
         from decimal import Decimal
 
         from app.research.backtest_runs.engine_payload import persisted_trade_net_pnl
-        from app.routers.engine import EngineTradeResponse
+        from app.schemas.engine_backtest import EngineTradeResponse
 
         commission_per_order = 1.5
         engine_trade = EngineTradeResponse(

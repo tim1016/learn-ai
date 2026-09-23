@@ -32,7 +32,7 @@ from app.services.engine_validation_analytics import build_validation_analytics_
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
-    from app.routers.engine import EngineBacktestResponse, EngineTradeResponse
+    from app.schemas.engine_backtest import EngineBacktestResponse, EngineTradeResponse
 
 REALIZED_EQUITY_ATOL = 1e-6
 

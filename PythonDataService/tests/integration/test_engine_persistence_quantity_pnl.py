@@ -23,7 +23,7 @@ from app.models.responses import (
 )
 from app.research.backtest_runs.engine_payload import build_engine_run_payload
 from app.research.backtest_runs.records import RunPayloadError, record_from_payload
-from app.routers.engine import EngineBacktestResponse, EngineTradeResponse
+from app.schemas.engine_backtest import EngineBacktestResponse, EngineTradeResponse
 
 
 def _response_with_trade(

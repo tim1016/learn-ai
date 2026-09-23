@@ -44,6 +44,8 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
     "app/research/grid_search",
     "app/research/walk_forward_study",
     "app/routers/engine.py",
+    "app/schemas/engine_backtest.py",
+    "app/services/engine_backtest_service.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
     "app/utils/session_anchors.py",

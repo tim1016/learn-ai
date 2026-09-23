@@ -107,7 +107,8 @@ def test_failed_lean_payload_preserves_strategy_parameters_for_history(tmp_path:
 
 def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: Path) -> None:
     """A paired run must not diverge just because it crossed the LEAN seam."""
-    from app.routers.engine import EngineBacktestRequest, _persisted_execution_config
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services.engine_backtest_service import _persisted_execution_config
     from app.services.lean_sidecar_persistence import build_persist_payload
 
     request = EngineBacktestRequest.model_validate(

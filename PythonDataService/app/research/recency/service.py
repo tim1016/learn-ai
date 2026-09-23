@@ -30,8 +30,9 @@ from app.research.sweep.grid import (
     expand_param,
     grid_size,
 )
-from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services.data_plane_health import resolved_code_revision
+from app.services.engine_backtest_service import execute_engine_backtest
 
 logger = logging.getLogger(__name__)
 

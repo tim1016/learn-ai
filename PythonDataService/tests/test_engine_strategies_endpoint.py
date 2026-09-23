@@ -81,7 +81,8 @@ def test_deployment_validation_has_matching_spec_fixture():
 def test_deployment_validation_trade_symbol_is_live_only_for_engine_lab_backtests():
     from fastapi import HTTPException
 
-    from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services.engine_backtest_service import execute_engine_backtest
 
     request = EngineBacktestRequest(
         strategy_name="deployment_validation",

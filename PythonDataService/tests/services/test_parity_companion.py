@@ -9,7 +9,7 @@ import pytest
 import respx
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.routers.engine import EngineBacktestRequest
+from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import parity_companion
 from app.services.parity_companion import (
     REASON_EXECUTION_PROFILE,
@@ -288,7 +288,7 @@ def test_policy_backed_cadence_matches_the_period_the_engine_actually_ran() -> N
 
     from app.engine.execution.portfolio import Portfolio
     from app.engine.strategy.base import StrategyContext
-    from app.routers.engine import _record_actual_strategy_bars
+    from app.services.engine_backtest_service import _record_actual_strategy_bars
 
     registration = _STRATEGY_REGISTRY["rsi_mean_reversion"]
     assert "resolution_minutes" in registration.lean_data_policy_parameter_names
