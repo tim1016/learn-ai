@@ -469,6 +469,8 @@ than a CI gate — recorded here so the loss is visible rather than silent.
   `docs/runbooks/fleet-d-two-clerk-rollout.md`, `docs/runbooks/fleet-d-recovery-and-rollback.md`,
   `docs/runbooks/fleet-e-compatibility-retirement.md`,
   `docs/runbooks/fleet-directory-unavailable.md`
+- Moving the installation to another Mac (export, import, go-live, going back):
+  `docs/runbooks/migrate-installation.md`
 - Alpaca clerk recovery: `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md`
 - Route and lane inventories: `docs/design/fleet-b-route-inventory.md`,
   `docs/design/fleet-a2-lane-inventory.md`, `docs/design/fleet-d-runtime-ownership-matrix.md`
