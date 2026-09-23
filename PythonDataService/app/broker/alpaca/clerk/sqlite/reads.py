@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -645,9 +646,15 @@ def reconcilable_effect_operations(
     into ``custody_subjects``, so every operation belongs to exactly one
     subject and no unattributable remainder exists. ``None`` keeps the
     account-wide read, which is what a boot-time account summary wants.
+
+    A terminal order stays on the worklist while its effective fills fall
+    short of the broker's own cumulative ``filled_quantity`` (#2305): a lost
+    ``trade_updates`` slice -- dropped at capture, or executed before the
+    first ``listen`` -- is re-derived by the sweep's exact lookup, whose
+    cumulative fold then closes the shortfall and drops it off the list.
     """
     subject_clause = "AND e.subject_id = ? " if subject_id is not None else ""
-    params = (subject_id,) if subject_id is not None else ()
+    params: tuple[object, ...] = (subject_id,) if subject_id is not None else ()
     rows = conn.execute(
         "SELECT DISTINCT e.effect_operation_id, e.authority_generation, e.idempotency_key, "
         "e.command_id, e.strategy_instance_id, e.run_id, e.kind, e.state, e.custody_owner, "
@@ -662,10 +669,10 @@ def reconcilable_effect_operations(
         "('filled','canceled','expired','rejected','replaced') "
         "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("
         "SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)))) "
+        f"AND {_EFFECTIVE_FILL_PREDICATE})) "
+        f"OR {_fills_short_of_broker_cumulative_sql('o.order_ref')}) "
         "ORDER BY e.created_at_ms ASC",
-        params,
+        (*params, FILL_QTY_EPSILON),
     ).fetchall()
     return [EffectOperationResource(**dict(row)) for row in rows]
 
@@ -761,6 +768,14 @@ def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> di
     return dict(row) if row is not None else None
 
 
+#: A fill row is effective while no correction names its ``execution_id`` as
+#: superseded (PRD #1441 S1.2). Expects the row aliased ``f``.
+_EFFECTIVE_FILL_PREDICATE = (
+    "NOT EXISTS (SELECT 1 FROM fills successor "
+    "WHERE successor.superseded_execution_ref = f.execution_id)"
+)
+
+
 def _effective_fill_totals_for_order(
     conn: sqlite3.Connection,
     order_ref: str,
@@ -776,11 +791,67 @@ def _effective_fill_totals_for_order(
         parameters += evidence_sources
     row = conn.execute(
         "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
-        "FROM fills f WHERE f.order_ref = ? " + source_predicate + "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        "FROM fills f WHERE f.order_ref = ? " + source_predicate + "AND " + _EFFECTIVE_FILL_PREDICATE,
         parameters,
     ).fetchone()
     return float(row["qty"]), float(row["cost"])
+
+
+def _latest_reported_filled_quantity_sql(order_ref_sql: str) -> str:
+    """SQL scalar: the cumulative filled quantity the order's LATEST acknowledgement reported.
+
+    The one reading of ``ORDER_SUBMIT_ACKED.facts_json.reported_filled_quantity``
+    (#2305). It is the latest acknowledgement by sequence, not the largest:
+    a later exact REST lookup that reports less than an earlier websocket
+    frame is the broker's current word, and it must be able to close the
+    gap -- a maximum would keep the order short for ever. ``NULL`` when the
+    latest acknowledgement reported no fill (and for every pre-#2305 row).
+    """
+    return (
+        "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
+        "FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
+        "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' ORDER BY t.sequence DESC LIMIT 1)"
+    )
+
+
+def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
+    """SQL predicate: the latest broker-reported cumulative exceeds the effective fills.
+
+    ``NULL`` (never short) when the latest acknowledgement reported no fill.
+    ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON` last. The
+    fill sum is covered by ``ix_fills_order_ref`` and the effective-fill
+    predicate by ``ix_fills_superseded_execution_ref`` (schema v15).
+    """
+    return (
+        "(" + _latest_reported_filled_quantity_sql(order_ref_sql) + " - "
+        "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
+        "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
+    )
+
+
+def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float | None:
+    """The cumulative filled quantity the order's latest acknowledgement reported, if any."""
+    row = conn.execute(
+        "SELECT " + _latest_reported_filled_quantity_sql("?") + " AS reported", (order_ref,)
+    ).fetchone()
+    return float(row["reported"]) if row["reported"] is not None else None
+
+
+def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
+    """Whether the order's effective fills fall short of the broker's latest cumulative (#2305).
+
+    The one definition shared by the reconciliation worklist
+    (:func:`reconcilable_effect_operations`) and the EXIT machine's
+    reducing-order refresh. Bounded by construction: one exact REST lookup
+    appends an acknowledgement carrying the broker's current cumulative and
+    folds fills up to it, so after any successful lookup the order is short
+    only if the broker itself still reports more than it has recorded.
+    """
+    row = conn.execute(
+        "SELECT " + _fills_short_of_broker_cumulative_sql("?") + " AS short",
+        (order_ref, order_ref, FILL_QTY_EPSILON),
+    ).fetchone()
+    return bool(row["short"])
 
 
 def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:

@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
     OrderFillObservedFacts,
+    OrderSubmitAckedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
 )
@@ -328,10 +329,26 @@ def fold_order_acknowledgement(
     order_ref = order.client_order_id
     assert order_ref is not None
     latest_ack = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_ACKED")
+    reported_filled_quantity = (
+        order.filled_quantity if order.filled_quantity >= FILL_QTY_EPSILON else None
+    )
+    # The broker's cumulative is recorded on the acknowledgement (#2305) and
+    # the shortfall read keys on the latest one, so a snapshot reporting a
+    # different cumulative -- more, or an exact REST lookup reporting less
+    # than an earlier frame -- is new evidence even when its state and source
+    # time are unchanged. Without the "less" direction a lower REST report
+    # could never close the gap.
+    latest_reported = repo.latest_reported_filled_quantity(order_ref)
+    reported_differs = (reported_filled_quantity is None) != (latest_reported is None) or (
+        reported_filled_quantity is not None
+        and latest_reported is not None
+        and abs(reported_filled_quantity - latest_reported) >= FILL_QTY_EPSILON
+    )
     ack_changed = latest_ack is None or (
         latest_ack["broker_order_id"] != order.order_id
         or latest_ack["broker_state"] != order.status
         or latest_ack["source_event_at_ms"] != order.updated_at_ms
+        or reported_differs
     )
 
     current_order = repo.order(order_ref)
@@ -360,7 +377,9 @@ def fold_order_acknowledgement(
                 source_event_at_ms=order.updated_at_ms,
                 clerk_observed_at_ms=repo.clock(),
                 summary_code="ORDER_SUBMIT_ACKED",
-                facts_json=canonicalize({}),
+                facts_json=OrderSubmitAckedFacts(
+                    reported_filled_quantity=reported_filled_quantity
+                ).to_facts_json(),
             )
         )
     if (

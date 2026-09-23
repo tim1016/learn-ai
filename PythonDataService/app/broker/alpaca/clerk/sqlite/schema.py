@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_un
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -686,6 +686,18 @@ SCHEMA_V14_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
     for statement in SCHEMA_V14_STATEMENTS
 )
+# v15 indexes the two ``fills`` columns the effective-fill predicate probes
+# (#2305): the reconciliation worklist asks, for every nonterminal order,
+# whether its effective fills cover the broker's reported cumulative, and
+# every historical ENTER stays nonterminal. Without these the read scans
+# ``fills`` once per order and again per fill. Same statements as
+# ``SCHEMA_MIGRATIONS[14]``.
+SCHEMA_V15_STATEMENTS: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS ix_fills_order_ref ON fills(order_ref)",
+    "CREATE INDEX IF NOT EXISTS ix_fills_superseded_execution_ref "
+    "ON fills(superseded_execution_ref)",
+)
+SCHEMA_V15_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V15_STATEMENTS)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -698,6 +710,8 @@ SCHEMA_DDL = (
     + SCHEMA_V13_DDL
     + "\n\n"
     + SCHEMA_V14_DDL
+    + "\n\n"
+    + SCHEMA_V15_DDL
 ).rstrip("\n")
 
 
@@ -918,6 +932,8 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # re-tag of persisted cumulative rows; ``simulated_execution_schema`` owns
     # the fragment and its rebuild reuse.
     13: SCHEMA_V14_STATEMENTS,
+    # v14 -> v15: index-only; same statements as the fresh v15 block above.
+    14: SCHEMA_V15_STATEMENTS,
 }
 
 

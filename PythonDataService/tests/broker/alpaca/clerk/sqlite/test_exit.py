@@ -1318,7 +1318,21 @@ async def test_resolve_exit_on_an_already_succeeded_operation_is_a_true_noop(
             "placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
         )
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    # The submit response says filled but carries no execution slice, so the
+    # pass holds the EXIT ``unknown``; the recovery evidence it awaits (the
+    # reducing order's cumulative) then lets the next pass prove it flat.
+    assert first.reducing_order_ref is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            first.reducing_order_ref, status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
+        ),
+    )
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade())
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "succeeded"
     before = len(repo.custody_transitions())
 
     trade2 = _FakeTrade()

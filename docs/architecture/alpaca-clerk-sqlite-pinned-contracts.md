@@ -93,6 +93,15 @@
   fabricated broker receipt. The Dry-Run world's legacy rows are not
   re-tagged by the migration; they convert lazily through the
   auto-supersession proof when their order is next observed.
+- Schema-v15 is index-only (#2305): `ix_fills_order_ref` and
+  `ix_fills_superseded_execution_ref` cover the effective-fill predicate the
+  reconciliation worklist evaluates per nonterminal order, to decide whether
+  a terminal order's recorded fills still fall short of the broker's
+  reported cumulative (`ORDER_SUBMIT_ACKED.facts_json.reported_filled_quantity`,
+  omitted when absent so every earlier acknowledgement stays `{}`). Every
+  historical ENTER stays nonterminal, so without them that read scanned
+  `fills` once per order and again per fill. The registered v14 → v15
+  migration is the same two `CREATE INDEX IF NOT EXISTS` statements.
 - Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
   captured *every* same-strategy/symbol sibling entry; it now captures every
   sibling that is still **cancel-provable**, excluding one already carrying
@@ -1155,6 +1164,9 @@ INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, executio
 UPDATE fills SET execution_id = 'shadow-execution:' || fills.order_ref, evidence_source = 'simulated_execution' WHERE fills.evidence_source = 'cumulative_recovery' AND fills.execution_id IS NULL AND (SELECT COUNT(*) FROM fills other WHERE other.order_ref = fills.order_ref AND other.evidence_source = 'cumulative_recovery') = 1 AND EXISTS (SELECT 1 FROM orders o WHERE o.order_ref = fills.order_ref AND o.client_order_id = o.order_ref AND o.broker_order_id = 'shadow-order:' || o.order_ref);
 DROP TABLE fills_v13_legacy;
 CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id) WHERE execution_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ix_fills_order_ref ON fills(order_ref);
+CREATE INDEX IF NOT EXISTS ix_fills_superseded_execution_ref ON fills(superseded_execution_ref);
 ```
 
 The `holds` view appears **twice** on purpose: v12 creates it, and the v13
