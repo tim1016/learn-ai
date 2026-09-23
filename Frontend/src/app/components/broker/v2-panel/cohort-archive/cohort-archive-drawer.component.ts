@@ -2,7 +2,6 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  effect,
   inject,
   input,
   output,
@@ -13,14 +12,7 @@ import {
 import { Drawer } from 'primeng/drawer';
 
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import { resourceTarget, type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
-import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
-import {
-  freezeLaneFence,
-  LANE_FENCE_CONFLICT_MESSAGE,
-  laneFenceDrifted,
-  laneFenceVerdict,
-} from '../../../../fleet/lane-fence';
+import { cohortDrawerLane } from '../lib/cohort-drawer-lane';
 import { ARCHIVE_CONFIRM_TOKEN } from './archive-confirm-token';
 import { CohortArchiveCommitComponent } from './cohort-archive-commit.component';
 import { CohortArchiveGroupComponent } from './cohort-archive-group.component';
@@ -77,7 +69,6 @@ export class CohortArchiveDrawerComponent {
   readonly archived = output();
 
   private readonly panelService = inject(BrokerV2PanelService);
-  private readonly fleetDirectory = inject(FleetDirectoryService);
 
   protected readonly submitting = signal(false);
   protected readonly outcome = signal<CohortActionResult | null>(null);
@@ -85,17 +76,15 @@ export class CohortArchiveDrawerComponent {
   protected readonly submitError = signal(false);
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
   protected readonly confirmText = signal('');
-  /** Target rendered when the destructive drawer was opened. */
-  private readonly presentedTarget = signal<ResourceTarget | null>(null);
-  /** Set when the lane rebinds under an open confirmation. The typed
-   * confirmation and presented target stay frozen rather than being
-   * silently re-minted against a lane the operator never saw (#2068,
-   * decision 10) — the operator must close and reopen to act again. */
-  protected readonly laneConflict = signal(false);
-  /** Set alongside `laneConflict`; distinguishes a rebound lane from one that
-   * was never enforceable at open (#2068, decision 15) — the two share one
-   * boolean gate but not one sentence. */
-  protected readonly laneConflictMessage = signal<string>(LANE_FENCE_CONFLICT_MESSAGE);
+  /** The command lane frozen at open; see `cohortDrawerLane` (#2068). */
+  private readonly lane = cohortDrawerLane({
+    visible: this.visible,
+    broker: this.broker,
+    clerkId: this.clerkId,
+    accountId: this.accountId,
+  });
+  protected readonly laneConflict = this.lane.conflict;
+  protected readonly laneConflictMessage = this.lane.conflictMessage;
 
   /**
    * Clear everything that could act on a bot.
@@ -112,68 +101,10 @@ export class CohortArchiveDrawerComponent {
     this.submitError.set(false);
   }
 
-  private readonly liveLane = computed(() => this.fleetDirectory.lane(this.broker(), this.clerkId()));
-
-  /** Read while the drawer is open; idle while it is closed. */
-  private readonly target = computed(() => {
-    const fence = freezeLaneFence(this.liveLane());
-    return resourceTarget(this.broker(), this.clerkId(), {
-      accountId: this.accountId(),
-      bindingGeneration: fence.bindingGeneration,
-      routingEpoch: fence.routingEpoch,
-    });
-  });
-
   private readonly archivable = resource({
-    params: () => (this.visible() ? { target: this.target() } : undefined),
+    params: () => (this.visible() ? { target: this.lane.readTarget() } : undefined),
     loader: ({ params }) => this.panelService.getCohortArchiveView(params.target),
   });
-
-  constructor() {
-    // Keep the command target bound to the drawer presentation. A lane
-    // rebinding while it is open states a conflict (laneConflict) rather
-    // than re-minting: the operator's typed confirmation must not be
-    // silently discarded against a lane they never saw change (#2068,
-    // decision 10). Only a route reuse (visible false→true again) clears it.
-    //
-    // A cold directory at the moment of open is a distinct refusal, not a
-    // drift: `presentedTarget` is deliberately left unset so `submit()`
-    // (guarded on `target === null`) cannot dispatch — the operator must
-    // reopen once the directory has loaded, not wait for a live rebind that
-    // this frozen presentation would never see anyway (#2068, decision 15).
-    let openedTarget: ResourceTarget | null = null;
-    effect(() => {
-      const visible = this.visible();
-      const target = this.target();
-      if (!visible) {
-        openedTarget = null;
-        this.presentedTarget.set(null);
-        this.laneConflict.set(false);
-        return;
-      }
-      if (openedTarget === null) {
-        openedTarget = target;
-        const verdict = laneFenceVerdict(
-          { bindingGeneration: target.bindingGeneration, routingEpoch: target.routingEpoch },
-          this.liveLane(),
-        );
-        if (!verdict.ok) {
-          this.laneConflict.set(true);
-          this.laneConflictMessage.set(verdict.message);
-          return;
-        }
-        this.presentedTarget.set(withCommand(target, 'bot_action', crypto.randomUUID()));
-      } else if (
-        laneFenceDrifted(
-          { bindingGeneration: openedTarget.bindingGeneration, routingEpoch: openedTarget.routingEpoch },
-          this.liveLane(),
-        )
-      ) {
-        this.laneConflict.set(true);
-        this.laneConflictMessage.set(LANE_FENCE_CONFLICT_MESSAGE);
-      }
-    });
-  }
 
   protected readonly view = computed<CohortArchiveView | null>(() => {
     const value = this.archivable.hasValue() ? this.archivable.value() : null;
@@ -273,7 +204,7 @@ export class CohortArchiveDrawerComponent {
   }
 
   protected async submit(): Promise<void> {
-    const target = this.presentedTarget();
+    const target = this.lane.presentedTarget();
     if (!this.canSubmit() || target === null) return;
     const idempotencyKey = target.idempotencyKey;
     if (idempotencyKey === null) {
