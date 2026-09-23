@@ -22,9 +22,12 @@ from app.installation_migration.contents import (
     BUNDLED_VOLUMES,
     EXCLUDED_BIND_MOUNTS,
     LAKE_FOLDER_KEY,
-    find_secret_files,
+    is_secret_shaped,
     resolve_folder_path,
 )
+from app.installation_migration.errors import MigrationRefused
+from app.installation_migration.tree import require_bundleable
+from app.lean_sidecar.launcher_auth import LAUNCHER_TOKEN_FILENAME
 
 _REPO = Path(__file__).resolve().parents[3]
 _PROJECT = "learn-ai"
@@ -166,14 +169,47 @@ def test_the_lake_folder_follows_its_host_path_override(
     assert resolve_folder_path(tmp_path, lake, lake_dir=tmp_path / "flag") == tmp_path / "flag"
 
 
-def test_secret_shaped_files_are_found_by_name(tmp_path: Path) -> None:
-    (tmp_path / "deep" / "er").mkdir(parents=True)
-    (tmp_path / "deep" / "er" / "live.env").write_text("K=V", encoding="utf-8")
-    (tmp_path / ".env").write_text("K=V", encoding="utf-8")
-    (tmp_path / "compose.override.yaml").write_text("services: {}", encoding="utf-8")
-    (tmp_path / "live.env.example").write_text("K=", encoding="utf-8")
-    (tmp_path / "environment.txt").write_text("fine", encoding="utf-8")
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env",
+        "live.env",
+        "compose.override.yaml",
+        "compose.override.yml",
+        LAUNCHER_TOKEN_FILENAME,
+        ".host-daemon-token",
+        "coordinator-token",
+        "service_token",
+        ".clerk-host-binding-capability",
+        "server.pem",
+        "signing.key",
+    ],
+)
+def test_secret_shaped_names(name: str) -> None:
+    assert is_secret_shaped(name)
 
-    found = sorted(path.relative_to(tmp_path).as_posix() for path in find_secret_files(tmp_path))
 
-    assert found == [".env", "compose.override.yaml", "deep/er/live.env"]
+@pytest.mark.parametrize(
+    "name",
+    ["live.env.example", "environment.txt", "tokenizer.json", "run.json", "keys.parquet"],
+)
+def test_ordinary_names_are_not_secret_shaped(name: str) -> None:
+    assert not is_secret_shaped(name)
+
+
+def test_the_live_auth_tokens_under_artifacts_are_secret_shaped(tmp_path: Path) -> None:
+    """Both exist on the owner's host today and are live authentication tokens."""
+    artifacts = tmp_path / "PythonDataService" / "artifacts"
+    (artifacts / "lean-sidecar").mkdir(parents=True)
+    (artifacts / "lean-sidecar" / LAUNCHER_TOKEN_FILENAME).write_text("t", encoding="utf-8")
+    (artifacts / ".host-daemon-token").write_text("t", encoding="utf-8")
+    (artifacts / "run.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(MigrationRefused) as refused:
+        require_bundleable([artifacts])
+
+    assert refused.value.reason == "secret_in_bundle_source"
+    assert sorted(Path(path).name for path in refused.value.details["paths"]) == [
+        ".host-daemon-token",
+        ".launcher-token",
+    ]

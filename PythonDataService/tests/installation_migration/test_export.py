@@ -268,3 +268,34 @@ def test_an_existing_bundle_is_never_overwritten(tmp_path: Path) -> None:
 
     assert refused.value.reason == "bundle_exists"
     assert bundle.read_bytes() == b"precious"
+
+
+def test_live_auth_tokens_under_artifacts_refuse_before_any_bot_stops(tmp_path: Path) -> None:
+    installation = build_installation(tmp_path)
+    artifacts = installation.repo_root / "PythonDataService" / "artifacts"
+    (artifacts / "lean-sidecar").mkdir()
+    (artifacts / "lean-sidecar" / ".launcher-token").write_text("live", encoding="utf-8")
+    (artifacts / ".host-daemon-token").write_text("live", encoding="utf-8")
+
+    with pytest.raises(MigrationRefused) as refused:
+        _export(installation, tmp_path / "bundle.tar")
+
+    assert refused.value.reason == "secret_in_bundle_source"
+    assert sorted(Path(path).name for path in refused.value.details["paths"]) == [
+        ".host-daemon-token",
+        ".launcher-token",
+    ]
+    assert installation.lanes.stopped == []
+    assert not (tmp_path / "bundle.tar").exists()
+
+
+def test_an_escaping_symlink_refuses_before_any_bot_stops(tmp_path: Path) -> None:
+    installation = build_installation(tmp_path)
+    (installation.repo_root / "PythonDataService" / "artifacts" / "hosts").symlink_to("/etc/hosts")
+
+    with pytest.raises(MigrationRefused) as refused:
+        _export(installation, tmp_path / "bundle.tar")
+
+    assert refused.value.reason == "unsafe_symlink_in_bundle_source"
+    assert installation.lanes.stopped == []
+    assert installation.podman.stopped == []

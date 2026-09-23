@@ -12,7 +12,11 @@ are not what "the same installation" means.
 
 The walk carries three kinds — directory, regular file, symlink — and
 refuses anything else (a socket, FIFO or device) by path: an entry the bundle
-cannot reproduce must stop the move, never vanish from it.
+cannot reproduce must stop the move, never vanish from it. A bundled tree
+also refuses, by path, any secret-shaped file and any symlink the import's
+safe extraction would refuse (absolute, or pointing outside the tree) —
+checked at export preflight and again inside :func:`build_folder_tar`, so no
+caller can write a tar that carries a secret or cannot be restored.
 """
 
 from __future__ import annotations
@@ -20,13 +24,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import stat
 import tarfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Literal
 
+from app.installation_migration.contents import is_secret_shaped
 from app.installation_migration.errors import MigrationRefused
 
 _CHUNK_BYTES = 1 << 20
@@ -93,6 +100,51 @@ def walk_tree(root: Path) -> list[TreeEntry]:
     return entries
 
 
+def _link_escapes(entry: TreeEntry) -> bool:
+    """Whether a symlink points outside its tree (or anywhere absolute)."""
+    target = entry.link_target or ""
+    if target.startswith(("/", "\\")) or os.path.isabs(target):
+        return True
+    landing = posixpath.normpath(posixpath.join(posixpath.dirname(entry.path), target))
+    return landing == ".." or landing.startswith("../")
+
+
+def _refuse_unbundleable(walks: Mapping[Path, list[TreeEntry]]) -> None:
+    secrets = sorted(
+        str(entry.absolute)
+        for entries in walks.values()
+        for entry in entries
+        if entry.kind != "d" and is_secret_shaped(posixpath.basename(entry.path))
+    )
+    if secrets:
+        raise MigrationRefused(
+            "secret_in_bundle_source",
+            f"Secret-shaped file(s) {', '.join(secrets)} sit inside a bundled folder; "
+            "the bundle never carries a secret. Move them out of the folder (the new "
+            "host mints its own tokens), then retry.",
+            details={"paths": secrets},
+        )
+    unsafe = sorted(
+        str(entry.absolute)
+        for entries in walks.values()
+        for entry in entries
+        if entry.kind == "l" and _link_escapes(entry)
+    )
+    if unsafe:
+        raise MigrationRefused(
+            "unsafe_symlink_in_bundle_source",
+            f"Symlink(s) {', '.join(unsafe)} point outside their bundled folder, which "
+            "the import's safe extraction refuses; replace them with the file or a "
+            "link inside the folder, then retry.",
+            details={"paths": unsafe},
+        )
+
+
+def require_bundleable(roots: Iterable[Path]) -> None:
+    """Refuse, naming every path, a tree holding a secret or an escaping symlink."""
+    _refuse_unbundleable({root: walk_tree(root) for root in roots})
+
+
 def _digest(entries: Iterable[tuple[str, str, str]]) -> str:
     digest = hashlib.sha256()
     for path, kind, payload in sorted(entries):
@@ -114,6 +166,26 @@ def tree_digest_from_dir(root: Path) -> str:
     )
 
 
+@contextmanager
+def _reading(archive: Path) -> Iterator[None]:
+    """Map a corrupt or truncated tar to a refusal naming it.
+
+    ``FilterError`` is re-raised untouched so the caller names the unsafe
+    member; every other ``TarError`` (and a short read) is the archive itself
+    being unreadable.
+    """
+    try:
+        yield
+    except tarfile.FilterError:
+        raise
+    except (tarfile.TarError, EOFError) as exc:
+        raise MigrationRefused(
+            "bundle_member_unreadable",
+            f"{archive} is not a readable tar: {exc}",
+            details={"archive": str(archive)},
+        ) from exc
+
+
 def _member_path(name: str) -> str:
     """A tar member name in the walk's relative form (``./a/`` → ``a``)."""
     while name.startswith("./"):
@@ -128,7 +200,7 @@ def tree_digest_from_tar(archive: Path) -> str:
     """
     entries: list[tuple[str, str, str]] = []
     seen: set[str] = set()
-    with tarfile.open(archive, "r:*") as bundle:
+    with _reading(archive), tarfile.open(archive, "r:*") as bundle:
         for member in bundle:
             path = _member_path(member.name)
             if path in ("", "."):
@@ -172,6 +244,7 @@ def build_folder_tar(root: Path, archive: Path) -> None:
     no silently skipped socket.
     """
     entries = walk_tree(root)
+    _refuse_unbundleable({root: entries})
     with tarfile.open(archive, "x", format=tarfile.PAX_FORMAT) as bundle:
         for entry in entries:
             metadata = entry.absolute.lstat()
@@ -200,7 +273,7 @@ def extract_tar(archive: Path, destination: Path) -> None:
     extraction reported as success.
     """
     try:
-        with tarfile.open(archive, "r:*") as bundle:
+        with _reading(archive), tarfile.open(archive, "r:*") as bundle:
             bundle.extractall(destination, filter="data")
     except tarfile.FilterError as exc:
         raise MigrationRefused(
@@ -214,6 +287,7 @@ __all__ = [
     "TreeEntry",
     "build_folder_tar",
     "extract_tar",
+    "require_bundleable",
     "sha256_file",
     "tree_digest_from_dir",
     "tree_digest_from_tar",

@@ -17,10 +17,11 @@ it is either bundled or excluded here with its reason.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from app.lean_sidecar.launcher_auth import LAUNCHER_TOKEN_FILENAME
 
 VolumeRole = Literal["postgres", "fleet_control", "clerk", "qualification"]
 
@@ -89,21 +90,28 @@ EXCLUDED_BIND_MOUNTS: dict[str, str] = {
 }
 
 #: The secret-shaped names no bundled folder may contain. The operator copies
-#: ``deploy/fleet/env/*.env`` (and the other ``.env`` files) by hand.
-_SECRET_FILE_NAMES = frozenset({".env", "compose.override.yaml", "compose.override.yml"})
+#: ``deploy/fleet/env/*.env`` (and the other ``.env`` files) by hand; every
+#: token a process mints under ``artifacts/`` is minted afresh on the new
+#: host. ``LAUNCHER_TOKEN_FILENAME`` is the LEAN launcher's live token, named
+#: by its canonical definition. The retired host daemon's
+#: ``.host-daemon-token`` (ADR 0007) and the clerk host-binding capability
+#: have no canonical definition left in code, so they are caught by shape:
+#: any ``*-token``/``*_token`` name, any hidden name mentioning a token or a
+#: capability, and key material (``*.pem``, ``*.key``).
+_SECRET_FILE_NAMES = frozenset(
+    {".env", "compose.override.yaml", "compose.override.yml", LAUNCHER_TOKEN_FILENAME}
+)
+_SECRET_SUFFIXES = (".env", "-token", "_token", ".pem", ".key")
+_HIDDEN_SECRET_WORDS = ("token", "capability")
 
 
 def is_secret_shaped(name: str) -> bool:
     """Whether a file name is one the bundle must never carry."""
-    return name in _SECRET_FILE_NAMES or name.endswith(".env")
-
-
-def find_secret_files(root: Path) -> Iterator[Path]:
-    """Every secret-shaped file under ``root``, never following a symlink."""
-    for directory, _dirnames, filenames in os.walk(root, followlinks=False):
-        for name in filenames:
-            if is_secret_shaped(name):
-                yield Path(directory) / name
+    return (
+        name in _SECRET_FILE_NAMES
+        or name.endswith(_SECRET_SUFFIXES)
+        or (name.startswith(".") and any(word in name for word in _HIDDEN_SECRET_WORDS))
+    )
 
 
 def resolve_folder_path(
@@ -133,7 +141,6 @@ __all__ = [
     "LAKE_HOST_PATH_ENV",
     "BundledFolder",
     "BundledVolume",
-    "find_secret_files",
     "is_secret_shaped",
     "resolve_folder_path",
 ]

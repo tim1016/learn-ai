@@ -18,6 +18,7 @@ from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.tree import (
     build_folder_tar,
     extract_tar,
+    require_bundleable,
     sha256_file,
     tree_digest_from_dir,
     tree_digest_from_tar,
@@ -131,3 +132,64 @@ def test_sha256_file_is_the_hex_digest_of_the_bytes(tmp_path: Path) -> None:
         sha256_file(target)
         == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )
+
+
+def test_the_folder_tar_builder_itself_refuses_a_secret(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "lean-sidecar").mkdir(parents=True)
+    (root / "lean-sidecar" / ".launcher-token").write_text("live", encoding="utf-8")
+
+    with pytest.raises(MigrationRefused) as refused:
+        build_folder_tar(root, tmp_path / "out.tar")
+
+    assert refused.value.reason == "secret_in_bundle_source"
+    assert not (tmp_path / "out.tar").exists()
+
+
+@pytest.mark.parametrize(
+    "target", ["/etc/hosts", "../outside", "sub/../../outside"], ids=["absolute", "up", "nested_up"]
+)
+def test_a_symlink_the_safe_extraction_would_refuse_is_refused_at_the_source(
+    tmp_path: Path, target: str
+) -> None:
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    os.symlink(target, root / "link")
+
+    with pytest.raises(MigrationRefused) as refused:
+        require_bundleable([root])
+    with pytest.raises(MigrationRefused):
+        build_folder_tar(root, tmp_path / "out.tar")
+
+    assert refused.value.reason == "unsafe_symlink_in_bundle_source"
+    assert refused.value.details["paths"] == [str(root / "link")]
+
+
+def test_a_symlink_inside_the_folder_is_bundleable(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "a.txt").write_text("a", encoding="utf-8")
+    os.symlink("sub/a.txt", root / "latest")
+    os.symlink("../latest", root / "sub" / "back")
+
+    require_bundleable([root])
+
+
+def test_a_corrupt_tar_is_a_refusal_not_a_traceback(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "big.bin").write_bytes(os.urandom(64 * 1024))
+    archive = tmp_path / "folder.tar"
+    build_folder_tar(root, archive)
+    truncated = tmp_path / "truncated.tar"
+    truncated.write_bytes(archive.read_bytes()[:10_000])
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(MigrationRefused) as unpacked:
+        extract_tar(truncated, destination)
+    with pytest.raises(MigrationRefused) as digested:
+        tree_digest_from_tar(truncated)
+
+    assert unpacked.value.reason == "bundle_member_unreadable"
+    assert digested.value.reason == "bundle_member_unreadable"

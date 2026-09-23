@@ -46,7 +46,6 @@ from app.installation_migration.contents import (
     BUNDLED_FOLDERS,
     BUNDLED_VOLUMES,
     BundledVolume,
-    find_secret_files,
     resolve_folder_path,
 )
 from app.installation_migration.errors import MigrationRefused
@@ -57,6 +56,7 @@ from app.installation_migration.podman import PodmanPort, VolumeInfo
 from app.installation_migration.topology import containers_writing_folders, load_topology
 from app.installation_migration.tree import (
     build_folder_tar,
+    require_bundleable,
     sha256_file,
     tree_digest_from_tar,
 )
@@ -248,14 +248,7 @@ def _preflight(
             f"Bundled folder(s) {', '.join(missing_folders)} do not exist on this host.",
             details={"folders": missing_folders},
         )
-    secrets = sorted(str(found) for path in paths.values() for found in find_secret_files(path))
-    if secrets:
-        raise MigrationRefused(
-            "secret_in_bundle_source",
-            f"Secret-shaped file(s) {', '.join(secrets)} sit inside a bundled folder; "
-            "the bundle never carries a secret. Move them out, then retry.",
-            details={"paths": secrets},
-        )
+    require_bundleable(paths.values())
     return {name: info for name, info in infos.items() if info is not None}, paths
 
 
