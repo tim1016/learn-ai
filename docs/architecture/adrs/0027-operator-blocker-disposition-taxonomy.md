@@ -101,3 +101,10 @@ title/body/consequence/confirm-label/token copy, and the operator surface
 provides the non-move safety confirmations used by mark-poisoned and
 crash-recovery override flows. The typed confirmation dialog renders those
 fields verbatim and has no domain-language fallback defaults.
+
+As of #2192 (2026-09-22), the frontend no longer renders any `fleet_roster`
+projection. Its last renderer, the Bots-roster account strip, was removed by
+#2185, and the owner chose to retire that host rather than re-wire it. The
+backend still authors the `fleet_roster` slot of `AccountOperatorPosture`, and
+the frontend types still mirror it, but the only account-posture surface is the
+Alpaca desk card, which reads `account_desk` alone.

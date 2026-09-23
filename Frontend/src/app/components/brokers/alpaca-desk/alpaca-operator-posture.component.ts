@@ -9,7 +9,7 @@ import {
 import { Router } from '@angular/router';
 
 import type { AccountOperatorPosture, OperatorBlocker, OperatorMove } from '../../../api/operator-blocker.types';
-import { accountOperatorPostureBlocker, movesForBlocker } from '../../../api/operator-blocker.types';
+import { movesForBlocker } from '../../../api/operator-blocker.types';
 
 interface PostureView {
   readonly headline: string;
@@ -54,7 +54,7 @@ export class AlpacaOperatorPostureComponent {
   protected readonly view = computed<PostureView | null>(() => {
     const posture = this.posture();
     if (posture === null) return null;
-    const blocker = accountOperatorPostureBlocker(posture, 'account_desk');
+    const blocker = posture.account_desk;
     const isSupported = this.moveIsSupported();
     return {
       headline: blocker?.headline ?? posture.status_headline,

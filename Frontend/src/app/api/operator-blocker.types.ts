@@ -148,9 +148,10 @@ export interface OperatorBlocker {
  * `status_headline` / `status_detail` carry the backend-authored healthy
  * copy. When `condition` is set, `account_desk` and `fleet_roster` share
  * that one condition's identity/severity but carry host-relative
- * disposition, copy, and moves per ADR 0027. Consumers read only their own
- * host projection via `accountOperatorPostureBlocker` below and must never
- * fall back to the other host's projection or re-derive a verdict from raw
+ * disposition, copy, and moves per ADR 0027. The frontend renders only the
+ * `account_desk` projection; the backend still authors `fleet_roster`, but
+ * that roster host was retired (#2192) and no surface reads it. Never fall
+ * back to the other host's projection or re-derive a verdict from raw
  * evidence.
  */
 export interface AccountOperatorPosture {
@@ -160,8 +161,6 @@ export interface AccountOperatorPosture {
   status_headline: string;
   status_detail: string | null;
 }
-
-export type AccountOperatorPostureHost = 'account_desk' | 'fleet_roster';
 
 /**
  * The `confirm_in_form` anchor the Alpaca operator lens recognizes to open
@@ -199,22 +198,6 @@ export function movesForBlocker(blocker: OperatorBlocker): readonly OperatorMove
   const secondaryMoves = blocker.secondary_moves ?? [];
   if (blocker.disposition === 'wait') return [];
   return blocker.primary_move ? [blocker.primary_move, ...secondaryMoves] : secondaryMoves;
-}
-
-/**
- * Selects the one host projection a surface may render. Returns `null`
- * (fail closed, never re-derive from raw evidence) when `posture` itself
- * is `null` — the only case this function guards. The backend's
- * `AccountOperatorPosture` validator (not this selector) is what makes a
- * partial projection — a non-null `condition` with one host's blocker
- * missing — impossible on the wire in the first place.
- */
-export function accountOperatorPostureBlocker(
-  posture: AccountOperatorPosture | null,
-  host: AccountOperatorPostureHost,
-): OperatorBlocker | null {
-  if (posture === null) return null;
-  return host === 'account_desk' ? posture.account_desk : posture.fleet_roster;
 }
 
 /** Returns the projections whose full backend-authored guidance belongs in a lens. */
