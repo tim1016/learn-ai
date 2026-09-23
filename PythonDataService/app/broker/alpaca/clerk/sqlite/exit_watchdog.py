@@ -18,12 +18,17 @@ defers: the ``EXIT_NOT_FLAT`` episode stays raised and visible for the
 operator's own priced flatten, and the entry stays free for it.
 
 #2343: the re-drive is sized from the Clerk's *attributed* position, so it is
-sent only when this pass's fresh broker snapshot agrees with the account-wide
-attribution for the symbol and can absorb the reduction without crossing
-zero. Otherwise — a flat account, a partial broker position — it defers like
-an unpriceable re-drive: no order, no EXIT effect, no burned attempt, the
-episode stays raised. Every refusal is decided before
-``accept_recovery_exit``, so a refused re-drive never parks an EXIT.
+sent only when this pass's broker snapshot equals the account-wide
+attribution for the symbol and nothing — at the broker or in the Clerk — is
+still working on that symbol. Equality alone rules out an overshoot: the
+reduction moves broker and attribution together. Otherwise (a flat account, a
+partial broker position, a working order that could fill under it) it
+defers: no order, no EXIT effect, no burned attempt, the episode stays
+raised. Every refusal is decided before ``accept_recovery_exit``, so a
+refused re-drive never parks an EXIT. A deferral is logged once per episode,
+and an episode still deferring after the policy's escalation age (the time
+its re-drives would have been exhausted in) escalates to ``EXIT_STUCK``
+exactly as exhausted re-drives do.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ import hashlib
 import logging
 from collections.abc import Callable
 from typing import NamedTuple
+from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegRefused
 from app.broker.alpaca.clerk.recovery_reduction import (
@@ -65,10 +71,10 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     Capability,
     ReductionIntent,
     decide_capability,
-    moves_toward_zero_without_crossing,
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_STUCK_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
 )
@@ -81,14 +87,21 @@ from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
 
+# First pre-acceptance deferral per EXIT_NOT_FLAT episode (uncertainty id ->
+# clock ms), per repository. It both logs a deferral once per episode rather
+# than every 15 s pass and anchors the deferral escalation age. Process
+# memory on purpose: a restart re-logs once and restarts the deferral clock,
+# which only delays an escalation, never sends an order.
+_FIRST_DEFERRAL_MS: WeakKeyDictionary[ClerkSqliteRepository, dict[str, int]] = WeakKeyDictionary()
+
 
 class BrokerSymbolView(NamedTuple):
-    """One symbol as this pass's fresh broker snapshot and the Clerk's books see it.
+    """One symbol as this pass's broker snapshot and the Clerk's books see it.
 
     ``attributed_qty`` is the account-wide attributed total across every
     strategy instance — the quantity the broker's signed position must equal.
-    ``agrees`` is the reconciliation plan's own verdict for the symbol:
-    neither drifted nor indeterminate.
+    ``agrees`` is that equality with no order for the symbol working in the
+    snapshot.
     """
 
     broker_qty: float
@@ -129,9 +142,9 @@ async def redrive_or_escalate_stale_exits(
 ) -> None:
     """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate.
 
-    ``broker_symbol`` reads one symbol from this pass's fresh broker snapshot
+    ``broker_symbol`` reads one symbol from this pass's broker snapshot
     against the Clerk's current attribution (#2343). It has no default: a
-    caller without fresh broker truth cannot re-drive.
+    caller without a broker snapshot cannot re-drive.
 
     ``pricing`` is what an extended-hours re-drive prices from (#2229); the
     degraded :data:`UNPRICEABLE_RECOVERY` default defers outside the regular
@@ -162,6 +175,15 @@ async def redrive_or_escalate_stale_exits(
             )
             if episode is None or now_ms - episode["observed_at_ms"] < redrive_policy.after_ms:
                 continue
+            if (
+                repo.active_uncertainty(
+                    scope="CUSTODY_SUBJECT",
+                    reason_code=EXIT_STUCK_REASON_CODE,
+                    strategy_instance_id=sid,
+                )
+                is not None
+            ):
+                continue  # already escalated: automatic re-drives stopped
             try:
                 facts = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"])
                 cause = ExitNotFlatCause.from_mapping(facts.cause_facts)
@@ -210,67 +232,14 @@ async def redrive_or_escalate_stale_exits(
         remaining = stale_exit.remaining
         redrives = stale_exit.redrives
         if redrives >= redrive_policy.max_count:
-
-            def _escalate_if_still_stuck(
-                sid: str = sid,
-                cause: ExitNotFlatCause = cause,
-                redrives: int = redrives,
-            ) -> str | None:
-                """Raise EXIT_STUCK from a fresh read, never the scan's cache.
-
-                The scan ran unfenced on a worker; websocket evidence can
-                resolve the episode or flatten the position between then and
-                now. Escalating either from obsolete data would leave an
-                already-flat strategy paused behind a false operator-visible
-                error (#1993 review).
-                """
-                episode_now = repo.active_uncertainty(
-                    scope="CUSTODY_SUBJECT",
-                    reason_code=EXIT_NOT_FLAT_REASON_CODE,
-                    strategy_instance_id=sid,
-                )
-                if episode_now is None:
-                    return None
-                remaining_now = repo.position(sid, cause.symbol)
-                if not position_quantity_is_nonzero(remaining_now):
-                    return None
-                return raise_uncertainty(
-                    repo,
-                    strategy_instance_id=sid,
-                    reason_code=redrive_policy.escalate_to,
-                    headline="A stuck EXIT exhausted automatic re-drives",
-                    explanation=(
-                        f"{remaining_now:g} {cause.symbol} remains attributed after "
-                        f"{redrives} automatic EXIT re-drives."
-                    ),
-                    operator_impact=(
-                        "New exposure stays paused for this strategy and automatic "
-                        "re-drives stopped. Exact operator reduction remains available."
-                    ),
-                    next_step="Run Reconcile now, then execute the presented safe flatten.",
-                    evidence_refs=(episode_now["uncertainty_id"],),
-                    cause_facts=ExitStuckCause(
-                        symbol=cause.symbol,
-                        attributed_qty=remaining_now,
-                        redrive_count=redrives,
-                        first_observed_at_ms=episode_now["observed_at_ms"],
-                    ).to_mapping(),
-                    severity="error",
-                )
-
-            escalated = await intake.off_loop(_escalate_if_still_stuck)
-            if escalated is not None and escalated != "unchanged":
-                logger.error(
-                    "stale EXIT escalated to a durable operator-visible EXIT_STUCK episode",
-                    extra={
-                        "action": "exit_stuck_escalated",
-                        "account_id": repo.account_id,
-                        "strategy_instance_id": sid,
-                        "symbol": cause.symbol,
-                        "redrive_count": redrives,
-                        "age_ms": now_ms - episode["observed_at_ms"],
-                    },
-                )
+            await _escalate_to_exit_stuck(
+                repo,
+                intake=intake,
+                redrive_policy=redrive_policy,
+                stale_exit=stale_exit,
+                now_ms=now_ms,
+                deferred_since_ms=None,
+            )
             continue
 
         def _candidate_entries(sid: str = sid, cause: ExitNotFlatCause = cause) -> list[OrderResource]:
@@ -356,17 +325,16 @@ async def redrive_or_escalate_stale_exits(
             if accepted is None:
                 continue  # attributed-flat since the scan; the flat fence resolver clears it
             if isinstance(accepted, _RedriveRefused):
-                logger.warning(
-                    accepted.message,
-                    extra={
-                        "action": accepted.action,
-                        "account_id": repo.account_id,
-                        "strategy_instance_id": sid,
-                        "symbol": cause.symbol,
-                        **accepted.facts,
-                    },
+                await _defer_or_escalate(
+                    repo,
+                    intake=intake,
+                    redrive_policy=redrive_policy,
+                    stale_exit=stale_exit,
+                    now_ms=now_ms,
+                    refusal=accepted,
                 )
                 continue
+            _FIRST_DEFERRAL_MS.get(repo, {}).pop(episode["uncertainty_id"], None)
             await resolve_accepted_exit(repo, accepted=accepted, trade=trade, off_loop=run)
         except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
             logger.info(
@@ -416,13 +384,26 @@ def _accept_admissible_redrive(
     remaining = repo.position(strategy_instance_id, symbol)
     if not position_quantity_is_nonzero(remaining):
         return None
+    if _clerk_work_in_flight(repo, symbol):
+        return _RedriveRefused(
+            action="exit_redrive_deferred_work_in_flight",
+            message=(
+                "deferred a stuck-EXIT re-drive: the Clerk still has work in flight "
+                "that could fill under it"
+            ),
+            facts={"strategy_attributed_qty": remaining},
+        )
+    # Equality with the account-wide attribution is the whole proof: the
+    # reduction moves broker and attribution by the same amount, so they stay
+    # equal and the broker cannot be carried past what the Clerk holds. A
+    # netted account (A +10, B -10, broker 0) re-drives A's SELL 10 correctly.
     view = broker_symbol(symbol)
-    if not view.agrees or not moves_toward_zero_without_crossing(view.broker_qty, -remaining):
+    if not view.agrees:
         return _RedriveRefused(
             action="exit_redrive_deferred_broker_disagrees",
             message=(
-                "deferred a stuck-EXIT re-drive: the broker's fresh position cannot "
-                "absorb the attributed reduction"
+                "deferred a stuck-EXIT re-drive: this pass's broker snapshot does not "
+                "agree with the attributed position, or an order on it is working"
             ),
             facts={
                 "broker_qty": view.broker_qty,
@@ -455,3 +436,148 @@ def _accept_admissible_redrive(
         entry_order_ref=entry_order_ref,
         confirmed_shape=confirmed_shape,
     )
+
+
+def _clerk_work_in_flight(repo: ClerkSqliteRepository, symbol: str) -> bool:
+    """Whether the Clerk has broker intent on ``symbol`` the snapshot may not show yet.
+
+    Any nonterminal effect of a strategy instance on the symbol (an ENTER in
+    flight, another EXIT, a recovery flatten) or any nonterminal manual order
+    (manual tickets are account-wide custody, so conservatively any symbol).
+    """
+    instance_symbols = {
+        instance["strategy_instance_id"]: str(instance["symbol"]).upper()
+        for instance in repo.strategy_instances()
+    }
+    return repo.has_nonterminal_manual_order() or any(
+        instance_symbols.get(effect.strategy_instance_id or "") == symbol.upper()
+        for effect in repo.reconcilable_effect_operations()
+    )
+
+
+async def _defer_or_escalate(
+    repo: ClerkSqliteRepository,
+    *,
+    intake: ReentrantAsyncLock,
+    redrive_policy: RedriveThenEscalate,
+    stale_exit: _StaleExit,
+    now_ms: int,
+    refusal: _RedriveRefused,
+) -> None:
+    """Log a pre-acceptance deferral once per episode; escalate one that outlasts the policy.
+
+    A deferral burns no attempt, so without this bound a permanently flat
+    broker would never reach ``EXIT_STUCK``. The escalation age is the time
+    the policy's re-drives would have been exhausted in:
+    ``after_ms × (max_count + 1)`` counted from the episode's first deferral.
+    """
+    uncertainty_id = stale_exit.episode["uncertainty_id"]
+    first_deferrals = _FIRST_DEFERRAL_MS.setdefault(repo, {})
+    first_ms = first_deferrals.get(uncertainty_id)
+    if first_ms is None:
+        first_deferrals[uncertainty_id] = now_ms
+        logger.warning(
+            refusal.message,
+            extra={
+                "action": refusal.action,
+                "account_id": repo.account_id,
+                "strategy_instance_id": stale_exit.strategy_instance_id,
+                "symbol": stale_exit.cause.symbol,
+                **refusal.facts,
+            },
+        )
+        return
+    if now_ms - first_ms < redrive_policy.after_ms * (redrive_policy.max_count + 1):
+        return
+    await _escalate_to_exit_stuck(
+        repo,
+        intake=intake,
+        redrive_policy=redrive_policy,
+        stale_exit=stale_exit,
+        now_ms=now_ms,
+        deferred_since_ms=first_ms,
+    )
+
+
+async def _escalate_to_exit_stuck(
+    repo: ClerkSqliteRepository,
+    *,
+    intake: ReentrantAsyncLock,
+    redrive_policy: RedriveThenEscalate,
+    stale_exit: _StaleExit,
+    now_ms: int,
+    deferred_since_ms: int | None,
+) -> None:
+    """Escalate a stuck EXIT to EXIT_STUCK: re-drives exhausted, or deferred too long.
+
+    ``deferred_since_ms`` is ``None`` for exhausted re-drives and the first
+    deferral's clock otherwise; it only changes the operator-facing wording.
+    """
+    sid = stale_exit.strategy_instance_id
+    cause = stale_exit.cause
+    redrives = stale_exit.redrives
+    if deferred_since_ms is None:
+        headline = "A stuck EXIT exhausted automatic re-drives"
+        why = f"after {redrives} automatic EXIT re-drives."
+    else:
+        headline = "A stuck EXIT could not be safely re-driven"
+        why = (
+            f"after automatic re-drives were deferred for {now_ms - deferred_since_ms} ms: "
+            "the broker's position did not agree with the Clerk's, or an order on the "
+            "symbol was still working."
+        )
+
+    def _escalate_if_still_stuck() -> str | None:
+        """Raise EXIT_STUCK from a fresh read, never the scan's cache.
+
+        The scan ran unfenced on a worker; websocket evidence can
+        resolve the episode or flatten the position between then and
+        now. Escalating either from obsolete data would leave an
+        already-flat strategy paused behind a false operator-visible
+        error (#1993 review).
+        """
+        episode_now = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT",
+            reason_code=EXIT_NOT_FLAT_REASON_CODE,
+            strategy_instance_id=sid,
+        )
+        if episode_now is None:
+            return None
+        remaining_now = repo.position(sid, cause.symbol)
+        if not position_quantity_is_nonzero(remaining_now):
+            return None
+        return raise_uncertainty(
+            repo,
+            strategy_instance_id=sid,
+            reason_code=redrive_policy.escalate_to,
+            headline=headline,
+            explanation=f"{remaining_now:g} {cause.symbol} remains attributed {why}",
+            operator_impact=(
+                "New exposure stays paused for this strategy and automatic "
+                "re-drives stopped. Exact operator reduction remains available."
+            ),
+            next_step="Run Reconcile now, then execute the presented safe flatten.",
+            evidence_refs=(episode_now["uncertainty_id"],),
+            cause_facts=ExitStuckCause(
+                symbol=cause.symbol,
+                attributed_qty=remaining_now,
+                redrive_count=redrives,
+                first_observed_at_ms=episode_now["observed_at_ms"],
+            ).to_mapping(),
+            severity="error",
+        )
+
+    escalated = await intake.off_loop(_escalate_if_still_stuck)
+    if escalated is not None and escalated != "unchanged":
+        logger.error(
+            "stale EXIT escalated to a durable operator-visible EXIT_STUCK episode",
+            extra={
+                "action": "exit_stuck_escalated",
+                "account_id": repo.account_id,
+                "strategy_instance_id": sid,
+                "symbol": cause.symbol,
+                "redrive_count": redrives,
+                "age_ms": now_ms - stale_exit.episode["observed_at_ms"],
+                "deferred_since_ms": deferred_since_ms,
+            },
+        )

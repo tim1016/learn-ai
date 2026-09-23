@@ -2230,20 +2230,28 @@ class _NoReconciler:
         raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
 
 
-async def _held_position(repo: ClerkSqliteRepository, *, suffix: str = "1") -> str:
-    """Filled 10-share SPY entry with an exact execution slice -> attributed +10."""
+async def _held_position(
+    repo: ClerkSqliteRepository,
+    *,
+    suffix: str = "1",
+    sid: str = WATCHDOG_SID,
+    run_id: str = WATCHDOG_RUN,
+    side: str = "buy",
+) -> str:
+    """Filled 10-share SPY entry with an exact execution slice -> attributed +10
+    (or -10 for ``side="sell"``)."""
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
-        strategy_instance_id=WATCHDOG_SID,
+        strategy_instance_id=sid,
         decision_id=f"wd-enter-{suffix}",
-        lifecycle_run_id=WATCHDOG_RUN,
-        leg=_leg(quantity=10),
+        lifecycle_run_id=run_id,
+        leg=_leg(quantity=10, side=side),
         trade=_FakeTrade(),
     )
     assert submission.order_ref is not None
     filled = _broker_order(
-        submission.order_ref, status="filled", quantity=10.0,
+        submission.order_ref, status="filled", side=side, quantity=10.0,
         filled_quantity=10, filled_avg_price=100.0,
     )
     fold_order_evidence(
@@ -2415,6 +2423,136 @@ async def test_watchdog_leaves_no_parked_redrive_exit_when_admission_refuses(
     await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade)
 
     _assert_redrive_deferred(repo, episode, trade)
+
+
+def _aged_exit_not_flat(repo: ClerkSqliteRepository, clock: Any) -> dict[str, Any]:
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    return episode
+
+
+def _register_second_spy_lane(repo: ClerkSqliteRepository) -> tuple[str, str]:
+    sid, run_id = "wd-bot-b", "wd-run-b"
+    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="wd-h2")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    return sid, run_id
+
+
+async def test_watchdog_does_not_redrive_while_a_foreign_order_works_the_symbol(
+    clocked_repo,
+) -> None:
+    """#2343 review M1: broker +10 equals attributed +10, but a foreign
+    ``sell 10 SPY`` is still working. Equality is no proof while an order can
+    fill under the re-drive — SELL 10 on top of it leaves the account at -10."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    episode = _aged_exit_not_flat(repo, clock)
+    foreign = _broker_order(
+        "not-ours-1", order_id="bo-foreign-1", side="sell", quantity=10.0, status="new"
+    )
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[foreign], positions=[_position("SPY", quantity=10.0)]),
+        trade=trade,
+    )
+
+    _assert_redrive_deferred(repo, episode, trade)
+
+
+async def test_watchdog_does_not_redrive_while_the_clerk_has_work_in_flight_on_the_symbol(
+    clocked_repo,
+) -> None:
+    """#2343 review M1: an order of our own on the symbol the snapshot does not
+    list yet (another lane's accepted ENTER) is also work that can fill under
+    the re-drive."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    sid_b, run_b = _register_second_spy_lane(repo)
+    accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=sid_b,
+        decision_id="wd-b-enter-in-flight",
+        lifecycle_run_id=run_b,
+        leg=_leg(quantity=5),
+    )
+    episode = _aged_exit_not_flat(repo, clock)
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=trade
+    )
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is None
+    assert not [
+        order for order in repo.orders_for_strategy(WATCHDOG_SID) if order.role == "REDUCING"
+    ]
+
+
+async def test_watchdog_redrives_a_netted_account(clocked_repo) -> None:
+    """#2343 review m2: lane A +10, lane B -10, broker flat. The broker equals
+    the account-wide attribution, so A's SELL 10 keeps them equal (both -10)
+    and must proceed; a zero-crossing check against the broker would defer it
+    forever."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    sid_b, run_b = _register_second_spy_lane(repo)
+    await _held_position(repo, suffix="b", sid=sid_b, run_id=run_b, side="sell")
+    assert repo.position(sid_b, "SPY") == -10.0
+    episode = _aged_exit_not_flat(repo, clock)
+    trade = _FakeTrade()
+
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+    assert len(trade.submit_calls) == 1
+
+
+async def test_watchdog_escalates_a_permanently_flat_broker_without_submitting(
+    clocked_repo, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2343 review m2: a deferral burns no attempt, so it is bounded by the
+    policy's escalation age instead — EXIT_STUCK exactly as exhausted
+    re-drives, never an order — and logged once per episode, not every pass."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _aged_exit_not_flat(repo, clock)
+    policy = _exit_not_flat_redrive_policy()
+    trade = _FakeTrade()
+
+    def _stuck() -> dict[str, Any] | None:
+        return repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT",
+            reason_code=EXIT_STUCK_REASON_CODE,
+            strategy_instance_id=WATCHDOG_SID,
+        )
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(policy.max_count + 1):
+            await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+            assert _stuck() is None
+            clock.advance(policy.after_ms)
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+
+    assert _stuck() is not None
+    assert trade.submit_calls == []
+    assert repo.active_exit_for_strategy(WATCHDOG_SID) is None
+    deferrals = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "exit_redrive_deferred_broker_disagrees"
+    ]
+    assert len(deferrals) == 1
 
 
 async def test_watchdog_defers_outside_the_regular_session_when_nothing_can_be_priced(

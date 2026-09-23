@@ -160,32 +160,43 @@ def _broker_symbol_reader(
 ) -> BrokerSymbolReader:
     """Read one symbol of this pass's broker snapshot against current attribution.
 
-    The stuck-EXIT watchdog's view of broker truth (#2343). Agreement is the
-    same per-symbol verdict the final comparison reaches — neither drifted
-    nor indeterminate — computed by :func:`plan_account_reconciliation`
-    itself, against the attribution at the moment of the call: a fill folded
-    since the snapshot that the snapshot did not see reads as disagreement,
-    so the watchdog defers rather than trusting either side.
+    The stuck-EXIT watchdog's view of broker truth (#2343). A symbol agrees
+    only when the broker's signed position equals the account-wide
+    attribution *and* no order for it is working in the snapshot: a working
+    order can fill under the re-drive and carry the account past zero, so it
+    is never proof, whether it is foreign, manual, or another EXIT of ours.
+    Attribution is read at the moment of the call, so a fill folded since the
+    snapshot that the snapshot did not see reads as disagreement and the
+    watchdog defers rather than trusting either side.
     """
     broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    in_flight = _in_flight_symbols(broker_orders)
 
     def read(symbol: str) -> BrokerSymbolView:
         normalized = symbol.upper()
-        attributed_positions = repo.attributed_positions_by_symbol()
-        plan = plan_account_reconciliation(
-            namespaces=frozenset(),
-            broker_orders=broker_orders,
-            broker_positions=broker_positions,
-            attributed_positions=attributed_positions,
-            known_order_refs=frozenset(),
-        )
+        broker_qty = broker_by_symbol.get(normalized, 0.0)
+        attributed_qty = _attributed_quantity_by_symbol(
+            repo.attributed_positions_by_symbol()
+        ).get(normalized, 0.0)
         return BrokerSymbolView(
-            broker_qty=broker_by_symbol.get(normalized, 0.0),
-            attributed_qty=_attributed_quantity_by_symbol(attributed_positions).get(normalized, 0.0),
-            agrees=normalized not in {*plan.drifted_symbols, *plan.indeterminate_symbols},
+            broker_qty=broker_qty,
+            attributed_qty=attributed_qty,
+            agrees=(
+                not position_quantity_is_nonzero(broker_qty - attributed_qty)
+                and normalized not in in_flight
+            ),
         )
 
     return read
+
+
+def _in_flight_symbols(broker_orders: list[BrokerOrder]) -> frozenset[str]:
+    """Upper-cased symbols with an order the broker may still act on."""
+    return frozenset(
+        order.symbol.upper()
+        for order in broker_orders
+        if order.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+    )
 
 
 def plan_account_reconciliation(
@@ -209,11 +220,7 @@ def plan_account_reconciliation(
             else not order_ref_namespace_matches(order.client_order_id, namespaces)
         )
     )
-    in_flight_symbols = {
-        order.symbol.upper()
-        for order in broker_orders
-        if order.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
-    }
+    in_flight_symbols = _in_flight_symbols(broker_orders)
     broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
     attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
     symbols = set(broker_by_symbol) | set(attributed_by_symbol)
@@ -873,7 +880,7 @@ async def _reconcile_account_serialized(
     )
 
     # The re-drive is sized from attribution, so it may only send what this
-    # pass's fresh broker position agrees with and can absorb (#2343).
+    # pass's broker snapshot agrees with, with nothing working on the symbol (#2343).
     await redrive_or_escalate_stale_exits(
         repo,
         trade=trade,
