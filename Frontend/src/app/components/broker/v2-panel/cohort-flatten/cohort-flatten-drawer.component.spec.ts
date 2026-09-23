@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
@@ -14,6 +15,7 @@ import type {
 import { CohortFlattenDrawerComponent } from './cohort-flatten-drawer.component';
 import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directory-testing';
 import { formatReceiptLabel } from '../../../../shared/pipes/receipt-label.pipe';
+import { MAX_COHORT_FLATTEN_LEGS } from './cohort-flatten-confirmation';
 
 function leg(overrides: Partial<CohortFlattenLeg> = {}): CohortFlattenLeg {
   return {
@@ -107,6 +109,15 @@ function refused(
   };
 }
 
+/** A refusal a same-key retry can change: the lease the batch hit was revived. */
+function revived(sid: string): CohortLegResult {
+  return refused(sid, {
+    message: 'The execution lease was revived; this request applied nothing.',
+    why: 'Click the action again.',
+    reason_code: 'EXECUTION_LEASE_REVIVED',
+  });
+}
+
 function result(legs: CohortLegResult[]): CohortActionResult {
   const count = (...kinds: string[]) => legs.filter((item) => kinds.includes(item.outcome)).length;
   return {
@@ -158,6 +169,37 @@ async function confirmWave(user: ReturnType<typeof userEvent.setup>, count: numb
   await user.click(within(dialog).getByRole('button', { name: `Flatten ${count}` }));
 }
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Each presentation read gets its own deferred, settled by the spec. */
+function queuedReads(service: ReturnType<typeof fakeService>): Deferred<CohortFlattenView>[] {
+  const reads: Deferred<CohortFlattenView>[] = [];
+  service.getCohortFlattenView = vi.fn(() => {
+    const read = deferred<CohortFlattenView>();
+    reads.push(read);
+    return read.promise;
+  });
+  return reads;
+}
+
+function reviewButton(count: number): HTMLButtonElement {
+  return screen.getByRole('button', { name: `Review flatten of ${count}` }) as HTMLButtonElement;
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('CohortFlattenDrawerComponent', () => {
@@ -205,7 +247,7 @@ describe('CohortFlattenDrawerComponent', () => {
     const user = userEvent.setup();
     await screen.findAllByRole('checkbox');
 
-    await user.click(screen.getByRole('button', { name: /Flatten this cohort: Deployment Validation SPY/ }));
+    await user.click(screen.getByRole('button', { name: /Select this cohort: Deployment Validation SPY/ }));
 
     expect(checkbox('spy-1').checked).toBe(true);
     expect(checkbox('spy-2').checked).toBe(true);
@@ -224,7 +266,7 @@ describe('CohortFlattenDrawerComponent', () => {
     await screen.findAllByRole('checkbox');
 
     const button = screen.getByRole('button', {
-      name: /Flatten this cohort: Deployment Validation IWM/,
+      name: /Select this cohort: Deployment Validation IWM/,
     }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
   });
@@ -341,13 +383,13 @@ describe('CohortFlattenDrawerComponent', () => {
     expect(blocker.textContent).toContain('after 2 of 3 bots');
     expect(within(blocker).getByText(formatReceiptLabel('EXECUTION_LEASE_LOST'))).toBeTruthy();
     expect(within(blocker).getByText('Another process owns this account.')).toBeTruthy();
-    expect(within(blocker).getByText('qqq-4')).toBeTruthy();
     const outcome = screen.getByRole('region', { name: 'Flatten outcome' });
+    expect(within(outcome).getByText(/Not attempted/).textContent).toContain('qqq-4');
     expect(within(outcome).getByText('receipt-qqq-1')).toBeTruthy();
   });
 
   it('retries the same wave under the same durable key and the same legs', async () => {
-    const service = fakeService([QQQ_COHORT], result([applied('qqq-1'), refused('qqq-2')]));
+    const service = fakeService([QQQ_COHORT], result([applied('qqq-1'), revived('qqq-2')]));
     await open(service);
     const user = userEvent.setup();
     await screen.findAllByRole('checkbox');
@@ -426,6 +468,213 @@ describe('CohortFlattenDrawerComponent', () => {
       (screen.getByRole('button', { name: 'Review flatten of 2' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(service.runCohortFlatten).not.toHaveBeenCalled();
+  });
+
+  describe('wave boundaries (#1909 review round)', () => {
+    it('keeps Review disabled until a presentation read STARTED after the POST resolved', async () => {
+      const service = fakeService([QQQ_COHORT]);
+      const reads = queuedReads(service);
+      const posts = [deferred<CohortActionResult>(), deferred<CohortActionResult>()];
+      service.runCohortFlatten = vi
+        .fn()
+        .mockReturnValueOnce(posts[0].promise)
+        .mockReturnValueOnce(posts[1].promise);
+      const { fixture } = await open(service);
+      const user = userEvent.setup();
+      reads[0].resolve(view([QQQ_COHORT]));
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+      posts[0].resolve(result([applied('qqq-1'), revived('qqq-2')]));
+      // The first POST resolved: read 2 starts and stays in flight.
+      await vi.waitFor(() => expect(reads).toHaveLength(2));
+      await user.click(await screen.findByRole('button', { name: 'Retry this batch' }));
+      // The retry resolves while read 2 — started BEFORE it resolved — is
+      // still loading, so read 2 may carry pre-flatten facts.
+      posts[1].resolve(result([applied('qqq-1'), applied('qqq-2')]));
+      await vi.waitFor(() => expect(screen.queryByText(/Flattening \d+ bots?…/)).toBeNull());
+      reads[1].resolve(view([QQQ_COHORT]));
+      await vi.waitFor(() => expect(reads).toHaveLength(3));
+      fixture.detectChanges();
+
+      expect(reviewButton(2).disabled).toBe(true);
+
+      reads[2].resolve(view([QQQ_COHORT]));
+      await vi.waitFor(() => expect(reviewButton(2).disabled).toBe(false));
+    });
+
+    it('does not re-read, and still dispatches, when the directory refreshes an identical lane while confirm is open', async () => {
+      const directory = provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_spec' })],
+      });
+      const service = fakeService([QQQ_COHORT]);
+      const { fixture } = await open(service, { directory });
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await user.click(reviewButton(2));
+      const dialog = await screen.findByRole('dialog');
+      await user.type(within(dialog).getByRole('textbox'), 'FLATTEN');
+      directory.rebind({
+        observed_at_ms: 1_757_000_000_001,
+        clerks: [testLane({ clerk_id: 'clrk_spec', observed_at_ms: 1_757_000_000_001 })],
+      });
+      await directory.useValue.refresh?.();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      // On demand, not polled (ADR 0051 D3): an unchanged lane is no reason to re-read.
+      expect(service.getCohortFlattenView).toHaveBeenCalledTimes(1);
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Flatten 2' }));
+      expect(service.runCohortFlatten).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the confirmation and sends nothing when the lane rebinds while it is open', async () => {
+      const directory = provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_spec' })],
+      });
+      const service = fakeService([QQQ_COHORT]);
+      const { fixture } = await open(service, { directory });
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await user.click(reviewButton(2));
+      const dialog = await screen.findByRole('dialog');
+      await user.type(within(dialog).getByRole('textbox'), 'FLATTEN');
+      const commit = within(dialog).getByRole('button', { name: 'Flatten 2' });
+      directory.rebind({
+        observed_at_ms: 1_757_000_000_001,
+        clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4 })],
+      });
+      await directory.useValue.refresh?.();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      // A click that raced the conflict must not dispatch either.
+      commit.click();
+      await fixture.whenStable();
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
+      expect(service.runCohortFlatten).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('failure honesty (#1909 review round)', () => {
+    it('keeps the known per-leg receipts when a retry never lands', async () => {
+      const service = fakeService([QQQ_COHORT]);
+      service.runCohortFlatten = vi
+        .fn()
+        .mockResolvedValueOnce(result([applied('qqq-1', 'rcpt/keep'), revived('qqq-2')]))
+        .mockRejectedValueOnce(new Error('network down'));
+      await open(service);
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+      await user.click(await screen.findByRole('button', { name: 'Retry this batch' }));
+
+      expect(await screen.findByText(/did not reach a result/)).toBeTruthy();
+      expect(screen.getByText('rcpt/keep')).toBeTruthy();
+    });
+
+    it('moves focus to the unknown-outcome alert when the POST never lands', async () => {
+      const service = fakeService([QQQ_COHORT]);
+      service.runCohortFlatten = vi.fn().mockRejectedValue(new Error('network down'));
+      await open(service);
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+
+      const alert = await screen.findByText(/did not reach a result/);
+      await vi.waitFor(() => expect(alert.closest('[tabindex="-1"]')).toBe(document.activeElement));
+    });
+
+    it('moves focus to the outcome once the wave answers', async () => {
+      const service = fakeService([QQQ_COHORT]);
+      await open(service);
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+
+      const outcome = await screen.findByRole('region', { name: 'Flatten outcome' });
+      await vi.waitFor(() => expect(document.activeElement).toBe(outcome));
+    });
+
+    it('renders a typed batch refusal as a refusal, refreshes the directory, and offers no retry', async () => {
+      const directory = provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_spec' })],
+      });
+      const refresh = vi.spyOn(directory.useValue as never, 'refresh');
+      const service = fakeService([QQQ_COHORT]);
+      service.runCohortFlatten = vi.fn().mockRejectedValue(
+        new HttpErrorResponse({
+          status: 409,
+          error: { reason: 'clerk_binding_generation_conflict', message: 'Expected 3 is not 4.' },
+        }),
+      );
+      await open(service, { directory });
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+
+      expect(await screen.findByText(/Expected 3 is not 4\./)).toBeTruthy();
+      expect(screen.queryByText(/Nothing is confirmed either way/)).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Retry this batch' })).toBeNull();
+      await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    });
+
+    it('offers no same-key retry for stale-presentation refusals and says to start a new wave', async () => {
+      // StaleRevisionError / ActionNotAvailableError are raised without a
+      // reason_code; re-sending the same tokens can only be refused again.
+      const service = fakeService(
+        [QQQ_COHORT],
+        result([applied('qqq-1'), refused('qqq-2', { reason_code: null })]),
+      );
+      await open(service);
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+
+      await screen.findByRole('region', { name: 'Flatten outcome' });
+      expect(screen.queryByRole('button', { name: 'Retry this batch' })).toBeNull();
+      expect(screen.getByText(/start a new wave/i)).toBeTruthy();
+    });
+
+    it('names legs the response never answered even without an account blocker', async () => {
+      // A contract violation (fewer legs than sent, no terminal refusal) must
+      // be visible, not silently dropped.
+      const service = fakeService([QQQ_COHORT], result([applied('qqq-1')]));
+      await open(service);
+      const user = userEvent.setup();
+      await screen.findAllByRole('checkbox');
+
+      await confirmWave(user, 2);
+
+      const outcome = await screen.findByRole('region', { name: 'Flatten outcome' });
+      expect(within(outcome).getByText(/Not attempted/).textContent).toContain('qqq-2');
+      expect(screen.queryByRole('alert', { name: 'Batch stopped: account-scoped' })).toBeNull();
+    });
+  });
+
+  it('caps a wave at the backend’s leg limit', async () => {
+    const legs = Array.from({ length: MAX_COHORT_FLATTEN_LEGS + 1 }, (_, index) =>
+      leg({ strategy_instance_id: `qqq-${String(index).padStart(3, '0')}`, concurrency_token: `t${index}` }),
+    );
+    await open(fakeService([cohort(legs)]));
+    await screen.findAllByRole('checkbox');
+
+    expect(reviewButton(MAX_COHORT_FLATTEN_LEGS)).toBeTruthy();
+    const overflow = checkbox(`qqq-${String(MAX_COHORT_FLATTEN_LEGS).padStart(3, '0')}`);
+    expect(overflow.checked).toBe(false);
+    expect(overflow.disabled).toBe(true);
+    expect(screen.getByText(new RegExp(`at most ${MAX_COHORT_FLATTEN_LEGS} bots`))).toBeTruthy();
   });
 
   it('has no detectable accessibility violations with cohorts and an outcome on screen', async () => {

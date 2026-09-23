@@ -11,35 +11,52 @@
   <ng-template #header>
     <div class="cohort-flatten__header">
       <div>
-        <span>Roster · {{ accountId() }}</span>
-        <h2>Flatten a cohort</h2>
-        <p>
-          Bots on the same strategy and symbol, each flattened by its own attributed
-          action. A bot can join the batch only when its own flatten is available.
-        </p>
+        <span>{{ copy.eyebrow(accountId()) }}</span>
+        <h2>{{ copy.title }}</h2>
+        <p>{{ copy.intro }}</p>
       </div>
-      <button type="button" aria-label="Close flatten a cohort" (click)="onClose()">
+      <button type="button" [attr.aria-label]="copy.closeLabel" (click)="onClose()">
         <i class="pi pi-times" aria-hidden="true"></i>
       </button>
     </div>
   </ng-template>
 
   @if (visible()) {
+    @if (submitting()) {
+      <p #progress class="cohort-flatten__progress" role="status" tabindex="-1">
+        {{ copy.inFlight(sentSids().length) }}
+      </p>
+    }
+
+    @if (dispatchFailure(); as failure) {
+      <div #failureAlert class="cohort-flatten__failure" role="alert" tabindex="-1">
+        @if (failure.kind === 'refused') {
+          <p><strong>{{ copy.requestRefused }}</strong></p>
+          @if (failure.reasonCode; as code) {
+            <p class="cohort-flatten__reason">{{ code | receiptLabel }}</p>
+          }
+          <p>{{ failure.message }}</p>
+          @if (failure.why; as why) {
+            <p>{{ why }}</p>
+          }
+          <p>{{ copy.requestRefusedNext }}</p>
+        } @else {
+          <p>{{ copy.requestUnknown }}</p>
+        }
+      </div>
+    }
+
+    @if (directoryRefreshFailed()) {
+      <p role="alert">{{ refreshFailedMessage }}</p>
+    }
+
     @if (outcome(); as result) {
       <app-cohort-flatten-outcome [result]="result" [requested]="sentSids()" />
     }
 
-    @if (submitError()) {
-      <p role="alert">
-        The flatten request did not reach a result. Nothing is confirmed either way —
-        retrying re-sends this same batch, so a bot that already flattened replays as a
-        no-op.
-      </p>
-    }
-
     @if (canRetry()) {
       <button type="button" class="cohort-flatten__retry" (click)="retry()">
-        Retry this batch
+        {{ copy.retry }}
       </button>
     }
 
@@ -48,20 +65,25 @@
     }
 
     @if (view() === null && loading()) {
-      <p role="status">Reading the roster…</p>
+      <p role="status">{{ copy.reading }}</p>
     } @else if (loadFailed()) {
-      <p role="alert">Could not read the account’s cohorts. Close and reopen to retry.</p>
+      <p role="alert">{{ copy.loadFailed }}</p>
     } @else if (emptyMessage(); as message) {
       <p role="status">{{ message }}</p>
     } @else {
-      @for (cohort of view()?.cohorts ?? []; track cohort.strategy_key + '::' + cohort.symbol) {
+      @for (cohort of view()?.cohorts ?? []; track keyOf(cohort)) {
         <app-cohort-flatten-group
           [cohort]="cohort"
-          [active]="activeKey() === cohort.strategy_key + '::' + cohort.symbol"
+          [active]="activeKey() === keyOf(cohort)"
           [selected]="selected()"
+          [capReached]="capReached()"
           (toggled)="toggle($event)"
           (chosen)="chooseCohort(cohort)"
         />
+      }
+
+      @if (overCap()) {
+        <p role="status">{{ copy.capReached(maxLegs) }}</p>
       }
 
       <div class="cohort-flatten__commit">
@@ -73,7 +95,7 @@
           [attr.aria-busy]="submitting()"
           (click)="review()"
         >
-          {{ submitting() ? 'Flattening…' : 'Review flatten of ' + selectedLegs().length }}
+          {{ copy.review(selectedLegs().length) }}
         </button>
       </div>
     }
@@ -81,12 +103,12 @@
     @if (pending(); as wave) {
       <app-typed-halt-confirm
         [open]="true"
-        [heading]="wave.copy.heading"
-        [message]="wave.copy.message"
-        [consequence]="wave.copy.consequence"
-        [assetSymbol]="activeCohort()?.symbol ?? null"
-        [requiredToken]="confirmToken"
-        [confirmLabel]="wave.copy.confirmLabel"
+        [heading]="wave.heading"
+        [message]="wave.message"
+        [consequence]="copy.confirmConsequence"
+        [assetSymbol]="wave.symbol"
+        [requiredToken]="copy.confirmToken"
+        [confirmLabel]="wave.confirmLabel"
         (confirmed)="confirm()"
         (cancelled)="cancelReview()"
       />

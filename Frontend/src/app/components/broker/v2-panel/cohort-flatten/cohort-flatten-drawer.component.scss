@@ -36,3 +36,27 @@
 .cohort-flatten__review {
   cursor: pointer;
 }
+
+.cohort-flatten__progress,
+.cohort-flatten__failure {
+  margin-bottom: 0.75rem;
+
+  &:focus-visible {
+    outline: 2px solid var(--focus-ring, currentColor);
+    outline-offset: 2px;
+  }
+}
+
+.cohort-flatten__failure {
+  padding: 0.6rem 0.75rem;
+  border: 2px solid var(--verdict-blocked, currentColor);
+  border-radius: 6px;
+
+  p {
+    margin: 0 0 0.35rem;
+  }
+}
+
+.cohort-flatten__reason {
+  font-weight: 600;
+}

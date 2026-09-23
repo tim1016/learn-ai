@@ -5,14 +5,15 @@ import {
   inject,
   input,
   output,
-  resource,
   signal,
+  type Signal,
 } from '@angular/core';
 
 import { Drawer } from 'primeng/drawer';
 
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import { cohortDrawerLane } from '../lib/cohort-drawer-lane';
+import { CohortDrawerPresentation } from '../lib/cohort-drawer-presentation';
+import { type ResourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { ARCHIVE_CONFIRM_TOKEN } from './archive-confirm-token';
 import { CohortArchiveCommitComponent } from './cohort-archive-commit.component';
 import { CohortArchiveGroupComponent } from './cohort-archive-group.component';
@@ -76,15 +77,22 @@ export class CohortArchiveDrawerComponent {
   protected readonly submitError = signal(false);
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
   protected readonly confirmText = signal('');
-  /** The command lane frozen at open; see `cohortDrawerLane` (#2068). */
-  private readonly lane = cohortDrawerLane({
+  /** The presentation read and the command lane frozen at open (#2068). */
+  private readonly presentation = new CohortDrawerPresentation({
     visible: this.visible,
     broker: this.broker,
     clerkId: this.clerkId,
     accountId: this.accountId,
+    load: (target) => this.panelService.getCohortArchiveView(target),
   });
-  protected readonly laneConflict = this.lane.conflict;
-  protected readonly laneConflictMessage = this.lane.conflictMessage;
+  protected readonly laneConflict = this.presentation.conflict;
+  protected readonly laneConflictMessage = this.presentation.conflictMessage;
+  /**
+   * The archive command minted for one opening of the drawer: one durable key
+   * per open, reused by a deliberate retry. Keyed on the frozen lane target,
+   * which is re-frozen on every open, so a reopen mints afresh.
+   */
+  private minted: { readonly frozen: ResourceTarget; readonly command: ResourceTarget } | null = null;
 
   /**
    * Clear everything that could act on a bot.
@@ -101,19 +109,9 @@ export class CohortArchiveDrawerComponent {
     this.submitError.set(false);
   }
 
-  private readonly archivable = resource({
-    params: () => (this.visible() ? { target: this.lane.readTarget() } : undefined),
-    loader: ({ params }) => this.panelService.getCohortArchiveView(params.target),
-  });
-
-  protected readonly view = computed<CohortArchiveView | null>(() => {
-    const value = this.archivable.hasValue() ? this.archivable.value() : null;
-    // Never hand back another account's legs: the resource keeps its previous
-    // value across a params change, and these legs carry act-on-me tokens.
-    return value?.account_id === this.accountId() ? value : null;
-  });
-  protected readonly loading = computed(() => this.archivable.isLoading());
-  protected readonly loadFailed = computed(() => this.archivable.error() !== undefined);
+  protected readonly view: Signal<CohortArchiveView | null> = this.presentation.view;
+  protected readonly loading = this.presentation.loading;
+  protected readonly loadFailed = this.presentation.loadFailed;
 
   /**
    * The legs the backend armed, narrowed to those that actually carry the
@@ -203,8 +201,17 @@ export class CohortArchiveDrawerComponent {
     this.closed.emit();
   }
 
+  private presentedCommand(): ResourceTarget | null {
+    const frozen = this.presentation.frozenTarget();
+    if (frozen === null) return null;
+    if (this.minted?.frozen !== frozen) {
+      this.minted = { frozen, command: withCommand(frozen, 'bot_action', crypto.randomUUID()) };
+    }
+    return this.minted.command;
+  }
+
   protected async submit(): Promise<void> {
-    const target = this.lane.presentedTarget();
+    const target = this.presentedCommand();
     if (!this.canSubmit() || target === null) return;
     const idempotencyKey = target.idempotencyKey;
     if (idempotencyKey === null) {
@@ -235,14 +242,14 @@ export class CohortArchiveDrawerComponent {
       // than the one it carried before the batch ran. `reload` rather than a
       // params change: the latter drops the prior value and blanks the list
       // under the outcome the operator is still reading.
-      this.archivable.reload();
+      this.presentation.reload();
     } catch {
       // The POST never returned a typed batch result, so no leg outcome is
       // known. An irreversible command must not leave the button quietly
       // re-enabling: say the outcome is unknown, and keep the selection so a
       // retry is a deliberate act rather than a re-selection from scratch.
       this.submitError.set(true);
-      this.archivable.reload();
+      this.presentation.reload();
     } finally {
       this.submitting.set(false);
     }

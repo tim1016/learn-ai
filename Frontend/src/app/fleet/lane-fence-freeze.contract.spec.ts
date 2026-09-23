@@ -27,7 +27,7 @@ const APP_ROOT = join(__dirname, '..');
  * (`freezeLaneFence(`) before that read reaches `withCommand(` — whether via
  * the `linkedSignal` + `untracked()` + eager-`effect()` pattern (the panel,
  * the roster, the gallery) or a `computed()` frozen once at action-open and
- * never re-read for the command (`cohortDrawerLane`, shared by the cohort
+ * never re-read for the command (`CohortDrawerPresentation`, shared by the cohort
  * archive and flatten drawers).
  *
  * A future entry here needs the same proof this comment demands: a real,
@@ -103,7 +103,7 @@ describe('the lane fence is frozen, never read at command time', () => {
  * already froze the whole target before handing it down. A provider that
  * does — the deploy drawer freezes an entire `ResourceTarget` once when it
  * opens and never re-derives it while open, the same "computed() frozen
- * once at action-open" pattern as `cohortDrawerLane` above — makes
+ * once at action-open" pattern as `CohortDrawerPresentation` above — makes
  * `fencedTarget(`/`freezeLaneFence(` in the *consumer* unnecessary. Those
  * consumers are named in `INPUT_ALLOWED` with the one-line proof this spec
  * demands; a future entry needs the same proof, not a bare addition.

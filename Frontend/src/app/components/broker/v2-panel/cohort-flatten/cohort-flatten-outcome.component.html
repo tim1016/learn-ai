@@ -1,15 +1,11 @@
 <section
   #region
   class="cohort-flatten__outcome"
-  aria-label="Flatten outcome"
+  [attr.aria-label]="copy.outcomeRegion"
   tabindex="-1"
 >
   <p class="cohort-flatten__summary" [attr.role]="unresolved() ? 'alert' : 'status'">
-    <strong>
-      Applied {{ result().applied_count }}, replayed {{ result().replayed_count }}, refused
-      {{ result().refused_count }}, failed {{ result().failed_count }} of
-      {{ requested().length }} sent.
-    </strong>
+    <strong>{{ summary() }}</strong>
   </p>
 
   @if (accountBlocker(); as blocker) {
@@ -18,11 +14,8 @@
       role="alert"
       aria-labelledby="cohort-flatten-account-blocker-heading"
     >
-      <h4 id="cohort-flatten-account-blocker-heading">Batch stopped: account-scoped</h4>
-      <p>
-        The batch stopped after {{ result().legs.length }} of {{ requested().length }} bots: this
-        account refused further writes, so no later bot could run.
-      </p>
+      <h4 id="cohort-flatten-account-blocker-heading">{{ copy.accountBlockerHeading }}</h4>
+      <p>{{ copy.accountBlockerBody(result().legs.length, requested().length) }}</p>
       @if (blocker.reason_code) {
         <p class="cohort-flatten__reason">{{ blocker.reason_code | receiptLabel }}</p>
       }
@@ -30,22 +23,29 @@
       @if (blocker.why; as why) {
         <p>{{ why }}</p>
       }
-      <p>
-        Not attempted:
-        @for (sid of notAttempted(); track sid; let last = $last) {
-          <code>{{ sid }}</code>{{ last ? '' : ', ' }}
-        }
-      </p>
     </div>
+  }
+
+  @if (notAttempted().length > 0) {
+    <p class="cohort-flatten__not-attempted">
+      {{ copy.notAttempted }}
+      @for (sid of notAttempted(); track sid; let last = $last) {
+        <code>{{ sid }}</code>{{ last ? '' : ', ' }}
+      }
+    </p>
+  }
+
+  @if (staleRefusals() > 0) {
+    <p>{{ copy.staleRefusals(staleRefusals()) }}</p>
   }
 
   <ol>
     @for (leg of result().legs; track leg.strategy_instance_id) {
       <li [class.cohort-flatten__leg-outcome--unresolved]="leg.error !== null">
         <code>{{ leg.strategy_instance_id }}</code>
-        <strong>{{ outcomeLabel[leg.outcome] }}</strong>
+        <strong>{{ copy.outcomeLabel[leg.outcome] }}</strong>
         @if (leg.result; as receipt) {
-          <span>Receipt <code>{{ receipt.receipt_id }}</code></span>
+          <span>{{ copy.receipt }} <code>{{ receipt.receipt_id }}</code></span>
           <span>{{ receipt.message }}</span>
           <app-timestamp-display [value]="receipt.recorded_at_ms" mode="local" />
         }
@@ -58,7 +58,7 @@
             <span>{{ why }}</span>
           }
           @if (error.receipt_id; as receiptId) {
-            <span>Receipt <code>{{ receiptId }}</code></span>
+            <span>{{ copy.receipt }} <code>{{ receiptId }}</code></span>
           }
         }
       </li>

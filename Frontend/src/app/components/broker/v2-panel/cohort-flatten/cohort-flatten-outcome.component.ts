@@ -9,16 +9,9 @@ import {
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import type { CohortActionResult, CohortLegResult } from '../lib/broker-v2-panel.types';
-
-/** Closed operator-copy map for the five typed leg outcomes. */
-const OUTCOME_LABEL: Readonly<Record<CohortLegResult['outcome'], string>> = {
-  applied: 'Applied',
-  replayed: 'Replayed (already applied)',
-  refused: 'Refused',
-  failed: 'Failed',
-  unknown: 'Outcome unknown',
-};
+import type { CohortActionResult } from '../lib/broker-v2-panel.types';
+import { COHORT_FLATTEN_COPY } from './cohort-flatten-confirmation';
+import { isStalePresentationRefusal } from './cohort-flatten-retry';
 
 /**
  * What one flatten wave actually did, per leg, in request order.
@@ -32,6 +25,9 @@ const OUTCOME_LABEL: Readonly<Record<CohortLegResult['outcome'], string>> = {
  * account's refusal. That case is rendered as the account-scoped blocker with
  * the legs it never reached named, while the attempted legs keep their
  * outcomes below it — never collapsed into one failure for the whole wave.
+ * Unanswered legs are named whenever there are any, blocker or not: a
+ * response short of its request without a terminal refusal breaks the batch
+ * contract, and that must be visible rather than silently dropped.
  */
 @Component({
   selector: 'app-cohort-flatten-outcome',
@@ -47,7 +43,20 @@ export class CohortFlattenOutcomeComponent {
 
   private readonly region = viewChild.required<ElementRef<HTMLElement>>('region');
 
-  protected readonly outcomeLabel = OUTCOME_LABEL;
+  protected readonly copy = COHORT_FLATTEN_COPY;
+
+  protected readonly summary = computed(() => {
+    const result = this.result();
+    return COHORT_FLATTEN_COPY.outcomeSummary(
+      {
+        applied: result.applied_count,
+        replayed: result.replayed_count,
+        refused: result.refused_count,
+        failed: result.failed_count,
+      },
+      this.requested().length,
+    );
+  });
 
   protected readonly unresolved = computed(
     () => this.result().refused_count + this.result().failed_count > 0,
@@ -57,6 +66,10 @@ export class CohortFlattenOutcomeComponent {
     const answered = new Set(this.result().legs.map((leg) => leg.strategy_instance_id));
     return this.requested().filter((sid) => !answered.has(sid));
   });
+
+  protected readonly staleRefusals = computed(
+    () => this.result().legs.filter(isStalePresentationRefusal).length,
+  );
 
   /** The account's refusal that ended the batch, when it ended early. */
   protected readonly accountBlocker = computed(() => {
