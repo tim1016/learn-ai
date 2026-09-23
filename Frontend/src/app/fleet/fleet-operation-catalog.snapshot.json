@@ -322,6 +322,16 @@
       "path_template": "/accounts/{account_id}/gallery/stream",
       "requires_account": true
     },
+    "lane_account_quiet_read": {
+      "method": "GET",
+      "path_template": "/lane/account-quiet",
+      "requires_account": false
+    },
+    "lane_stop_all_bots": {
+      "method": "POST",
+      "path_template": "/lane/stop-all-bots",
+      "requires_account": false
+    },
     "live_graduation_apply": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/live-graduation/apply",

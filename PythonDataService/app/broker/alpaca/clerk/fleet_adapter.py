@@ -153,6 +153,27 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             readiness=_CONFIGURATION,
             agent_path="/api/brokers/alpaca/attention",
         ),
+        # Installation migration (#2268): the lane-wide operator stop and the
+        # account-quiet read #2154 composed for the drain beat, read here on
+        # demand without draining anything. CONFIGURATION_ACCESS for the same
+        # reason as live_verdict above: a lane must be stoppable, and must be
+        # able to say why it is not quiet, whether or not its binding is
+        # confirmed.
+        _op(
+            "lane_stop_all_bots",
+            "POST",
+            "/lane/stop-all-bots",
+            capability=Capability.BOT_ACTION,
+            idempotency=_ONE_SHOT,
+            readiness=_CONFIGURATION,
+        ),
+        _op(
+            "lane_account_quiet_read",
+            "GET",
+            "/lane/account-quiet",
+            capability=Capability.CUSTODY_READ,
+            readiness=_CONFIGURATION,
+        ),
         _op(
             "market_status_read",
             "GET",
