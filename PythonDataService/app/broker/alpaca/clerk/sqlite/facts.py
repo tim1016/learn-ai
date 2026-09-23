@@ -19,10 +19,15 @@ only ever *update* an already-existing ``effect_operations``/``orders`` row —
 none of their fields are needed to rebuild that row's identity — but §3d's
 "no untyped snapshot bag" rule still applies to whatever they *do* carry
 beyond outer transition columns, so those get typed dataclasses too.
-``ORDER_SUBMIT_ACKED`` is the one exception: every field its fold reads
+``ORDER_SUBMIT_ACKED`` is the near-exception: every field its fold reads
 (``broker_order_id``, ``broker_state``, ``source_event_at_ms``) is already an
-outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
-``{}`` — there is nothing left to type.
+outer ``custody_transitions`` column. Its facts carry only the broker's
+reported cumulative filled quantity (:class:`OrderSubmitAckedFacts`, #2305).
+The ``ORDER_SUBMIT_ACKED`` fold does not project it; the fill-completeness
+read (``reads.order_fills_short_of_broker_cumulative``) and the
+acknowledgement's own change detection read it from the latest acknowledgement.
+It is omitted when absent, so an unfilled acknowledgement's ``facts_json``
+stays ``{}``.
 """
 
 from __future__ import annotations
@@ -543,6 +548,34 @@ class OrderFillObservedFacts:
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderFillObservedFacts:
+        return cls(**json.loads(facts_json))
+
+
+_ORDER_SUBMIT_ACKED_DEFAULTS: Mapping[str, Any] = {"reported_filled_quantity": None}
+
+
+@dataclass(frozen=True)
+class OrderSubmitAckedFacts:
+    """The broker's own cumulative ``filled_quantity`` on an acknowledged order (#2305).
+
+    A ``trade_updates`` frame's embedded order is lifecycle evidence, never the
+    source of fill math, but its cumulative is the broker's statement of how
+    much of the order has filled. Recording it lets a terminal order whose
+    recorded fills fall short of it stay reconcilable until the lost slice is
+    re-derived (``reads.order_fills_short_of_broker_cumulative``).
+
+    Omitted when absent (hash-chained schema evolution): every
+    acknowledgement written before #2305, and every one reporting no fill,
+    keeps the byte-identical ``{}``.
+    """
+
+    reported_filled_quantity: float | None = None
+
+    def to_facts_json(self) -> str:
+        return canonicalize(_omit_defaults(asdict(self), _ORDER_SUBMIT_ACKED_DEFAULTS))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderSubmitAckedFacts:
         return cls(**json.loads(facts_json))
 
 
