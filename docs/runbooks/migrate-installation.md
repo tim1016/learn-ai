@@ -55,11 +55,23 @@ On the **new** Mac:
    volume. If a stack already ran on this Mac, remove its containers but keep
    the volumes: `podman compose -f compose.yaml -f compose.fleet.dev.yaml down`
    (never `-v`). Import moves any existing volumes aside itself.
-4. Make sure the disk has room: about three times the bundle, plus a copy of
-   anything already there. Import checks this before it touches anything.
+4. Make sure the disk has room: about three times the bundle, plus the lane
+   volumes once more, plus a copy of anything already there. Import checks this before it touches anything.
 
-On the **old** Mac, close every position and cancel every working order at the
-broker first.
+On the **old** Mac:
+
+1. Close every position and cancel every working order at the broker.
+2. Make sure the clerks run this code, not an older copy. Export needs each
+   lane's stop receipt to include `intent_stopped`, and a clerk still running
+   older code leaves it out, so export refuses. Pull, then restart both clerks
+   (their code is bind-mounted, so a restart loads it):
+
+   ```bash
+   git pull
+   podman restart alpaca-live-clerk alpaca-paper-clerk
+   ```
+
+   Wait until both are healthy (`podman ps`) before you run the check below.
 
 ## 1. Old machine: check that every account is flat
 
