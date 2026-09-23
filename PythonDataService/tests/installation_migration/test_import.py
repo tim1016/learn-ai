@@ -347,19 +347,36 @@ def test_import_refuses_a_member_the_manifest_does_not_declare(
     assert podman.volumes == {}
 
 
-def test_import_reports_that_a_scratch_registry_needs_reapproval(
+def test_a_faithful_round_trip_resolves_a_lane_mounted_where_its_registry_says(
     tmp_path: Path, exported
 ) -> None:
-    _source, bundle = exported
+    """The Live scratch clerk is recorded the way the dev topology mounts it
+    (container path, the overlay's namespace), so it resolves on the new host
+    and a re-approval report is a finding, not the fake's default. The Paper
+    clerk cannot share that (namespace, root) — the registry's uniqueness
+    index — so it alone is reported, never silently re-approved."""
+    source, bundle = exported
     repo_root, podman = build_empty_destination(tmp_path)
 
     steps = _import(repo_root, podman, bundle)
 
     resolution = next(step for step in steps if step["step"] == "host-resolution")
-    # The scratch clerks were provisioned on tmp roots, which no service here
-    # mounts: reported, never silently re-approved.
-    assert len(resolution["reapproval_required"]) == 2
-    assert steps[-1]["reapproval_required"] == resolution["reapproval_required"]
+    assert resolution["reapproval_required"] == [source.paper_clerk_id]
+    live = next(entry for entry in resolution["clerks"] if entry["clerk_id"] == source.live_clerk_id)
+    assert live["resolves"] is True
+    assert steps[-1]["reapproval_required"] == [source.paper_clerk_id]
+
+
+def test_volume_exports_have_no_dot_root_entry_like_real_podman(tmp_path: Path) -> None:
+    podman = FakePodman(tmp_path / "podman")
+    root = podman.add_volume("v")
+    (root / "sub").mkdir()
+    (root / "sub" / "a.txt").write_text("a", encoding="utf-8")
+
+    podman.export_volume("v", tmp_path / "v.tar")
+
+    with tarfile.open(tmp_path / "v.tar") as archive:
+        assert sorted(archive.getnames()) == ["sub", "sub/a.txt"]
 
 
 _LEAN_CACHE_MEMBER = "folders/PythonDataService__lean-cache.tar"

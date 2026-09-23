@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from dotenv import dotenv_values
+
 from app.installation_migration.errors import MigrationRefused
 
 if TYPE_CHECKING:
@@ -117,22 +119,35 @@ def postgres_image_major(topology: Mapping[str, Any], *, volume_key: str) -> str
     return None
 
 
+def compose_variable(repo_root: Path, name: str) -> str | None:
+    """A variable exactly as Compose interpolates ``${NAME:-default}`` here.
+
+    Compose reads the process environment first and the repo-root ``.env``
+    only for a name the environment does not set — a name set to empty in
+    the environment still shadows ``.env``. ``.env`` is parsed by
+    ``python-dotenv``, so ``export NAME=…``, quotes and inline comments read
+    as Compose reads them. An empty result is ``None``: ``:-`` then takes
+    the default.
+    """
+    if name in os.environ:
+        value: str | None = os.environ[name]
+    else:
+        dotenv = repo_root / ".env"
+        value = dotenv_values(dotenv).get(name) if dotenv.is_file() else None
+    stripped = (value or "").strip()
+    return stripped or None
+
+
 def deployment_namespace(repo_root: Path) -> str:
     """The namespace the fleet overlay will register clerks under on this host.
 
     Resolved the way Compose resolves the overlay's
-    ``${FLEET_DEPLOYMENT_NAMESPACE:-…}``: the process environment, then the
-    repo-root ``.env`` Compose interpolates from, then the committed default.
+    ``${FLEET_DEPLOYMENT_NAMESPACE:-…}`` (:func:`compose_variable`), then the
+    committed default.
     """
-    from_environment = os.environ.get(NAMESPACE_ENV, "").strip()
-    if from_environment:
-        return from_environment
-    dotenv = repo_root / ".env"
-    if dotenv.is_file():
-        for line in dotenv.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.strip().partition("=")
-            if separator and key.strip() == NAMESPACE_ENV and value.strip():
-                return value.strip().strip("'\"")
+    configured = compose_variable(repo_root, NAMESPACE_ENV)
+    if configured is not None:
+        return configured
     overlay = repo_root / FLEET_OVERLAY
     match = _NAMESPACE_DEFAULT.search(overlay.read_text(encoding="utf-8"))
     if match is None:
@@ -204,6 +219,7 @@ def host_resolution_report(
 
 
 __all__ = [
+    "compose_variable",
     "containers_writing_folders",
     "deployment_namespace",
     "host_resolution_report",

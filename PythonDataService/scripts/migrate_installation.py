@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +56,7 @@ from app.installation_migration.lanes import (
     FleetLanes,
 )
 from app.installation_migration.podman import PodmanPort, SubprocessPodman
+from app.installation_migration.topology import compose_variable
 from scripts._operator_cli import jsonable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -70,18 +70,8 @@ def _write(payload: object) -> None:
 
 
 def _control_secret(repo_root: Path) -> str | None:
-    """The coordinator's control secret: the environment, then the root ``.env``."""
-    configured = os.environ.get(_CONTROL_SECRET_ENV, "").strip()
-    if configured:
-        return configured
-    dotenv = repo_root / ".env"
-    if not dotenv.is_file():
-        return None
-    for line in dotenv.read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.strip().partition("=")
-        if separator and key.strip() == _CONTROL_SECRET_ENV:
-            return value.strip().strip("'\"") or None
-    return None
+    """The coordinator's control secret, as Compose hands it to the coordinator."""
+    return compose_variable(repo_root, _CONTROL_SECRET_ENV)
 
 
 @dataclass

@@ -141,11 +141,15 @@ def test_the_owner_listed_contents_are_all_present() -> None:
         "learn-ai-alpaca-paper-clerk-data",
         "learn-ai-alpaca-clerk-qualification-data",
     }
+    # Owner rule: every gitignored folder a container mounts goes in — which
+    # carries the derived analytics cache too.
     assert {folder.key for folder in BUNDLED_FOLDERS} == {
         "data-lake-volume",
         "PythonDataService/artifacts",
+        "PythonDataService/cache",
         "PythonDataService/lean-cache",
     }
+    assert set(EXCLUDED_BIND_MOUNTS) == {"../Lean/Data"}
 
 
 def test_members_are_distinct_paths_inside_the_bundle() -> None:
@@ -155,6 +159,26 @@ def test_members_are_distinct_paths_inside_the_bundle() -> None:
 
     assert len(set(members)) == len(members)
     assert all(member.startswith(("volumes/", "folders/")) for member in members)
+
+
+def test_the_lake_path_comes_from_the_repo_root_dotenv_as_compose_reads_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lake = next(folder for folder in BUNDLED_FOLDERS if folder.key == LAKE_FOLDER_KEY)
+    monkeypatch.delenv("LEAN_DATA_VOLUME_HOST_PATH", raising=False)
+    (tmp_path / ".env").write_text(
+        f"export LEAN_DATA_VOLUME_HOST_PATH={tmp_path / 'from-dotenv'}  # the big disk\n",
+        encoding="utf-8",
+    )
+
+    assert resolve_folder_path(tmp_path, lake, lake_dir=None) == tmp_path / "from-dotenv"
+
+    # The process environment wins over .env, exactly as in Compose ...
+    monkeypatch.setenv("LEAN_DATA_VOLUME_HOST_PATH", str(tmp_path / "from-env"))
+    assert resolve_folder_path(tmp_path, lake, lake_dir=None) == tmp_path / "from-env"
+    # ... even when it is set but empty, which ``${VAR:-default}`` then defaults.
+    monkeypatch.setenv("LEAN_DATA_VOLUME_HOST_PATH", "")
+    assert resolve_folder_path(tmp_path, lake, lake_dir=None) == tmp_path / "data-lake-volume"
 
 
 def test_the_lake_folder_follows_its_host_path_override(

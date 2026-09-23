@@ -8,8 +8,10 @@ them as tars exactly as ``podman volume export/import`` would, and
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import sqlite3
 import tarfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -18,7 +20,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.fleet.service import FleetControlService
-from app.broker.fleet.store import FleetRegistryStore
+from app.broker.fleet.store import FleetRegistryStore, registry_database_path
 from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.lanes import Lane
@@ -70,8 +72,11 @@ class FakePodman:
         return self.volumes.get(name)
 
     def export_volume(self, name: str, destination: Path) -> None:
+        # Like ``podman volume export``: the volume's children at the tar
+        # root — no ``./`` root entry and no ``./`` prefix.
         with tarfile.open(destination, "x") as archive:
-            archive.add(self.volume_dir(name), arcname=".")
+            for child in sorted(self.volume_dir(name).iterdir()):
+                archive.add(child, arcname=child.name)
         if name in self.truncate_export:
             destination.write_bytes(destination.read_bytes()[:700])
 
@@ -228,6 +233,61 @@ def make_repo(root: Path) -> Path:
     return root
 
 
+#: The namespace the committed dev overlay registers clerks under.
+DEV_NAMESPACE = "compose:learn-ai"
+
+
+def _dev_topology_volume_roots() -> dict[str, str]:
+    """Each clerk volume's mount path in the committed dev topology."""
+    snapshot = json.loads(
+        (REPO / "deploy" / "fleet" / "topology.snapshot.json").read_text(encoding="utf-8")
+    )
+    names = {key: spec.get("name") or key for key, spec in snapshot["volumes"].items()}
+    roots: dict[str, str] = {}
+    for service in snapshot["service_detail"].values():
+        for mount in service.get("volumes") or []:
+            source, _, rest = str(mount).partition("->")
+            target, _, kind = rest.rpartition(":")
+            if kind == "volume" and source in names:
+                roots[names[source]] = target
+    return roots
+
+
+def _as_mounted_in_the_dev_topology(control_dir: Path) -> None:
+    """Record the Live scratch clerk where the dev topology mounts its volume.
+
+    ``provision_clerk`` proves a real on-disk root, which a test can only give
+    it under its tmp path; a real installation's registry records the path
+    the lane sees inside its container (``/app/artifacts/alpaca_clerk``) under
+    the overlay's namespace. The identity trigger forbids that edit, so it is
+    lifted for this one UPDATE and restored from its own stored SQL.
+
+    Only the Live lane can be re-homed: the dev topology mounts *both* lane
+    volumes at ``/app/artifacts/alpaca_clerk`` under one namespace, and the
+    registry's unique ``(deployment_namespace, volume_root)`` index admits
+    one active clerk there. The Paper lane keeps its tmp root, so a round
+    trip reports exactly it for re-approval.
+    """
+    roots = _dev_topology_volume_roots()
+    connection = sqlite3.connect(registry_database_path(control_dir))
+    try:
+        with connection:
+            (trigger_sql,) = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'trg_clerks_identity_immutable'"
+            ).fetchone()
+            connection.execute("DROP TRIGGER trg_clerks_identity_immutable")
+            connection.execute(
+                "UPDATE clerks SET deployment_namespace = ?", (DEV_NAMESPACE,)
+            )
+            connection.execute(
+                "UPDATE clerks SET volume_root = ? WHERE volume_attestation_id = ?",
+                (roots[LIVE_VOLUME], LIVE_VOLUME),
+            )
+            connection.execute(trigger_sql)
+    finally:
+        connection.close()
+
+
 def write_fleet_env_files(repo_root: Path) -> None:
     env = repo_root / "deploy" / "fleet" / "env"
     env.mkdir(parents=True, exist_ok=True)
@@ -300,6 +360,7 @@ def build_installation(tmp_path: Path, *, name: str = "source") -> Installation:
             repository.close()
     finally:
         service.close()
+    _as_mounted_in_the_dev_topology(podman.volume_dir(CONTROL_VOLUME))
 
     for folder in BUNDLED_FOLDERS:
         (repo_root / folder.key).mkdir(parents=True, exist_ok=True)

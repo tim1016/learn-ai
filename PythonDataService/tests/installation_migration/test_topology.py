@@ -72,7 +72,9 @@ def test_the_namespace_defaults_to_the_overlay_value(
     )
     assert deployment_namespace(tmp_path) == "compose:learn-ai"
 
-    (tmp_path / ".env").write_text("FLEET_DEPLOYMENT_NAMESPACE=compose:other\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "export FLEET_DEPLOYMENT_NAMESPACE=compose:other  # second mac\n", encoding="utf-8"
+    )
     assert deployment_namespace(tmp_path) == "compose:other"
 
     monkeypatch.setenv("FLEET_DEPLOYMENT_NAMESPACE", "compose:env")

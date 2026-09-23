@@ -128,7 +128,9 @@ def test_the_control_secret_comes_from_the_environment_then_the_root_dotenv(
     monkeypatch.delenv("DATA_PLANE_CONTROL_SECRET", raising=False)
     assert migrate_installation._control_secret(tmp_path) is None
 
-    (tmp_path / ".env").write_text('DATA_PLANE_CONTROL_SECRET="from-dotenv"\n', encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        'export DATA_PLANE_CONTROL_SECRET="from-dotenv"  # rotated 2026-09\n', encoding="utf-8"
+    )
     assert migrate_installation._control_secret(tmp_path) == "from-dotenv"
 
     monkeypatch.setenv("DATA_PLANE_CONTROL_SECRET", "from-env")

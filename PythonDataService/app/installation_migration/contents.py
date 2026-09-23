@@ -3,8 +3,12 @@
 Owner decision (grill session 2026-09-22, #2151 comment): the bundle holds the
 five podman volumes, ``data-lake-volume/``, the whole
 ``PythonDataService/artifacts/`` and ``PythonDataService/lean-cache`` — the
-rule being that every gitignored folder a container mounts goes in — and no
-secret at all.
+rule being that every gitignored folder a container mounts goes in, which by
+that same rule carries ``PythonDataService/cache`` too — and no secret at all.
+
+The bundle covers the **dev topology only**: ``compose.yaml`` +
+``compose.fleet.dev.yaml``, the stack the owner runs. Another topology (the
+production fleet overlay, a Windows host) needs its own review of this list.
 
 The list is declared here, once, rather than re-derived from the Compose
 files at run time: a migration must move what the operator reviewed, not
@@ -16,11 +20,11 @@ it is either bundled or excluded here with its reason.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.installation_migration.topology import compose_variable
 from app.lean_sidecar.launcher_auth import LAUNCHER_TOKEN_FILENAME
 
 VolumeRole = Literal["postgres", "fleet_control", "clerk", "qualification"]
@@ -72,17 +76,14 @@ LAKE_HOST_PATH_ENV = "LEAN_DATA_VOLUME_HOST_PATH"
 BUNDLED_FOLDERS: tuple[BundledFolder, ...] = (
     BundledFolder(LAKE_FOLDER_KEY),
     BundledFolder("PythonDataService/artifacts"),
+    BundledFolder("PythonDataService/cache"),
     BundledFolder("PythonDataService/lean-cache"),
 )
 
-#: Gitignored or out-of-repo folders a container mounts that the bundle
-#: deliberately does not carry, each with the reason the owner's rule does
-#: not reach it.
+#: Out-of-repo folders a container mounts that the bundle deliberately does
+#: not carry, each with the reason the owner's rule (every *gitignored*
+#: folder a container mounts goes in) does not reach it.
 EXCLUDED_BIND_MOUNTS: dict[str, str] = {
-    "PythonDataService/cache": (
-        "Derived analytics cache, regenerated from Polygon data (.gitignore); "
-        "not in the owner-approved bundle list."
-    ),
     "../Lean/Data": (
         "Outside the repository: the LEAN reference data a separate checkout "
         "provides, mounted read-only."
@@ -120,13 +121,14 @@ def resolve_folder_path(
     """The host path of one bundled folder on this machine.
 
     The lake follows an explicit ``lake_dir`` first, then
-    ``LEAN_DATA_VOLUME_HOST_PATH`` (the variable the Compose bind reads),
-    then the repo-relative default — the same order the bind resolves in.
+    ``LEAN_DATA_VOLUME_HOST_PATH`` as Compose resolves it for the bind (the
+    process environment, then the repo-root ``.env``), then the repo-relative
+    default — the same order the bind resolves in.
     """
     if folder.key == LAKE_FOLDER_KEY:
         if lake_dir is not None:
             return lake_dir
-        override = os.environ.get(LAKE_HOST_PATH_ENV, "").strip()
+        override = compose_variable(repo_root, LAKE_HOST_PATH_ENV)
         if override:
             candidate = Path(override)
             return candidate if candidate.is_absolute() else repo_root / candidate
