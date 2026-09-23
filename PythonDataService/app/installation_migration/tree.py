@@ -24,7 +24,9 @@ or cannot be restored.
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import io
 import json
 import os
 import posixpath
@@ -208,7 +210,7 @@ def tree_digest_from_tar(archive: Path, *, exclude: frozenset[str] = frozenset()
 
     A hardlink member digests as the regular file it is once extracted.
     ``exclude`` names root-relative paths left out of the digest — import's
-    go-live hold marker, which it adds to a lane volume after the restore.
+    go-live hold marker, which it lays into a lane volume with the content.
     """
     entries: list[tuple[str, str, str]] = []
     seen: set[str] = set()
@@ -298,6 +300,48 @@ def build_folder_tar(root: Path, archive: Path) -> None:
                     bundle.addfile(info, handle)
 
 
+def tar_with_root_file_first(source: Path, archive: Path, *, name: str, payload: bytes) -> None:
+    """Write ``source``'s members to a new tar at ``archive``, led by one root file.
+
+    ``name`` is written first, as a regular file holding ``payload``, and any
+    root member of that name in ``source`` is dropped — so the new tar holds
+    exactly one. Every other member is copied with its own metadata (owner,
+    mode, mtime, link target), so the tar extracts as ``source`` would plus
+    the one file. First, so an extraction that stops part-way has laid it
+    down before any other member.
+    """
+    leading = tarfile.TarInfo(name)
+    leading.type = tarfile.REGTYPE
+    leading.mode = 0o644
+    leading.size = len(payload)
+    with (
+        _reading(source),
+        tarfile.open(source, "r:*") as original,
+        tarfile.open(archive, "x", format=tarfile.PAX_FORMAT) as combined,
+    ):
+        combined.addfile(leading, io.BytesIO(payload))
+        for member in original:
+            if _member_path(member.name) == name:
+                continue
+            if not member.isreg():
+                combined.addfile(member)
+                continue
+            handle = original.extractfile(member)
+            if handle is None:
+                raise MigrationRefused(
+                    "bundle_member_unreadable",
+                    f"{source} member {member.name!r} has no readable content.",
+                    details={"archive": str(source), "path": member.name},
+                )
+            copied = copy.copy(member)
+            # A GNU sparse member is written back as the plain file it
+            # extracts to.
+            copied.type = tarfile.REGTYPE
+            copied.sparse = None
+            with handle:
+                combined.addfile(copied, handle)
+
+
 def extract_tar(archive: Path, destination: Path) -> None:
     """Extract ``archive`` under ``destination`` through the ``data`` filter.
 
@@ -323,6 +367,7 @@ __all__ = [
     "require_bundleable",
     "root_member_bytes",
     "sha256_file",
+    "tar_with_root_file_first",
     "tree_digest_from_dir",
     "tree_digest_from_tar",
     "walk_tree",

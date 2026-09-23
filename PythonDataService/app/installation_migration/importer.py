@@ -32,8 +32,9 @@ until every check before step 6 has passed:
    exported to a dated aside directory and that copy read back whole before
    the volume is removed; each existing folder is moved there whole.
 6. **Restore** (volumes imported, each staged folder renamed into place).
-   Each clerk volume gets a **go-live hold marker** at its root as soon as
-   it is restored (#2269): the lane starts no bot until
+   Each clerk volume gets a **go-live hold marker** at its root in the same
+   ``podman volume import`` as its content, marker first, so no clerk volume
+   is ever restored without its hold (#2269): the lane starts no bot until
    ``migrate-installation go-live`` releases it. Then **re-verify the
    destination** against the manifest's content digests — each clerk
    volume's content apart from its marker, and the marker itself.
@@ -85,10 +86,10 @@ from app.installation_migration.topology import (
     required_env_files,
 )
 from app.installation_migration.tree import (
-    build_folder_tar,
     extract_tar,
     root_member_bytes,
     sha256_file,
+    tar_with_root_file_first,
     tree_digest_from_dir,
     tree_digest_from_tar,
 )
@@ -235,12 +236,14 @@ def run_import(
                 }
             )
 
+            # Staged before anything moves, so a failure here changes nothing.
+            holds = _stage_go_live_holds(manifest, staged, staging / "go-live-holds", clock())
+
             # From here on the destination changes; every failure must say
             # exactly what changed and where the preserved data is.
             try:
                 _move_aside(podman, manifest, folder_paths, aside, progress)
                 emit({"step": "moved-aside", "aside": str(aside), **progress.aside_record()})
-                holds = _stage_go_live_holds(manifest, staging / "go-live-holds", clock())
                 _restore(podman, manifest, folder_paths, staged, staged_folders, holds, progress)
                 emit({"step": "restored", "go_live_holds": sorted(holds)})
                 _verify_destination(
@@ -390,19 +393,24 @@ def _require_disk_space(
     """Refuse up front rather than run out of room half-way through a restore.
 
     The staging filesystem (which also holds the aside directory) needs about
-    three bundles plus a copy of every volume already here; each folder is
-    extracted next to its destination, so that folder's filesystem needs it
-    once more. An existing volume podman cannot size is estimated at its
-    bundled size.
+    three bundles, a copy of every volume already here, and each clerk
+    volume's restore tar (its content led by the go-live marker) once more;
+    each folder is extracted next to its destination, so that folder's
+    filesystem needs it once more. An existing volume podman cannot size is
+    estimated at its bundled size.
     """
     bundle_bytes = sum(entry.size_bytes for entry in (*manifest.volumes, *manifest.folders))
+    clerk_volumes = {volume.name for volume in BUNDLED_VOLUMES if volume.role == "clerk"}
+    hold_bytes = sum(
+        entry.size_bytes for entry in manifest.volumes if entry.name in clerk_volumes
+    )
     existing_bytes = 0
     for entry in manifest.volumes:
         if podman.volume_info(entry.name) is not None:
             size = podman.volume_size_bytes(entry.name)
             existing_bytes += entry.size_bytes if size is None else size
     needs: list[tuple[Path, int]] = [
-        (staging_root, _STAGING_BUNDLE_MULTIPLE * bundle_bytes + existing_bytes)
+        (staging_root, _STAGING_BUNDLE_MULTIPLE * bundle_bytes + existing_bytes + hold_bytes)
     ]
     needs.extend(
         (folder_paths[entry.key].parent, entry.size_bytes) for entry in manifest.folders
@@ -572,21 +580,25 @@ def _move_aside(
 
 @dataclass(frozen=True, slots=True)
 class _GoLiveHold:
-    """One clerk volume's go-live marker: its bytes, and the one-file tar carrying it."""
+    """One clerk volume's go-live marker: its bytes, and the one tar carrying
+    the volume's bundled content led by that marker."""
 
     payload: bytes
     archive: Path
 
 
 def _stage_go_live_holds(
-    manifest: Manifest, scratch: Path, written_at_ms: int
+    manifest: Manifest, staged: Mapping[str, Path], scratch: Path, written_at_ms: int
 ) -> dict[str, _GoLiveHold]:
-    """One marker per clerk volume, written durably, as a tar podman can import.
+    """Each clerk volume's restore tar: its bundled content plus a fresh marker.
 
-    The marker is written through the atomic-file helper (fsynced, renamed
-    into place) and tarred from there; ``podman volume import`` then lays it
-    at the volume root beside the restored content.
+    One tar, so one ``podman volume import`` lays both and no failure can
+    restore a clerk volume without its hold. The marker is the tar's first
+    member, so even an import that stops part-way has laid it before any
+    content; any old marker the bundle carried (a host never released) is
+    replaced, never duplicated.
     """
+    scratch.mkdir(parents=True)
     holds: dict[str, _GoLiveHold] = {}
     for volume in BUNDLED_VOLUMES:
         if volume.role != "clerk":
@@ -601,10 +613,10 @@ def _stage_go_live_holds(
                 registry_id=manifest.registry.registry_id,
             )
         )
-        directory = scratch / volume.name
-        atomic_write_bytes(directory / GO_LIVE_HOLD_MARKER, payload)
         archive = scratch / f"{volume.name}.tar"
-        build_folder_tar(directory, archive)
+        tar_with_root_file_first(
+            staged[volume.member], archive, name=GO_LIVE_HOLD_MARKER, payload=payload
+        )
         holds[volume.name] = _GoLiveHold(payload=payload, archive=archive)
     return holds
 
@@ -620,12 +632,10 @@ def _restore(
 ) -> None:
     for entry in manifest.volumes:
         podman.create_volume(VolumeInfo(name=entry.name, driver=entry.driver, labels=entry.labels))
-        podman.import_volume(entry.name, staged[entry.member])
         hold = holds.get(entry.name)
-        if hold is not None:
-            # Before the next volume, so no clerk volume is ever restored
-            # without its hold.
-            podman.import_volume(entry.name, hold.archive)
+        # A clerk volume's content and its hold arrive in one import, so
+        # no clerk volume is ever restored without its hold.
+        podman.import_volume(entry.name, staged[entry.member] if hold is None else hold.archive)
         progress.restored_volumes.append(entry.name)
     for entry in manifest.folders:
         path = folder_paths[entry.key]

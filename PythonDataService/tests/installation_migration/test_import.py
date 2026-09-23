@@ -434,9 +434,9 @@ def test_a_hold_that_did_not_land_fails_verification_loudly(
     real_import = podman.import_volume
 
     def dropping_holds(name: str, source: Path) -> None:
-        if name == PAPER_VOLUME and source.parent.name == "go-live-holds":
-            return
         real_import(name, source)
+        if name == PAPER_VOLUME:
+            (podman.volume_dir(name) / GO_LIVE_HOLD_MARKER).unlink()
 
     monkeypatch.setattr(podman, "import_volume", dropping_holds)
 
@@ -447,6 +447,44 @@ def test_a_hold_that_did_not_land_fails_verification_loudly(
     cause = refused.value.details["cause"]
     assert cause["reason"] == "destination_verification_failed"
     assert f"{PAPER_VOLUME} (go-live hold marker)" in cause["details"]["mismatched"]
+
+
+def test_a_clerk_volume_and_its_hold_arrive_in_one_import_marker_first(
+    tmp_path: Path, exported, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No failure can separate a restored clerk volume from its hold: one
+    ``podman volume import`` per volume carries both, the marker leading —
+    so an import that dies after laying anything down has laid the hold."""
+    _source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    real_import = podman.import_volume
+    imports: list[str] = []
+    first_members: dict[str, str] = {}
+
+    def recording(name: str, source: Path) -> None:
+        imports.append(name)
+        with tarfile.open(source, "r:*") as archive:
+            first_members[name] = archive.next().name
+        if name == PAPER_VOLUME:
+            # Dies part-way: only the first member is extracted.
+            with tarfile.open(source, "r:*") as archive:
+                archive.extract(archive.next(), podman.volume_dir(name), filter="tar")
+            raise MigrationRefused("podman_command_failed", "`podman volume import` died")
+        real_import(name, source)
+
+    monkeypatch.setattr(podman, "import_volume", recording)
+
+    with pytest.raises(MigrationRefused) as refused:
+        _import(repo_root, podman, bundle)
+
+    assert refused.value.reason == "restore_incomplete"
+    assert sorted(imports) == sorted(set(imports)), "each volume is imported exactly once"
+    assert first_members[LIVE_VOLUME] == GO_LIVE_HOLD_MARKER
+    assert first_members[PAPER_VOLUME] == GO_LIVE_HOLD_MARKER
+    assert read_go_live_hold(podman.volume_dir(LIVE_VOLUME)).held is True
+    partial = read_go_live_hold(podman.volume_dir(PAPER_VOLUME))
+    assert partial.held is True
+    assert partial.marker is not None
 
 
 def test_a_bundle_from_a_host_never_released_imports_with_a_fresh_hold(
