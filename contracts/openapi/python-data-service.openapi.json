@@ -21456,6 +21456,60 @@
         "title": "KindDistributionModel",
         "type": "object"
       },
+      "LaneAccountQuietRead": {
+        "description": "This lane's account-quiet answer, read on demand without draining.\n\nThe four conditions are ``confirm_lane_quiet``'s own names; ``outstanding``\nlists the unsatisfied ones in the registry's declared phrasing, so a\nrefusal names which condition is open \u2014 never an order or a position.",
+        "properties": {
+          "account_flat": {
+            "title": "Account Flat",
+            "type": "boolean"
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker_work_ended": {
+            "title": "Broker Work Ended",
+            "type": "boolean"
+          },
+          "intents_resolved": {
+            "title": "Intents Resolved",
+            "type": "boolean"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "outstanding": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outstanding",
+            "type": "array"
+          },
+          "quiet": {
+            "title": "Quiet",
+            "type": "boolean"
+          },
+          "runner_idle": {
+            "title": "Runner Idle",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account_id",
+          "observed_at_ms",
+          "runner_idle",
+          "broker_work_ended",
+          "account_flat",
+          "intents_resolved",
+          "quiet",
+          "outstanding"
+        ],
+        "title": "LaneAccountQuietRead",
+        "type": "object"
+      },
       "LaneAttentionItem": {
         "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is the uncertainty id \u2014 stable across polls, so the bell\ndedupes by it and an item disappears exactly when the underlying episode\nresolves. The narrow v1 set: active uncertainties only, which includes\n``EXIT_NOT_FLAT`` and every exit waiting for an operator.",
         "properties": {
@@ -21539,6 +21593,154 @@
           "items"
         ],
         "title": "LaneAttentionRead",
+        "type": "object"
+      },
+      "LaneStopAllBotsReceipt": {
+        "description": "The durable receipt of one lane-wide stop, as recorded on the lane.",
+        "properties": {
+          "all_stopped": {
+            "title": "All Stopped",
+            "type": "boolean"
+          },
+          "change_ref": {
+            "title": "Change Ref",
+            "type": "string"
+          },
+          "completed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Completed At Ms",
+            "type": "integer"
+          },
+          "operator": {
+            "title": "Operator",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "refused": {
+            "items": {
+              "$ref": "#/components/schemas/LaneStopRefusalRead"
+            },
+            "title": "Refused",
+            "type": "array"
+          },
+          "requested_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Requested At Ms",
+            "type": "integer"
+          },
+          "still_running": {
+            "title": "Still Running",
+            "type": "boolean"
+          },
+          "stopped": {
+            "items": {
+              "$ref": "#/components/schemas/LaneStoppedBotRead"
+            },
+            "title": "Stopped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "requested_at_ms",
+          "completed_at_ms",
+          "operator",
+          "change_ref",
+          "reason",
+          "stopped",
+          "refused",
+          "still_running",
+          "all_stopped"
+        ],
+        "title": "LaneStopAllBotsReceipt",
+        "type": "object"
+      },
+      "LaneStopAllBotsRequest": {
+        "additionalProperties": false,
+        "description": "Who is stopping every bot on the lane, and under which change record.",
+        "properties": {
+          "change_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Change Ref",
+            "type": "string"
+          },
+          "operator": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operator",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator",
+          "change_ref"
+        ],
+        "title": "LaneStopAllBotsRequest",
+        "type": "object"
+      },
+      "LaneStopRefusalRead": {
+        "description": "One bot whose Stop refused, in the refusal's own words.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id",
+          "message",
+          "detail"
+        ],
+        "title": "LaneStopRefusalRead",
+        "type": "object"
+      },
+      "LaneStoppedBotRead": {
+        "description": "One bot the lane-wide stop ended.",
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id"
+        ],
+        "title": "LaneStoppedBotRead",
         "type": "object"
       },
       "LastQuoteSnapshot": {
@@ -59100,6 +59302,155 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/account-quiet": {
+      "get": {
+        "description": "Fleet-routed GET /lane/account-quiet (custody_read).",
+        "operationId": "fleet_lane_account_quiet_read_api_brokers__broker__clerks__clerk_id__lane_account_quiet_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Lane Account Quiet Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/stop-all-bots": {
+      "post": {
+        "description": "Fleet-routed POST /lane/stop-all-bots (bot_action).",
+        "operationId": "fleet_lane_stop_all_bots_api_brokers__broker__clerks__clerk_id__lane_stop_all_bots_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Lane Stop All Bots",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/live-verdict": {
       "get": {
         "description": "Fleet-routed GET /live-verdict (custody_read).",
@@ -59619,6 +59970,134 @@
           }
         },
         "summary": "Get Session Fee Reconciliation",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/lane/account-quiet": {
+      "get": {
+        "description": "This lane's account-quiet answer, read on demand without draining (#2268).\n\nThe same answer #2154 composed for the drain beat \u2014 broker open orders\nempty, positions empty, no in-flight intent, read twice, plus no bot\ntask running \u2014 but read here as a plain observation: no registry state\nchanges and the lane's assignment stays effective. A lane that cannot\nobserve its broker answers 503, never \"not quiet\".",
+        "operationId": "get_lane_account_quiet_api_brokers__broker__lane_account_quiet_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaneAccountQuietRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Lane Account Quiet",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/lane/stop-all-bots": {
+      "post": {
+        "description": "Stop every bot on this lane and record that it did (#2268).\n\nThe operator's Stop per bot, so each stays stopped wherever the lane next\nboots; the receipt is written on the lane's own volume whether or not\nevery Stop succeeded. An incomplete stop refuses with that receipt, so a\ncaller can never read a partial stop as success. Drains nothing and\nchanges no assignment.",
+        "operationId": "stop_all_lane_bots_api_brokers__broker__lane_stop_all_bots_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaneStopAllBotsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaneStopAllBotsReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop All Lane Bots",
         "tags": [
           "brokers-v2"
         ]

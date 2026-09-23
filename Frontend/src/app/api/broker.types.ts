@@ -3410,6 +3410,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/account-quiet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Lane Account Quiet Read
+         * @description Fleet-routed GET /lane/account-quiet (custody_read).
+         */
+        get: operations["fleet_lane_account_quiet_read_api_brokers__broker__clerks__clerk_id__lane_account_quiet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/stop-all-bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Lane Stop All Bots
+         * @description Fleet-routed POST /lane/stop-all-bots (bot_action).
+         */
+        post: operations["fleet_lane_stop_all_bots_api_brokers__broker__clerks__clerk_id__lane_stop_all_bots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/live-verdict": {
         parameters: {
             query?: never;
@@ -3561,6 +3601,58 @@ export interface paths {
         get: operations["get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/lane/account-quiet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lane Account Quiet
+         * @description This lane's account-quiet answer, read on demand without draining (#2268).
+         *
+         *     The same answer #2154 composed for the drain beat — broker open orders
+         *     empty, positions empty, no in-flight intent, read twice, plus no bot
+         *     task running — but read here as a plain observation: no registry state
+         *     changes and the lane's assignment stays effective. A lane that cannot
+         *     observe its broker answers 503, never "not quiet".
+         */
+        get: operations["get_lane_account_quiet_api_brokers__broker__lane_account_quiet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/lane/stop-all-bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop All Lane Bots
+         * @description Stop every bot on this lane and record that it did (#2268).
+         *
+         *     The operator's Stop per bot, so each stays stopped wherever the lane next
+         *     boots; the receipt is written on the lane's own volume whether or not
+         *     every Stop succeeded. An incomplete stop refuses with that receipt, so a
+         *     caller can never read a partial stop as success. Drains nothing and
+         *     changes no assignment.
+         */
+        post: operations["stop_all_lane_bots_api_brokers__broker__lane_stop_all_bots_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16569,6 +16661,32 @@ export interface components {
             stats: components["schemas"]["DistributionStatsModel"];
         };
         /**
+         * LaneAccountQuietRead
+         * @description This lane's account-quiet answer, read on demand without draining.
+         *
+         *     The four conditions are ``confirm_lane_quiet``'s own names; ``outstanding``
+         *     lists the unsatisfied ones in the registry's declared phrasing, so a
+         *     refusal names which condition is open — never an order or a position.
+         */
+        LaneAccountQuietRead: {
+            /** Account Flat */
+            account_flat: boolean;
+            /** Account Id */
+            account_id: string;
+            /** Broker Work Ended */
+            broker_work_ended: boolean;
+            /** Intents Resolved */
+            intents_resolved: boolean;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Outstanding */
+            outstanding: string[];
+            /** Quiet */
+            quiet: boolean;
+            /** Runner Idle */
+            runner_idle: boolean;
+        };
+        /**
          * LaneAttentionItem
          * @description One condition currently needing the operator on this lane (#2228).
          *
@@ -16605,6 +16723,66 @@ export interface components {
             account_id: string | null;
             /** Items */
             items: components["schemas"]["LaneAttentionItem"][];
+        };
+        /**
+         * LaneStopAllBotsReceipt
+         * @description The durable receipt of one lane-wide stop, as recorded on the lane.
+         */
+        LaneStopAllBotsReceipt: {
+            /** All Stopped */
+            all_stopped: boolean;
+            /** Change Ref */
+            change_ref: string;
+            /** Completed At Ms */
+            completed_at_ms: number;
+            /** Operator */
+            operator: string;
+            /** Reason */
+            reason: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Refused */
+            refused: components["schemas"]["LaneStopRefusalRead"][];
+            /** Requested At Ms */
+            requested_at_ms: number;
+            /** Still Running */
+            still_running: boolean;
+            /** Stopped */
+            stopped: components["schemas"]["LaneStoppedBotRead"][];
+        };
+        /**
+         * LaneStopAllBotsRequest
+         * @description Who is stopping every bot on the lane, and under which change record.
+         */
+        LaneStopAllBotsRequest: {
+            /** Change Ref */
+            change_ref: string;
+            /** Operator */
+            operator: string;
+        };
+        /**
+         * LaneStopRefusalRead
+         * @description One bot whose Stop refused, in the refusal's own words.
+         */
+        LaneStopRefusalRead: {
+            /** Detail */
+            detail: string | null;
+            /** Message */
+            message: string;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * LaneStoppedBotRead
+         * @description One bot the lane-wide stop ended.
+         */
+        LaneStoppedBotRead: {
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
         };
         /**
          * LastQuoteSnapshot
@@ -33382,6 +33560,78 @@ export interface operations {
             };
         };
     };
+    fleet_lane_account_quiet_read_api_brokers__broker__clerks__clerk_id__lane_account_quiet_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_lane_stop_all_bots_api_brokers__broker__clerks__clerk_id__lane_stop_all_bots_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_live_verdict_api_brokers__broker__clerks__clerk_id__live_verdict_get: {
         parameters: {
             query?: never;
@@ -33641,6 +33891,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionFeeReconciliation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_lane_account_quiet_api_brokers__broker__lane_account_quiet_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaneAccountQuietRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_all_lane_bots_api_brokers__broker__lane_stop_all_bots_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LaneStopAllBotsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaneStopAllBotsReceipt"];
                 };
             };
             /** @description Validation Error */

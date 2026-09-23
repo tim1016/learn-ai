@@ -32,6 +32,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -177,6 +178,9 @@ __all__ = [
     "BotTaskRegistry",
     "CarryoverPolicyRefusedError",
     "InvalidStrategyInstanceIdError",
+    "LaneStopOutcome",
+    "LaneStopRefusal",
+    "LaneStoppedBot",
     "MarketDataFeedUnavailableError",
     "RecoveryUncertainError",
     "RestartIntensityRefusedError",
@@ -189,6 +193,59 @@ logger = logging.getLogger(__name__)
 _CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class LaneStoppedBot:
+    """One bot the lane-wide stop ended, with the run it ended."""
+
+    strategy_instance_id: str
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class LaneStopRefusal:
+    """One bot whose Stop refused; its task may still be running."""
+
+    strategy_instance_id: str
+    run_id: str
+    message: str
+    detail: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LaneStopOutcome:
+    """What one lane-wide stop did, and whether any task still runs after it.
+
+    ``still_running`` is read from the task registry after every Stop has
+    returned, not derived from ``refused``: a Stop whose cancellation timed
+    out returns normally while its task is still alive.
+    """
+
+    stopped: tuple[LaneStoppedBot, ...]
+    refused: tuple[LaneStopRefusal, ...]
+    still_running: bool
+
+
+def _lane_stop_refusal(
+    strategy_instance_id: str, run_id: str, message: str, detail: str | None
+) -> LaneStopRefusal:
+    """Record one bot whose lane-wide Stop did not complete, loudly."""
+    logger.warning(
+        "Lane-wide stop refused for one bot",
+        extra={
+            "action": "lane_stop_all_bot_refused",
+            "strategy_instance_id": strategy_instance_id,
+            "run_id": run_id,
+            "error": message,
+        },
+    )
+    return LaneStopRefusal(
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+        message=message,
+        detail=detail,
+    )
 
 
 # Commit-time refusals, keyed by the shared retirement rule's cause. The
@@ -1184,6 +1241,60 @@ class BotTaskRegistry:
         await self._authority_for(managed.binding).release_if_unused()
         return self.status(broker, strategy_instance_id)
 
+    async def stop_every_running_bot(self, *, updated_by: str, reason: str) -> LaneStopOutcome:
+        """The operator's Stop, applied to every live task on this lane (#2268).
+
+        Not ``stop_all``: service shutdown preserves operator intent so the
+        bots want to run again after the restart, whereas this is exactly
+        ``stop`` per bot — durable ``STOPPED`` intent first, then the Clerk
+        STOP and the reap — so every bot stays stopped wherever the lane next
+        boots. A bot whose Stop refuses or fails is reported with the
+        refusal's own words (or the failure's type) and left to the operator;
+        the other bots are still stopped, and nothing here retries or
+        escalates.
+        A task that ended on its own between the snapshot and its Stop had
+        nothing left to stop and is not reported.
+        """
+        stopped: list[LaneStoppedBot] = []
+        refused: list[LaneStopRefusal] = []
+        running = [
+            (sid, managed.binding.broker, managed.binding.run_id)
+            for sid, managed in self._bots.items()
+            if not managed.task.done()
+        ]
+        for sid, broker, run_id in running:
+            try:
+                await self.stop(broker, sid, updated_by=updated_by, reason=reason)
+            except UnknownBotError:
+                continue
+            except BotRunnerError as exc:
+                refused.append(_lane_stop_refusal(sid, run_id, str(exc), exc.detail))
+                continue
+            except Exception as exc:
+                # Deliberately broad: a Clerk or custody failure has no common
+                # base, and one bot's failure must neither hide the others'
+                # Stops nor cost the lane its receipt. It is logged with its
+                # traceback, recorded by type, and the lane-wide stop still
+                # fails closed on it (``all_stopped`` is false).
+                logger.exception(
+                    "Lane-wide stop failed for one bot",
+                    extra={
+                        "action": "lane_stop_all_bot_failed",
+                        "strategy_instance_id": sid,
+                        "run_id": run_id,
+                    },
+                )
+                refused.append(
+                    _lane_stop_refusal(sid, run_id, f"{type(exc).__name__}: {exc}", None)
+                )
+                continue
+            stopped.append(LaneStoppedBot(strategy_instance_id=sid, run_id=run_id))
+        return LaneStopOutcome(
+            stopped=tuple(stopped),
+            refused=tuple(refused),
+            still_running=self.any_running(),
+        )
+
     async def stop_all(self) -> None:
         """Service shutdown: stop every task without overwriting operator intent."""
         stopping: list[ManagedBot] = []
@@ -1671,6 +1782,11 @@ class BotTaskRegistry:
     def _is_running(self, strategy_instance_id: str) -> bool:
         managed = self._bots.get(strategy_instance_id)
         return managed is not None and not managed.task.done()
+
+    @property
+    def artifacts_root(self) -> Path:
+        """The lane's artifact root, under which every bot's evidence lives."""
+        return self._artifacts_root
 
     def any_running(self) -> bool:
         """Whether this registry currently owns any live bot task."""

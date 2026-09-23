@@ -80,6 +80,11 @@ from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
 from app.schemas.clerk_custody import CustodyDiagnosis
+from app.schemas.lane_quiesce import (
+    LaneAccountQuietRead,
+    LaneStopAllBotsReceipt,
+    LaneStopAllBotsRequest,
+)
 from app.schemas.manual_orders import (
     ManualOrderCancellationResponse,
     ManualOrderCancelRequest,
@@ -103,9 +108,15 @@ from app.services.alpaca_live_verdict import (
     observe_loss_hold,
     observe_shadow_state,
 )
+from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.lane_quiesce import (
+    get_lane_account_quiet_source,
+    read_lane_account_quiet,
+    stop_all_bots_on_lane,
+)
 from app.services.market_liveness import MarketLivenessStore, get_market_liveness_store
 from app.services.sqlite_account_pnl_attribution import sqlite_account_pnl_attribution
 from app.services.sqlite_clerk_compat import (
@@ -774,6 +785,104 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
             )
         )
     return LaneAttentionRead(account_id=repository.account_id, items=items)
+
+
+def _require_alpaca_lane(broker: str, *, operation: str) -> None:
+    """Refuse a lane quiesce route for any broker but Alpaca."""
+    if broker != "alpaca":
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": f"{operation}_unsupported_broker",
+                "message": f"No {operation.replace('_', ' ')} for broker '{broker}'.",
+            },
+        )
+
+
+@router.post(
+    "/{broker}/lane/stop-all-bots",
+    response_model=LaneStopAllBotsReceipt,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def stop_all_lane_bots(
+    broker: str, request: LaneStopAllBotsRequest
+) -> LaneStopAllBotsReceipt:
+    """Stop every bot on this lane and record that it did (#2268).
+
+    The operator's Stop per bot, so each stays stopped wherever the lane next
+    boots; the receipt is written on the lane's own volume whether or not
+    every Stop succeeded. An incomplete stop refuses with that receipt, so a
+    caller can never read a partial stop as success. Drains nothing and
+    changes no assignment.
+    """
+    _require_alpaca_lane(broker, operation="lane_stop_all")
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "lane_bot_runner_not_installed",
+                "message": "This process runs no bot runner, so it has no bots to stop.",
+            },
+        )
+    receipt = await stop_all_bots_on_lane(
+        registry, operator=request.operator, change_ref=request.change_ref
+    )
+    wire = receipt.to_json()
+    if not receipt.all_stopped:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "lane_stop_all_incomplete",
+                "message": "At least one bot on this lane did not stop; the receipt "
+                "names each one and the refusal it gave.",
+                "receipt": wire,
+            },
+        )
+    return LaneStopAllBotsReceipt.model_validate(wire)
+
+
+@router.get("/{broker}/lane/account-quiet", response_model=LaneAccountQuietRead)
+async def get_lane_account_quiet(broker: str) -> LaneAccountQuietRead:
+    """This lane's account-quiet answer, read on demand without draining (#2268).
+
+    The same answer #2154 composed for the drain beat — broker open orders
+    empty, positions empty, no in-flight intent, read twice, plus no bot
+    task running — but read here as a plain observation: no registry state
+    changes and the lane's assignment stays effective. A lane that cannot
+    observe its broker answers 503, never "not quiet".
+    """
+    _require_alpaca_lane(broker, operation="lane_account_quiet")
+    source = get_lane_account_quiet_source()
+    if source is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "lane_account_quiet_unanswerable",
+                "message": "This lane has no account clerk and bot runner to answer "
+                "account quiet from.",
+            },
+        )
+    answer = await read_lane_account_quiet(source)
+    if answer is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "lane_account_quiet_unobservable",
+                "message": f"Account {source.account_id} could not be observed at the "
+                "broker, so this lane has no quiet answer to give.",
+            },
+        )
+    return LaneAccountQuietRead(
+        account_id=source.account_id,
+        observed_at_ms=answer.observed_at_ms,
+        runner_idle=answer.runner_idle,
+        broker_work_ended=answer.broker_work_ended,
+        account_flat=answer.account_flat,
+        intents_resolved=answer.intents_resolved,
+        quiet=not answer.outstanding,
+        outstanding=list(answer.outstanding),
+    )
 
 
 @router.get("/{broker}/live-verdict", response_model=AlpacaLiveVerdict)

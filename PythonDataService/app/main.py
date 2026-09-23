@@ -862,13 +862,25 @@ async def _service_lifespan(
     # #2154: once draining, the beat answers lane quiet from the runner's own
     # tasks and the account's clerk. Installed only when both exist; a lane
     # without a clerk never confirms and exits through force-retire.
-    if fleet_lane is not None and _boot_clerk is not None and bot_task_registry is not None:
+    # #2268: the same probe answers installation migration's on-demand
+    # account-quiet read, which drains nothing — one composition, two readers.
+    from app.services.lane_quiesce import (
+        LaneAccountQuietSource,
+        set_lane_account_quiet_source,
+    )
+
+    if _boot_clerk is not None and bot_task_registry is not None:
         from app.broker.alpaca.clerk.fleet_boot import lane_quiet_probe
 
-        fleet_lane.lane_quiet_probe = lane_quiet_probe(
+        account_quiet_probe = lane_quiet_probe(
             bots_running=bot_task_registry.any_running,
             observe_account=_boot_clerk.observe_account_quiet,
         )
+        set_lane_account_quiet_source(
+            LaneAccountQuietSource(account_id=_boot_clerk.account_id, probe=account_quiet_probe)
+        )
+        if fleet_lane is not None:
+            fleet_lane.lane_quiet_probe = account_quiet_probe
 
     # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
     # sweep cannot race the boot reconciliation pass (both call reconcile_once).
@@ -927,6 +939,7 @@ async def _service_lifespan(
         # Stop the in-container bot tasks first — they consume the shared
         # MarketDataFeed, which is torn down later in this block. Operator
         # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
+        set_lane_account_quiet_source(None)
         if bot_task_registry is not None:
             await bot_task_registry.stop_all()
         set_bot_task_registry(None)

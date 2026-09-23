@@ -33,18 +33,25 @@ def test_both_bounds_exceed_the_fleet_default() -> None:
     assert HISTORY_BATCH_OUTER_TIMEOUT_S > DEFAULT_INTERNAL_TIMEOUT_S
 
 
+#: Every operation that deliberately widens its forward bound, and why:
+#: ``lane_stop_all_bots`` runs one operator Stop per bot (#2268, pinned in
+#: ``test_lane_quiesce_operations.py``).
+_OTHER_DELIBERATE_WIDENINGS = frozenset({"lane_stop_all_bots"})
+
+
 def test_bot_chart_history_declares_the_outer_bound() -> None:
-    """Only this operation widens; every other declared operation is untouched."""
+    """This operation widens; every other operation stays at the fleet default
+    unless it is a named, separately pinned widening."""
     by_id = {op.operation_id: op for op in ALPACA_OPERATIONS}
     assert by_id["bot_chart_history"].read_timeout_s == HISTORY_BATCH_OUTER_TIMEOUT_S
 
-    others_widened = [
+    others_widened = {
         op.operation_id
         for op in ALPACA_OPERATIONS
         if op.operation_id != "bot_chart_history"
         and op.read_timeout_s != DEFAULT_INTERNAL_TIMEOUT_S
-    ]
-    assert others_widened == []
+    }
+    assert others_widened == _OTHER_DELIBERATE_WIDENINGS
 
 
 _ECHOED_IDENTITY_HEADERS = (
