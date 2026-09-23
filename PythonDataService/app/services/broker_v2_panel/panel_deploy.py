@@ -215,6 +215,7 @@ async def deploy_alpaca_paper_bot(
             http_status=exc.http_status,
             operation_attempted=exc.admission_decision is None,
             admission_decision=exc.admission_decision,
+            reason_code=exc.reason_code,
         ) from exc
     return build_alpaca_paper_deploy_receipt(
         broker=broker,
@@ -261,6 +262,7 @@ async def preview_alpaca_paper_start_admission(
             next_action="Correct the deployment inputs or bot state, then refresh admission.",
             http_status=exc.http_status,
             admission_decision=exc.admission_decision,
+            reason_code=exc.reason_code,
         ) from exc
 
 

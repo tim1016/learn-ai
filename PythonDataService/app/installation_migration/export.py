@@ -2,11 +2,13 @@
 
 The order is the safety argument:
 
-1. **Preflight** — every bundled volume and folder exists, no folder holds a
-   secret-shaped file or an escaping symlink, the bundle path is free, and
-   the tracked working tree is clean (or the operator overrode that, which
-   the manifest records). A doomed export fails here, before it has touched
-   anything.
+1. **Preflight** — every bundled volume and folder exists, no folder holds
+   an escaping symlink, the bundle path is free, and the tracked working
+   tree is clean (or the operator overrode that, which the manifest
+   records). A doomed export fails here, before it has touched anything.
+   Every secret-shaped file in a bundled folder is skipped and named — in
+   this step's output, in the manifest and in the final step — never
+   carried (#2269).
 2. **Read account quiet on every lane** (#2154's reader, via the
    coordinator, no drain): broker open orders empty, positions empty, no
    in-flight intent. Any account not flat refuses, naming the account and
@@ -40,7 +42,7 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.broker.fleet.records import LANE_QUIET_CONDITIONS
@@ -50,6 +52,7 @@ from app.installation_migration.bundle import (
     FolderEntry,
     LaneEntry,
     Manifest,
+    SkippedSecretFile,
     VolumeEntry,
     write_bundle,
 )
@@ -58,6 +61,7 @@ from app.installation_migration.contents import (
     BUNDLED_VOLUMES,
     BundledVolume,
     resolve_folder_path,
+    skipped_secret_note,
 )
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.facts import (
@@ -68,7 +72,12 @@ from app.installation_migration.facts import (
 from app.installation_migration.git import GitPort
 from app.installation_migration.lanes import FleetLanes, Lane
 from app.installation_migration.podman import PodmanPort, VolumeInfo
-from app.installation_migration.topology import containers_writing_folders, load_topology
+from app.installation_migration.topology import (
+    containers_writing_folders,
+    deployment_namespace,
+    host_topology_facts,
+    load_topology,
+)
 from app.installation_migration.tree import (
     build_folder_tar,
     require_bundleable,
@@ -160,13 +169,24 @@ def _export_bundle(
     emit: Emit,
     clock: Callable[[], int],
 ) -> None:
-    volume_infos, folder_paths, source_tree_dirty = _preflight(request, bundle, podman, git)
+    volume_infos, folder_paths, source_tree_dirty, skipped = _preflight(
+        request, bundle, podman, git
+    )
+    # Read before any bot is stopped, so a checkout that cannot describe its
+    # own host refuses while nothing has changed.
+    topology = load_topology(request.repo_root)
+    namespace = deployment_namespace(request.repo_root)
+    skipped_secrets = tuple(
+        SkippedSecretFile(path=path, note=skipped_secret_note(PurePosixPath(path).name))
+        for path in skipped
+    )
     emit(
         {
             "step": "preflight",
             "volumes": sorted(volume_infos),
             "folders": sorted(folder_paths),
             "source_tree_dirty": source_tree_dirty,
+            "skipped_secret_files": [entry.model_dump() for entry in skipped_secrets],
         }
     )
 
@@ -188,7 +208,6 @@ def _export_bundle(
     )
     emit({"step": "accounts-quiet", "accounts": [entry.answer.account_id for entry in quiet]})
 
-    topology = load_topology(request.repo_root)
     stopped = _quiesce_containers(podman, topology, emit)
     emit({"step": "containers-stopped", "containers": stopped})
 
@@ -234,6 +253,8 @@ def _export_bundle(
                 for entry in quiet
             ),
             postgres=postgres,
+            skipped_secret_files=skipped_secrets,
+            source_host=host_topology_facts(identity.registry, topology, namespace=namespace),
         )
         members = [volume.member for volume in BUNDLED_VOLUMES] + [
             folder.member for folder in BUNDLED_FOLDERS
@@ -245,6 +266,7 @@ def _export_bundle(
             "bundle": str(bundle),
             "source_commit": source_commit,
             "source_tree_dirty": source_tree_dirty,
+            "skipped_secret_files": [entry.model_dump() for entry in skipped_secrets],
             "stack": "stopped",
             "next": "Copy the bundle and deploy/fleet/env/*.env (plus the repo-root "
             ".env and PythonDataService/.env) to the new machine by hand, then shut this "
@@ -258,7 +280,7 @@ def _export_bundle(
 
 def _preflight(
     request: ExportRequest, bundle: Path, podman: PodmanPort, git: GitPort
-) -> tuple[dict[str, VolumeInfo], dict[str, Path], bool]:
+) -> tuple[dict[str, VolumeInfo], dict[str, Path], bool, list[str]]:
     if bundle.exists():
         raise MigrationRefused(
             "bundle_exists",
@@ -294,11 +316,12 @@ def _preflight(
             f"Bundled folder(s) {', '.join(missing_folders)} do not exist on this host.",
             details={"folders": missing_folders},
         )
-    require_bundleable(paths.values())
+    skipped = require_bundleable(paths)
     return (
         {name: info for name, info in infos.items() if info is not None},
         paths,
         source_tree_dirty,
+        skipped,
     )
 
 
@@ -349,6 +372,7 @@ def _stop_every_bot(
                 "clerk_id": lane.clerk_id,
                 "receipt_id": receipt.receipt_id,
                 "stopped": [bot.model_dump() for bot in receipt.stopped],
+                "intent_stopped": [bot.model_dump() for bot in receipt.intent_stopped],
             }
         )
     return receipts

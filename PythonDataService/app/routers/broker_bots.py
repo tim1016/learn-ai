@@ -72,6 +72,7 @@ def _raise_runner_error(error: BotRunnerError) -> NoReturn:
                 if error.admission_decision is not None
                 else None
             ),
+            "reason_code": error.reason_code,
         },
     )
 

@@ -57,8 +57,10 @@ class PanelRunnerError(PanelDataError):
         next_action: str | None = None,
         operation_attempted: bool = False,
         admission_decision: RunAdmissionDecision | None = None,
+        reason_code: str | None = None,
     ) -> None:
         super().__init__(message, detail=detail, next_action=next_action)
         self.http_status = http_status
         self.operation_attempted = operation_attempted
         self.admission_decision = admission_decision
+        self.reason_code = reason_code

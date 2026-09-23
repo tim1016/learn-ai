@@ -17290,6 +17290,48 @@
         "title": "GallerySymbolBars",
         "type": "object"
       },
+      "GoLiveHoldMarker": {
+        "additionalProperties": false,
+        "description": "What import records in each marker: which bundle put the lane on hold.",
+        "properties": {
+          "kind": {
+            "const": "learn-ai-go-live-hold",
+            "title": "Kind"
+          },
+          "registry_id": {
+            "title": "Registry Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version"
+          },
+          "source_commit": {
+            "title": "Source Commit",
+            "type": "string"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "string"
+          },
+          "written_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Written At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "schema_version",
+          "written_at_ms",
+          "volume",
+          "source_commit",
+          "registry_id"
+        ],
+        "title": "GoLiveHoldMarker",
+        "type": "object"
+      },
       "GoldenFixturesCatalog": {
         "properties": {
           "fixtures": {
@@ -21595,6 +21637,158 @@
         "title": "LaneAttentionRead",
         "type": "object"
       },
+      "LaneGoLiveReleaseReceipt": {
+        "description": "The durable receipt of one go-live release, as recorded on the lane.",
+        "properties": {
+          "bar_check": {
+            "$ref": "#/components/schemas/LaneIbkrBarCheckRead"
+          },
+          "change_ref": {
+            "title": "Change Ref",
+            "type": "string"
+          },
+          "marker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoLiveHoldMarker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "marker_problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Marker Problem"
+          },
+          "operator": {
+            "title": "Operator",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "released_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Released At Ms",
+            "type": "integer"
+          },
+          "was_held": {
+            "title": "Was Held",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "released_at_ms",
+          "operator",
+          "change_ref",
+          "was_held",
+          "marker",
+          "marker_problem",
+          "bar_check"
+        ],
+        "title": "LaneGoLiveReleaseReceipt",
+        "type": "object"
+      },
+      "LaneGoLiveReleaseRequest": {
+        "additionalProperties": false,
+        "description": "Who releases the lane, under which change record, and their confirmation.",
+        "properties": {
+          "change_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Change Ref",
+            "type": "string"
+          },
+          "old_machine_off_confirmation": {
+            "const": "the old machine is off",
+            "title": "Old Machine Off Confirmation"
+          },
+          "operator": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operator",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator",
+          "change_ref",
+          "old_machine_off_confirmation"
+        ],
+        "title": "LaneGoLiveReleaseRequest",
+        "type": "object"
+      },
+      "LaneIbkrBarCheckRead": {
+        "description": "Proof that IB Gateway returned real historical bars to this lane.\n\nOnly a check that returned at least one bar answers 200; the instants are\nthe first bar's start and the last bar's end (``int64 ms UTC``).",
+        "properties": {
+          "bar_count": {
+            "minimum": 1.0,
+            "title": "Bar Count",
+            "type": "integer"
+          },
+          "checked_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Checked At Ms",
+            "type": "integer"
+          },
+          "first_bar_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Bar Start Ms",
+            "type": "integer"
+          },
+          "last_bar_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Bar End Ms",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "bar_count",
+          "first_bar_start_ms",
+          "last_bar_end_ms",
+          "checked_at_ms"
+        ],
+        "title": "LaneIbkrBarCheckRead",
+        "type": "object"
+      },
+      "LaneIntentStoppedBotRead": {
+        "description": "One bot with no live task whose recorded intent the stop set to STOPPED.",
+        "properties": {
+          "previous_desired_state": {
+            "title": "Previous Desired State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "previous_desired_state"
+        ],
+        "title": "LaneIntentStoppedBotRead",
+        "type": "object"
+      },
       "LaneStopAllBotsReceipt": {
         "description": "The durable receipt of one lane-wide stop, as recorded on the lane.",
         "properties": {
@@ -21611,6 +21805,13 @@
             "minimum": 0.0,
             "title": "Completed At Ms",
             "type": "integer"
+          },
+          "intent_stopped": {
+            "items": {
+              "$ref": "#/components/schemas/LaneIntentStoppedBotRead"
+            },
+            "title": "Intent Stopped",
+            "type": "array"
           },
           "operator": {
             "title": "Operator",
@@ -21657,6 +21858,7 @@
           "change_ref",
           "reason",
           "stopped",
+          "intent_stopped",
           "refused",
           "still_running",
           "all_stopped"
@@ -21689,7 +21891,7 @@
         "type": "object"
       },
       "LaneStopRefusalRead": {
-        "description": "One bot whose Stop refused, in the refusal's own words.",
+        "description": "One bot whose Stop refused, in the refusal's own words.\n\n``run_id`` is null for a bot with no live task whose recorded intent could\nnot be read or rewritten.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -21707,8 +21909,15 @@
             "type": "string"
           },
           "run_id": {
-            "title": "Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -59368,6 +59577,155 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/go-live/release": {
+      "post": {
+        "description": "Fleet-routed POST /lane/go-live/release (bot_action).",
+        "operationId": "fleet_lane_go_live_release_api_brokers__broker__clerks__clerk_id__lane_go_live_release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Lane Go Live Release",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/ibkr-bar-check": {
+      "get": {
+        "description": "Fleet-routed GET /lane/ibkr-bar-check (market_status_read).",
+        "operationId": "fleet_lane_ibkr_bar_check_api_brokers__broker__clerks__clerk_id__lane_ibkr_bar_check_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Lane Ibkr Bar Check",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/lane/stop-all-bots": {
       "post": {
         "description": "Fleet-routed POST /lane/stop-all-bots (bot_action).",
@@ -60029,6 +60387,134 @@
           }
         },
         "summary": "Get Lane Account Quiet",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/lane/go-live/release": {
+      "post": {
+        "description": "Release this lane's go-live hold after an installation migration (#2269).\n\nThe request must carry the operator's \"old machine is off\" confirmation\n(422 without it), and this lane must have passed the IB Gateway bar\ncheck within the last few minutes (409 otherwise) \u2014 neither alone\nreleases. Removes the hold marker import wrote and records a receipt on\nthe lane's volume; idempotent. Starts no bot: they stay stopped until\nthe operator starts them.",
+        "operationId": "release_lane_go_live_hold_api_brokers__broker__lane_go_live_release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaneGoLiveReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaneGoLiveReleaseReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Lane Go Live Hold",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/lane/ibkr-bar-check": {
+      "get": {
+        "description": "Prove IB Gateway returns real historical bars to this lane (#2269).\n\nRecent historical SPY minute bars, so the check answers off-hours too;\n200 only when at least one bar came back. An unreachable gateway, a\nrefused or timed-out request, or zero bars answers 503 with the named\nreason \u2014 never a pass. Read-only: it subscribes to nothing and trades\nnothing.",
+        "operationId": "get_lane_ibkr_bar_check_api_brokers__broker__lane_ibkr_bar_check_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaneIbkrBarCheckRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Lane Ibkr Bar Check",
         "tags": [
           "brokers-v2"
         ]

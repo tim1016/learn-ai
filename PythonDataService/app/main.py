@@ -806,20 +806,35 @@ async def _service_lifespan(
     # MarketDataFeed a deploy fails with a typed 503, and the artifact-derived
     # list stays readable. No host daemon anywhere in this path (L1/P10).
     from app.marketdata.ibkr_feed import get_market_data_feed
-    from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+    from app.services.bot_runner import (
+        BotTaskRegistry,
+        drained_lane_start_gate,
+        go_live_start_gate,
+        set_bot_task_registry,
+    )
     from app.services.strategy_validation_admission import current_deployment_strategy_validation_fact
 
     bot_task_registry = None
     if _ROLE_RUNS_CLERK:
+        from app.services.lane_go_live import lane_go_live_hold
+
         bot_task_registry = BotTaskRegistry(
             artifacts_root=Path(ibkr_settings.live_runs_root).parent,
             feed_resolver=get_market_data_feed,
             supported_broker_ids=frozenset({"alpaca"}),
             validation_fact=current_deployment_strategy_validation_fact,
-            # #2155: once this lane's heartbeat learns it is drained, every
-            # new bot start refuses; existing bots settle undisturbed. Probed
-            # per request, so the drain lands on the next operator action.
-            drained_lane_gate=lambda: fleet_lane is not None and fleet_lane.draining,
+            lane_start_gates=(
+                # #2155: once this lane's heartbeat learns it is drained, every
+                # new bot start refuses; existing bots settle undisturbed. Probed
+                # per request, so the drain lands on the next operator action.
+                drained_lane_start_gate(lambda: fleet_lane is not None and fleet_lane.draining),
+                # #2269: a lane restored by installation migration starts no bot
+                # until `migrate_installation go-live` removes the hold marker
+                # import wrote at its clerk volume root — read there, not at the
+                # artifacts root above, which the combined role keeps outside the
+                # volume. Read per start; fails closed.
+                go_live_start_gate(lane_go_live_hold),
+            ),
         )
         set_bot_task_registry(bot_task_registry)
         logger.info("In-container bot runner installed (task registry, daemon-free).")

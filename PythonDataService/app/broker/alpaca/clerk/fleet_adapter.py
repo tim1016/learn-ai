@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_i
 from app.broker.fleet.history_batch import HISTORY_BATCH_OUTER_TIMEOUT_S
 from app.broker.fleet.internal_http import (
     DEFAULT_INTERNAL_TIMEOUT_S,
+    LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S,
     LANE_STOP_ALL_READ_TIMEOUT_S,
 )
 from app.broker.fleet.provider import (
@@ -54,8 +55,8 @@ def _op(
 
     ``read_timeout_s`` widens this operation's own outer coordinator -> agent
     delivery bound (``ProviderOperation.read_timeout_s``); every operation but
-    ``bot_chart_history`` (issue #2204) and ``lane_stop_all_bots`` (#2268)
-    leaves it at the fleet default.
+    ``bot_chart_history`` (issue #2204), ``lane_stop_all_bots`` (#2268) and
+    ``lane_ibkr_bar_check`` (#2269) leaves it at the fleet default.
     """
     return ProviderOperation(
         operation_id=operation_id,
@@ -177,6 +178,27 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/lane/account-quiet",
             capability=Capability.CUSTODY_READ,
+            readiness=_CONFIGURATION,
+        ),
+        # Installation migration's go-live (#2269): prove IB Gateway returns
+        # real historical bars to the lane, then release the lane's go-live
+        # hold. CONFIGURATION_ACCESS for the same reason as the two above: a
+        # freshly migrated lane must be checkable and releasable whether or
+        # not its binding is confirmed yet.
+        _op(
+            "lane_ibkr_bar_check",
+            "GET",
+            "/lane/ibkr-bar-check",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            read_timeout_s=LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S,
+        ),
+        _op(
+            "lane_go_live_release",
+            "POST",
+            "/lane/go-live/release",
+            capability=Capability.BOT_ACTION,
+            idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
         ),
         _op(

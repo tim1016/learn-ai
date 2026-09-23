@@ -8,9 +8,12 @@ rendered, secret-free projection of ``compose.yaml`` + ``compose.fleet.dev.yaml`
   copy, and must be stopped before a restore);
 - which ``deploy/fleet/env/*.env`` files the stack cannot start without
   (import refuses until the operator has copied them by hand);
-- whether each registry clerk's recorded ``volume_root`` and approved
-  endpoint still resolve here, and so whether a re-approval is needed —
-  reported, never performed.
+- where each live clerk's volume is mounted, and under which namespace
+  clerks register (:class:`HostTopologyFacts`) — recorded by export on the
+  old host, re-read by import on the new one, and compared, so a re-approval
+  is required exactly when the host changed what the registry's
+  ``volume_root`` and approved endpoint refer to (#2269). Reported, never
+  performed.
 """
 
 from __future__ import annotations
@@ -21,11 +24,11 @@ import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
 from app.installation_migration.errors import MigrationRefused
+from app.installation_migration.records import StrictRecord
 
 if TYPE_CHECKING:
     from app.installation_migration.facts import RegistryFacts
@@ -159,58 +162,109 @@ def deployment_namespace(repo_root: Path) -> str:
     return match.group("default").strip()
 
 
-def host_resolution_report(
-    registry: RegistryFacts, topology: Mapping[str, Any], *, namespace: str
-) -> list[dict[str, Any]]:
-    """Whether each live clerk's volume root and endpoint resolve on this host.
+class ClerkMount(StrictRecord):
+    """One service on a host that mounts a clerk's attested volume, and where."""
 
-    A clerk resolves when this host registers clerks under its recorded
-    namespace, some service mounts the clerk's attested named volume at its
-    recorded ``volume_root``, and its approved endpoint's host is that same
-    service. Anything else is ``reapproval_required`` — named, never fixed:
-    re-approval is the operator's host ceremony.
+    service: str
+    container: str
+    target: str
+
+
+class HostClerkFacts(StrictRecord):
+    """Where one host's topology mounts one live clerk's volume."""
+
+    clerk_id: str
+    mounts: tuple[ClerkMount, ...]
+
+
+class HostTopologyFacts(StrictRecord):
+    """What one host's topology says about every live clerk in the registry.
+
+    Recorded by export on the old host and read again by import on the new
+    one; the re-approval check compares the two (#2269).
     """
+
+    deployment_namespace: str
+    clerks: tuple[HostClerkFacts, ...]
+
+
+def host_topology_facts(
+    registry: RegistryFacts, topology: Mapping[str, Any], *, namespace: str
+) -> HostTopologyFacts:
+    """This host's namespace and, per live clerk, every service mounting its volume."""
     volume_names = {
         key: str(spec.get("name") or key) for key, spec in topology["volumes"].items()
     }
+    clerks: list[HostClerkFacts] = []
+    for clerk in registry.clerks:
+        if clerk.lifecycle_state == "retired":
+            continue
+        mounts = sorted(
+            (
+                ClerkMount(
+                    service=service_name,
+                    container=str(service.get("container_name") or service_name),
+                    target=target,
+                )
+                for service_name, service in topology["service_detail"].items()
+                for source, target, kind in _mounts(service)
+                if kind == "volume" and volume_names.get(source) == clerk.attestation_id
+            ),
+            key=lambda mount: (mount.service, mount.target),
+        )
+        clerks.append(HostClerkFacts(clerk_id=clerk.clerk_id, mounts=tuple(mounts)))
+    return HostTopologyFacts(deployment_namespace=namespace, clerks=tuple(clerks))
+
+
+def _describe_mounts(mounts: Iterable[ClerkMount]) -> str:
+    listed = [f"{mount.service} at {mount.target}" for mount in mounts]
+    return ", ".join(listed) or "no service"
+
+
+def reapproval_report(
+    registry: RegistryFacts, source: HostTopologyFacts, destination: HostTopologyFacts
+) -> list[dict[str, Any]]:
+    """Whether each live clerk's host facts changed between the old host and this one.
+
+    The registry travels unchanged, so what a clerk's recorded
+    ``volume_root`` and approved endpoint mean can only change with the host:
+    the namespace it registers clerks under, and which service mounts each
+    clerk's volume where (the endpoint names that service). Only a
+    difference between the old host's facts and this host's is
+    ``reapproval_required`` — named, never fixed: re-approval is the
+    operator's host ceremony. A registry value that already disagreed with
+    the old host's topology (the dev Paper lane's ``/paper-volume``) is
+    carried over as it was, not re-judged here.
+    """
     endpoints = {row.clerk_id: row for row in registry.approved_endpoints}
+    before = {entry.clerk_id: entry for entry in source.clerks}
+    after = {entry.clerk_id: entry for entry in destination.clerks}
     report: list[dict[str, Any]] = []
     for clerk in registry.clerks:
         if clerk.lifecycle_state == "retired":
             continue
-        serving: dict[str, set[str]] = {}
-        for service_name, service in topology["service_detail"].items():
-            for source, target, kind in _mounts(service):
-                if kind == "volume" and volume_names.get(source) == clerk.attestation_id:
-                    names = {service_name, str(service.get("container_name") or service_name)}
-                    serving.setdefault(target, set()).update(names)
         issues: list[str] = []
-        if clerk.deployment_namespace != namespace:
+        if source.deployment_namespace != destination.deployment_namespace:
             issues.append(
-                f"registered under namespace {clerk.deployment_namespace!r}; this "
-                f"host registers under {namespace!r}"
+                f"the old host registered clerks under {source.deployment_namespace!r}; "
+                f"this host registers under {destination.deployment_namespace!r}"
             )
-        hosts = serving.get(clerk.volume_root)
-        if hosts is None:
+        old, new = before.get(clerk.clerk_id), after.get(clerk.clerk_id)
+        if old is None:
+            issues.append("the bundle records no old-host mounts for this clerk")
+        elif new is None or old.mounts != new.mounts:
             issues.append(
-                f"no service here mounts volume {clerk.attestation_id!r} at "
-                f"{clerk.volume_root!r}"
+                f"volume {clerk.attestation_id!r} was mounted by "
+                f"{_describe_mounts(old.mounts)} on the old host and by "
+                f"{_describe_mounts(new.mounts if new else ())} here"
             )
         endpoint = endpoints.get(clerk.clerk_id)
-        if endpoint is not None:
-            endpoint_host = urlsplit(endpoint.base_url).hostname
-            if hosts is None or endpoint_host not in hosts:
-                issues.append(
-                    f"approved endpoint {endpoint.base_url!r} does not name the "
-                    "service that mounts this clerk's volume here"
-                )
         report.append(
             {
                 "clerk_id": clerk.clerk_id,
                 "volume_root": clerk.volume_root,
                 "endpoint_ref": None if endpoint is None else endpoint.endpoint_ref,
                 "base_url": None if endpoint is None else endpoint.base_url,
-                "resolves": not issues,
                 "reapproval_required": bool(issues),
                 "issues": issues,
             }
@@ -219,12 +273,16 @@ def host_resolution_report(
 
 
 __all__ = [
+    "ClerkMount",
+    "HostClerkFacts",
+    "HostTopologyFacts",
     "compose_variable",
     "containers_writing_folders",
     "deployment_namespace",
-    "host_resolution_report",
+    "host_topology_facts",
     "load_topology",
     "postgres_image_major",
+    "reapproval_report",
     "required_env_files",
     "required_fleet_env_files",
 ]

@@ -35,8 +35,10 @@ def test_both_bounds_exceed_the_fleet_default() -> None:
 
 #: Every operation that deliberately widens its forward bound, and why:
 #: ``lane_stop_all_bots`` runs one operator Stop per bot (#2268, pinned in
-#: ``test_lane_quiesce_operations.py``).
-_OTHER_DELIBERATE_WIDENINGS = frozenset({"lane_stop_all_bots"})
+#: ``test_lane_quiesce_operations.py``); ``lane_ibkr_bar_check`` waits on one
+#: IB Gateway historical request (#2269, pinned in
+#: ``test_lane_go_live_operations.py``).
+_OTHER_DELIBERATE_WIDENINGS = frozenset({"lane_stop_all_bots", "lane_ibkr_bar_check"})
 
 
 def test_bot_chart_history_declares_the_outer_bound() -> None:

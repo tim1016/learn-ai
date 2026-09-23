@@ -6,7 +6,8 @@ through the coordinator's catalog-routed operations:
 
 - **stop every bot on the lane, and record that it did.** The operator's
   Stop, per bot, so each bot's durable desired state reads ``STOPPED`` and it
-  stays stopped wherever the lane next boots. The record is one receipt per
+  stays stopped wherever the lane next boots — including a bot with no live
+  task whose recorded intent still said it should run (#2269). The record is one receipt per
   call under the lane's own artifact root — on the lane's volume, so it
   travels in the migration bundle with the evidence it describes. Nothing
   here drains the lane or touches its assignment.
@@ -32,7 +33,12 @@ from app.broker.alpaca.clerk.fleet_boot import (
     LaneQuietAnswer,
     LaneQuietProbe,
 )
-from app.services.bot_runner import LaneStopOutcome, LaneStoppedBot, LaneStopRefusal
+from app.services.bot_runner import (
+    LaneIntentStoppedBot,
+    LaneStopOutcome,
+    LaneStoppedBot,
+    LaneStopRefusal,
+)
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import now_ms_utc
 
@@ -70,6 +76,7 @@ class LaneStopAllReceipt:
     operator: str
     change_ref: str
     stopped: tuple[LaneStoppedBot, ...]
+    intent_stopped: tuple[LaneIntentStoppedBot, ...]
     refused: tuple[LaneStopRefusal, ...]
     still_running: bool
 
@@ -90,6 +97,13 @@ class LaneStopAllReceipt:
             "stopped": [
                 {"strategy_instance_id": bot.strategy_instance_id, "run_id": bot.run_id}
                 for bot in self.stopped
+            ],
+            "intent_stopped": [
+                {
+                    "strategy_instance_id": bot.strategy_instance_id,
+                    "previous_desired_state": bot.previous_desired_state,
+                }
+                for bot in self.intent_stopped
             ],
             "refused": [
                 {
@@ -129,6 +143,7 @@ async def stop_all_bots_on_lane(
         operator=operator,
         change_ref=change_ref,
         stopped=outcome.stopped,
+        intent_stopped=outcome.intent_stopped,
         refused=outcome.refused,
         still_running=outcome.still_running,
     )
@@ -148,6 +163,7 @@ async def stop_all_bots_on_lane(
             "operator": operator,
             "change_ref": change_ref,
             "stopped_count": len(receipt.stopped),
+            "intent_stopped_count": len(receipt.intent_stopped),
             "refused_count": len(receipt.refused),
             "still_running": receipt.still_running,
         },

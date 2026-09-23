@@ -13,15 +13,20 @@ are not what "the same installation" means.
 The walk carries three kinds — directory, regular file, symlink — and
 refuses anything else (a socket, FIFO or device) by path: an entry the bundle
 cannot reproduce must stop the move, never vanish from it. A bundled tree
-also refuses, by path, any secret-shaped file and any symlink the import's
-safe extraction would refuse (absolute, or pointing outside the tree) —
-checked at export preflight and again inside :func:`build_folder_tar`, so no
-caller can write a tar that carries a secret or cannot be restored.
+also refuses, by path, any symlink the import's safe extraction would refuse
+(absolute, or pointing outside the tree). A secret-shaped file is **skipped
+and named** instead (#2269): it is never part of the tar or its digest, and
+:func:`require_bundleable` returns every one it skipped so export can list
+them. Both rules apply at export preflight and again inside
+:func:`build_folder_tar`, so no caller can write a tar that carries a secret
+or cannot be restored.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import io
 import json
 import os
 import posixpath
@@ -109,25 +114,20 @@ def _link_escapes(entry: TreeEntry) -> bool:
     return landing == ".." or landing.startswith("../")
 
 
+def _is_secret(entry: TreeEntry) -> bool:
+    return entry.kind != "d" and is_secret_shaped(posixpath.basename(entry.path))
+
+
+def _bundled_entries(entries: Iterable[TreeEntry]) -> list[TreeEntry]:
+    """The entries a bundle carries: every one but a secret-shaped file."""
+    return [entry for entry in entries if not _is_secret(entry)]
+
+
 def _refuse_unbundleable(walks: Mapping[Path, list[TreeEntry]]) -> None:
-    secrets = sorted(
-        str(entry.absolute)
-        for entries in walks.values()
-        for entry in entries
-        if entry.kind != "d" and is_secret_shaped(posixpath.basename(entry.path))
-    )
-    if secrets:
-        raise MigrationRefused(
-            "secret_in_bundle_source",
-            f"Secret-shaped file(s) {', '.join(secrets)} sit inside a bundled folder; "
-            "the bundle never carries a secret. Move them out of the folder (the new "
-            "host mints its own tokens), then retry.",
-            details={"paths": secrets},
-        )
     unsafe = sorted(
         str(entry.absolute)
         for entries in walks.values()
-        for entry in entries
+        for entry in _bundled_entries(entries)
         if entry.kind == "l" and _link_escapes(entry)
     )
     if unsafe:
@@ -140,9 +140,21 @@ def _refuse_unbundleable(walks: Mapping[Path, list[TreeEntry]]) -> None:
         )
 
 
-def require_bundleable(roots: Iterable[Path]) -> None:
-    """Refuse, naming every path, a tree holding a secret or an escaping symlink."""
-    _refuse_unbundleable({root: walk_tree(root) for root in roots})
+def require_bundleable(roots: Mapping[str, Path]) -> list[str]:
+    """Refuse an escaping symlink by path; name every secret-shaped file skipped.
+
+    ``roots`` maps each folder's key to its host path. The answer is each
+    skipped file as ``<key>/<path inside the folder>``, sorted — portable, so
+    the same name means the same file on either host.
+    """
+    walks = {root: walk_tree(root) for root in roots.values()}
+    _refuse_unbundleable(walks)
+    return sorted(
+        f"{key}/{entry.path}"
+        for key, root in roots.items()
+        for entry in walks[root]
+        if _is_secret(entry)
+    )
 
 
 def _digest(entries: Iterable[tuple[str, str, str]]) -> str:
@@ -193,17 +205,19 @@ def _member_path(name: str) -> str:
     return name.strip("/")
 
 
-def tree_digest_from_tar(archive: Path) -> str:
+def tree_digest_from_tar(archive: Path, *, exclude: frozenset[str] = frozenset()) -> str:
     """The content digest of a tar, comparable to :func:`tree_digest_from_dir`.
 
     A hardlink member digests as the regular file it is once extracted.
+    ``exclude`` names root-relative paths left out of the digest — import's
+    go-live hold marker, which it lays into a lane volume with the content.
     """
     entries: list[tuple[str, str, str]] = []
     seen: set[str] = set()
     with _reading(archive), tarfile.open(archive, "r:*") as bundle:
         for member in bundle:
             path = _member_path(member.name)
-            if path in ("", "."):
+            if path in ("", ".") or path in exclude:
                 continue
             if path in seen:
                 raise MigrationRefused(
@@ -260,10 +274,12 @@ def build_folder_tar(root: Path, archive: Path) -> None:
 
     Entries are added from the walk itself rather than ``TarFile.add``, so the
     tar holds exactly what the directory digest hashed — no hardlink members,
-    no silently skipped socket.
+    no silently skipped socket — minus every secret-shaped file, which
+    :func:`require_bundleable` has already named.
     """
-    entries = walk_tree(root)
-    _refuse_unbundleable({root: entries})
+    walked = walk_tree(root)
+    _refuse_unbundleable({root: walked})
+    entries = _bundled_entries(walked)
     with tarfile.open(archive, "x", format=tarfile.PAX_FORMAT) as bundle:
         for entry in entries:
             metadata = entry.absolute.lstat()
@@ -282,6 +298,48 @@ def build_folder_tar(root: Path, archive: Path) -> None:
                 info.size = metadata.st_size
                 with entry.absolute.open("rb") as handle:
                     bundle.addfile(info, handle)
+
+
+def tar_with_root_file_first(source: Path, archive: Path, *, name: str, payload: bytes) -> None:
+    """Write ``source``'s members to a new tar at ``archive``, led by one root file.
+
+    ``name`` is written first, as a regular file holding ``payload``, and any
+    root member of that name in ``source`` is dropped — so the new tar holds
+    exactly one. Every other member is copied with its own metadata (owner,
+    mode, mtime, link target), so the tar extracts as ``source`` would plus
+    the one file. First, so an extraction that stops part-way has laid it
+    down before any other member.
+    """
+    leading = tarfile.TarInfo(name)
+    leading.type = tarfile.REGTYPE
+    leading.mode = 0o644
+    leading.size = len(payload)
+    with (
+        _reading(source),
+        tarfile.open(source, "r:*") as original,
+        tarfile.open(archive, "x", format=tarfile.PAX_FORMAT) as combined,
+    ):
+        combined.addfile(leading, io.BytesIO(payload))
+        for member in original:
+            if _member_path(member.name) == name:
+                continue
+            if not member.isreg():
+                combined.addfile(member)
+                continue
+            handle = original.extractfile(member)
+            if handle is None:
+                raise MigrationRefused(
+                    "bundle_member_unreadable",
+                    f"{source} member {member.name!r} has no readable content.",
+                    details={"archive": str(source), "path": member.name},
+                )
+            copied = copy.copy(member)
+            # A GNU sparse member is written back as the plain file it
+            # extracts to.
+            copied.type = tarfile.REGTYPE
+            copied.sparse = None
+            with handle:
+                combined.addfile(copied, handle)
 
 
 def extract_tar(archive: Path, destination: Path) -> None:
@@ -309,6 +367,7 @@ __all__ = [
     "require_bundleable",
     "root_member_bytes",
     "sha256_file",
+    "tar_with_root_file_first",
     "tree_digest_from_dir",
     "tree_digest_from_tar",
     "walk_tree",

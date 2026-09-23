@@ -80,6 +80,11 @@ from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
 from app.schemas.clerk_custody import CustodyDiagnosis
+from app.schemas.lane_go_live import (
+    LaneGoLiveReleaseReceipt,
+    LaneGoLiveReleaseRequest,
+    LaneIbkrBarCheckRead,
+)
 from app.schemas.lane_quiesce import (
     LaneAccountQuietRead,
     LaneStopAllBotsReceipt,
@@ -112,6 +117,15 @@ from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.go_live_hold import GoLiveHoldUnreadableError, GoLiveReleaseFailedError
+from app.services.lane_go_live import (
+    GoLiveBarCheckRequired,
+    GoLiveHoldRootUnresolvedError,
+    LaneBarCheckFailed,
+    check_ibkr_historical_bars,
+    lane_go_live_hold_root,
+    release_lane_go_live,
+)
 from app.services.lane_quiesce import (
     get_lane_account_quiet_source,
     read_lane_account_quiet,
@@ -883,6 +897,78 @@ async def get_lane_account_quiet(broker: str) -> LaneAccountQuietRead:
         quiet=not answer.outstanding,
         outstanding=list(answer.outstanding),
     )
+
+
+@router.get("/{broker}/lane/ibkr-bar-check", response_model=LaneIbkrBarCheckRead)
+async def get_lane_ibkr_bar_check(broker: str) -> LaneIbkrBarCheckRead:
+    """Prove IB Gateway returns real historical bars to this lane (#2269).
+
+    Recent historical SPY minute bars, so the check answers off-hours too;
+    200 only when at least one bar came back. An unreachable gateway, a
+    refused or timed-out request, or zero bars answers 503 with the named
+    reason — never a pass. Read-only: it subscribes to nothing and trades
+    nothing.
+    """
+    _require_alpaca_lane(broker, operation="lane_ibkr_bar_check")
+    try:
+        check = await check_ibkr_historical_bars()
+    except LaneBarCheckFailed as exc:
+        raise HTTPException(
+            status_code=503, detail={"reason": exc.reason, "message": exc.message}
+        ) from exc
+    return LaneIbkrBarCheckRead.model_validate(check.to_json())
+
+
+@router.post(
+    "/{broker}/lane/go-live/release",
+    response_model=LaneGoLiveReleaseReceipt,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def release_lane_go_live_hold(
+    broker: str, request: LaneGoLiveReleaseRequest
+) -> LaneGoLiveReleaseReceipt:
+    """Release this lane's go-live hold after an installation migration (#2269).
+
+    The request must carry the operator's "old machine is off" confirmation
+    (422 without it), and this lane must have passed the IB Gateway bar
+    check within the last few minutes (409 otherwise) — neither alone
+    releases. Removes the hold marker import wrote and records a receipt on
+    the lane's volume; idempotent. Starts no bot: they stay stopped until
+    the operator starts them.
+    """
+    _require_alpaca_lane(broker, operation="lane_go_live_release")
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "lane_bot_runner_not_installed",
+                "message": "This process runs no bot runner, so it holds no go-live hold.",
+            },
+        )
+    try:
+        receipt = release_lane_go_live(
+            lane_go_live_hold_root(), operator=request.operator, change_ref=request.change_ref
+        )
+    except GoLiveBarCheckRequired as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "lane_go_live_bar_check_required", "message": str(exc)},
+        ) from exc
+    except (GoLiveHoldUnreadableError, GoLiveHoldRootUnresolvedError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "lane_go_live_hold_unreadable",
+                "message": f"This lane cannot tell whether it is held, so it stays held: {exc}",
+            },
+        ) from exc
+    except GoLiveReleaseFailedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "lane_go_live_release_failed", "message": str(exc)},
+        ) from exc
+    return LaneGoLiveReleaseReceipt.model_validate(receipt.to_json())
 
 
 @router.get("/{broker}/live-verdict", response_model=AlpacaLiveVerdict)

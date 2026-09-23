@@ -129,7 +129,7 @@ def _boot_online_unbound_lane(tmp_path: Path) -> tuple[dict[str, str], Path]:
         "FLEET_REQUEST_QUEUE_TIMEOUT_MS": "0",
         "ALPACA_CLERK_DIR": str(volume_root),
         # Inside the volume, so the writable-root fence is satisfied.
-        "IBKR_LIVE_RUNS_ROOT": str(volume_root / "live_runs" / "runs"),
+        "IBKR_LIVE_RUNS_ROOT": str(volume_root / "live_runs"),
         "IBKR_LIVE_BARS_ROOT": str(volume_root / "live_bars"),
         # Best-effort IBKR connect is orthogonal to this seam; disabling it
         # keeps the boot fast and free of a real gateway dependency.

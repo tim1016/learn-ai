@@ -18,10 +18,14 @@ class BotRunnerError(Exception):
         *,
         detail: str | None = None,
         admission_decision: RunAdmissionDecision | None = None,
+        reason_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.detail = detail
         self.admission_decision = admission_decision
+        #: A stable code for a refusal that has no admission decision to
+        #: carry one (the lane-level start gates); ``None`` otherwise.
+        self.reason_code = reason_code
 
 
 class UnknownBotError(BotRunnerError):
@@ -68,6 +72,12 @@ class CarryoverPolicyRefusedError(BotRunnerError):
 
 class RunAdmissionRefusedError(BotRunnerError):
     http_status = 409
+
+
+#: The lane is held for go-live after an installation migration (#2269).
+LANE_GO_LIVE_PENDING = "LANE_GO_LIVE_PENDING"
+#: The lane cannot read its go-live hold, so it holds (fail closed).
+LANE_GO_LIVE_HOLD_UNREADABLE = "LANE_GO_LIVE_HOLD_UNREADABLE"
 
 
 class ActivationFailedCleanupProvenError(BotRunnerError):

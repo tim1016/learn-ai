@@ -25,13 +25,26 @@ class LaneStoppedBotRead(BaseModel):
     run_id: str
 
 
-class LaneStopRefusalRead(BaseModel):
-    """One bot whose Stop refused, in the refusal's own words."""
+class LaneIntentStoppedBotRead(BaseModel):
+    """One bot with no live task whose recorded intent the stop set to STOPPED."""
 
     model_config = ConfigDict(frozen=True)
 
     strategy_instance_id: str
-    run_id: str
+    previous_desired_state: str
+
+
+class LaneStopRefusalRead(BaseModel):
+    """One bot whose Stop refused, in the refusal's own words.
+
+    ``run_id`` is null for a bot with no live task whose recorded intent could
+    not be read or rewritten.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy_instance_id: str
+    run_id: str | None
     message: str
     detail: str | None
 
@@ -48,6 +61,7 @@ class LaneStopAllBotsReceipt(BaseModel):
     change_ref: str
     reason: str
     stopped: list[LaneStoppedBotRead]
+    intent_stopped: list[LaneIntentStoppedBotRead]
     refused: list[LaneStopRefusalRead]
     still_running: bool
     all_stopped: bool
@@ -75,6 +89,7 @@ class LaneAccountQuietRead(BaseModel):
 
 __all__ = [
     "LaneAccountQuietRead",
+    "LaneIntentStoppedBotRead",
     "LaneStopAllBotsReceipt",
     "LaneStopAllBotsRequest",
     "LaneStopRefusalRead",

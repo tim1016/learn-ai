@@ -40,6 +40,15 @@ DEFAULT_INTERNAL_TIMEOUT_S = 10.0
 #: own wait (``installation_migration.lanes.STOP_ALL_CLIENT_TIMEOUT_S``, 120 s,
 #: derived from this bound), so the operator always reads the lane's answer.
 LANE_STOP_ALL_READ_TIMEOUT_S = 110.0
+#: The coordinator -> lane read bound of ``lane_ibkr_bar_check`` (#2269). The
+#: lane bounds its own IB Gateway work (contract qualification plus one
+#: historical-bars request) at
+#: ``lane_go_live.IBKR_BAR_CHECK_TIMEOUT_S`` (30 s), which the 10 s default
+#: would cut off mid-request and report as ``clerk_unreachable``; 40 s lets
+#: the lane's own answer -- a pass, or its named failure -- always arrive, and
+#: the migration CLI's wait (``installation_migration.lanes``) is derived
+#: from this bound.
+LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S = 40.0
 DEFAULT_MAX_EVENT_BYTES = 1_000_000
 
 

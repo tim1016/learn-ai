@@ -38,6 +38,7 @@ __all__ = [
     "DesiredStateCorruptError",
     "DesiredStateRecord",
     "DesiredStateRepo",
+    "instances_with_recorded_desired_state",
     "stable_desired_state_path",
     "validate_strategy_instance_id",
 ]
@@ -58,6 +59,10 @@ class DesiredStateCorruptError(RuntimeError):
         self.__cause__ = cause
 
 
+_LIVE_STATE_NAMESPACE = "live_state"
+_DESIRED_STATE_FILENAME = "desired_state.json"
+
+
 def stable_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
     """Canonical on-disk path for a strategy instance's desired-state file.
 
@@ -72,9 +77,28 @@ def stable_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -
     """
     return (
         strategy_instance_artifact_dir(
-            artifacts_root, "live_state", strategy_instance_id
+            artifacts_root, _LIVE_STATE_NAMESPACE, strategy_instance_id
         )
-        / "desired_state.json"
+        / _DESIRED_STATE_FILENAME
+    )
+
+
+def instances_with_recorded_desired_state(artifacts_root: Path) -> list[str]:
+    """Every instance directory under ``artifacts_root`` that records a desired state.
+
+    Sorted, and not validated: a directory name that is not a safe instance id
+    is still listed, so the caller's ``stable_desired_state_path`` refuses it
+    by name instead of it silently dropping out of a lane-wide sweep. An
+    instance with no file is absent — its intent defaults to RUNNING only for
+    a bot the runner already manages, never for a directory on disk.
+    """
+    live_state = Path(artifacts_root) / _LIVE_STATE_NAMESPACE
+    if not live_state.is_dir():
+        return []
+    return sorted(
+        child.name
+        for child in live_state.iterdir()
+        if child.is_dir() and (child / _DESIRED_STATE_FILENAME).is_file()
     )
 
 

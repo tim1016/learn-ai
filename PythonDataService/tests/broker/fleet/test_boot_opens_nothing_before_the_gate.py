@@ -78,7 +78,7 @@ def test_a_mismatched_volume_marker_leaves_no_writer_artifact(tmp_path: Path) ->
         "FLEET_REQUEST_QUEUE_TIMEOUT_MS": "0",
         "ALPACA_CLERK_DIR": str(volume_root),
         # Inside the volume, so _fence_writable_roots cannot mask the gate.
-        "IBKR_LIVE_RUNS_ROOT": str(volume_root / "live_runs" / "runs"),
+        "IBKR_LIVE_RUNS_ROOT": str(volume_root / "live_runs"),
         "IBKR_LIVE_BARS_ROOT": str(volume_root / "live_bars"),
     }
     before = sorted(p.relative_to(volume_root) for p in volume_root.rglob("*"))

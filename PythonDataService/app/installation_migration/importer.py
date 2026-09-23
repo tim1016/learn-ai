@@ -23,21 +23,30 @@ until every check before step 6 has passed:
    read back from the staged copy — registry identity, clerks, assignment
    and authority generations, every lane marker proven through the
    canonical volume gate, the Postgres version — must equal the manifest's.
-   Registry ``volume_root``s and approved endpoints are checked against this
-   host's topology and any re-approval they need is **reported, never
-   performed**.
+   The old host's topology facts (from the manifest) are compared with this
+   host's: a clerk whose namespace or volume mounts changed needs
+   re-approval, which is **reported, never performed**. A registry value
+   that already disagreed with the old host's topology is carried over as it
+   was (#2269).
 5. **Existing data moved aside**, never deleted: each existing volume is
    exported to a dated aside directory and that copy read back whole before
    the volume is removed; each existing folder is moved there whole.
-6. **Restore** (volumes imported, each staged folder renamed into place),
-   then **re-verify the destination** against the manifest's content digests.
+6. **Restore** (volumes imported, each staged folder renamed into place).
+   Each clerk volume gets a **go-live hold marker** at its root in the same
+   ``podman volume import`` as its content, marker first, so no clerk volume
+   is ever restored without its hold (#2269): the lane starts no bot until
+   ``migrate-installation go-live`` releases it. Then **re-verify the
+   destination** against the manifest's content digests — each clerk
+   volume's content apart from its marker, and the marker itself.
 
 Any failure once step 5 has begun is ``restore_incomplete``: it names the
 aside directory, its ``moved-aside.json``, and exactly which volumes and
 folders were restored, and writes the same as a partial receipt.
 
-The stack is left stopped. Go-live — the IB Gateway gate and the operator's
-"old machine is off" confirmation — is #2269's, not this command's.
+The stack is left stopped. Go-live — the IB Gateway bar check and the
+operator's "old machine is off" confirmation — is its own command
+(:mod:`app.installation_migration.golive`); until it runs, the markers hold
+every bot start.
 """
 
 from __future__ import annotations
@@ -70,16 +79,24 @@ from app.installation_migration.podman import PodmanPort, VolumeInfo
 from app.installation_migration.topology import (
     containers_writing_folders,
     deployment_namespace,
-    host_resolution_report,
+    host_topology_facts,
     load_topology,
     postgres_image_major,
+    reapproval_report,
     required_env_files,
 )
 from app.installation_migration.tree import (
     extract_tar,
+    root_member_bytes,
     sha256_file,
+    tar_with_root_file_first,
     tree_digest_from_dir,
     tree_digest_from_tar,
+)
+from app.services.go_live_hold import (
+    GO_LIVE_HOLD_MARKER,
+    GoLiveHoldMarker,
+    go_live_marker_bytes,
 )
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import now_ms_utc
@@ -149,6 +166,7 @@ def run_import(
             "created_at_ms": manifest.created_at_ms,
             "registry_id": manifest.registry.registry_id,
             "pg_version": manifest.postgres.pg_version,
+            "skipped_secret_files": [entry.model_dump() for entry in manifest.skipped_secret_files],
         }
     )
     _require_dirty_source_acknowledged(manifest, request)
@@ -201,8 +219,12 @@ def run_import(
                     "clerks": [clerk.clerk_id for clerk in registry.clerks],
                 }
             )
-            resolution = host_resolution_report(
-                registry, topology, namespace=deployment_namespace(request.repo_root)
+            resolution = reapproval_report(
+                registry,
+                manifest.source_host,
+                host_topology_facts(
+                    registry, topology, namespace=deployment_namespace(request.repo_root)
+                ),
             )
             emit(
                 {
@@ -214,14 +236,19 @@ def run_import(
                 }
             )
 
+            # Staged before anything moves, so a failure here changes nothing.
+            holds = _stage_go_live_holds(manifest, staged, staging / "go-live-holds", clock())
+
             # From here on the destination changes; every failure must say
             # exactly what changed and where the preserved data is.
             try:
                 _move_aside(podman, manifest, folder_paths, aside, progress)
                 emit({"step": "moved-aside", "aside": str(aside), **progress.aside_record()})
-                _restore(podman, manifest, folder_paths, staged, staged_folders, progress)
-                emit({"step": "restored"})
-                _verify_destination(podman, manifest, folder_paths, staging / "verify")
+                _restore(podman, manifest, folder_paths, staged, staged_folders, holds, progress)
+                emit({"step": "restored", "go_live_holds": sorted(holds)})
+                _verify_destination(
+                    podman, manifest, folder_paths, staged, holds, staging / "verify"
+                )
                 emit({"step": "destination-verified"})
             except Exception as exc:
                 # Deliberately broad: a podman, filesystem or verification
@@ -243,6 +270,7 @@ def run_import(
         "registry_id": manifest.registry.registry_id,
         "moved_aside": progress.aside_record(),
         "host_resolution": resolution,
+        "go_live_holds": sorted(holds),
         "stack": "stopped",
     }
     atomic_write_bytes(
@@ -261,8 +289,10 @@ def run_import(
                 if reapproval
                 else ""
             )
-            + "The stack stays stopped; go-live (IB Gateway reachable, old machine confirmed "
-            "off) is a separate step. Bots stay stopped until the operator starts them.",
+            + "The stack stays stopped. Every lane is held for go-live: bring the stack up, "
+            "then run `python -m scripts.migrate_installation go-live` (IB Gateway must "
+            "deliver bars to every lane, then you confirm the old machine is off). Bots stay "
+            "stopped until you start them.",
         }
     )
 
@@ -363,19 +393,24 @@ def _require_disk_space(
     """Refuse up front rather than run out of room half-way through a restore.
 
     The staging filesystem (which also holds the aside directory) needs about
-    three bundles plus a copy of every volume already here; each folder is
-    extracted next to its destination, so that folder's filesystem needs it
-    once more. An existing volume podman cannot size is estimated at its
-    bundled size.
+    three bundles, a copy of every volume already here, and each clerk
+    volume's restore tar (its content led by the go-live marker) once more;
+    each folder is extracted next to its destination, so that folder's
+    filesystem needs it once more. An existing volume podman cannot size is
+    estimated at its bundled size.
     """
     bundle_bytes = sum(entry.size_bytes for entry in (*manifest.volumes, *manifest.folders))
+    clerk_volumes = {volume.name for volume in BUNDLED_VOLUMES if volume.role == "clerk"}
+    hold_bytes = sum(
+        entry.size_bytes for entry in manifest.volumes if entry.name in clerk_volumes
+    )
     existing_bytes = 0
     for entry in manifest.volumes:
         if podman.volume_info(entry.name) is not None:
             size = podman.volume_size_bytes(entry.name)
             existing_bytes += entry.size_bytes if size is None else size
     needs: list[tuple[Path, int]] = [
-        (staging_root, _STAGING_BUNDLE_MULTIPLE * bundle_bytes + existing_bytes)
+        (staging_root, _STAGING_BUNDLE_MULTIPLE * bundle_bytes + existing_bytes + hold_bytes)
     ]
     needs.extend(
         (folder_paths[entry.key].parent, entry.size_bytes) for entry in manifest.folders
@@ -543,17 +578,64 @@ def _move_aside(
         progress.removed_volumes.append(moved["name"])
 
 
+@dataclass(frozen=True, slots=True)
+class _GoLiveHold:
+    """One clerk volume's go-live marker: its bytes, and the one tar carrying
+    the volume's bundled content led by that marker."""
+
+    payload: bytes
+    archive: Path
+
+
+def _stage_go_live_holds(
+    manifest: Manifest, staged: Mapping[str, Path], scratch: Path, written_at_ms: int
+) -> dict[str, _GoLiveHold]:
+    """Each clerk volume's restore tar: its bundled content plus a fresh marker.
+
+    One tar, so one ``podman volume import`` lays both and no failure can
+    restore a clerk volume without its hold. The marker is the tar's first
+    member, so even an import that stops part-way has laid it before any
+    content; any old marker the bundle carried (a host never released) is
+    replaced, never duplicated.
+    """
+    scratch.mkdir(parents=True)
+    holds: dict[str, _GoLiveHold] = {}
+    for volume in BUNDLED_VOLUMES:
+        if volume.role != "clerk":
+            continue
+        payload = go_live_marker_bytes(
+            GoLiveHoldMarker(
+                kind="learn-ai-go-live-hold",
+                schema_version=1,
+                written_at_ms=written_at_ms,
+                volume=volume.name,
+                source_commit=manifest.source_commit,
+                registry_id=manifest.registry.registry_id,
+            )
+        )
+        archive = scratch / f"{volume.name}.tar"
+        tar_with_root_file_first(
+            staged[volume.member], archive, name=GO_LIVE_HOLD_MARKER, payload=payload
+        )
+        holds[volume.name] = _GoLiveHold(payload=payload, archive=archive)
+    return holds
+
+
 def _restore(
     podman: PodmanPort,
     manifest: Manifest,
     folder_paths: Mapping[str, Path],
     staged: Mapping[str, Path],
     staged_folders: Mapping[str, Path],
+    holds: Mapping[str, _GoLiveHold],
     progress: _Progress,
 ) -> None:
     for entry in manifest.volumes:
         podman.create_volume(VolumeInfo(name=entry.name, driver=entry.driver, labels=entry.labels))
-        podman.import_volume(entry.name, staged[entry.member])
+        hold = holds.get(entry.name)
+        # A clerk volume's content and its hold arrive in one import, so
+        # no clerk volume is ever restored without its hold.
+        podman.import_volume(entry.name, staged[entry.member] if hold is None else hold.archive)
         progress.restored_volumes.append(entry.name)
     for entry in manifest.folders:
         path = folder_paths[entry.key]
@@ -566,15 +648,36 @@ def _verify_destination(
     podman: PodmanPort,
     manifest: Manifest,
     folder_paths: Mapping[str, Path],
+    staged: Mapping[str, Path],
+    holds: Mapping[str, _GoLiveHold],
     scratch: Path,
 ) -> None:
+    """Every restored volume and folder holds exactly the bundle's content.
+
+    A clerk volume is compared with its bundled copy apart from the marker
+    path — a bundle exported from a host that was itself never released
+    carries an old marker, which the fresh one replaces — and must hold the
+    fresh marker byte for byte.
+    """
     scratch.mkdir(parents=True)
+    exclude = frozenset({GO_LIVE_HOLD_MARKER})
     mismatched: list[str] = []
     for entry in manifest.volumes:
         export = scratch / f"{entry.name}.tar"
         podman.export_volume(entry.name, export)
-        if tree_digest_from_tar(export) != entry.content_digest:
+        hold = holds.get(entry.name)
+        if hold is None:
+            if tree_digest_from_tar(export) != entry.content_digest:
+                mismatched.append(entry.name)
+            continue
+        if tree_digest_from_tar(export, exclude=exclude) != tree_digest_from_tar(
+            staged[entry.member], exclude=exclude
+        ):
             mismatched.append(entry.name)
+        elif root_member_bytes(export, [GO_LIVE_HOLD_MARKER]).get(GO_LIVE_HOLD_MARKER) != (
+            hold.payload
+        ):
+            mismatched.append(f"{entry.name} (go-live hold marker)")
     for entry in manifest.folders:
         if tree_digest_from_dir(folder_paths[entry.key]) != entry.content_digest:
             mismatched.append(str(folder_paths[entry.key]))

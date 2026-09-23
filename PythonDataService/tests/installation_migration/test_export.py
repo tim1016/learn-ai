@@ -9,6 +9,7 @@ draining a lane.
 
 from __future__ import annotations
 
+import io
 import tarfile
 from dataclasses import replace
 from pathlib import Path
@@ -22,7 +23,11 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.installation_migration.bundle import MANIFEST_MEMBER, read_manifest
-from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
+from app.installation_migration.contents import (
+    BUNDLED_FOLDERS,
+    BUNDLED_VOLUMES,
+    skipped_secret_note,
+)
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.export import _ACCOUNT_CONDITIONS, ExportRequest, run_export
 from tests.installation_migration._support import (
@@ -362,18 +367,26 @@ def test_the_bundle_carries_no_secret_file(tmp_path: Path) -> None:
     assert b"SENTINEL-SECRET-9f3c" not in raw
 
 
-def test_a_secret_inside_a_bundled_folder_refuses_before_any_bot_stops(tmp_path: Path) -> None:
+def test_a_secret_inside_a_bundled_folder_is_skipped_and_listed(tmp_path: Path) -> None:
     installation = build_installation(tmp_path)
     (installation.repo_root / "PythonDataService" / "artifacts" / "stray.env").write_text(
-        "K=V", encoding="utf-8"
+        "K=SENTINEL-SECRET-4b1d", encoding="utf-8"
     )
+    bundle = tmp_path / "bundle.tar"
 
-    with pytest.raises(MigrationRefused) as refused:
-        _export(installation, tmp_path / "bundle.tar")
+    steps = _export(installation, bundle)
 
-    assert refused.value.reason == "secret_in_bundle_source"
-    assert any(path.endswith("stray.env") for path in refused.value.details["paths"])
-    assert installation.lanes.stopped == []
+    expected = [
+        {
+            "path": "PythonDataService/artifacts/stray.env",
+            "note": skipped_secret_note("stray.env"),
+        }
+    ]
+    assert steps[0]["step"] == "preflight"
+    assert steps[0]["skipped_secret_files"] == expected
+    assert steps[-1]["skipped_secret_files"] == expected
+    assert [entry.model_dump() for entry in read_manifest(bundle).skipped_secret_files] == expected
+    assert b"SENTINEL-SECRET-4b1d" not in _all_member_bytes(bundle)
 
 
 def test_a_missing_volume_refuses_before_any_bot_stops(tmp_path: Path) -> None:
@@ -414,23 +427,30 @@ def test_an_existing_bundle_is_never_overwritten(tmp_path: Path) -> None:
     assert bundle.read_bytes() == b"precious"
 
 
-def test_live_auth_tokens_under_artifacts_refuse_before_any_bot_stops(tmp_path: Path) -> None:
+def test_the_owners_leftover_tokens_no_longer_block_export(tmp_path: Path) -> None:
+    """#2269: the three token files on the owner's host used to refuse the
+    whole export with no way out; each is skipped, listed with why it needs
+    nothing, and never carried."""
     installation = build_installation(tmp_path)
     artifacts = installation.repo_root / "PythonDataService" / "artifacts"
     (artifacts / "lean-sidecar").mkdir()
-    (artifacts / "lean-sidecar" / ".launcher-token").write_text("live", encoding="utf-8")
-    (artifacts / ".host-daemon-token").write_text("live", encoding="utf-8")
+    (artifacts / "lean-sidecar" / ".launcher-token").write_text("TOKEN-A-77", encoding="utf-8")
+    (artifacts / ".host-daemon-token").write_text("TOKEN-B-77", encoding="utf-8")
+    (artifacts / ".clerk-host-binding-capability").write_text("TOKEN-C-77", encoding="utf-8")
+    bundle = tmp_path / "bundle.tar"
 
-    with pytest.raises(MigrationRefused) as refused:
-        _export(installation, tmp_path / "bundle.tar")
+    steps = _export(installation, bundle)
 
-    assert refused.value.reason == "secret_in_bundle_source"
-    assert sorted(Path(path).name for path in refused.value.details["paths"]) == [
-        ".host-daemon-token",
-        ".launcher-token",
+    assert [entry["path"] for entry in steps[-1]["skipped_secret_files"]] == [
+        "PythonDataService/artifacts/.clerk-host-binding-capability",
+        "PythonDataService/artifacts/.host-daemon-token",
+        "PythonDataService/artifacts/lean-sidecar/.launcher-token",
     ]
-    assert installation.lanes.stopped == []
-    assert not (tmp_path / "bundle.tar").exists()
+    raw = _all_member_bytes(bundle)
+    for token in (b"TOKEN-A-77", b"TOKEN-B-77", b"TOKEN-C-77"):
+        assert token not in raw
+    # The folder itself still travels.
+    assert steps[-1]["step"] == "complete"
 
 
 def test_an_escaping_symlink_refuses_before_any_bot_stops(tmp_path: Path) -> None:
@@ -443,6 +463,25 @@ def test_an_escaping_symlink_refuses_before_any_bot_stops(tmp_path: Path) -> Non
     assert refused.value.reason == "unsafe_symlink_in_bundle_source"
     assert installation.lanes.stopped == []
     assert installation.podman.stopped == []
+
+
+def _all_member_bytes(bundle: Path) -> bytes:
+    """Every byte of every regular file the bundle carries, nested tars opened."""
+    chunks: list[bytes] = []
+    with tarfile.open(bundle) as outer:
+        for member in outer.getmembers():
+            handle = outer.extractfile(member)
+            if handle is None:
+                continue
+            payload = handle.read()
+            chunks.append(payload)
+            if member.name.endswith(".tar"):
+                with tarfile.open(fileobj=io.BytesIO(payload)) as nested:
+                    for inner in nested.getmembers():
+                        inner_handle = nested.extractfile(inner)
+                        if inner_handle is not None:
+                            chunks.append(inner_handle.read())
+    return b"".join(chunks)
 
 
 def test_the_account_conditions_are_the_canonical_lane_quiet_conditions_minus_the_runner() -> None:

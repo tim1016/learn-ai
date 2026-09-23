@@ -7,9 +7,10 @@ secret, forwarded by the coordinator with that lane's coordinator service
 token, fenced by the lane's routing epoch. The tool never dials a lane's
 port directly and holds no lane credential.
 
-Two catalog operations serve it (``app/broker/alpaca/clerk/fleet_adapter.py``):
-``lane_stop_all_bots`` and ``lane_account_quiet_read``. Neither drains a lane
-or changes an assignment.
+Four catalog operations serve it (``app/broker/alpaca/clerk/fleet_adapter.py``):
+``lane_stop_all_bots`` and ``lane_account_quiet_read`` for export, and
+``lane_ibkr_bar_check`` and ``lane_go_live_release`` for go-live (#2269). None
+drains a lane or changes an assignment.
 """
 
 from __future__ import annotations
@@ -20,8 +21,16 @@ from typing import Any, Protocol, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from app.broker.fleet.internal_http import LANE_STOP_ALL_READ_TIMEOUT_S
+from app.broker.fleet.internal_http import (
+    LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S,
+    LANE_STOP_ALL_READ_TIMEOUT_S,
+)
 from app.installation_migration.errors import MigrationRefused
+from app.schemas.lane_go_live import (
+    OLD_MACHINE_OFF_CONFIRMATION,
+    LaneGoLiveReleaseReceipt,
+    LaneIbkrBarCheckRead,
+)
 from app.schemas.lane_quiesce import LaneAccountQuietRead, LaneStopAllBotsReceipt
 
 CONTROL_SECRET_HEADER = "X-Data-Plane-Control-Secret"
@@ -30,6 +39,9 @@ DEFAULT_COORDINATOR_URL = "http://127.0.0.1:8000"
 #: from the coordinator's forward bound so the coordinator's answer -- even
 #: its ``clerk_unreachable`` -- always lands before this client gives up.
 STOP_ALL_CLIENT_TIMEOUT_S = LANE_STOP_ALL_READ_TIMEOUT_S + 10.0
+#: The go-live bar check waits on one IB Gateway historical request; derived
+#: the same way, so the lane's named failure always reaches the operator.
+BAR_CHECK_CLIENT_TIMEOUT_S = LANE_IBKR_BAR_CHECK_READ_TIMEOUT_S + 10.0
 _READ_TIMEOUT_S = 30.0
 
 
@@ -53,6 +65,18 @@ class FleetLanes(Protocol):
     ) -> LaneStopAllBotsReceipt: ...
 
     def account_quiet(self, lane: Lane) -> LaneAccountQuietRead: ...
+
+
+class GoLiveLanes(Protocol):
+    """The lane directory and the two lane acts go-live needs (#2269)."""
+
+    def list_lanes(self) -> list[Lane]: ...
+
+    def ibkr_bar_check(self, lane: Lane) -> LaneIbkrBarCheckRead: ...
+
+    def release_go_live(
+        self, lane: Lane, *, operator: str, change_ref: str
+    ) -> LaneGoLiveReleaseReceipt: ...
 
 
 _Answer = TypeVar("_Answer", bound=BaseModel)
@@ -196,12 +220,57 @@ class CoordinatorLanes:
             )
         return self._answer(response, LaneAccountQuietRead, lane=lane)
 
+    def ibkr_bar_check(self, lane: Lane) -> LaneIbkrBarCheckRead:
+        path = f"/api/brokers/{lane.broker}/clerks/{lane.clerk_id}/lane/ibkr-bar-check"
+        response = self._call(
+            "GET", path, subject=lane.clerk_id, timeout_s=BAR_CHECK_CLIENT_TIMEOUT_S
+        )
+        if response.status_code != 200:
+            self._refuse(
+                response,
+                reason="lane_ibkr_bar_check_failed",
+                lane=lane,
+                what="the IB Gateway bar check",
+            )
+        return self._answer(response, LaneIbkrBarCheckRead, lane=lane)
+
+    def release_go_live(
+        self, lane: Lane, *, operator: str, change_ref: str
+    ) -> LaneGoLiveReleaseReceipt:
+        path = f"/api/brokers/{lane.broker}/clerks/{lane.clerk_id}/lane/go-live/release"
+        response = self._call(
+            "POST",
+            path,
+            subject=lane.clerk_id,
+            timeout_s=_READ_TIMEOUT_S,
+            json={
+                "command_context": {
+                    "capability": "bot_action",
+                    "idempotency_key": None,
+                    "target": {},
+                },
+                "operator": operator,
+                "change_ref": change_ref,
+                "old_machine_off_confirmation": OLD_MACHINE_OFF_CONFIRMATION,
+            },
+        )
+        if response.status_code != 200:
+            self._refuse(
+                response,
+                reason="lane_go_live_release_refused",
+                lane=lane,
+                what="to release its go-live hold",
+            )
+        return self._answer(response, LaneGoLiveReleaseReceipt, lane=lane)
+
 
 __all__ = [
+    "BAR_CHECK_CLIENT_TIMEOUT_S",
     "CONTROL_SECRET_HEADER",
     "DEFAULT_COORDINATOR_URL",
     "STOP_ALL_CLIENT_TIMEOUT_S",
     "CoordinatorLanes",
     "FleetLanes",
+    "GoLiveLanes",
     "Lane",
 ]

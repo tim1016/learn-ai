@@ -71,6 +71,7 @@ _RECEIPT = {
     "change_ref": "migrate",
     "reason": "lane_stop_all",
     "stopped": [{"strategy_instance_id": "ema-1", "run_id": "run-1"}],
+    "intent_stopped": [],
     "refused": [],
     "still_running": False,
     "all_stopped": True,
@@ -163,3 +164,82 @@ def test_an_unreachable_coordinator_refuses() -> None:
         lanes.list_lanes()
 
     assert refused.value.reason == "coordinator_unreachable"
+
+
+_BAR_CHECK = {
+    "symbol": "SPY",
+    "bar_count": 1950,
+    "first_bar_start_ms": 1_788_800_000_000,
+    "last_bar_end_ms": 1_789_000_000_000,
+    "checked_at_ms": 1_789_100_000_000,
+}
+
+
+def test_ibkr_bar_check_reads_the_clerk_scoped_route() -> None:
+    lanes, seen = _lanes(lambda _request: httpx.Response(200, json=_BAR_CHECK))
+
+    check = lanes.ibkr_bar_check(_LANE)
+
+    assert check.bar_count == 1950
+    assert seen[0].method == "GET"
+    assert seen[0].url.path == "/api/brokers/alpaca/clerks/clrk_live/lane/ibkr-bar-check"
+
+
+def test_a_lane_whose_gateway_returns_no_bars_refuses_naming_the_lane_and_why() -> None:
+    lanes, _seen = _lanes(
+        lambda _request: httpx.Response(
+            503, json={"detail": {"reason": "ibkr_no_bars", "message": "no bars came back"}}
+        )
+    )
+
+    with pytest.raises(MigrationRefused) as refused:
+        lanes.ibkr_bar_check(_LANE)
+
+    assert refused.value.reason == "lane_ibkr_bar_check_failed"
+    assert "ibkr_no_bars" in refused.value.message
+    assert refused.value.details["clerk_id"] == "clrk_live"
+
+
+def test_release_posts_the_envelope_and_the_confirmation_words() -> None:
+    receipt = {
+        "receipt_id": "rel-1",
+        "released_at_ms": 1_789_100_000_001,
+        "operator": "inkant",
+        "change_ref": "go-live",
+        "was_held": True,
+        "marker": None,
+        "marker_problem": None,
+        "bar_check": _BAR_CHECK,
+    }
+    lanes, seen = _lanes(lambda _request: httpx.Response(200, json=receipt))
+
+    answer = lanes.release_go_live(_LANE, operator="inkant", change_ref="go-live")
+
+    assert answer.was_held is True
+    request = seen[0]
+    assert request.method == "POST"
+    assert request.url.path == "/api/brokers/alpaca/clerks/clrk_live/lane/go-live/release"
+    body = json.loads(request.content)
+    assert body["command_context"]["capability"] == "bot_action"
+    assert body["old_machine_off_confirmation"] == "the old machine is off"
+    assert (body["operator"], body["change_ref"]) == ("inkant", "go-live")
+
+
+def test_a_refused_release_names_the_lane() -> None:
+    lanes, _seen = _lanes(
+        lambda _request: httpx.Response(
+            409,
+            json={
+                "detail": {
+                    "reason": "lane_go_live_bar_check_required",
+                    "message": "no fresh bar check",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(MigrationRefused) as refused:
+        lanes.release_go_live(_LANE, operator="inkant", change_ref="go-live")
+
+    assert refused.value.reason == "lane_go_live_release_refused"
+    assert "lane_go_live_bar_check_required" in refused.value.message
