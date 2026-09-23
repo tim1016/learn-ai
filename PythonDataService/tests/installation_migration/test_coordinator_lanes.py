@@ -71,6 +71,7 @@ _RECEIPT = {
     "change_ref": "migrate",
     "reason": "lane_stop_all",
     "stopped": [{"strategy_instance_id": "ema-1", "run_id": "run-1"}],
+    "intent_stopped": [],
     "refused": [],
     "still_running": False,
     "all_stopped": True,

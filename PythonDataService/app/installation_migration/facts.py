@@ -31,6 +31,7 @@ from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateCorruptError,
     DesiredStateRepo,
+    instances_with_recorded_desired_state,
     stable_desired_state_path,
 )
 from app.installation_migration.contents import BUNDLED_VOLUMES
@@ -342,11 +343,6 @@ def staged_identity_facts(volume_tars: Mapping[str, Path], scratch: Path) -> Sta
     return StagedIdentity(registry=registry, clerk_volumes=clerk_volumes, lane_roots=lane_roots)
 
 
-#: The per-bot state directory under a lane's artifact root, the layout
-#: ``stable_desired_state_path`` writes (``<root>/live_state/<sid>/…``).
-_LIVE_STATE_DIRECTORY = "live_state"
-
-
 def bots_not_stopped(lane_roots: Mapping[str, Path]) -> list[dict[str, str]]:
     """Every bot in a copied lane volume whose durable desired state is not STOPPED.
 
@@ -356,29 +352,18 @@ def bots_not_stopped(lane_roots: Mapping[str, Path]) -> list[dict[str, str]]:
     """
     found: list[dict[str, str]] = []
     for volume, root in sorted(lane_roots.items()):
-        live_state = root / _LIVE_STATE_DIRECTORY
-        if not live_state.is_dir():
-            continue
-        for bot_dir in sorted(child for child in live_state.iterdir() if child.is_dir()):
+        for sid in instances_with_recorded_desired_state(root):
             try:
-                path = stable_desired_state_path(root, bot_dir.name)
-                if not path.is_file():
-                    continue
-                state = DesiredStateRepo(path).read_state()
+                state = DesiredStateRepo(stable_desired_state_path(root, sid)).read_state()
             except (ValueError, DesiredStateCorruptError) as exc:
                 raise MigrationRefused(
                     "bot_desired_state_unreadable",
-                    f"Bot {bot_dir.name!r} in volume {volume} has no readable desired "
-                    f"state: {exc}",
-                    details={"volume": volume, "strategy_instance_id": bot_dir.name},
+                    f"Bot {sid!r} in volume {volume} has no readable desired state: {exc}",
+                    details={"volume": volume, "strategy_instance_id": sid},
                 ) from exc
             if state is not DesiredState.STOPPED:
                 found.append(
-                    {
-                        "volume": volume,
-                        "strategy_instance_id": bot_dir.name,
-                        "desired_state": state.value,
-                    }
+                    {"volume": volume, "strategy_instance_id": sid, "desired_state": state.value}
                 )
     return found
 

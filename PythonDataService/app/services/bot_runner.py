@@ -56,7 +56,9 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.engine.live.desired_state import (
     DesiredState,
+    DesiredStateCorruptError,
     DesiredStateRepo,
+    instances_with_recorded_desired_state,
     stable_desired_state_path,
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
@@ -178,6 +180,7 @@ __all__ = [
     "BotTaskRegistry",
     "CarryoverPolicyRefusedError",
     "InvalidStrategyInstanceIdError",
+    "LaneIntentStoppedBot",
     "LaneStopOutcome",
     "LaneStopRefusal",
     "LaneStoppedBot",
@@ -204,11 +207,28 @@ class LaneStoppedBot:
 
 
 @dataclass(frozen=True, slots=True)
-class LaneStopRefusal:
-    """One bot whose Stop refused; its task may still be running."""
+class LaneIntentStoppedBot:
+    """A bot with no live task whose durable intent the lane-wide stop set to STOPPED.
+
+    Its desired state still said it should run (a crash, or a restart that
+    never resumed it), so the next boot or a migrated copy would have read it
+    as a bot that wants to start.
+    """
 
     strategy_instance_id: str
-    run_id: str
+    previous_desired_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class LaneStopRefusal:
+    """One bot whose Stop refused; its task may still be running.
+
+    ``run_id`` is ``None`` for a bot with no live task whose recorded intent
+    could not be read or rewritten.
+    """
+
+    strategy_instance_id: str
+    run_id: str | None
     message: str
     detail: str | None
 
@@ -223,12 +243,13 @@ class LaneStopOutcome:
     """
 
     stopped: tuple[LaneStoppedBot, ...]
+    intent_stopped: tuple[LaneIntentStoppedBot, ...]
     refused: tuple[LaneStopRefusal, ...]
     still_running: bool
 
 
 def _lane_stop_refusal(
-    strategy_instance_id: str, run_id: str, message: str, detail: str | None
+    strategy_instance_id: str, run_id: str | None, message: str, detail: str | None
 ) -> LaneStopRefusal:
     """Record one bot whose lane-wide Stop did not complete, loudly."""
     logger.warning(
@@ -1254,6 +1275,12 @@ class BotTaskRegistry:
         escalates.
         A task that ended on its own between the snapshot and its Stop had
         nothing left to stop and is not reported.
+
+        Then every bot on the lane **without** a live task whose recorded
+        intent is not STOPPED gets the same durable STOPPED intent (#2269):
+        otherwise the lane is idle yet its volume still says those bots want
+        to run, and export — which refuses such a copy — would have no way
+        out.
         """
         stopped: list[LaneStoppedBot] = []
         refused: list[LaneStopRefusal] = []
@@ -1289,11 +1316,62 @@ class BotTaskRegistry:
                 )
                 continue
             stopped.append(LaneStoppedBot(strategy_instance_id=sid, run_id=run_id))
+        intent_stopped = await self._stop_recorded_intent_of_idle_bots(
+            updated_by=updated_by, reason=reason, refused=refused
+        )
         return LaneStopOutcome(
             stopped=tuple(stopped),
+            intent_stopped=tuple(intent_stopped),
             refused=tuple(refused),
             still_running=self.any_running(),
         )
+
+    async def _stop_recorded_intent_of_idle_bots(
+        self, *, updated_by: str, reason: str, refused: list[LaneStopRefusal]
+    ) -> list[LaneIntentStoppedBot]:
+        """Record STOPPED for every idle bot whose durable intent says otherwise.
+
+        Enumerated exactly as export's copy check reads the volume, so a
+        lane-wide stop leaves nothing that check would refuse. Each rewrite
+        runs under the bot's operation lock and re-checks that no task has
+        started meanwhile; a bot whose intent cannot be read or written is a
+        refusal, never skipped.
+        """
+        intent_stopped: list[LaneIntentStoppedBot] = []
+        for sid in instances_with_recorded_desired_state(self._artifacts_root):
+            try:
+                async with self._operation_lock(sid):
+                    if self._is_running(sid):
+                        continue
+                    repo = self._desired_repo(sid)
+                    previous = repo.read_state()
+                    if previous is DesiredState.STOPPED:
+                        continue
+                    repo.set(
+                        DesiredState.STOPPED,
+                        updated_by=updated_by,
+                        now_ms=self._now_ms(),
+                        reason=reason,
+                    )
+            except (ValueError, OSError, DesiredStateCorruptError) as exc:
+                refused.append(
+                    _lane_stop_refusal(sid, None, f"{type(exc).__name__}: {exc}", None)
+                )
+                continue
+            logger.warning(
+                "Lane-wide stop recorded STOPPED intent for an idle bot",
+                extra={
+                    "action": "lane_stop_all_intent_stopped",
+                    "strategy_instance_id": sid,
+                    "previous_desired_state": previous.value,
+                },
+            )
+            intent_stopped.append(
+                LaneIntentStoppedBot(
+                    strategy_instance_id=sid, previous_desired_state=previous.value
+                )
+            )
+        return intent_stopped
 
     async def stop_all(self) -> None:
         """Service shutdown: stop every task without overwriting operator intent."""

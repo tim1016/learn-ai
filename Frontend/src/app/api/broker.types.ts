@@ -16725,6 +16725,16 @@ export interface components {
             items: components["schemas"]["LaneAttentionItem"][];
         };
         /**
+         * LaneIntentStoppedBotRead
+         * @description One bot with no live task whose recorded intent the stop set to STOPPED.
+         */
+        LaneIntentStoppedBotRead: {
+            /** Previous Desired State */
+            previous_desired_state: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * LaneStopAllBotsReceipt
          * @description The durable receipt of one lane-wide stop, as recorded on the lane.
          */
@@ -16735,6 +16745,8 @@ export interface components {
             change_ref: string;
             /** Completed At Ms */
             completed_at_ms: number;
+            /** Intent Stopped */
+            intent_stopped: components["schemas"]["LaneIntentStoppedBotRead"][];
             /** Operator */
             operator: string;
             /** Reason */
@@ -16763,6 +16775,9 @@ export interface components {
         /**
          * LaneStopRefusalRead
          * @description One bot whose Stop refused, in the refusal's own words.
+         *
+         *     ``run_id`` is null for a bot with no live task whose recorded intent could
+         *     not be read or rewritten.
          */
         LaneStopRefusalRead: {
             /** Detail */
@@ -16770,7 +16785,7 @@ export interface components {
             /** Message */
             message: string;
             /** Run Id */
-            run_id: string;
+            run_id: string | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
         };

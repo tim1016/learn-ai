@@ -160,6 +160,7 @@ class FakeLanes:
             change_ref=change_ref,
             reason="lane_stop_all",
             stopped=[],
+            intent_stopped=[],
             refused=[],
             still_running=False,
             all_stopped=True,

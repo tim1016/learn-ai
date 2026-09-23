@@ -349,6 +349,7 @@ def _stop_every_bot(
                 "clerk_id": lane.clerk_id,
                 "receipt_id": receipt.receipt_id,
                 "stopped": [bot.model_dump() for bot in receipt.stopped],
+                "intent_stopped": [bot.model_dump() for bot in receipt.intent_stopped],
             }
         )
     return receipts

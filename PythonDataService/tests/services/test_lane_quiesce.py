@@ -15,7 +15,12 @@ import pytest
 
 from app.broker.alpaca.clerk.fleet_boot import LaneQuietAnswer
 from app.services import lane_quiesce
-from app.services.bot_runner import LaneStopOutcome, LaneStoppedBot, LaneStopRefusal
+from app.services.bot_runner import (
+    LaneIntentStoppedBot,
+    LaneStopOutcome,
+    LaneStoppedBot,
+    LaneStopRefusal,
+)
 from app.services.lane_quiesce import (
     LANE_STOP_ALL_REASON,
     STOP_ALL_RECEIPTS_DIRECTORY,
@@ -55,6 +60,11 @@ async def test_stop_all_writes_a_durable_receipt_naming_every_stopped_bot(
         tmp_path,
         LaneStopOutcome(
             stopped=(LaneStoppedBot(strategy_instance_id="ema-1", run_id="run-1"),),
+            intent_stopped=(
+                LaneIntentStoppedBot(
+                    strategy_instance_id="ema-crashed", previous_desired_state="RUNNING"
+                ),
+            ),
             refused=(),
             still_running=False,
         ),
@@ -75,6 +85,10 @@ async def test_stop_all_writes_a_durable_receipt_naming_every_stopped_bot(
     assert durable["operator"] == "inkant"
     assert durable["change_ref"] == "migrate-2026-09-22"
     assert durable["stopped"] == [{"strategy_instance_id": "ema-1", "run_id": "run-1"}]
+    # #2269: an idle bot whose intent still said RUNNING is in the same receipt.
+    assert durable["intent_stopped"] == [
+        {"strategy_instance_id": "ema-crashed", "previous_desired_state": "RUNNING"}
+    ]
     assert durable["refused"] == []
     assert durable["still_running"] is False
     assert isinstance(durable["requested_at_ms"], int)
@@ -86,6 +100,7 @@ async def test_an_incomplete_stop_is_still_recorded_and_says_so(tmp_path: Path) 
         tmp_path,
         LaneStopOutcome(
             stopped=(),
+            intent_stopped=(),
             refused=(
                 LaneStopRefusal(
                     strategy_instance_id="ema-1",
@@ -120,7 +135,7 @@ async def test_an_incomplete_stop_is_still_recorded_and_says_so(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_two_stops_write_two_receipts_never_overwriting(tmp_path: Path) -> None:
     registry = _FakeRegistry(
-        tmp_path, LaneStopOutcome(stopped=(), refused=(), still_running=False)
+        tmp_path, LaneStopOutcome(stopped=(), intent_stopped=(), refused=(), still_running=False)
     )
     clock = _Clock()
 

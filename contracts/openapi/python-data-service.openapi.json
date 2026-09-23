@@ -21595,6 +21595,25 @@
         "title": "LaneAttentionRead",
         "type": "object"
       },
+      "LaneIntentStoppedBotRead": {
+        "description": "One bot with no live task whose recorded intent the stop set to STOPPED.",
+        "properties": {
+          "previous_desired_state": {
+            "title": "Previous Desired State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "previous_desired_state"
+        ],
+        "title": "LaneIntentStoppedBotRead",
+        "type": "object"
+      },
       "LaneStopAllBotsReceipt": {
         "description": "The durable receipt of one lane-wide stop, as recorded on the lane.",
         "properties": {
@@ -21611,6 +21630,13 @@
             "minimum": 0.0,
             "title": "Completed At Ms",
             "type": "integer"
+          },
+          "intent_stopped": {
+            "items": {
+              "$ref": "#/components/schemas/LaneIntentStoppedBotRead"
+            },
+            "title": "Intent Stopped",
+            "type": "array"
           },
           "operator": {
             "title": "Operator",
@@ -21657,6 +21683,7 @@
           "change_ref",
           "reason",
           "stopped",
+          "intent_stopped",
           "refused",
           "still_running",
           "all_stopped"
@@ -21689,7 +21716,7 @@
         "type": "object"
       },
       "LaneStopRefusalRead": {
-        "description": "One bot whose Stop refused, in the refusal's own words.",
+        "description": "One bot whose Stop refused, in the refusal's own words.\n\n``run_id`` is null for a bot with no live task whose recorded intent could\nnot be read or rewritten.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -21707,8 +21734,15 @@
             "type": "string"
           },
           "run_id": {
-            "title": "Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
