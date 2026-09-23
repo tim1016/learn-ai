@@ -4,7 +4,6 @@ export type Disposition = 'fix_here' | 'fix_elsewhere' | 'wait' | 'terminal';
 export type OperatorHost =
   | 'bot_cockpit'
   | 'deploy_preflight'
-  | 'fleet_roster'
   | 'account_monitor'
   | 'account_desk';
 export type OperatorConditionScope = 'bot' | 'account' | 'broker' | 'fleet' | 'host' | 'strategy';
@@ -144,20 +143,16 @@ export interface OperatorBlocker {
 /**
  * One canonical account-level operator decision, authored from one evidence
  * cut (issue #1664). `condition` is `null` exactly when the account is
- * healthy — in that case both host projections are also `null` and
+ * healthy — in that case `account_desk` is also `null` and
  * `status_headline` / `status_detail` carry the backend-authored healthy
- * copy. When `condition` is set, `account_desk` and `fleet_roster` share
- * that one condition's identity/severity but carry host-relative
- * disposition, copy, and moves per ADR 0027. The frontend renders only the
- * `account_desk` projection; the backend still authors `fleet_roster`, but
- * that roster host was retired (#2192) and no surface reads it. Never fall
- * back to the other host's projection or re-derive a verdict from raw
- * evidence.
+ * copy. When `condition` is set, `account_desk` carries that condition's
+ * identity/severity plus the desk's disposition, copy, and moves per ADR
+ * 0027. The former `fleet_roster` projection was retired with its host
+ * (#2192). Never re-derive a verdict from raw evidence.
  */
 export interface AccountOperatorPosture {
   condition: OperatorCondition | null;
   account_desk: OperatorBlocker | null;
-  fleet_roster: OperatorBlocker | null;
   status_headline: string;
   status_detail: string | null;
 }

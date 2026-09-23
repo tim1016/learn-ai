@@ -102,7 +102,7 @@
       },
       "AccountOperatorPosture": {
         "additionalProperties": false,
-        "description": "One canonical account-level operator decision, authored from one\nevidence cut (issue #1664).\n\n``condition`` is ``None`` exactly when the account is healthy; in that\ncase both host projections are also ``None`` and ``status_headline`` /\n``status_detail`` carry the backend-authored healthy copy. Whenever\n``condition`` is set, both ``account_desk`` and ``fleet_roster`` are\nrequired \u2014 a non-null condition can never validate with only one host\nprojection present, so a consumer selecting its own host never silently\nreads ``None`` for a live blocking condition. They share ``condition``\n(identity and severity) but carry host-relative disposition, copy, and\nmoves per ADR 0027; each projection's own ``host`` field is validated\nto match the slot it is assigned to. Consumers read only their own host\nprojection and must never fall back to the other host's projection or\nre-derive a verdict from raw evidence.",
+        "description": "One canonical account-level operator decision, authored from one\nevidence cut (issue #1664).\n\n``condition`` is ``None`` exactly when the account is healthy; in that\ncase the ``account_desk`` projection is also ``None`` and\n``status_headline`` / ``status_detail`` carry the backend-authored healthy\ncopy. Whenever ``condition`` is set, ``account_desk`` is required \u2014 a\nnon-null condition can never validate without it, so the desk never\nsilently reads ``None`` for a live blocking condition. The projection\nshares ``condition`` (identity and severity) and carries the desk's\ndisposition, copy, and moves per ADR 0027; its own ``host`` field is\nvalidated to be ``account_desk``. The former ``fleet_roster`` projection\nwas retired with its host (#2192). Consumers must never re-derive a\nverdict from raw evidence.",
         "properties": {
           "account_desk": {
             "anyOf": [
@@ -118,16 +118,6 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OperatorCondition"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "fleet_roster": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OperatorBlocker"
               },
               {
                 "type": "null"
@@ -153,7 +143,6 @@
         "required": [
           "condition",
           "account_desk",
-          "fleet_roster",
           "status_headline",
           "status_detail"
         ],
@@ -25570,7 +25559,6 @@
             "enum": [
               "bot_cockpit",
               "deploy_preflight",
-              "fleet_roster",
               "account_monitor",
               "account_desk"
             ],

@@ -3,10 +3,10 @@
 Every scenario in the issue's acceptance criteria gets its own test: healthy,
 review-only uncertainty, available recovery, unavailable/waiting recovery,
 terminal authority failure, inactive account, wrong execution mode,
-unresolved intents, and missing/stale/unhealthy Clerk channels. A separate
-contract test proves the ``account_desk``/``fleet_roster`` projections share
-condition identity/severity while carrying host-relative disposition/copy/
-moves, per ADR 0027.
+unresolved intents, and missing/stale/unhealthy Clerk channels. Separate
+contract tests pin the ``account_desk`` projection to the posture's condition
+identity and host, per ADR 0027, and prove the retired ``fleet_roster`` host
+(#2192) cannot come back through the schema.
 """
 
 from __future__ import annotations
@@ -90,7 +90,6 @@ def test_healthy_evidence_yields_null_condition_and_backend_status_copy() -> Non
 
     assert posture.condition is None
     assert posture.account_desk is None
-    assert posture.fleet_roster is None
     assert posture.status_headline == "Account Clerk custody is healthy"
     assert posture.status_detail is not None
 
@@ -113,12 +112,9 @@ def test_review_only_uncertainty_waits_without_a_move() -> None:
     assert posture.account_desk is not None
     assert posture.account_desk.disposition == "wait"
     assert posture.account_desk.primary_move is None
-    assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "wait"
-    assert posture.fleet_roster.primary_move is None
 
 
-def test_available_recovery_is_fix_here_on_desk_and_fix_elsewhere_on_roster() -> None:
+def test_available_recovery_is_fix_here_on_the_desk() -> None:
     posture = build_account_operator_posture(
         _context(
             uncertainty_count=1,
@@ -137,10 +133,6 @@ def test_available_recovery_is_fix_here_on_desk_and_fix_elsewhere_on_roster() ->
     assert posture.account_desk.disposition == "fix_here"
     assert posture.account_desk.primary_move is not None
     assert posture.account_desk.primary_move.action.kind == "confirm_in_form"
-    assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "fix_elsewhere"
-    assert posture.fleet_roster.primary_move is not None
-    assert posture.fleet_roster.primary_move.action.kind == "navigate"
 
 
 def test_unhealthy_authority_is_terminal_and_points_at_the_offline_runbook() -> None:
@@ -149,7 +141,7 @@ def test_unhealthy_authority_is_terminal_and_points_at_the_offline_runbook() -> 
     Replaces a test that asserted `wait` with no move. Waiting cures nothing
     here -- the authority stays failed until an operator stops the data plane
     and runs the recovery CLI -- so the honest disposition is `terminal` with
-    the runbook as the move, on both hosts.
+    the runbook as the move.
     """
     posture = build_account_operator_posture(
         _context(
@@ -180,8 +172,6 @@ def test_unhealthy_authority_is_terminal_and_points_at_the_offline_runbook() -> 
     assert posture.account_desk.disposition == "terminal"
     assert posture.account_desk.primary_move is not None
     assert posture.account_desk.primary_move.action.kind == "open_runbook"
-    assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "terminal"
 
     # The cure is named in the copy, not only in the move: the operator lens
     # deliberately does not render an `open_runbook` button, so a blocker that
@@ -242,8 +232,6 @@ def test_terminal_authority_failure_with_no_recovery_action_is_terminal_on_both_
     assert posture.account_desk is not None
     assert posture.account_desk.disposition == "terminal"
     assert posture.account_desk.primary_move is not None or posture.account_desk.secondary_moves
-    assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "terminal"
 
 
 def test_inactive_account_waits_with_account_status_evidence() -> None:
@@ -271,8 +259,6 @@ def test_wrong_execution_mode_is_terminal_with_a_real_cure_not_an_indefinite_wai
     assert posture.account_desk.primary_move is not None
     assert posture.account_desk.primary_move.action.kind == "open_runbook"
     assert "paper mode" in posture.account_desk.headline
-    assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "terminal"
 
 
 def test_shadow_custody_world_reads_a_live_account_without_the_wrong_mode_posture() -> None:
@@ -322,14 +308,14 @@ def test_the_wrong_mode_refusal_names_the_mode_its_own_world_admits(
     assert posture.condition.id == "alpaca_account_wrong_execution_mode"
     assert posture.condition.evidence["account_mode"] == account_mode
     assert posture.condition.evidence["custody_world"] == custody_world
-    for blocker in (posture.account_desk, posture.fleet_roster):
-        assert blocker is not None
-        assert blocker.headline == f"This account is not in {admitted} mode"
-        assert blocker.detail is not None
-        assert f"require a {admitted}-mode account" in blocker.detail
-        # No ``!r``: the observed mode is read out plainly, and the world that
-        # judged it is on the evidence beside it.
-        assert f"reports {account_mode} mode" in blocker.detail
+    blocker = posture.account_desk
+    assert blocker is not None
+    assert blocker.headline == f"This account is not in {admitted} mode"
+    assert blocker.detail is not None
+    assert f"require a {admitted}-mode account" in blocker.detail
+    # No ``!r``: the observed mode is read out plainly, and the world that
+    # judged it is on the evidence beside it.
+    assert f"reports {account_mode} mode" in blocker.detail
 
 
 def test_account_identity_mismatch_is_terminal_and_takes_priority_over_stale_defaults() -> None:
@@ -353,8 +339,6 @@ def test_account_identity_mismatch_is_terminal_and_takes_priority_over_stale_def
     assert posture.account_desk.disposition == "terminal"
     assert posture.account_desk.primary_move is not None
     assert posture.account_desk.primary_move.action.kind == "open_runbook"
-    assert posture.fleet_roster is not None
-    assert posture.fleet_roster.disposition == "terminal"
 
 
 def test_trading_blocked_takes_priority_over_channels_and_intents() -> None:
@@ -438,7 +422,7 @@ def test_custody_condition_takes_priority_over_account_eligibility() -> None:
     assert posture.condition.id.startswith("alpaca_clerk_recovery:")
 
 
-def test_both_host_projections_share_condition_identity_and_severity() -> None:
+def test_account_desk_projection_shares_the_posture_condition() -> None:
     posture = build_account_operator_posture(
         _context(
             uncertainty_count=1,
@@ -447,17 +431,26 @@ def test_both_host_projections_share_condition_identity_and_severity() -> None:
         )
     )
 
+    assert posture.condition is not None
     assert posture.account_desk is not None
-    assert posture.fleet_roster is not None
-    assert posture.account_desk.condition.id == posture.fleet_roster.condition.id
-    assert posture.account_desk.condition.severity == posture.fleet_roster.condition.severity
-    # Host-relative disposition/copy/moves differ even though identity matches.
-    assert posture.account_desk.disposition != posture.fleet_roster.disposition
-    assert posture.account_desk.primary_move != posture.fleet_roster.primary_move
+    assert posture.account_desk.host == "account_desk"
+    assert posture.account_desk.condition == posture.condition
 
 
-@pytest.mark.parametrize("field", ["account_desk", "fleet_roster"])
-def test_healthy_posture_cannot_carry_a_host_blocker(field: str) -> None:
+def test_retired_fleet_roster_projection_is_rejected_by_the_schema() -> None:
+    """#2192: the fleet_roster host was retired end to end; the posture
+    schema forbids the field rather than silently dropping it."""
+    posture = build_account_operator_posture(_context(outstanding_intents=1))
+    assert posture.account_desk is not None
+
+    assert "fleet_roster" not in posture.model_dump()
+    with pytest.raises(ValidationError, match="fleet_roster"):
+        AccountOperatorPosture.model_validate(
+            {**posture.model_dump(), "fleet_roster": posture.account_desk.model_dump()}
+        )
+
+
+def test_healthy_posture_cannot_carry_a_host_blocker() -> None:
     blocked_posture = build_account_operator_posture(
         _context(
             uncertainty_count=1,
@@ -465,14 +458,13 @@ def test_healthy_posture_cannot_carry_a_host_blocker(field: str) -> None:
             recovery_actions=(_recovery_action(available=True, primary=True),),
         )
     )
-    stray_blocker = getattr(blocked_posture, field)
+    stray_blocker = blocked_posture.account_desk
     assert stray_blocker is not None
 
     with pytest.raises(ValidationError, match="must not carry a host blocker"):
         AccountOperatorPosture(
             condition=None,
-            account_desk=stray_blocker if field == "account_desk" else None,
-            fleet_roster=stray_blocker if field == "fleet_roster" else None,
+            account_desk=stray_blocker,
             status_headline="Account Clerk custody is healthy",
             status_detail=None,
         )
@@ -482,31 +474,25 @@ def test_mismatched_host_blocker_condition_is_rejected() -> None:
     mismatched_posture = build_account_operator_posture(_context(outstanding_intents=1))
     other_posture = build_account_operator_posture(_context(account_mode="live"))
     assert mismatched_posture.condition is not None
-    assert mismatched_posture.account_desk is not None
-    assert other_posture.fleet_roster is not None
+    assert other_posture.account_desk is not None
 
     with pytest.raises(ValidationError, match="must match the posture's condition"):
         AccountOperatorPosture(
             condition=mismatched_posture.condition,
-            account_desk=mismatched_posture.account_desk,
-            fleet_roster=other_posture.fleet_roster,
+            account_desk=other_posture.account_desk,
             status_headline="mismatch",
             status_detail=None,
         )
 
 
-@pytest.mark.parametrize("missing_field", ["account_desk", "fleet_roster"])
-def test_non_null_condition_requires_both_host_projections(missing_field: str) -> None:
+def test_non_null_condition_requires_the_account_desk_projection() -> None:
     posture = build_account_operator_posture(_context(outstanding_intents=1))
     assert posture.condition is not None
-    assert posture.account_desk is not None
-    assert posture.fleet_roster is not None
 
-    with pytest.raises(ValidationError, match="requires both the account_desk and fleet_roster"):
+    with pytest.raises(ValidationError, match="requires the account_desk projection"):
         AccountOperatorPosture(
             condition=posture.condition,
-            account_desk=None if missing_field == "account_desk" else posture.account_desk,
-            fleet_roster=None if missing_field == "fleet_roster" else posture.fleet_roster,
+            account_desk=None,
             status_headline="partial",
             status_detail=None,
         )
@@ -515,14 +501,13 @@ def test_non_null_condition_requires_both_host_projections(missing_field: str) -
 def test_host_projection_must_carry_the_matching_host_field() -> None:
     posture = build_account_operator_posture(_context(outstanding_intents=1))
     assert posture.condition is not None
-    assert posture.fleet_roster is not None
+    assert posture.account_desk is not None
 
     with pytest.raises(ValidationError, match="must carry host="):
         AccountOperatorPosture(
             condition=posture.condition,
-            # host="fleet_roster" placed in the account_desk slot.
-            account_desk=posture.fleet_roster,
-            fleet_roster=posture.fleet_roster,
+            # A bot_cockpit-hosted blocker placed in the account_desk slot.
+            account_desk=posture.account_desk.model_copy(update={"host": "bot_cockpit"}),
             status_headline="mismatch",
             status_detail=None,
         )

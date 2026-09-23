@@ -279,7 +279,8 @@ async def test_clerk_status_reports_healthy_posture_when_account_and_custody_are
     posture = status.json()["operator_posture"]
     assert posture["condition"] is None
     assert posture["account_desk"] is None
-    assert posture["fleet_roster"] is None
+    # #2192: the retired fleet_roster host no longer reaches the wire.
+    assert "fleet_roster" not in posture
 
 
 @pytest.mark.asyncio
@@ -301,8 +302,7 @@ async def test_clerk_status_reports_wrong_execution_mode_from_the_same_read(
     # Terminal, not wait: a non-paper account is a static config problem that
     # fresh evidence can never resolve (2026-08-20 review).
     assert posture["account_desk"]["disposition"] == "terminal"
-    assert posture["fleet_roster"]["disposition"] == "terminal"
-    assert posture["account_desk"]["condition"]["id"] == posture["fleet_roster"]["condition"]["id"]
+    assert posture["account_desk"]["condition"]["id"] == posture["condition"]["id"]
 
 
 @pytest.mark.asyncio
@@ -344,7 +344,6 @@ async def test_clerk_status_reports_identity_mismatch_instead_of_the_wrong_accou
     assert posture["condition"]["id"] == "alpaca_account_identity_mismatch"
     assert posture["condition"]["severity"] == "blocking"
     assert posture["account_desk"]["disposition"] == "terminal"
-    assert posture["fleet_roster"]["disposition"] == "terminal"
 
 
 @pytest.mark.asyncio

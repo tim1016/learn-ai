@@ -7323,22 +7323,20 @@ export interface components {
          *     evidence cut (issue #1664).
          *
          *     ``condition`` is ``None`` exactly when the account is healthy; in that
-         *     case both host projections are also ``None`` and ``status_headline`` /
-         *     ``status_detail`` carry the backend-authored healthy copy. Whenever
-         *     ``condition`` is set, both ``account_desk`` and ``fleet_roster`` are
-         *     required — a non-null condition can never validate with only one host
-         *     projection present, so a consumer selecting its own host never silently
-         *     reads ``None`` for a live blocking condition. They share ``condition``
-         *     (identity and severity) but carry host-relative disposition, copy, and
-         *     moves per ADR 0027; each projection's own ``host`` field is validated
-         *     to match the slot it is assigned to. Consumers read only their own host
-         *     projection and must never fall back to the other host's projection or
-         *     re-derive a verdict from raw evidence.
+         *     case the ``account_desk`` projection is also ``None`` and
+         *     ``status_headline`` / ``status_detail`` carry the backend-authored healthy
+         *     copy. Whenever ``condition`` is set, ``account_desk`` is required — a
+         *     non-null condition can never validate without it, so the desk never
+         *     silently reads ``None`` for a live blocking condition. The projection
+         *     shares ``condition`` (identity and severity) and carries the desk's
+         *     disposition, copy, and moves per ADR 0027; its own ``host`` field is
+         *     validated to be ``account_desk``. The former ``fleet_roster`` projection
+         *     was retired with its host (#2192). Consumers must never re-derive a
+         *     verdict from raw evidence.
          */
         AccountOperatorPosture: {
             account_desk: components["schemas"]["OperatorBlocker"] | null;
             condition: components["schemas"]["OperatorCondition"] | null;
-            fleet_roster: components["schemas"]["OperatorBlocker"] | null;
             /** Status Detail */
             status_detail: string | null;
             /** Status Headline */
@@ -18521,7 +18519,7 @@ export interface components {
              * Host
              * @enum {string}
              */
-            host: "bot_cockpit" | "deploy_preflight" | "fleet_roster" | "account_monitor" | "account_desk";
+            host: "bot_cockpit" | "deploy_preflight" | "account_monitor" | "account_desk";
             primary_move?: components["schemas"]["OperatorMove"] | null;
             /** Secondary Moves */
             secondary_moves?: components["schemas"]["OperatorMove"][];
