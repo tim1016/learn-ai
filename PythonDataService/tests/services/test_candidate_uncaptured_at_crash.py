@@ -40,7 +40,10 @@ from tests._helpers.bot_runner.ema_parity import (
     _ema_parity_bars_through_first_exit,
     _ema_signal_evaluation_id,
 )
-from tests._helpers.bot_runner.market import _tradable_market_liveness
+from tests._helpers.bot_runner.market import (
+    _tradable_market_liveness,
+    patch_decisions_delivered_on_time,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +57,11 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
+
+
+@pytest.fixture(autouse=True)
+def _decisions_delivered_on_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_decisions_delivered_on_time(monkeypatch)
 
 
 class _PhaseFeed:
@@ -134,15 +142,15 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
     set_alpaca_clerk(clerk)
     try:
         bars = _ema_parity_bars_through_first_exit()
-        # The consolidator only fires a completed 15-minute bucket lazily,
-        # when the *next* minute bar arrives (see `_drain_bar`'s docstring
-        # in bot_trade_strategy.py) -- bars[-1] is that triggering bar for
-        # the EXIT bucket, and everything before it is safe to run live.
-        crashed_run_bars, crash_bar = bars[:-1], bars[-1]
-        assert crash_bar.end_ms > _EMA_FIRST_EXIT_MS
+        # A completed 15-minute bucket fires on the minute bar that closes it
+        # (see `_drain_bar`'s docstring in bot_trade_strategy.py): the bar
+        # ending at the EXIT close is that bar, and everything before it is
+        # safe to run live.
+        crashed_run_bars = [bar for bar in bars if bar.end_ms < _EMA_FIRST_EXIT_MS]
+        assert bars[len(crashed_run_bars)].end_ms == _EMA_FIRST_EXIT_MS
 
         # Phase 1 ("the crashed run"): every bar up to, but not including,
-        # the EXIT-triggering bar is decided live -- the real ENTER reaches
+        # the EXIT bucket's closing bar is decided live -- the real ENTER reaches
         # the Clerk and is captured. The process then "crashes": simply
         # never being fed the final bar is the same crash-simulation idiom
         # test_atomic_seam_fault_injection.py uses ("simulated here by
@@ -209,9 +217,8 @@ async def test_replay_of_a_clean_stop_never_fabricates_crash_evidence(
         assert any(receipt.outcome == "exit_intent" for receipt in receipts_after_first_run)
 
         # Resume with the identical window handed back as retained history a
-        # second time -- the only true crash-window bar (the one after the
-        # EXIT decision) does not exist yet, so this must never fabricate
-        # crash evidence.
+        # second time -- every bucket in it, the EXIT included, already has
+        # its receipt, so this must never fabricate crash evidence.
         await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=bars))
 
         receipts_after_resume = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=500)

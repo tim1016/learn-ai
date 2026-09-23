@@ -370,6 +370,9 @@ class MinuteAssembler:
     new socket merge deterministically and a redelivery is absorbed by the
     ``live_idempotent`` policy.
 
+    A minute is emitted as soon as it holds every contribution (by count), or
+    otherwise when the first print of a later minute arrives.
+
     ``_flushed`` remembers the minute :meth:`flush_if_complete` emitted early,
     until a later minute arrives. Without it, the resubscribed socket's first
     5-second bars — which may still belong to that minute — would either crash
@@ -437,7 +440,11 @@ class MinuteAssembler:
             provenance="ibkr_realtime",
             generation=generation,
         )
-        return emitted
+        # A minute proven complete by count is closed: emit it now rather than
+        # hold it for the next minute's first print. That print can be a night
+        # away -- an extended run's 19:59 ET minute otherwise waited for 04:00
+        # the next trading day and was decided eight hours late (#2345).
+        return emitted if emitted is not None else self.flush_if_complete()
 
     def flush_if_complete(self) -> IbkrMinuteBar | None:
         """Emit the open minute now iff it already holds every RTH contribution."""

@@ -23,6 +23,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.schemas.run_admission import StrategyValidationAdmissionFact
+from app.services.feed_continuity_policy import LateDecision
 from app.services.market_liveness import compose_market_liveness
 
 
@@ -82,3 +83,19 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
+
+
+def _decided_on_time(_policy: object, _decision_bar_close_ms: int) -> LateDecision | None:
+    return None
+
+
+def patch_decisions_delivered_on_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read every decision as taken at its own bar's close (#2303/#2345).
+
+    Runner suites replay fixed, historical bar timestamps as if they were
+    live, so against the real wall clock every decision would be days late
+    and ``bot_trade_strategy._refused_as_late`` would refuse it before the
+    behaviour under test is reached. The staleness gate itself is pinned,
+    against a controlled clock, by ``tests/services/test_stale_decision_gate.py``.
+    """
+    monkeypatch.setattr(bot_trade_strategy, "late_decision", _decided_on_time)

@@ -54,14 +54,18 @@ from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineRe
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
 from app.services.decision_session import RunDecisionSession
-from app.services.feed_continuity_policy import admit_on_delivery, continuity_policy_for
+from app.services.feed_continuity_policy import (
+    admit_on_delivery,
+    continuity_policy_for,
+    late_decision,
+)
 from app.services.market_liveness import (
     MarketEntryPolicy,
     market_data_bars_live,
     market_liveness_fact,
 )
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
-from app.utils.timestamps import now_ms_utc, ny_datetime
+from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     from app.services.bot_dry_run import DryRunActivityJournal
@@ -489,11 +493,24 @@ def _build_signal_strategy(
 
 
 def _drain_bar(strategy: _LiveSignalStrategy, context: StrategyContext, bar: TradeBar) -> None:
-    """Feed one closed bar through the strategy/consolidator pipeline."""
+    """Feed one closed bar through the strategy/consolidator pipeline.
+
+    A bucket fires on the bar that completes it, not on the first bar of the
+    next one. The consolidator alone fires lazily (LEAN semantics), which a
+    live run cannot afford: the completed bucket would wait for the next
+    print -- a minute in session, a night across the close (#1708 review
+    finding 2), and, at the end of a warmup replay, the first *live* bar,
+    which then decided a replayed bucket under the mode warmup captured for it
+    (#2303). ``scan`` at the bar's own close emits exactly the bucket the lazy
+    fire would have emitted, with the same contents, so the decision itself is
+    unchanged; only its timing is. A partial bucket is untouched and still
+    fires lazily.
+    """
     context.current_time_ms = bar.end_ms
     strategy.on_minute_bar(bar)
     for consolidator in context.get_consolidators(bar.symbol):
         consolidator.update(bar)
+        consolidator.scan(bar.end_ms)
 
 
 async def _warm_up_signal_strategy(
@@ -549,8 +566,6 @@ async def _signal_strategy_evaluations(
     feed: MarketDataFeed,
     captured_decisions: Mapping[str, str] | None,
     quarantine_receipts: QuarantineReceiptSink | None,
-    *,
-    session: RunDecisionSession,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -576,24 +591,14 @@ async def _signal_strategy_evaluations(
         yield uncaptured_candidate
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
+        # The mode is this bar's, captured as it was yielded: `_drain_bar`
+        # fires a bucket on the bar that completes it, so the gate a live
+        # bucket is decided under is the live run's at that bar (#2303).
         mode = _evaluation_mode_for(feed, market_bar)
         runtime.replay_closed_bar(context, market_bar, mode=mode)
         evaluation = _evaluation_from_active_stage(binding, runtime, context, market_bar)
         if evaluation is not None:
             yield evaluation
-        # #1708 review finding 2: the consolidator only fires a working
-        # bucket lazily, when a *later* bar arrives. Streaming stops at the
-        # decision session's close, so the final bucket would otherwise sit
-        # unflushed until the next session's bars start arriving -- stranding
-        # that decision overnight. Force the flush at the exact
-        # decision-session-close boundary instead.
-        if market_bar.end_ms == session.close_ms(ny_datetime(market_bar.end_ms).date()):
-            for consolidator in context.get_consolidators(market_bar.symbol):
-                if consolidator.scan(market_bar.end_ms) is None:
-                    continue
-                evaluation = _evaluation_from_active_stage(binding, runtime, context, market_bar)
-                if evaluation is not None:
-                    yield evaluation
 
 
 def _evaluation_from_active_stage(
@@ -697,18 +702,19 @@ async def strategy_evaluations(
 
     ``session`` is the run's resolved decision session (ADR 0059 D5.2). A
     custody runner resolves it once at its own boundary, from the executing
-    authority's declared window, and passes it here. Omitting it means "this
-    caller declares no window", which a regular-hours binding resolves fine
-    and an extended one refuses loudly rather than deciding on nothing.
+    authority's declared window, and passes it here; the stream itself needs
+    nothing from it, because the session's bar filter is the feed's
+    (``_RetainedSourceBarFeed``) and a bucket fires on the bar that completes
+    it rather than on a session-close flush. Omitting it means "this caller
+    declares no window", which a regular-hours binding resolves fine and an
+    extended one refuses loudly rather than deciding on nothing.
     """
     if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
+    if session is None:
+        require_decision_session(binding)
     async for evaluation in _signal_strategy_evaluations(
-        binding,
-        feed,
-        captured_decisions,
-        quarantine_receipts,
-        session=require_decision_session(binding) if session is None else session,
+        binding, feed, captured_decisions, quarantine_receipts
     ):
         yield evaluation
 
@@ -816,6 +822,9 @@ async def run_trade_bot(
             "An extended-session run requires its source-bar ledger; the unretained "
             "test seam cannot apply the broker's declared window."
         )
+    continuity = (
+        None if source_bars is None else continuity_policy_for(binding, source_bars, session=session)
+    )
     run_feed = (
         feed
         if source_bars is None
@@ -824,7 +833,7 @@ async def run_trade_bot(
             source_bars,
             run_id=binding.run_id,
             session=session,
-            continuity=continuity_policy_for(binding, source_bars, session=session),
+            continuity=continuity,
         )
     )
     async for evaluation in strategy_evaluations(
@@ -870,6 +879,8 @@ async def run_trade_bot(
                 outcome="blocked",
                 reason_code="PAUSED_OBSERVE_ONLY",
             )
+            continue
+        if _refused_as_late(decision_receipts, binding=binding, evaluation=evaluation, continuity=continuity):
             continue
         # The liveness gate applies only to ENTER — creating new exposure.
         # EXIT is deliberately exempt and always reaches the Clerk unblocked:
@@ -1064,6 +1075,62 @@ def _dispose_transient_exit_refusal(
     )
 
 
+def _refused_as_late(
+    decision_receipts: SqliteDecisionReceipts,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    continuity: ContinuityPolicy | None,
+) -> bool:
+    """Refuse a decision taken too long after its bar closed; ``True`` when refused.
+
+    The one staleness gate between a staged candidate and the Clerk, shared by
+    both runners. Lateness is the wall clock minus the decision bar's close,
+    judged by ``feed_continuity_policy.late_decision`` against the run's own
+    delivery allowance -- whatever produced the bar. A minute the assembler
+    held until the next morning's first print (#2345), or a bucket whose
+    closing bar arrived after a quiet line resumed, is decided against a
+    market that has since moved; so is anything a replay left for the live
+    loop to fire (#2303).
+
+    Refused, not demoted to ``OBSERVE_ONLY``: the evaluation's mode is fixed in
+    its trace when it is staged, and ``PAUSED_OBSERVE_ONLY`` is the operator's
+    fact, not the clock's. The disposition is the liveness gate's -- DISCARD
+    (nothing was committed, so nothing unwinds) and a protected ``blocked``
+    receipt naming ``DECISION_LATE`` -- which also means a later Resume
+    replays this bucket as already decided and never decides it again.
+    Applies to EXIT as well as ENTER: an exit decided on a stale bar is still
+    an order the strategy did not ask for at this price.
+    """
+    late = late_decision(continuity, evaluation.decision_bar_close_ms)
+    if late is None:
+        return False
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code="DECISION_LATE",
+    )
+    logger.warning(
+        "Bot refused a decision taken after its delivery allowance",
+        extra={
+            "action": "bot_decision_late",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+            "observed_at_ms": late.observed_at_ms,
+            "lateness_ms": late.lateness_ms,
+            "allowance_ms": late.allowance_ms,
+        },
+    )
+    return True
+
+
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
     return (
         f"decision-bar:{evaluation.bar.feed_id}:{binding.symbol}:"
@@ -1140,12 +1207,13 @@ async def run_dry_run_bot(
         strategy_instance_id=binding.strategy_instance_id,
     )
     session = require_decision_session(binding, window=clerk.program_leg_policy.window)
+    continuity = continuity_policy_for(binding, source_bars, session=session)
     retained_feed = _RetainedSourceBarFeed(
         feed,
         source_bars,
         run_id=binding.run_id,
         session=session,
-        continuity=continuity_policy_for(binding, source_bars, session=session),
+        continuity=continuity,
     )
     async for evaluation in strategy_evaluations(
         binding,
@@ -1199,6 +1267,8 @@ async def run_dry_run_bot(
                     "bar_end_ms": intent.bar_close_ms,
                 },
             )
+            continue
+        if _refused_as_late(decision_receipts, binding=binding, evaluation=evaluation, continuity=continuity):
             continue
         side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
         retained, decision_evidence = _decision_bar_evidence(

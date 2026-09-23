@@ -218,14 +218,15 @@ async def test_interruption_before_any_delivered_bar_is_fatal_as_today(monkeypat
     assert sink.events == []
 
 
-async def test_a_complete_open_minute_is_flushed_and_delivered_before_the_wait(
+async def test_a_complete_minute_is_delivered_before_the_interruption_it_precedes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Nothing was delivered yet, but the assembler holds a whole minute.
+    """A minute complete by count is delivered at once, not held for the wait.
 
-    The interruption adopts the open minute as the continuity anchor instead of
-    failing, and the minute is flushed and delivered *between* the interruption
-    and the recovery — the evidence a consumer replays must show it that way.
+    The assembler emits a minute on its twelfth contribution (#2345), so a
+    minute that was whole when the socket died has already been delivered as
+    an ordinary ``realtime`` bar with no continuity event to explain it, and
+    the interruption anchors its deadline on it (ruling P6).
     """
     sink = _RecordingSink()
     source = _Source(
@@ -244,12 +245,10 @@ async def test_a_complete_open_minute_is_flushed_and_delivered_before_the_wait(
     # The bar after the recovery is the minute the resubscribed line landed
     # in, so it carries the recovery that explains it.
     assert observed == [
-        (_MINUTE0, "realtime", ("interruption",)),
+        (_MINUTE0, "realtime", ()),
         (_MINUTE0 + 60_000, "realtime_across_reconnect", ("interruption", "recovered")),
     ]
-    # The flushed minute is a delivered bar, so the deadline the run promises
-    # is derived from where it left the watermark, not from where the
-    # interruption found it (ruling P6).
+    # The deadline the run promises derives from the delivered minute.
     assert sink.events[0].last_delivered_end_ms == _MINUTE0 + 60_000
     assert sink.events[0].deadline_ms == _MINUTE0 + 980_000
 
@@ -742,14 +741,14 @@ async def test_sink_failure_is_fatal_and_typed(monkeypatch: pytest.MonkeyPatch) 
     assert excinfo.value.reason == "CONTINUITY_EVIDENCE_UNWRITABLE"
 
 
-async def test_sink_failure_withholds_the_bar_the_flush_had_ready(
+async def test_sink_failure_at_the_interruption_ends_the_run_after_the_delivered_minute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No delivered bar may precede the evidence explaining it (spec rule 9).
+    """No bar may follow an interruption whose evidence could not be written (spec rule 9).
 
-    The flush now runs before the ``interruption`` event is written, so the bar
-    it produces is held until that write succeeds. When it cannot, the run dies
-    having delivered nothing.
+    The complete minute was delivered before the socket died (#2345) and needs
+    no continuity evidence; the interruption that follows it cannot be
+    recorded, so the run dies there, delivering nothing after it.
     """
     sink = _RecordingSink()
     sink.fail = True
@@ -766,7 +765,7 @@ async def test_sink_failure_withholds_the_bar_the_flush_had_ready(
             delivered.append(bar)
 
     assert excinfo.value.reason == "CONTINUITY_EVIDENCE_UNWRITABLE"
-    assert delivered == []
+    assert [(bar.start_ms, bar.provenance) for bar in delivered] == [(_MINUTE0, "realtime")]
 
 
 async def test_not_connected_on_reentry_is_a_second_episode_under_the_same_deadline(

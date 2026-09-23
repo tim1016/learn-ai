@@ -125,10 +125,9 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     retained = SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
     assert len(retained.bars(provider="lean-golden", symbol="SPY")) == len(bars)
     assert all(row.bar_ref.startswith(f"source-bar:{account_id}:") for row in activity)
-    # The EMA's 15-minute decision arrives when the following raw minute
-    # flushes its consolidator. A latest-bar fill would therefore price the
-    # following minute, not the decision close. Each journal receipt must
-    # name and price the unique durable bar at the intent's clock.
+    # The EMA's 15-minute decision is priced at its own close, not at
+    # whichever raw minute was latest when the decision surfaced. Each journal
+    # receipt must name and price the unique durable bar at the intent's clock.
     for row in activity:
         decision_bar = retained.find_by_closed_end(
             provider="lean-golden",
@@ -137,6 +136,59 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
         )
         assert decision_bar is not None
         assert (row.bar_ref, row.fill_price) == (decision_bar.bar_ref, float(decision_bar.close))
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_refuses_a_decision_taken_after_its_delivery_allowance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolated_synthetic_authority: None,
+) -> None:
+    """#2345: the Dry Run runner applies the same staleness gate as the trade runner.
+
+    This package reads every decision as on time by default; this test puts the
+    real gate back and pins the wall clock a day past every decision bar.
+    """
+    import app.services.bot_trade_strategy as bot_trade_strategy
+    import app.services.feed_continuity_policy as feed_continuity_policy
+    from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+
+    monkeypatch.setattr(bot_trade_strategy, "late_decision", feed_continuity_policy.late_decision)
+    bars = _ema_parity_bars_through_first_exit()
+    monkeypatch.setattr(feed_continuity_policy, "now_ms_utc", lambda: bars[-1].end_ms + 86_400_000)
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="SPY",
+        mode="dry_run",
+        quantity=3,
+    )
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
+    runtime = get_clerk_runtime(synthetic_account_id_for_strategy(_SID))
+    assert runtime is not None and runtime.clerk is not None
+
+    def _late_refusals() -> list[str]:
+        receipts = runtime.clerk.repository.decision_receipt_tail(strategy_instance_id=_SID, limit=500)
+        return [
+            receipt.outcome
+            for receipt in receipts
+            if json.loads(receipt.facts_json)["reason_code"] == "DECISION_LATE"
+        ]
+
+    await _wait_for(lambda: len(_late_refusals()) >= 1)
+
+    # The refused ENTER was discarded, so the strategy never held a position
+    # and never staged the EXIT; nothing reached the synthetic authority.
+    assert _late_refusals() == ["blocked"]
+    assert registry.dry_run_activity("alpaca", _SID) == []
     await registry.stop("alpaca", _SID)
 
 

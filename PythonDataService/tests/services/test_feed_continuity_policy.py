@@ -56,9 +56,9 @@ def test_continuity_policy_for_extended_binding_with_a_window_schedules_the_exte
     assert policy is not None and policy.session == _EXTENDED
     # The sealed binding declares a 15-minute decision clock (see
     # ``test_continuity_policy_for_sealed_rth_binding_...`` below): the
-    # bucket [17:00,17:15) fires on the 17:16 source minute (force-flush is
-    # reserved for the day's last bucket at the declared close).
-    assert policy.is_trigger_ms(_et(date(2026, 9, 2), 17, 16)) is True
+    # bucket [17:00,17:15) fires on the source minute closing it, at 17:15.
+    assert policy.is_trigger_ms(_et(date(2026, 9, 2), 17, 15)) is True
+    assert policy.is_trigger_ms(_et(date(2026, 9, 2), 17, 16)) is False
 
 
 def test_continuity_policy_for_binding_without_a_decision_timeframe_gets_no_policy(
@@ -95,8 +95,8 @@ async def test_continuity_policy_for_sealed_rth_binding_refuses_substitution_and
         )
         assert ref.run_id == binding.run_id
         assert [event.kind for event in ledger.events(run_id=binding.run_id)] == ["interruption"]
-        # The seal declares a 15-minute decision clock, so the bucket closing
-        # at 15:00 ET triggers on the first source minute of the next bucket.
-        assert policy.next_trigger_ms(_BUCKET_CLOSE_MS) == _BUCKET_CLOSE_MS + 60_000
+        # The seal declares a 15-minute decision clock, so once the bucket
+        # closing at 15:00 ET is decided the next decision is the next bucket's close.
+        assert policy.next_trigger_ms(_BUCKET_CLOSE_MS) == _BUCKET_CLOSE_MS + 15 * 60_000
     finally:
         ledger.close()
