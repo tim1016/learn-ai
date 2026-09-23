@@ -21,6 +21,7 @@
  * is the alternative ADR 0051 rejects). If that ever changes, this copy must.
  */
 
+import { fmtExposure } from '../../format';
 import type { CohortFlattenLeg, CohortLegResult } from '../lib/broker-v2-panel.types';
 
 /**
@@ -33,21 +34,10 @@ import type { CohortFlattenLeg, CohortLegResult } from '../lib/broker-v2-panel.t
  */
 export const MAX_COHORT_FLATTEN_LEGS = 64;
 
-type Exposure = Readonly<Record<string, number>>;
-
 function bots(count: number): string {
   return count === 1 ? 'bot' : 'bots';
 }
 
-/** `SYM qty` pairs, in the per-bot `flatten_stop` body's own format. */
-function formatExposure(exposure: Exposure): string {
-  return (
-    Object.entries(exposure)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([symbol, quantity]) => `${symbol} ${quantity}`)
-      .join(', ') || 'none'
-  );
-}
 
 export const COHORT_FLATTEN_COPY = {
   // ── Drawer ──────────────────────────────────────────────────────────────
@@ -66,7 +56,9 @@ export const COHORT_FLATTEN_COPY = {
   selectCohortLabel: (strategyLabel: string, symbol: string) =>
     `Select this cohort: ${strategyLabel} ${symbol}`,
   armedCount: (armed: number, total: number) => `${armed} of ${total} can flatten`,
-  exposure: formatExposure,
+  // The roster's single exposure formatter, so a leg reads the same here as
+  // on every other surface that shows attributed exposure.
+  exposure: fmtExposure,
   capReached: (max: number) =>
     `A batch can carry at most ${max} bots; the rest of this cohort stays unselected.`,
 
@@ -80,7 +72,7 @@ export const COHORT_FLATTEN_COPY = {
   confirmMessage: (accountId: string, strategyLabel: string, legs: readonly CohortFlattenLeg[]) =>
     `This command targets ${legs.length} ${bots(legs.length)} of ${strategyLabel} on account ` +
     `${accountId}. Attributed exposure: ` +
-    legs.map((leg) => `${leg.strategy_instance_id} ${formatExposure(leg.exposure)}`).join('; ') +
+    legs.map((leg) => `${leg.strategy_instance_id} ${fmtExposure(leg.exposure)}`).join('; ') +
     '.',
   confirmConsequence:
     'Each bot runs its own flatten in turn and reduces only its Clerk-attributed ' +

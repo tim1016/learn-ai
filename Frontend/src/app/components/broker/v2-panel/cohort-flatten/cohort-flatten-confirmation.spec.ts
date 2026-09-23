@@ -124,7 +124,7 @@ describe('the cohort-flatten operator-copy map (owner decision 2026-09-23)', () 
 
     expect(message).toBe(
       'This command targets 2 bots of Deployment Validation on account PA1. ' +
-        'Attributed exposure: qqq-1 QQQ 10; qqq-2 none.',
+        'Attributed exposure: qqq-1 +10 QQQ; qqq-2 Flat.',
     );
   });
 

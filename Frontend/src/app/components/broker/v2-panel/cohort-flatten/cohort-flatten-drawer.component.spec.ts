@@ -207,8 +207,8 @@ describe('CohortFlattenDrawerComponent', () => {
     await open(fakeService([QQQ_COHORT]));
 
     expect(await screen.findByText('Deployment Validation')).toBeTruthy();
-    expect(screen.getByText('QQQ 10')).toBeTruthy();
-    expect(screen.getByText('QQQ -4')).toBeTruthy();
+    expect(screen.getByText('+10 QQQ')).toBeTruthy();
+    expect(screen.getByText('-4 QQQ')).toBeTruthy();
     expect(screen.getByText('This bot is still running. Stop it first.')).toBeTruthy();
     expect(checkbox('qqq-3').disabled).toBe(true);
   });
@@ -282,8 +282,8 @@ describe('CohortFlattenDrawerComponent', () => {
 
     expect(dialog.textContent).toContain('2 bots');
     expect(dialog.textContent).toContain('account PA1');
-    expect(dialog.textContent).toContain('qqq-1 QQQ 10');
-    expect(dialog.textContent).toContain('qqq-2 QQQ -4');
+    expect(dialog.textContent).toContain('qqq-1 +10 QQQ');
+    expect(dialog.textContent).toContain('qqq-2 -4 QQQ');
     expect(dialog.textContent).not.toContain('qqq-3');
     const commit = within(dialog).getByRole('button', { name: 'Flatten 2' }) as HTMLButtonElement;
     expect(commit.disabled).toBe(true);

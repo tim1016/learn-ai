@@ -66,14 +66,13 @@ function defaultSelection(armed: readonly ArmedFlattenLeg[]): ReadonlySet<string
 
 /**
  * Everything the confirmation shows, frozen when the operator asked to
- * review — legs, symbol and the read they came from — so nothing a later
+ * review — its legs and symbol — so nothing a later
  * read or directory refresh does can change or silently drop what they
  * confirm.
  */
 interface PendingWave {
   readonly legs: readonly ArmedFlattenLeg[];
   readonly symbol: string;
-  readonly read: number;
   readonly heading: string;
   readonly message: string;
   readonly confirmLabel: string;
@@ -302,13 +301,11 @@ export class CohortFlattenDrawerComponent {
 
   protected review(): void {
     const cohort = this.activeCohort();
-    const read = this.presentation.read();
-    if (!this.canReview() || cohort === null || read === null) return;
+    if (!this.canReview() || cohort === null) return;
     const legs = this.selectedLegs();
     this.pending.set({
       legs,
       symbol: cohort.symbol,
-      read,
       heading: COHORT_FLATTEN_COPY.confirmHeading(legs.length),
       message: COHORT_FLATTEN_COPY.confirmMessage(this.accountId(), cohort.strategy_label, legs),
       confirmLabel: COHORT_FLATTEN_COPY.confirmLabel(legs.length),
