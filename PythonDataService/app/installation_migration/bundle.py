@@ -32,7 +32,7 @@ import os
 import tarfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -44,11 +44,11 @@ from app.installation_migration.contents import (
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.facts import (
     ClerkVolumeFacts,
+    InstantMs,
     PostgresFacts,
     RegistryFacts,
     StrictRecord,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MANIFEST_MEMBER = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
@@ -57,7 +57,6 @@ MANIFEST_KIND = "learn-ai-installation-bundle"
 _CHUNK_BYTES = 1 << 20
 _SHA256_HEX = r"^[0-9a-f]{64}$"
 _GIT_COMMIT = r"^[0-9a-f]{40}$"
-InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 
 
 class VolumeEntry(StrictRecord):
@@ -203,20 +202,35 @@ def write_bundle(
     partial = bundle.with_name(f"{bundle.name}.partial")
     payload = manifest.model_dump_json(indent=2).encode("utf-8")
     try:
-        with tarfile.open(partial, "x", format=tarfile.PAX_FORMAT) as archive:
-            info = tarfile.TarInfo(MANIFEST_MEMBER)
-            info.size = len(payload)
-            info.mtime = manifest.created_at_ms // 1000
-            info.mode = 0o600
-            archive.addfile(info, io.BytesIO(payload))
-            for name, source in members:
-                archive.add(source, arcname=name, recursive=False)
-        with partial.open("rb") as handle:
+        # The write handle outlives the archive so the fsync covers the
+        # end-of-archive blocks tarfile writes on close, and is taken on the
+        # descriptor that wrote them — fsync on a read-only descriptor is not
+        # a durability guarantee POSIX makes.
+        with partial.open("xb") as handle:
+            with tarfile.open(fileobj=handle, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                info = tarfile.TarInfo(MANIFEST_MEMBER)
+                info.size = len(payload)
+                info.mtime = manifest.created_at_ms // 1000
+                info.mode = 0o600
+                archive.addfile(info, io.BytesIO(payload))
+                for name, source in members:
+                    archive.add(source, arcname=name, recursive=False)
+            handle.flush()
             os.fsync(handle.fileno())
         os.replace(partial, bundle)
+        _fsync_directory(bundle.parent)
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Make a rename into ``directory`` durable."""
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def read_manifest(bundle: Path) -> Manifest:

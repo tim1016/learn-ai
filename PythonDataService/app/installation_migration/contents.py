@@ -98,20 +98,27 @@ EXCLUDED_BIND_MOUNTS: dict[str, str] = {
 #: ``.host-daemon-token`` (ADR 0007) and the clerk host-binding capability
 #: have no canonical definition left in code, so they are caught by shape:
 #: any ``*-token``/``*_token`` name, any hidden name mentioning a token or a
-#: capability, and key material (``*.pem``, ``*.key``).
+#: capability, key material (``*.pem``, ``*.key``, SSH ``id_*`` keys, and
+#: ``*.p12``/``*.pfx``/``*.jks`` keystores), and any name mentioning a
+#: secret, password or credential.
 _SECRET_FILE_NAMES = frozenset(
     {".env", "compose.override.yaml", "compose.override.yml", LAUNCHER_TOKEN_FILENAME}
 )
-_SECRET_SUFFIXES = (".env", "-token", "_token", ".pem", ".key")
+_SECRET_SUFFIXES = (".env", "-token", "_token", ".pem", ".key", ".p12", ".pfx", ".jks")
+_SECRET_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+_SECRET_WORDS = ("secret", "password", "credential")
 _HIDDEN_SECRET_WORDS = ("token", "capability")
 
 
 def is_secret_shaped(name: str) -> bool:
     """Whether a file name is one the bundle must never carry."""
+    lowered = name.lower()
     return (
         name in _SECRET_FILE_NAMES
-        or name.endswith(_SECRET_SUFFIXES)
-        or (name.startswith(".") and any(word in name for word in _HIDDEN_SECRET_WORDS))
+        or lowered.endswith(_SECRET_SUFFIXES)
+        or lowered.startswith(_SECRET_PREFIXES)
+        or any(word in lowered for word in _SECRET_WORDS)
+        or (name.startswith(".") and any(word in lowered for word in _HIDDEN_SECRET_WORDS))
     )
 
 

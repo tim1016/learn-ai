@@ -81,7 +81,9 @@ from app.utils.timestamps import now_ms_utc
 Emit = Callable[[Mapping[str, object]], None]
 
 #: The account half of lane quiet: what "flat" means for migration.
-_ACCOUNT_CONDITIONS = ("broker_work_ended", "account_flat", "intents_resolved")
+_ACCOUNT_CONDITIONS = tuple(
+    name for name, _ in LANE_QUIET_CONDITIONS if name != "runner_idle"
+)
 _CONDITION_PHRASES = dict(LANE_QUIET_CONDITIONS)
 #: Stop order: lanes before the coordinator, Postgres last.
 _STOP_RANK = {"clerk": 0, "qualification": 1, "fleet_control": 2, "postgres": 3}

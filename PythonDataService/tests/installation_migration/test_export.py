@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.fleet.records import LANE_QUIET_CONDITIONS
 from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateRepo,
@@ -23,7 +24,7 @@ from app.engine.live.desired_state import (
 from app.installation_migration.bundle import MANIFEST_MEMBER, read_manifest
 from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
-from app.installation_migration.export import ExportRequest, run_export
+from app.installation_migration.export import _ACCOUNT_CONDITIONS, ExportRequest, run_export
 from tests.installation_migration._support import (
     LIVE_ACCOUNT,
     LIVE_VOLUME,
@@ -442,3 +443,10 @@ def test_an_escaping_symlink_refuses_before_any_bot_stops(tmp_path: Path) -> Non
     assert refused.value.reason == "unsafe_symlink_in_bundle_source"
     assert installation.lanes.stopped == []
     assert installation.podman.stopped == []
+
+
+def test_the_account_conditions_are_the_canonical_lane_quiet_conditions_minus_the_runner() -> None:
+    """Migration's "flat" is #2154's account half, derived so it cannot drift."""
+    canonical = tuple(name for name, _ in LANE_QUIET_CONDITIONS)
+    assert tuple(name for name in canonical if name != "runner_idle") == _ACCOUNT_CONDITIONS
+    assert "runner_idle" not in _ACCOUNT_CONDITIONS

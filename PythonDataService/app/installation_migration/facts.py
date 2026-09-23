@@ -20,9 +20,9 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.broker.fleet.errors import FleetControlError
 from app.broker.fleet.store import registry_database_path
@@ -36,6 +36,7 @@ from app.engine.live.desired_state import (
 from app.installation_migration.contents import BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.tree import extract_tar, root_member_bytes
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 #: The Alpaca clerk's account-database layout under its volume root:
 #: ``accounts/alpaca/<account_id>/clerk.db``. Duplicated from
@@ -47,6 +48,10 @@ CLERK_ACCOUNTS_RELATIVE = Path("accounts") / "alpaca"
 CLERK_DB_FILENAME = "clerk.db"
 
 _SQLITE_SIDECARS = ("-wal", "-shm")
+
+
+#: An instant in the domain's admissible range (temporal-rigor.md).
+InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 
 
 class StrictRecord(BaseModel):
@@ -110,7 +115,7 @@ class VolumeMarkerFacts(StrictRecord):
     volume_id: str
     attestation_kind: str
     attestation_id: str
-    created_at_ms: int
+    created_at_ms: InstantMs
 
 
 class ClerkAccountFacts(StrictRecord):

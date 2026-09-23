@@ -207,6 +207,14 @@ def test_the_lake_folder_follows_its_host_path_override(
         ".clerk-host-binding-capability",
         "server.pem",
         "signing.key",
+        "id_rsa",
+        "id_ed25519.pub",
+        "client.p12",
+        "broker.pfx",
+        "truststore.jks",
+        "alpaca_secret.json",
+        "DB_PASSWORD.txt",
+        "gcp-credentials.json",
     ],
 )
 def test_secret_shaped_names(name: str) -> None:
@@ -215,7 +223,15 @@ def test_secret_shaped_names(name: str) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["live.env.example", "environment.txt", "tokenizer.json", "run.json", "keys.parquet"],
+    [
+        "live.env.example",
+        "environment.txt",
+        "tokenizer.json",
+        "run.json",
+        "keys.parquet",
+        "identity.json",
+        "SPY_minute.zip",
+    ],
 )
 def test_ordinary_names_are_not_secret_shaped(name: str) -> None:
     assert not is_secret_shaped(name)
