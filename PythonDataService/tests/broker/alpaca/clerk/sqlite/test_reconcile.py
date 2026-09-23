@@ -2307,6 +2307,116 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
     assert len(trade.submit_calls) == 1  # the recovery reducing order reached the broker
 
 
+def _assert_redrive_deferred(repo: ClerkSqliteRepository, episode: dict[str, Any], trade: _FakeTrade) -> None:
+    """No order, no re-drive EXIT effect, no burned attempt, episode still raised."""
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert trade.submit_calls == []
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is None
+    assert repo.active_exit_for_strategy(WATCHDOG_SID) is None
+    assert not [
+        effect
+        for effect in repo.reconcilable_effect_operations()
+        if effect.strategy_instance_id == WATCHDOG_SID and effect.kind == "EXIT"
+    ]
+    still_raised = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert still_raised is not None
+    assert still_raised["uncertainty_id"] == episode["uncertainty_id"]
+
+
+@pytest.mark.parametrize(
+    "broker_positions",
+    [[], [_position("SPY", quantity=4.0)]],
+    ids=["broker_flat", "broker_partial"],
+)
+async def test_watchdog_does_not_redrive_when_the_broker_disagrees_on_the_symbol(
+    clocked_repo,
+    caplog: pytest.LogCaptureFixture,
+    broker_positions: list[BrokerPosition],
+) -> None:
+    """#2343 (P0): the re-drive sized its SELL from the attributed +10 alone, so
+    a flat broker got a SELL 10 (a new short) and a +4 broker a SELL 10 that
+    crosses zero. An automatic re-drive may only send a reduction the broker's
+    fresh position absorbs, and only when broker and clerk agree on the symbol."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    trade = _FakeTrade()
+
+    with caplog.at_level(logging.WARNING):
+        await reconcile_account(repo, read=_FakeRead(positions=broker_positions), trade=trade)
+
+    _assert_redrive_deferred(repo, episode, trade)
+    deferrals = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "exit_redrive_deferred_broker_disagrees"
+    ]
+    assert len(deferrals) == 1
+    expected_broker_qty = sum(position.quantity for position in broker_positions)
+    assert (deferrals[0].broker_qty, deferrals[0].attributed_qty) == (expected_broker_qty, 10.0)
+
+
+async def test_watchdog_does_not_redrive_on_a_stale_broker_snapshot(clocked_repo) -> None:
+    """#2343: no fresh broker position means no proof the reduction is
+    absorbable, so the re-drive defers (fail closed)."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    trade = _FakeTrade()
+
+    result = await reconcile_account(
+        repo, read=_FakeRead(error=BrokerUnavailable("broker down")), trade=trade
+    )
+
+    assert result.verdict == "stale"
+    _assert_redrive_deferred(repo, episode, trade)
+
+
+async def test_watchdog_leaves_no_parked_redrive_exit_when_admission_refuses(
+    clocked_repo,
+) -> None:
+    """#2343 (P3): a re-drive the REDUCE gate refuses (here the account-wide
+    POSITION_DRIFT a QQQ mismatch raised last pass, which carries no SPY proof)
+    must not leave an ``exit-redrive-*`` EXIT parked in ``accepted`` — that
+    burned an attempt, held the entry, and would sell once the hold cleared."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    positions = [_position("SPY", quantity=10.0), _position("QQQ", quantity=5.0)]
+    first = await reconcile_account(repo, read=_FakeRead(positions=positions), trade=_FakeTrade())
+    assert first.verdict == "position_drift"  # the episode was too young to re-drive
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    trade = _FakeTrade()
+
+    await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade)
+
+    _assert_redrive_deferred(repo, episode, trade)
+
+
 async def test_watchdog_defers_outside_the_regular_session_when_nothing_can_be_priced(
     clocked_repo,
 ) -> None:

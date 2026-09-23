@@ -15,7 +15,11 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     RecoveryPricing,
 )
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
-from app.broker.alpaca.clerk.sqlite.exit_watchdog import redrive_or_escalate_stale_exits
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
+    BrokerSymbolReader,
+    BrokerSymbolView,
+    redrive_or_escalate_stale_exits,
+)
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
@@ -128,6 +132,62 @@ async def _under_intake[LocalResult](
     return await intake.off_loop(operation, *args, **kwargs)
 
 
+def _broker_quantity_by_symbol(broker_positions: list[BrokerPosition]) -> dict[str, float]:
+    """The broker's signed position per upper-cased symbol."""
+    broker_by_symbol: dict[str, float] = {}
+    for position in broker_positions:
+        symbol = position.symbol.upper()
+        broker_by_symbol[symbol] = broker_by_symbol.get(symbol, 0.0) + signed_broker_position_quantity(
+            position
+        )
+    return broker_by_symbol
+
+
+def _attributed_quantity_by_symbol(attributed_positions: dict[str, float]) -> dict[str, float]:
+    """The Clerk's account-wide attributed position per upper-cased symbol."""
+    attributed_by_symbol: dict[str, float] = {}
+    for symbol, quantity in attributed_positions.items():
+        normalized = symbol.upper()
+        attributed_by_symbol[normalized] = attributed_by_symbol.get(normalized, 0.0) + quantity
+    return attributed_by_symbol
+
+
+def _broker_symbol_reader(
+    repo: ClerkSqliteRepository,
+    *,
+    broker_orders: list[BrokerOrder],
+    broker_positions: list[BrokerPosition],
+) -> BrokerSymbolReader:
+    """Read one symbol of this pass's broker snapshot against current attribution.
+
+    The stuck-EXIT watchdog's view of broker truth (#2343). Agreement is the
+    same per-symbol verdict the final comparison reaches — neither drifted
+    nor indeterminate — computed by :func:`plan_account_reconciliation`
+    itself, against the attribution at the moment of the call: a fill folded
+    since the snapshot that the snapshot did not see reads as disagreement,
+    so the watchdog defers rather than trusting either side.
+    """
+    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+
+    def read(symbol: str) -> BrokerSymbolView:
+        normalized = symbol.upper()
+        attributed_positions = repo.attributed_positions_by_symbol()
+        plan = plan_account_reconciliation(
+            namespaces=frozenset(),
+            broker_orders=broker_orders,
+            broker_positions=broker_positions,
+            attributed_positions=attributed_positions,
+            known_order_refs=frozenset(),
+        )
+        return BrokerSymbolView(
+            broker_qty=broker_by_symbol.get(normalized, 0.0),
+            attributed_qty=_attributed_quantity_by_symbol(attributed_positions).get(normalized, 0.0),
+            agrees=normalized not in {*plan.drifted_symbols, *plan.indeterminate_symbols},
+        )
+
+    return read
+
+
 def plan_account_reconciliation(
     *,
     namespaces: frozenset[str],
@@ -154,16 +214,8 @@ def plan_account_reconciliation(
         for order in broker_orders
         if order.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
     }
-    broker_by_symbol: dict[str, float] = {}
-    for position in broker_positions:
-        symbol = position.symbol.upper()
-        broker_by_symbol[symbol] = broker_by_symbol.get(symbol, 0.0) + signed_broker_position_quantity(
-            position
-        )
-    attributed_by_symbol: dict[str, float] = {}
-    for symbol, quantity in attributed_positions.items():
-        normalized = symbol.upper()
-        attributed_by_symbol[normalized] = attributed_by_symbol.get(normalized, 0.0) + quantity
+    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
     symbols = set(broker_by_symbol) | set(attributed_by_symbol)
     mismatched_symbols = {
         symbol
@@ -401,12 +453,7 @@ def _sync_position_drift(
         )
         return
     symbols = ", ".join(mismatched_symbols)
-    broker_by_symbol: dict[str, float] = {}
-    for position in broker_positions:
-        symbol = position.symbol.upper()
-        broker_by_symbol[symbol] = broker_by_symbol.get(symbol, 0.0) + signed_broker_position_quantity(
-            position
-        )
+    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
     cause = PositionDriftCause(
         positions=tuple(
             PositionDriftObservation(
@@ -825,8 +872,17 @@ async def _reconcile_account_serialized(
         intake=intake,
     )
 
+    # The re-drive is sized from attribution, so it may only send what this
+    # pass's fresh broker position agrees with and can absorb (#2343).
     await redrive_or_escalate_stale_exits(
-        repo, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
+        repo,
+        trade=trade,
+        intake=intake,
+        broker_symbol=_broker_symbol_reader(
+            repo, broker_orders=broker_orders, broker_positions=broker_positions
+        ),
+        pricing=pricing,
+        off_loop=to_thread,
     )
 
     # No ENTER may stay working once its run is no longer ACTIVE (#2362):

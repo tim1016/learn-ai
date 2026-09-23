@@ -417,7 +417,7 @@ def _strict_uncertainty_facts(uncertainty: dict[str, Any], policy: ReasonPolicy)
     return facts
 
 
-def _moves_toward_zero_without_crossing(quantity: float, delta: float) -> bool:
+def moves_toward_zero_without_crossing(quantity: float, delta: float) -> bool:
     if not position_quantity_is_nonzero(quantity) or quantity * delta >= 0:
         return False
     after = quantity + delta
@@ -451,9 +451,9 @@ def _position_drift_allows_action(
     current_attributed = repo.attributed_positions_by_symbol().get(intent.symbol.upper(), 0.0)
     if position_quantity_is_nonzero(current_attributed - observation.attributed_qty):
         return False
-    return _moves_toward_zero_without_crossing(
+    return moves_toward_zero_without_crossing(
         observation.broker_qty, intent.signed_delta
-    ) and _moves_toward_zero_without_crossing(current_attributed, intent.signed_delta)
+    ) and moves_toward_zero_without_crossing(current_attributed, intent.signed_delta)
 
 
 def _exit_not_flat_allows_action(
@@ -515,7 +515,7 @@ def _exit_not_flat_proof(
         _exit_not_flat_allows_action(facts=facts, intent=intent)
         and strategy_instance_id is not None
         and intent is not None
-        and _moves_toward_zero_without_crossing(
+        and moves_toward_zero_without_crossing(
             repo.position(strategy_instance_id, intent.symbol.upper()),
             intent.signed_delta,
         )
@@ -534,7 +534,7 @@ def _exit_stuck_proof(
         _exit_stuck_allows_action(facts=facts, intent=intent)
         and strategy_instance_id is not None
         and intent is not None
-        and _moves_toward_zero_without_crossing(
+        and moves_toward_zero_without_crossing(
             repo.position(strategy_instance_id, intent.symbol.upper()),
             intent.signed_delta,
         )
@@ -884,6 +884,7 @@ __all__ = [
     "admit_new_exposure",
     "classify_admission_refusal",
     "decide_capability",
+    "moves_toward_zero_without_crossing",
     "raise_uncertainty",
     "require_admission",
     "require_capability",

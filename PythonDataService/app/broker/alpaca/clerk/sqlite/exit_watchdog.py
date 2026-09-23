@@ -16,23 +16,34 @@ a market order the vendor would queue to the next open. When no priceable
 reduction exists (no session, no allowance, no live quote) the re-drive
 defers: the ``EXIT_NOT_FLAT`` episode stays raised and visible for the
 operator's own priced flatten, and the entry stays free for it.
+
+#2343: the re-drive is sized from the Clerk's *attributed* position, so it is
+sent only when this pass's fresh broker snapshot agrees with the account-wide
+attribution for the symbol and can absorb the reduction without crossing
+zero. Otherwise — a flat account, a partial broker position — it defers like
+an unpriceable re-drive: no order, no EXIT effect, no burned attempt, the
+episode stays raised. Every refusal is decided before
+``accept_recovery_exit``, so a refused re-drive never parks an EXIT.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from typing import NamedTuple
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegRefused
 from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
+    ConfirmedRecoveryShape,
     RecoveryPricing,
     price_automatic_recovery_reduction,
     quote_spread_bps,
     regular_session_open,
 )
 from app.broker.alpaca.clerk.sqlite.exit import (
+    ExitSubmission,
     accept_recovery_exit,
     resolve_accepted_exit,
 )
@@ -51,6 +62,10 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
+    Capability,
+    ReductionIntent,
+    decide_capability,
+    moves_toward_zero_without_crossing,
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -65,6 +80,31 @@ from app.broker.contract.models import OrderSide
 from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
+
+
+class BrokerSymbolView(NamedTuple):
+    """One symbol as this pass's fresh broker snapshot and the Clerk's books see it.
+
+    ``attributed_qty`` is the account-wide attributed total across every
+    strategy instance — the quantity the broker's signed position must equal.
+    ``agrees`` is the reconciliation plan's own verdict for the symbol:
+    neither drifted nor indeterminate.
+    """
+
+    broker_qty: float
+    attributed_qty: float
+    agrees: bool
+
+
+type BrokerSymbolReader = Callable[[str], BrokerSymbolView]
+
+
+class _RedriveRefused(NamedTuple):
+    """A pre-acceptance refusal: logged, nothing sent, nothing accepted."""
+
+    action: str
+    message: str
+    facts: dict[str, object]
 
 
 class _StaleExit(NamedTuple):
@@ -83,10 +123,15 @@ async def redrive_or_escalate_stale_exits(
     *,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
+    broker_symbol: BrokerSymbolReader,
     pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
     off_loop: OffLoop | None = None,
 ) -> None:
     """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate.
+
+    ``broker_symbol`` reads one symbol from this pass's fresh broker snapshot
+    against the Clerk's current attribution (#2343). It has no default: a
+    caller without fresh broker truth cannot re-drive.
 
     ``pricing`` is what an extended-hours re-drive prices from (#2229); the
     degraded :data:`UNPRICEABLE_RECOVERY` default defers outside the regular
@@ -297,16 +342,31 @@ async def redrive_or_escalate_stale_exits(
             quote_spread = quote_spread_bps(quote) if quote is not None else None
         try:
             accepted = await intake.off_loop(
-                accept_recovery_exit,
+                _accept_admissible_redrive,
                 repo,
-                account_id=repo.account_id,
+                broker_symbol=broker_symbol,
                 strategy_instance_id=sid,
+                symbol=cause.symbol,
                 decision_id=(
                     f"{EXIT_REDRIVE_DECISION_PREFIX}{stale_exit.episode_token}-{redrives + 1}"
                 ),
                 entry_order_ref=entries[-1].order_ref,
                 confirmed_shape=confirmed_shape,
             )
+            if accepted is None:
+                continue  # attributed-flat since the scan; the flat fence resolver clears it
+            if isinstance(accepted, _RedriveRefused):
+                logger.warning(
+                    accepted.message,
+                    extra={
+                        "action": accepted.action,
+                        "account_id": repo.account_id,
+                        "strategy_instance_id": sid,
+                        "symbol": cause.symbol,
+                        **accepted.facts,
+                    },
+                )
+                continue
             await resolve_accepted_exit(repo, accepted=accepted, trade=trade, off_loop=run)
         except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
             logger.info(
@@ -331,3 +391,67 @@ async def redrive_or_escalate_stale_exits(
                 "quote_spread_bps": quote_spread,
             },
         )
+
+
+def _accept_admissible_redrive(
+    repo: ClerkSqliteRepository,
+    *,
+    broker_symbol: BrokerSymbolReader,
+    strategy_instance_id: str,
+    symbol: str,
+    decision_id: str,
+    entry_order_ref: str,
+    confirmed_shape: ConfirmedRecoveryShape | None,
+) -> ExitSubmission | _RedriveRefused | None:
+    """Accept the re-drive EXIT only when the broker and the REDUCE gate admit it.
+
+    One fenced fold, so the attribution checked here is the attribution the
+    acceptance commits against. Every refusal returns before
+    ``accept_recovery_exit``: a refused re-drive creates no EXIT effect, burns
+    no attempt, and leaves the entry free. (#2343 P3: the REDUCE refusal used
+    to raise from ``resolve_accepted_exit`` after the EXIT was committed,
+    parking it in ``accepted``, armed to sell once the hold cleared.) ``None``
+    means the strategy became attributed-flat since the scan.
+    """
+    remaining = repo.position(strategy_instance_id, symbol)
+    if not position_quantity_is_nonzero(remaining):
+        return None
+    view = broker_symbol(symbol)
+    if not view.agrees or not moves_toward_zero_without_crossing(view.broker_qty, -remaining):
+        return _RedriveRefused(
+            action="exit_redrive_deferred_broker_disagrees",
+            message=(
+                "deferred a stuck-EXIT re-drive: the broker's fresh position cannot "
+                "absorb the attributed reduction"
+            ),
+            facts={
+                "broker_qty": view.broker_qty,
+                "attributed_qty": view.attributed_qty,
+                "strategy_attributed_qty": remaining,
+                "broker_agrees": view.agrees,
+            },
+        )
+    decision = decide_capability(
+        repo,
+        capability=Capability.REDUCE,
+        strategy_instance_id=strategy_instance_id,
+        reduction_intent=ReductionIntent(
+            symbol=symbol,
+            side="SELL" if remaining > 0 else "BUY",
+            quantity=abs(remaining),
+        ),
+    )
+    if not decision.allowed:
+        return _RedriveRefused(
+            action="exit_redrive_deferred",
+            message="deferred a policy-blocked stuck-EXIT re-drive before accepting it",
+            facts={"reason_code": decision.reason_code},
+        )
+    return accept_recovery_exit(
+        repo,
+        account_id=repo.account_id,
+        strategy_instance_id=strategy_instance_id,
+        decision_id=decision_id,
+        entry_order_ref=entry_order_ref,
+        confirmed_shape=confirmed_shape,
+    )
