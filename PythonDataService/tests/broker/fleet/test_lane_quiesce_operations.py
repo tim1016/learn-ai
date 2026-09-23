@@ -8,13 +8,19 @@ other, forwarded with the per-clerk coordinator token.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
     OperationReadiness,
     validate_operation_catalog,
 )
+from app.broker.fleet.records import AssignmentState, StoredLifecycleState
+from app.broker.fleet.service import FleetControlService
+from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet_composition import production_provider_adapters
+from tests.broker.fleet.conftest import FrozenClock, bind_lane, provision_lane
 
 
 def _operation(operation_id: str):
@@ -51,3 +57,35 @@ def test_lane_account_quiet_read_is_a_lane_scoped_custody_read() -> None:
 
 def test_the_catalog_with_both_operations_still_validates() -> None:
     validate_operation_catalog(production_provider_adapters()["alpaca"].operations())
+
+
+def test_both_operations_route_to_a_serving_lane_without_draining_it(
+    control_dir: Path, clock: FrozenClock
+) -> None:
+    """Routing resolves a bound, provisioned lane and leaves it exactly so:
+    still ``provisioned``, its assignment still ``effective``."""
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        lane = provision_lane(
+            service, broker="alpaca", label="serving", tmp_path=control_dir.parent
+        )
+        _session, confirmed = bind_lane(service, lane, account="PA3MIGRATE1")
+        for operation_id in ("lane_stop_all_bots", "lane_account_quiet_read"):
+            _clerk, session, _assignment = service.resolve_route(
+                broker="alpaca",
+                clerk_id=lane.clerk_id,
+                readiness=_operation(operation_id).readiness,
+            )
+            assert session.clerk_id == lane.clerk_id
+        stored = service._store.read_clerk(lane.clerk_id)
+        assert stored is not None
+        assert stored.lifecycle_state is StoredLifecycleState.PROVISIONED
+        [assignment] = service._store.list_active_assignments()
+        assert assignment.state is AssignmentState.EFFECTIVE
+        assert assignment.assignment_generation == confirmed.assignment_generation
+    finally:
+        service.close()
