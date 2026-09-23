@@ -15,7 +15,10 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.fleet.history_batch import HISTORY_BATCH_OUTER_TIMEOUT_S
-from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
+from app.broker.fleet.internal_http import (
+    DEFAULT_INTERNAL_TIMEOUT_S,
+    LANE_STOP_ALL_READ_TIMEOUT_S,
+)
 from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
@@ -51,7 +54,8 @@ def _op(
 
     ``read_timeout_s`` widens this operation's own outer coordinator -> agent
     delivery bound (``ProviderOperation.read_timeout_s``); every operation but
-    ``bot_chart_history`` leaves it at the fleet default (issue #2204).
+    ``bot_chart_history`` (issue #2204) and ``lane_stop_all_bots`` (#2268)
+    leaves it at the fleet default.
     """
     return ProviderOperation(
         operation_id=operation_id,
@@ -166,6 +170,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_ACTION,
             idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
+            read_timeout_s=LANE_STOP_ALL_READ_TIMEOUT_S,
         ),
         _op(
             "lane_account_quiet_read",

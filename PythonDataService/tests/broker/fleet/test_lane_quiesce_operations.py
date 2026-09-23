@@ -89,3 +89,21 @@ def test_both_operations_route_to_a_serving_lane_without_draining_it(
         assert assignment.assignment_generation == confirmed.assignment_generation
     finally:
         service.close()
+
+
+def test_lane_stop_all_bots_forward_outlasts_a_stop_and_answers_inside_the_cli_budget() -> None:
+    """Each Stop can take more than 5 s (the Clerk STOP, the cancellation wait,
+    then a custody proof), so the fleet's 10 s default would cut a multi-bot
+    stop off mid-flight; the coordinator must still answer before the
+    migration CLI stops waiting for it."""
+    from app.broker.fleet.internal_http import (
+        DEFAULT_INTERNAL_TIMEOUT_S,
+        LANE_STOP_ALL_READ_TIMEOUT_S,
+    )
+    from app.installation_migration.lanes import STOP_ALL_CLIENT_TIMEOUT_S
+
+    operation = _operation("lane_stop_all_bots")
+
+    assert operation.read_timeout_s == LANE_STOP_ALL_READ_TIMEOUT_S
+    assert operation.read_timeout_s > DEFAULT_INTERNAL_TIMEOUT_S
+    assert operation.read_timeout_s < STOP_ALL_CLIENT_TIMEOUT_S

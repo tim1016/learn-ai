@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.services.bot_runner import RunAdmissionRefusedError
+from app.services.bot_runner_errors import BotRunnerError
 from tests._helpers.bot_runner.custody import _SID, _registry
 from tests._helpers.bot_runner.doubles import _FakeFeed
 
@@ -85,6 +87,47 @@ async def test_a_refused_stop_is_reported_and_the_lane_is_still_running(
     assert [(bot.strategy_instance_id, bot.message) for bot in outcome.refused] == [
         (_SID, "custody unavailable")
     ]
+    assert outcome.still_running is True
+    monkeypatch.setattr(registry, "stop", real_stop)
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        BotRunnerError("runner fault", detail="typed runner refusal"),
+        ClerkSqliteError("clerk database refused the STOP"),
+    ],
+    ids=["bot_runner_error", "clerk_error"],
+)
+async def test_any_per_bot_stop_failure_is_recorded_and_the_other_bots_still_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    other = await registry.deploy(
+        broker="alpaca", strategy_instance_id=_OTHER_SID, symbol="QQQ"
+    )
+    real_stop = registry.stop
+
+    async def failing_stop(broker: str, strategy_instance_id: str, **kwargs: object):
+        if strategy_instance_id == _SID:
+            raise failure
+        return await real_stop(broker, strategy_instance_id, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry, "stop", failing_stop)
+
+    outcome = await registry.stop_every_running_bot(
+        updated_by="inkant", reason="lane_stop_all"
+    )
+
+    assert [(bot.strategy_instance_id, bot.run_id) for bot in outcome.stopped] == [
+        (_OTHER_SID, other.active_run_id)
+    ]
+    [refusal] = outcome.refused
+    assert refusal.strategy_instance_id == _SID
+    assert str(failure) in refusal.message
     assert outcome.still_running is True
     monkeypatch.setattr(registry, "stop", real_stop)
     await registry.stop("alpaca", _SID)

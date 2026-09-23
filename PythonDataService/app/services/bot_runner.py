@@ -227,6 +227,27 @@ class LaneStopOutcome:
     still_running: bool
 
 
+def _lane_stop_refusal(
+    strategy_instance_id: str, run_id: str, message: str, detail: str | None
+) -> LaneStopRefusal:
+    """Record one bot whose lane-wide Stop did not complete, loudly."""
+    logger.warning(
+        "Lane-wide stop refused for one bot",
+        extra={
+            "action": "lane_stop_all_bot_refused",
+            "strategy_instance_id": strategy_instance_id,
+            "run_id": run_id,
+            "error": message,
+        },
+    )
+    return LaneStopRefusal(
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+        message=message,
+        detail=detail,
+    )
+
+
 # Commit-time refusals, keyed by the shared retirement rule's cause. The
 # panel renders its own operator copy from the same causes; this is what an
 # operator sees when the world changed between presentation and click.
@@ -1227,8 +1248,10 @@ class BotTaskRegistry:
         bots want to run again after the restart, whereas this is exactly
         ``stop`` per bot — durable ``STOPPED`` intent first, then the Clerk
         STOP and the reap — so every bot stays stopped wherever the lane next
-        boots. A bot whose Stop refuses is reported with the refusal's own
-        words and left to the operator; nothing here retries or escalates.
+        boots. A bot whose Stop refuses or fails is reported with the
+        refusal's own words (or the failure's type) and left to the operator;
+        the other bots are still stopped, and nothing here retries or
+        escalates.
         A task that ended on its own between the snapshot and its Stop had
         nothing left to stop and is not reported.
         """
@@ -1244,23 +1267,25 @@ class BotTaskRegistry:
                 await self.stop(broker, sid, updated_by=updated_by, reason=reason)
             except UnknownBotError:
                 continue
-            except RunAdmissionRefusedError as exc:
-                logger.warning(
-                    "Lane-wide stop refused for one bot",
+            except BotRunnerError as exc:
+                refused.append(_lane_stop_refusal(sid, run_id, str(exc), exc.detail))
+                continue
+            except Exception as exc:
+                # Deliberately broad: a Clerk or custody failure has no common
+                # base, and one bot's failure must neither hide the others'
+                # Stops nor cost the lane its receipt. It is logged with its
+                # traceback, recorded by type, and the lane-wide stop still
+                # fails closed on it (``all_stopped`` is false).
+                logger.exception(
+                    "Lane-wide stop failed for one bot",
                     extra={
-                        "action": "lane_stop_all_bot_refused",
+                        "action": "lane_stop_all_bot_failed",
                         "strategy_instance_id": sid,
                         "run_id": run_id,
-                        "error": str(exc),
                     },
                 )
                 refused.append(
-                    LaneStopRefusal(
-                        strategy_instance_id=sid,
-                        run_id=run_id,
-                        message=str(exc),
-                        detail=exc.detail,
-                    )
+                    _lane_stop_refusal(sid, run_id, f"{type(exc).__name__}: {exc}", None)
                 )
                 continue
             stopped.append(LaneStoppedBot(strategy_instance_id=sid, run_id=run_id))

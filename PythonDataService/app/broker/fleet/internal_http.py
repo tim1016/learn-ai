@@ -30,6 +30,16 @@ import httpx
 from app.utils.throttle import TtlCache
 
 DEFAULT_INTERNAL_TIMEOUT_S = 10.0
+#: The coordinator -> lane read bound of ``lane_stop_all_bots`` (#2268). One
+#: lane-wide stop runs the operator's Stop for every bot in turn, and a
+#: single Stop can take well over 5 s -- the Clerk STOP, up to 5 s waiting on
+#: the task's cancellation, then a fresh custody proof at the broker -- so the
+#: 10 s default above would cut a multi-bot stop off mid-flight and report
+#: ``clerk_unreachable`` while the lane was still stopping bots. 110 s leaves
+#: room for a full lane of bots and still answers inside the migration CLI's
+#: own wait (``installation_migration.lanes.STOP_ALL_CLIENT_TIMEOUT_S``, 120 s,
+#: derived from this bound), so the operator always reads the lane's answer.
+LANE_STOP_ALL_READ_TIMEOUT_S = 110.0
 DEFAULT_MAX_EVENT_BYTES = 1_000_000
 
 

@@ -19,12 +19,15 @@ from typing import Any, Protocol
 
 import httpx
 
+from app.broker.fleet.internal_http import LANE_STOP_ALL_READ_TIMEOUT_S
 from app.installation_migration.errors import MigrationRefused
 
 CONTROL_SECRET_HEADER = "X-Data-Plane-Control-Secret"
 DEFAULT_COORDINATOR_URL = "http://127.0.0.1:8000"
-#: Stopping every bot waits on each Stop's own bounded cancellation.
-_STOP_TIMEOUT_S = 120.0
+#: Stopping every bot waits on each Stop's own bounded cancellation. Derived
+#: from the coordinator's forward bound so the coordinator's answer -- even
+#: its ``clerk_unreachable`` -- always lands before this client gives up.
+STOP_ALL_CLIENT_TIMEOUT_S = LANE_STOP_ALL_READ_TIMEOUT_S + 10.0
 _READ_TIMEOUT_S = 30.0
 
 
@@ -140,7 +143,7 @@ class CoordinatorLanes:
             "POST",
             path,
             subject=lane.clerk_id,
-            timeout_s=_STOP_TIMEOUT_S,
+            timeout_s=STOP_ALL_CLIENT_TIMEOUT_S,
             json={
                 "command_context": {
                     "capability": "bot_action",
@@ -173,6 +176,7 @@ class CoordinatorLanes:
 __all__ = [
     "CONTROL_SECRET_HEADER",
     "DEFAULT_COORDINATOR_URL",
+    "STOP_ALL_CLIENT_TIMEOUT_S",
     "CoordinatorLanes",
     "FleetLanes",
     "Lane",
