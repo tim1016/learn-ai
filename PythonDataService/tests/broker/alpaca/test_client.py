@@ -794,3 +794,52 @@ async def test_order_submission_is_not_retried_when_the_connection_drops(tmp_pat
         await client.submit_order({"symbol": "SPY", "qty": "1", "side": "buy"})
 
     assert len(responses.calls) == 1
+
+
+# ── alpaca-py's own status-code retry is off (#2304, #2342) ────────────────
+
+
+@responses.activate
+async def test_order_submission_is_not_re_posted_by_the_sdk_on_504(tmp_path: Path) -> None:
+    """A 504 does not prove Alpaca dropped the order. alpaca-py re-POSTs on
+    429/504 by default, so a gateway timeout after Alpaca accepted the order
+    came back as a duplicate-client_order_id reject and the Clerk folded a
+    live order as "did not reach the broker" (#2304). The abandoned SDK worker
+    could also keep re-POSTing past the Clerk's absence window (#2342).
+
+    One 504 must surface as one uncertain submission, with one POST on the
+    wire and the order kept inside the visibility window."""
+    responses.add(responses.POST, f"{_BASE}/v2/orders", status=504, json={"message": "gateway timeout"})
+    responses.add(
+        responses.POST,
+        f"{_BASE}/v2/orders",
+        status=422,
+        json={"code": 40010001, "message": "client_order_id must be unique"},
+    )
+    client = AlpacaTradingClient(
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS),
+    )
+
+    with pytest.raises(BrokerUnavailable):
+        await client.submit_order({"symbol": "SPY", "qty": "1", "side": "buy", "client_order_id": "coid-1"})
+
+    assert len(responses.calls) == 1
+    assert client._submission_may_become_visible("coid-1")
+
+
+@responses.activate
+async def test_reads_are_not_retried_by_the_sdk_on_504(tmp_path: Path) -> None:
+    """The SDK retry also slept 3 s between re-issued reads, stalling the
+    sweep. Reads fail fast; the next sweep pass is the retry."""
+    responses.add(responses.GET, f"{_BASE}/v2/account", status=504, json={"message": "gateway timeout"})
+    client = AlpacaTradingClient(
+        settings=AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS),
+    )
+
+    with pytest.raises(BrokerUnavailable):
+        await client.get_account()
+
+    assert len(responses.calls) == 1
+

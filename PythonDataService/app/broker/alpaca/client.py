@@ -9,8 +9,9 @@ This wrapper bridges the two:
   (dicts / lists of dicts) rather than SDK models. The adapter is therefore the
   single, explicit ingestion boundary that converts vendor strings to contract
   types (int64 ms UTC, float) — the SDK does no hidden timestamp parsing. The
-  SDK still owns auth, URL derivation, request building, and retry, and its
-  model definitions remain the schema-drift authority.
+  SDK still owns auth, URL derivation and request building, and its model
+  definitions remain the schema-drift authority. Retry is this module's: the
+  SDK's own status-code retry is switched off (#2304).
 - A verbatim-capture hook is installed on the SDK's session, so every response
   is journaled before it is parsed.
 - Failures are translated to broker-contract errors; no alpaca-py or requests
@@ -69,9 +70,9 @@ _SUBMIT_VISIBILITY_GRACE_S = 30.0
 
 # Bounded rate-limit retry for the WRITE path (submit / cancel) only. A 429
 # means the request was throttled BEFORE it landed, so retrying with the same
-# client_order_id is safe — a genuine duplicate would come back as a 409 and
-# resolve as a definitive reject. The honored backoff is capped so a large
-# Retry-After can never stall a strategy bar; when retries are exhausted the
+# client_order_id is safe. A duplicate-client_order_id reply would mean the
+# order EXISTS at Alpaca (#2304), not that it was rejected. The honored
+# backoff is capped so a large Retry-After can never stall a strategy bar; when retries are exhausted the
 # failure carries a distinct "throttled" message so the operator sees a
 # throttle, not a plain reject. Reads never retry (that would slow the sweep).
 _MAX_RATE_LIMIT_RETRIES = 2
@@ -106,11 +107,30 @@ def _install_session_timeout(session: Session, *, timeout_s: float) -> None:
 # urllib3 hands the closed socket to the next request, which dies with
 # RemoteDisconnected before a byte was answered — 16 occurrences in 6 hours on
 # the Live lane, each degrading the clerk's account posture to
-# evidence-unavailable. alpaca-py does not cover it: its own retry fires on
-# HTTP status codes (429/504), never on a connection-level failure. The same
-# requests.Session carries order submission (POST) and cancellation (DELETE),
-# so this allowlist is the whole safety argument — a write is never re-issued.
+# evidence-unavailable. alpaca-py's own status-code retry is switched off by
+# ``_disable_sdk_status_retry``, so this is the only retry that can re-issue a
+# request. The same requests.Session carries order submission (POST) and
+# cancellation (DELETE), so this allowlist is the whole safety argument — a
+# write is never re-issued.
 _STALE_CONNECTION_RETRY_METHODS: frozenset[str] = frozenset({"GET", "HEAD"})
+
+
+def _disable_sdk_status_retry(client: Any) -> None:
+    """Turn off alpaca-py's own 429/504 retry loop for every method.
+
+    ``RESTClient._request`` re-issues ANY request, POST included, on those
+    codes. A 504 does not prove Alpaca dropped the order, so the re-POST came
+    back as a duplicate-client_order_id reject that the Clerk folded as "never
+    reached the broker" (#2304), and an abandoned worker kept re-POSTing past
+    the Clerk's absence window (#2342). This client owns retry itself: the
+    bounded 429 retry on writes, the GET/HEAD stale-connection retry, and none
+    on reads. ``TradingClient`` takes no retry arguments and the base class
+    treats ``0`` as "use the default", so the attribute is set after
+    construction; the guard fails loudly if a new SDK renames it.
+    """
+    if not hasattr(client, "_retry"):
+        raise RuntimeError("alpaca-py no longer exposes RESTClient._retry; re-check #2304 before upgrading")
+    client._retry = 0
 
 
 def _connection_failure_kind(exc: BaseException) -> str:
@@ -220,6 +240,7 @@ class AlpacaTradingClient:
             paper=settings.is_paper,
             raw_data=True,
         )
+        _disable_sdk_status_retry(client)
         _install_session_timeout(client._session, timeout_s=self._timeout_s)
         _install_stale_connection_retry(client._session)
         journal = self._journal or get_capture_journal()
