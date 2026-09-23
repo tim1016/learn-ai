@@ -187,6 +187,7 @@ class _ClaimedState(NamedTuple):
     reducing: OrderResource | None
     symbol: str
     recovery: bool
+    reducing_fills_short: bool
 
 
 def _read_exit_claim_state(
@@ -199,7 +200,12 @@ def _read_exit_claim_state(
     reducing = next((order for order in orders if order.role == "REDUCING"), None)
     assert entries
     return _ClaimedState(
-        effect, entries, reducing, _single_entry_symbol(repo, entries), _is_recovery_exit(repo, effect_operation_id)
+        effect,
+        entries,
+        reducing,
+        _single_entry_symbol(repo, entries),
+        _is_recovery_exit(repo, effect_operation_id),
+        reducing is not None and repo.order_fills_short_of_broker_cumulative(reducing.order_ref),
     )
 
 
@@ -315,18 +321,22 @@ def _finalize_claimed_exit(
     # ``expired`` / ``rejected`` terminal snapshot with no recorded
     # execution carries no such ambiguity — it is proven unfilled
     # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
+    # The same holds when the recorded fills fall short of the broker's own
+    # cumulative (#2305): a slice was lost, so the remaining attribution is
+    # not proof the reduction under-filled.
     if (
         not repo.fills_for_order(refreshed.order_ref)
         and (refreshed.broker_state or "").lower() not in UNFILLED_TERMINAL_STATES
-    ):
+    ) or repo.order_fills_short_of_broker_cumulative(refreshed.order_ref):
         if state.effect.state != "unknown":
             fold_uncertain(
                 repo,
                 effect_operation_id=effect_operation_id,
                 order_ref=refreshed.order_ref,
                 why=(
-                    "Reducing order is terminal but no execution slice has been "
-                    "recorded; awaiting websocket or recovery evidence."
+                    "Reducing order is terminal but its recorded execution slices do "
+                    "not yet cover the broker's filled quantity; awaiting websocket "
+                    "or recovery evidence."
                 ),
             )
         return _snapshot(repo, effect_operation_id)
@@ -407,7 +417,10 @@ async def _resolve_claimed(
             broker=broker,
             run=run,
         )
-    elif not _is_terminal(reducing.broker_state):
+    elif not _is_terminal(reducing.broker_state) or state.reducing_fills_short:
+        # A terminal reducing order whose recorded fills fall short of the
+        # broker's cumulative lost a slice (#2305): refresh it by exact lookup
+        # so the cumulative fold closes the gap before the outcome is judged.
         await _refresh_or_resume_reducing_order(
             repo,
             effect_operation_id=effect_operation_id,

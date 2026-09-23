@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -645,9 +646,15 @@ def reconcilable_effect_operations(
     into ``custody_subjects``, so every operation belongs to exactly one
     subject and no unattributable remainder exists. ``None`` keeps the
     account-wide read, which is what a boot-time account summary wants.
+
+    A terminal order stays on the worklist while its effective fills fall
+    short of the broker's own cumulative ``filled_quantity`` (#2305): a lost
+    ``trade_updates`` slice -- dropped at capture, or executed before the
+    first ``listen`` -- is re-derived by the sweep's exact lookup, whose
+    cumulative fold then closes the shortfall and drops it off the list.
     """
     subject_clause = "AND e.subject_id = ? " if subject_id is not None else ""
-    params = (subject_id,) if subject_id is not None else ()
+    params: tuple[object, ...] = (subject_id,) if subject_id is not None else ()
     rows = conn.execute(
         "SELECT DISTINCT e.effect_operation_id, e.authority_generation, e.idempotency_key, "
         "e.command_id, e.strategy_instance_id, e.run_id, e.kind, e.state, e.custody_owner, "
@@ -662,10 +669,10 @@ def reconcilable_effect_operations(
         "('filled','canceled','expired','rejected','replaced') "
         "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("
         "SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)))) "
+        f"AND {_EFFECTIVE_FILL_PREDICATE})) "
+        f"OR {_fills_short_of_broker_cumulative_sql('o.order_ref')}) "
         "ORDER BY e.created_at_ms ASC",
-        params,
+        (*params, FILL_QTY_EPSILON),
     ).fetchall()
     return [EffectOperationResource(**dict(row)) for row in rows]
 
@@ -761,6 +768,14 @@ def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> di
     return dict(row) if row is not None else None
 
 
+#: A fill row is effective while no correction names its ``execution_id`` as
+#: superseded (PRD #1441 S1.2). Expects the row aliased ``f``.
+_EFFECTIVE_FILL_PREDICATE = (
+    "NOT EXISTS (SELECT 1 FROM fills successor "
+    "WHERE successor.superseded_execution_ref = f.execution_id)"
+)
+
+
 def _effective_fill_totals_for_order(
     conn: sqlite3.Connection,
     order_ref: str,
@@ -776,11 +791,55 @@ def _effective_fill_totals_for_order(
         parameters += evidence_sources
     row = conn.execute(
         "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
-        "FROM fills f WHERE f.order_ref = ? " + source_predicate + "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        "FROM fills f WHERE f.order_ref = ? " + source_predicate + "AND " + _EFFECTIVE_FILL_PREDICATE,
         parameters,
     ).fetchone()
     return float(row["qty"]), float(row["cost"])
+
+
+def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
+    """SQL predicate: the broker reported more filled quantity than is recorded.
+
+    True when any ``ORDER_SUBMIT_ACKED`` for the order recorded a
+    ``reported_filled_quantity`` exceeding the order's effective fills -- the
+    broker's cumulative is monotone, so the largest report is the one that
+    matters and a smaller later report is stale, never a reversal. An
+    acknowledgement with no reported cumulative (every pre-#2305 row, and
+    every unfilled one) is skipped before the fill sum is read, so an order
+    that never reported a fill costs one index probe. Binds one parameter,
+    :data:`FILL_QTY_EPSILON`.
+    """
+    reported = "json_extract(t.facts_json, '$.reported_filled_quantity')"
+    return (
+        "EXISTS (SELECT 1 FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
+        "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' AND " + reported + " IS NOT NULL "
+        "AND CAST(" + reported + " AS REAL) - (SELECT COALESCE(SUM(f.qty), 0) FROM fills f "
+        "WHERE f.order_ref = t.order_ref AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
+    )
+
+
+def broker_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float:
+    """The largest cumulative ``filled_quantity`` the broker reported for an order (0 if none)."""
+    row = conn.execute(
+        "SELECT MAX(CAST(json_extract(facts_json, '$.reported_filled_quantity') AS REAL)) AS reported "
+        "FROM custody_transitions WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED'",
+        (order_ref,),
+    ).fetchone()
+    return float(row["reported"]) if row["reported"] is not None else 0.0
+
+
+def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
+    """Whether the order's effective fills are provably incomplete (#2305).
+
+    The one definition shared by the reconciliation worklist
+    (:func:`reconcilable_effect_operations`) and the EXIT machine's
+    reducing-order refresh.
+    """
+    row = conn.execute(
+        "SELECT " + _fills_short_of_broker_cumulative_sql("?") + " AS short",
+        (order_ref, FILL_QTY_EPSILON),
+    ).fetchone()
+    return bool(row["short"])
 
 
 def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:
