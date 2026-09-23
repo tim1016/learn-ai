@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
@@ -398,22 +401,16 @@ async def test_sweep_cumulative_then_late_exact_slice_leaves_no_coverage_conflic
     assert verdicts == ["clean"]
 
 
-async def test_exit_reducing_fill_in_boot_window_reaches_flat(
-    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
-) -> None:
-    """#2316 EXIT variant: the reducing order's exec-A (4) falls in the boot window.
-
-    The EXIT refreshes a terminal reducing order whose fills are short of the
-    broker's cumulative instead of failing it ``EXIT_NOT_FLAT``.
-    """
-    repo, clock = clocked_repo
+async def _exit_with_open_reducing(
+    repo: ClerkSqliteRepository, trade: _Trade, *, decision_id: str
+) -> tuple[str, str, str]:
+    """Attributed +10, an EXIT whose SELL 10 is open with 0 filled at a boot reconcile."""
     entry_ref = await _held_position(repo)
-    trade = _Trade()
     accepted = accept_exit(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=WATCHDOG_SID,
-        decision_id="lost-exit",
+        decision_id=decision_id,
         lifecycle_run_id=WATCHDOG_RUN,
         entry_order_ref=entry_ref,
     )
@@ -431,16 +428,34 @@ async def test_exit_reducing_fill_in_boot_window_reaches_flat(
     await reconcile_account(
         repo, read=_FakeRead(orders=[open0], positions=[_position("SPY", quantity=10.0)]), trade=trade
     )
+    return accepted.effect_operation_id, red, bo
 
-    await _connect(
-        repo,
-        [
-            _frame(
-                event="fill", coid=red, broker_id=bo, side="sell", order_qty=10,
-                filled_qty=10, status="filled", qty=6, exec_id="exec-B-sell",
-            )
-        ],
+
+def _sell_fill_frame(red: str, bo: str) -> str:
+    """The first connect carries only exec-B-sell (6) on an order the broker reports filled 10."""
+    return _frame(
+        event="fill", coid=red, broker_id=bo, side="sell", order_qty=10,
+        filled_qty=10, status="filled", qty=6, exec_id="exec-B-sell",
     )
+
+
+def _transition_count(repo: ClerkSqliteRepository) -> int:
+    return len(repo.custody_transitions())
+
+
+async def test_exit_reducing_fill_in_boot_window_reaches_flat(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """#2316 EXIT variant: the reducing order's exec-A (4) falls in the boot window.
+
+    The EXIT refreshes a terminal reducing order whose fills are short of the
+    broker's cumulative instead of failing it ``EXIT_NOT_FLAT``.
+    """
+    repo, clock = clocked_repo
+    trade = _Trade()
+    exit_id, red, bo = await _exit_with_open_reducing(repo, trade, decision_id="lost-exit")
+
+    await _connect(repo, [_sell_fill_frame(red, bo)])
     assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(4.0, abs=QTY_ATOL, rel=0)
     trade.broker_state[red] = _broker_order(
         red, order_id=bo, side="sell", status="filled", quantity=10.0,
@@ -451,7 +466,207 @@ async def test_exit_reducing_fill_in_boot_window_reaches_flat(
     verdicts = await _sweep_until_settled(repo, clock, trade, broker_qty=0.0, passes=2)
 
     assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(0.0, abs=QTY_ATOL, rel=0)
-    effect = repo.effect_operation(accepted.effect_operation_id)
+    effect = repo.effect_operation(exit_id)
     assert effect is not None and effect.state == "succeeded"
     assert trade.legs[submits_before:] == []
     assert verdicts[-1] == "clean"
+
+
+async def test_rest_reporting_less_than_the_websocket_settles_exit_not_flat_with_bounded_rows(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """The frame said filled 10 over a 6 slice; the exact REST lookup says 6.
+
+    The latest acknowledgement is the broker's current word: the lower REST
+    report closes the gap, so the EXIT falls through to ``EXIT_NOT_FLAT``
+    (master's outcome, which feeds the #2343 watchdog) instead of alternating
+    ``unknown``/``in_progress`` and appending rows on every sweep.
+    """
+    repo, clock = clocked_repo
+    trade = _Trade()
+    exit_id, red, bo = await _exit_with_open_reducing(repo, trade, decision_id="rest-less")
+    await _connect(repo, [_sell_fill_frame(red, bo)])
+    trade.broker_state[red] = _broker_order(
+        red, order_id=bo, side="sell", status="filled", quantity=10.0,
+        filled_quantity=6.0, filled_avg_price=100.0,
+    )
+    positions = [_position("SPY", quantity=4.0)]
+
+    counts = []
+    for _ in range(20):
+        # 1 s apart: 20 sweeps stay inside EXIT_NOT_FLAT's 120 s redrive age,
+        # so the watchdog's re-drive does not enter the row count.
+        clock.advance(1_000)
+        await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade)
+        counts.append(_transition_count(repo))
+
+    effect = repo.effect_operation(exit_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=WATCHDOG_SID
+    ) is not None
+    assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(4.0, abs=QTY_ATOL, rel=0)
+    assert not repo.order_fills_short_of_broker_cumulative(red)
+    # Settled after the first sweep: no hash-chained row is appended again.
+    assert counts[1:] == [counts[0]] * 19
+
+
+async def test_unknown_exit_after_a_filled_submit_response_refreshes_with_bounded_rows(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """The submit response says filled 10 with no slice: the EXIT holds ``unknown``.
+
+    The sweep's re-drive refreshes the terminal reducing order by exact lookup
+    (it is short of the reported cumulative), folds the cumulative, proves the
+    strategy flat and stops appending rows.
+    """
+    repo, clock = clocked_repo
+
+    class _FilledOnSubmit(_Trade):
+        async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            self.legs.append((str(leg.side), leg.quantity))
+            return _broker_order(
+                client_order_id, order_id=f"bo-{client_order_id}", side="sell", status="filled",
+                quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0,
+            )
+
+    trade = _FilledOnSubmit()
+    entry_ref = await _held_position(repo)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=WATCHDOG_SID,
+        decision_id="filled-submit",
+        lifecycle_run_id=WATCHDOG_RUN,
+        entry_order_ref=entry_ref,
+    )
+    trade.broker_state[entry_ref] = _broker_order(
+        entry_ref, status="filled", quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0
+    )
+    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    red = resolved.reducing_order_ref
+    assert red is not None
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    trade.broker_state[red] = _broker_order(
+        red, order_id=f"bo-{red}", side="sell", status="filled", quantity=10.0,
+        filled_quantity=10.0, filled_avg_price=100.0,
+    )
+
+    counts = []
+    for _ in range(20):
+        clock.advance(1_000)
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+        counts.append(_transition_count(repo))
+
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "succeeded"
+    assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(0.0, abs=QTY_ATOL, rel=0)
+    assert trade.legs == [("sell", 10.0)]
+    assert counts[1:] == [counts[0]] * 19
+
+
+async def test_two_lost_slices_then_one_late_raises_the_known_2346_conflict(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """Pins today's behaviour for a double fault; #2346 is the known follow-up.
+
+    exec-A (1) and exec-B (1) are both lost, the terminal exec-C (3) arrives
+    with the order filled 5, and the sweep folds the missing cumulative 2, so
+    the position is right. Then exec-A alone arrives late: ``{A=1}`` cannot
+    prove ``{cumulative 2}``, so an ``EXECUTION_COVERAGE_CONFLICT`` opens. It
+    clears only if exec-B also arrives; the order-level coverage proof that
+    would clear it without B is #2346.
+    """
+    repo, clock = clocked_repo
+    trade = _Trade()
+    ref, bo, _effect_id = await _open_enter(repo, trade, decision_id="double-loss")
+    await _connect(
+        repo,
+        [
+            _frame(
+                event="fill", coid=ref, broker_id=bo, side="buy", order_qty=5,
+                filled_qty=5, status="filled", qty=3, exec_id="exec-C",
+            )
+        ],
+    )
+    trade.broker_state[ref] = _broker_filled(ref, bo)
+    await _sweep_until_settled(repo, clock, trade, broker_qty=5.0, passes=1)
+    assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(5.0, abs=QTY_ATOL, rel=0)
+
+    await SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_RecordingReconciler()
+    ).record_lifecycle_event(
+        client_order_id=ref,
+        event=BrokerOrderEvent(
+            event_type="partial_fill",
+            occurred_at_ms=1_700_000_000_300,
+            price=100.0,
+            quantity=1.0,
+            execution_id="exec-A",
+        ),
+        event_key="exec:exec-A",
+        order=_broker_order(
+            ref, order_id=bo, status="partially_filled", quantity=5.0,
+            filled_quantity=1.0, filled_avg_price=100.0,
+        ),
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    conflicts = [
+        u
+        for u in repo.active_uncertainties_for_admission(strategy_instance_id=WATCHDOG_SID)
+        if u["reason_code"] == "EXECUTION_COVERAGE_CONFLICT"
+    ]
+    assert len(conflicts) == 1
+    assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(5.0, abs=QTY_ATOL, rel=0)
+
+
+_FILL_INDEXES = frozenset({"ix_fills_order_ref", "ix_fills_superseded_execution_ref"})
+
+
+def _index_names(conn: sqlite3.Connection) -> set[str]:
+    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+
+
+def test_v15_migration_adds_the_fill_indexes(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    conn = repo._conn
+    try:
+        for index in sorted(_FILL_INDEXES):
+            conn.execute(f"DROP INDEX {index}")
+        conn.execute("UPDATE control_meta SET schema_version = 14 WHERE id = 1")
+        conn.commit()
+
+        schema.migrate_schema(conn, from_version=14)
+
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 15
+        assert _index_names(conn) >= _FILL_INDEXES
+    finally:
+        repo.close()
+
+
+def test_reconcilable_worklist_read_probes_fills_through_its_indexes(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """Perf guard: every historical ENTER stays nonterminal, so the worklist
+    evaluates the fill-completeness predicate per order. It must probe
+    ``fills`` through its v15 indexes, never scan it (quadratic in history)."""
+    repo, _clock = clocked_repo
+    conn = repo._conn
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        reads.reconcilable_effect_operations(conn)
+    finally:
+        conn.set_trace_callback(None)
+    (statement,) = [sql for sql in statements if "FROM effect_operations e" in sql]
+
+    plan = " | ".join(row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + statement))
+
+    assert "ix_fills_order_ref" in plan, plan
+    assert "ix_fills_superseded_execution_ref" in plan, plan
+    assert "SCAN f " not in f"{plan} " and "SCAN successor" not in plan, plan
+
+

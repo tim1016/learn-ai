@@ -323,7 +323,13 @@ def _finalize_claimed_exit(
     # (ADR 0059 D5.4) and falls through to EXIT_NOT_FLAT below.
     # The same holds when the recorded fills fall short of the broker's own
     # cumulative (#2305): a slice was lost, so the remaining attribution is
-    # not proof the reduction under-filled.
+    # not proof the reduction under-filled. The shortfall read subsumes the
+    # no-fill clause for every acknowledgement that reports its cumulative;
+    # the clause stays for acknowledgements written before #2305, whose
+    # ``facts_json`` is ``{}`` and so never reads short. The shortfall is
+    # bounded: the refresh above appends the broker's current cumulative as
+    # the latest acknowledgement, so after one successful exact lookup the
+    # order is short only while the broker itself reports unrecorded fills.
     if (
         not repo.fills_for_order(refreshed.order_ref)
         and (refreshed.broker_state or "").lower() not in UNFILLED_TERMINAL_STATES

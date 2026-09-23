@@ -797,47 +797,59 @@ def _effective_fill_totals_for_order(
     return float(row["qty"]), float(row["cost"])
 
 
-def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
-    """SQL predicate: the broker reported more filled quantity than is recorded.
+def _latest_reported_filled_quantity_sql(order_ref_sql: str) -> str:
+    """SQL scalar: the cumulative filled quantity the order's LATEST acknowledgement reported.
 
-    True when any ``ORDER_SUBMIT_ACKED`` for the order recorded a
-    ``reported_filled_quantity`` exceeding the order's effective fills -- the
-    broker's cumulative is monotone, so the largest report is the one that
-    matters and a smaller later report is stale, never a reversal. An
-    acknowledgement with no reported cumulative (every pre-#2305 row, and
-    every unfilled one) is skipped before the fill sum is read, so an order
-    that never reported a fill costs one index probe. Binds one parameter,
-    :data:`FILL_QTY_EPSILON`.
+    The one reading of ``ORDER_SUBMIT_ACKED.facts_json.reported_filled_quantity``
+    (#2305). It is the latest acknowledgement by sequence, not the largest:
+    a later exact REST lookup that reports less than an earlier websocket
+    frame is the broker's current word, and it must be able to close the
+    gap -- a maximum would keep the order short for ever. ``NULL`` when the
+    latest acknowledgement reported no fill (and for every pre-#2305 row).
     """
-    reported = "json_extract(t.facts_json, '$.reported_filled_quantity')"
     return (
-        "EXISTS (SELECT 1 FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
-        "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' AND " + reported + " IS NOT NULL "
-        "AND CAST(" + reported + " AS REAL) - (SELECT COALESCE(SUM(f.qty), 0) FROM fills f "
-        "WHERE f.order_ref = t.order_ref AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
+        "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
+        "FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
+        "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' ORDER BY t.sequence DESC LIMIT 1)"
     )
 
 
-def broker_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float:
-    """The largest cumulative ``filled_quantity`` the broker reported for an order (0 if none)."""
+def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
+    """SQL predicate: the latest broker-reported cumulative exceeds the effective fills.
+
+    ``NULL`` (never short) when the latest acknowledgement reported no fill.
+    ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON` last. The
+    fill sum is covered by ``ix_fills_order_ref`` and the effective-fill
+    predicate by ``ix_fills_superseded_execution_ref`` (schema v15).
+    """
+    return (
+        "(" + _latest_reported_filled_quantity_sql(order_ref_sql) + " - "
+        "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
+        "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
+    )
+
+
+def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float | None:
+    """The cumulative filled quantity the order's latest acknowledgement reported, if any."""
     row = conn.execute(
-        "SELECT MAX(CAST(json_extract(facts_json, '$.reported_filled_quantity') AS REAL)) AS reported "
-        "FROM custody_transitions WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED'",
-        (order_ref,),
+        "SELECT " + _latest_reported_filled_quantity_sql("?") + " AS reported", (order_ref,)
     ).fetchone()
-    return float(row["reported"]) if row["reported"] is not None else 0.0
+    return float(row["reported"]) if row["reported"] is not None else None
 
 
 def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
-    """Whether the order's effective fills are provably incomplete (#2305).
+    """Whether the order's effective fills fall short of the broker's latest cumulative (#2305).
 
     The one definition shared by the reconciliation worklist
     (:func:`reconcilable_effect_operations`) and the EXIT machine's
-    reducing-order refresh.
+    reducing-order refresh. Bounded by construction: one exact REST lookup
+    appends an acknowledgement carrying the broker's current cumulative and
+    folds fills up to it, so after any successful lookup the order is short
+    only if the broker itself still reports more than it has recorded.
     """
     row = conn.execute(
         "SELECT " + _fills_short_of_broker_cumulative_sql("?") + " AS short",
-        (order_ref, FILL_QTY_EPSILON),
+        (order_ref, order_ref, FILL_QTY_EPSILON),
     ).fetchone()
     return bool(row["short"])
 

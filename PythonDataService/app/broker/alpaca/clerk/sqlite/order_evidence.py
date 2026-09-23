@@ -332,19 +332,23 @@ def fold_order_acknowledgement(
     reported_filled_quantity = (
         order.filled_quantity if order.filled_quantity >= FILL_QTY_EPSILON else None
     )
-    # The broker's cumulative is recorded on the acknowledgement (#2305), so a
-    # snapshot reporting more filled quantity than any prior acknowledgement is
-    # new evidence even when its state and source time are unchanged.
-    reported_advances = (
+    # The broker's cumulative is recorded on the acknowledgement (#2305) and
+    # the shortfall read keys on the latest one, so a snapshot reporting a
+    # different cumulative -- more, or an exact REST lookup reporting less
+    # than an earlier frame -- is new evidence even when its state and source
+    # time are unchanged. Without the "less" direction a lower REST report
+    # could never close the gap.
+    latest_reported = repo.latest_reported_filled_quantity(order_ref)
+    reported_differs = (reported_filled_quantity is None) != (latest_reported is None) or (
         reported_filled_quantity is not None
-        and reported_filled_quantity - repo.broker_reported_filled_quantity(order_ref)
-        >= FILL_QTY_EPSILON
+        and latest_reported is not None
+        and abs(reported_filled_quantity - latest_reported) >= FILL_QTY_EPSILON
     )
     ack_changed = latest_ack is None or (
         latest_ack["broker_order_id"] != order.order_id
         or latest_ack["broker_state"] != order.status
         or latest_ack["source_event_at_ms"] != order.updated_at_ms
-        or reported_advances
+        or reported_differs
     )
 
     current_order = repo.order(order_ref)

@@ -526,10 +526,10 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.effective_exact_fill_totals_for_order(self._conn, order_ref)
 
-    def broker_reported_filled_quantity(self: ClerkSqliteRepository, order_ref: str) -> float:
-        """The largest cumulative filled quantity the broker reported for one order."""
+    def latest_reported_filled_quantity(self: ClerkSqliteRepository, order_ref: str) -> float | None:
+        """The cumulative filled quantity the order's latest acknowledgement reported."""
         with self._write_lock:
-            return reads.broker_reported_filled_quantity(self._conn, order_ref)
+            return reads.latest_reported_filled_quantity(self._conn, order_ref)
 
     def order_fills_short_of_broker_cumulative(self: ClerkSqliteRepository, order_ref: str) -> bool:
         """Whether the order's effective fills fall short of the broker's cumulative (#2305)."""

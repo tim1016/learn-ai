@@ -22,10 +22,12 @@ beyond outer transition columns, so those get typed dataclasses too.
 ``ORDER_SUBMIT_ACKED`` is the near-exception: every field its fold reads
 (``broker_order_id``, ``broker_state``, ``source_event_at_ms``) is already an
 outer ``custody_transitions`` column. Its facts carry only the broker's
-reported cumulative filled quantity (:class:`OrderSubmitAckedFacts`, #2305),
-which no fold reads — it is the durable proof a fill-completeness read compares
-recorded fills against — and which is omitted when absent, so an unfilled
-acknowledgement's ``facts_json`` stays ``{}``.
+reported cumulative filled quantity (:class:`OrderSubmitAckedFacts`, #2305).
+The ``ORDER_SUBMIT_ACKED`` fold does not project it; the fill-completeness
+read (``reads.order_fills_short_of_broker_cumulative``) and the
+acknowledgement's own change detection read it from the latest acknowledgement.
+It is omitted when absent, so an unfilled acknowledgement's ``facts_json``
+stays ``{}``.
 """
 
 from __future__ import annotations
