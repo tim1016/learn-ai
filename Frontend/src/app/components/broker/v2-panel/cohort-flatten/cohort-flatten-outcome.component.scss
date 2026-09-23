@@ -1,0 +1,45 @@
+.cohort-flatten__outcome {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+  background: var(--surface-100, rgb(0 0 0 / 4%));
+
+  &:focus-visible {
+    outline: 2px solid var(--focus-ring, currentColor);
+    outline-offset: 2px;
+  }
+
+  p {
+    margin: 0 0 0.35rem;
+  }
+
+  ol {
+    margin: 0.5rem 0 0;
+    padding-left: 1.25rem;
+    font-size: 0.85rem;
+  }
+
+  li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.6rem;
+    padding: 0.2rem 0;
+  }
+}
+
+.cohort-flatten__account-blocker {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 2px solid var(--verdict-blocked, currentColor);
+  border-radius: 6px;
+  font-size: 0.85rem;
+
+  h4 {
+    margin: 0 0 0.35rem;
+    font-size: 0.9rem;
+  }
+}
+
+.cohort-flatten__reason {
+  font-weight: 600;
+}

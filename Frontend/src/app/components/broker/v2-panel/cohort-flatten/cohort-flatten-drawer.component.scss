@@ -1,0 +1,38 @@
+.cohort-flatten__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+
+  h2 {
+    margin: 0.25rem 0;
+    font-size: 1.15rem;
+  }
+
+  p {
+    margin: 0;
+    max-width: 46ch;
+    font-size: 0.85rem;
+  }
+
+  button {
+    background: none;
+    border: 0;
+    cursor: pointer;
+    padding: 0.25rem;
+  }
+}
+
+.cohort-flatten__retry {
+  margin-bottom: 0.75rem;
+  cursor: pointer;
+}
+
+.cohort-flatten__commit {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--surface-border, rgb(0 0 0 / 12%));
+}
+
+.cohort-flatten__review {
+  cursor: pointer;
+}

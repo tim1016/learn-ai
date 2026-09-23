@@ -1,0 +1,39 @@
+<section class="cohort-flatten__group" [class.cohort-flatten__group--active]="active()">
+  <h3>
+    <span>{{ cohort().strategy_label }}</span>
+    <app-asset-identity [symbol]="cohort().symbol" size="sm" />
+    <span class="cohort-flatten__count">
+      {{ cohort().enabled_count }} of {{ cohort().legs.length }} can flatten
+    </span>
+  </h3>
+  @if (!active()) {
+    <button
+      type="button"
+      class="cohort-flatten__choose"
+      [disabled]="cohort().enabled_count === 0"
+      [attr.aria-label]="'Flatten this cohort: ' + cohort().strategy_label + ' ' + cohort().symbol"
+      (click)="chosen.emit()"
+    >
+      Flatten this cohort
+    </button>
+  }
+  <ul>
+    @for (leg of cohort().legs; track leg.strategy_instance_id) {
+      <li [class.cohort-flatten__leg--blocked]="!leg.enabled">
+        <label>
+          <input
+            type="checkbox"
+            [checked]="isSelected(leg)"
+            [disabled]="!leg.enabled || !active()"
+            (change)="toggled.emit(leg)"
+          />
+          <code>{{ leg.strategy_instance_id }}</code>
+        </label>
+        <span class="cohort-flatten__exposure">{{ exposureOf(leg.exposure) }}</span>
+        @if (leg.blocker_headline; as blocker) {
+          <span class="cohort-flatten__blocker">{{ blocker }}</span>
+        }
+      </li>
+    }
+  </ul>
+</section>
