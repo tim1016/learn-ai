@@ -602,6 +602,7 @@ class LaneRouter:
             expected_binding_generation=expected_binding_generation,
             expected_account_id=expected_account,
             readiness=operation.readiness,
+            routable_while_draining=operation.routable_while_draining,
         )
         _clerk, session, assignment = resolved
         if assignment is not None:  # execution operations only; CONFIGURATION_ACCESS resolves with no assignment

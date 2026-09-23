@@ -37,7 +37,19 @@ import type {
   PanelActionRequest,
   PanelActionResult,
   PanelProfile,
+  PanelQuiesceActionId,
 } from './broker-v2-panel.types';
+
+/** Keyed by the generated quiesce action union, so a set the backend widens
+ * or narrows fails to compile here instead of drifting (#2351). */
+const QUIESCE_ACTIONS: Readonly<Record<PanelQuiesceActionId, true>> = {
+  stop: true,
+  flatten_stop: true,
+};
+
+function isQuiesceAction(actionId: PanelActionRequest['action_id']): actionId is PanelQuiesceActionId {
+  return Object.hasOwn(QUIESCE_ACTIONS, actionId);
+}
 
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
@@ -264,14 +276,23 @@ export class BrokerV2PanelService {
     );
   }
 
+  /**
+   * Run one presented panel action. Stop and flatten-and-stop travel on their
+   * own catalog operation, which a draining lane still routes while it
+   * refuses every other action (#2351, ADR 0063 §2) — so the operator can
+   * make a draining lane quiet from this panel.
+   */
   runAction(
     target: ResourceTarget,
     sid: string,
     request: PanelActionRequest,
   ): Promise<PanelActionResult> {
+    const operation = isQuiesceAction(request.action_id)
+      ? 'bot_panel_quiesce_action'
+      : 'bot_panel_action';
     return firstValueFrom(
       this.http.post<PanelActionResult>(
-        operationUrl('bot_panel_action', { ...target, sid }),
+        operationUrl(operation, { ...target, sid }),
         this.commandBody(target, 'bot_action', request),
       ),
     );

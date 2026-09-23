@@ -27816,6 +27816,57 @@
         "title": "PanelProfile",
         "type": "object"
       },
+      "PanelQuiesceActionRequest": {
+        "additionalProperties": false,
+        "description": "Execute one presented action that only stops a bot or reduces exposure.\n\nThe same request as :class:`PanelActionRequest`, narrowed to the quiesce\nactions a draining lane still routes (#2351): the action set is closed at\nthe schema, so a resume or continue sent here refuses before it runs.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "stop",
+              "flatten_stop"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "concurrency_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Concurrency Token",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "revision",
+          "concurrency_token",
+          "idempotency_key"
+        ],
+        "title": "PanelQuiesceActionRequest",
+        "type": "object"
+      },
       "ParamPropertySchema": {
         "description": "One parameter's JSON-schema leaf metadata.",
         "properties": {
@@ -50586,6 +50637,113 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions/quiesce": {
+      "post": {
+        "description": "The panel's stop and flatten-and-stop, on an operation of their own.\n\nA draining lane routes this operation and refuses ``/actions`` (#2351,\nADR 0063 \u00a72): the request schema admits only the two actions that stop a\nbot or reduce its exposure, and the execution is the one every panel\naction shares.",
+        "operationId": "run_quiesce_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_quiesce_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PanelQuiesceActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionErrorResponse"
+                }
+              }
+            },
+            "description": "The action's revision/concurrency token is stale, or it is no longer available."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionErrorResponse"
+                }
+              }
+            },
+            "description": "The performer began but did not return a terminal command receipt."
+          }
+        },
+        "summary": "Execute one presented stop or flatten-and-stop action (\u00a711, #2351)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/authority-facts": {
       "get": {
         "operationId": "get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get",
@@ -54015,6 +54173,107 @@
           }
         },
         "summary": "Fleet Bot Panel Action",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions/quiesce": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions/quiesce (bot_action).",
+        "operationId": "fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Panel Quiesce Action",
         "tags": [
           "broker-clerks"
         ]

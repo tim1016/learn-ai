@@ -166,6 +166,14 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
 # ``panel_projection_service.select_primary_action_by_lens``.
 TRADER_LIFECYCLE_ACTION_IDS: Final[frozenset[str]] = frozenset({"resume", "continue", "stop"})
 
+# The presented actions that only stop a bot or reduce its exposure (#2351).
+# A draining lane routes them through their own operation
+# (``bot_panel_quiesce_action``) while refusing the rest of the action set —
+# ``resume`` and ``continue`` would start decisions again. ADR 0063 §2's
+# amendment names these two, beside the recovery surface's
+# ``cancel_verified_working_orders``, as how an operator makes a lane quiet.
+QuiesceActionId = Literal["stop", "flatten_stop"]
+
 
 # ── Server-authored copy (decision #7) ───────────────────────────────────────
 # One label + explanation per emitted code. The copy-coverage contract test

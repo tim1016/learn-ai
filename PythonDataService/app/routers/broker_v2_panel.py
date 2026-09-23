@@ -54,6 +54,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
     PanelProfile,
+    PanelQuiesceActionRequest,
 )
 from app.schemas.canary_admission import (
     CanaryActivationConfirmation,
@@ -586,6 +587,25 @@ _ACTION_ERROR_RESPONSES = {
     responses=_ACTION_ERROR_RESPONSES,
 )
 async def run_action_scoped(broker: str, account_id: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
+    return await _run_action(broker, account_id, sid, request)
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots/{sid}/actions/quiesce",
+    response_model=PanelActionResult,
+    summary="Execute one presented stop or flatten-and-stop action (§11, #2351)",
+    responses=_ACTION_ERROR_RESPONSES,
+)
+async def run_quiesce_action_scoped(
+    broker: str, account_id: str, sid: str, request: PanelQuiesceActionRequest
+) -> PanelActionResult:
+    """The panel's stop and flatten-and-stop, on an operation of their own.
+
+    A draining lane routes this operation and refuses ``/actions`` (#2351,
+    ADR 0063 §2): the request schema admits only the two actions that stop a
+    bot or reduce its exposure, and the execution is the one every panel
+    action shares.
+    """
     return await _run_action(broker, account_id, sid, request)
 
 

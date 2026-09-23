@@ -60,6 +60,12 @@ lifecycle answer, or the coordinator's typed refusal at registration,
 re-authors the volume's confirmation evidence into a drained tombstone
 (``_learn_drain``), and that file then refuses the FR-066 offline boot that
 would otherwise resurrect the binding during the next coordinator outage.
+
+So is its own retirement (#2351): ``force-retire`` releases the account on a
+deadline, whether or not the lane was quiet. A beat or registration refused
+with the typed ``FleetLaneRetired`` tombstones the evidence, stops every bot
+the lane still runs, and ends the beat — never read as a transient refusal
+that re-registers forever while the bots keep trading.
 """
 
 from __future__ import annotations
@@ -87,6 +93,7 @@ from app.broker.fleet.identity import new_agent_instance_id
 from app.broker.fleet.internal_http import FleetTransportRefused
 from app.broker.fleet.presence import (
     FleetLaneDraining,
+    FleetLaneRetired,
     FleetPresence,
     FleetPresenceError,
     LocalPresence,
@@ -173,6 +180,10 @@ LANE_QUIET_OBSERVATION_TIMEOUT_S = 5.0
 #: Produces a fresh answer, or ``None`` when the lane cannot observe its
 #: account this beat — no answer, never a "not quiet" one.
 LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
+
+#: Stops every bot this lane runs through the lane-wide stop (#2268's
+#: ``stop_all_bots_on_lane``) and says whether every one stopped (#2351).
+LaneBotsStop = Callable[[], Awaitable[bool]]
 
 
 def lane_quiet_probe(
@@ -275,6 +286,14 @@ class FleetLaneBoot:
     #: The outstanding conditions of the last answer the coordinator accepted,
     #: so the log records a change rather than repeating every beat.
     lane_quiet_outstanding: tuple[str, ...] | None = None
+    #: Whether this lane has learned its own clerk is retired (#2351): set
+    #: once, never cleared, by ``_learn_retirement``. A retired lane runs no
+    #: bot, re-registers nothing and ends its beat once its bots stopped.
+    retired: bool = False
+    #: How a retired lane stops its bots. Installed by the composition root
+    #: beside ``lane_quiet_probe``; ``None`` on a lane with no bot runner,
+    #: which has nothing to stop.
+    stop_bots: LaneBotsStop | None = field(default=None, repr=False)
     heartbeat: asyncio.Task | None = field(default=None, repr=False)
 
     @property
@@ -424,6 +443,18 @@ async def open_fleet_lane(
         # Kept on the boot so a re-registration presents the same reference:
         # it is the lane's for its whole lifetime, not this one call's.
         boot.endpoint_ref = settings.AGENT_ENDPOINT_REF
+    except FleetLaneRetired as exc:
+        # A retired lane booting is the same lesson one step later (#2351):
+        # tombstone the evidence so no offline boot can resurrect it, and
+        # refuse — nothing has started yet, so there is no bot to stop.
+        _learn_retirement(boot)
+        await close_fleet_lane(boot)
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane's registration because "
+            f"its clerk is retired: {exc.message}",
+            next_step="A retired lane never re-enrols; decommission this volume "
+            "or provision a new clerk.",
+        ) from exc
     except FleetLaneDraining as exc:
         # The lesson, not a transport failure (#2155): mark the evidence on
         # this volume so no later offline boot can present the drained
@@ -732,6 +763,67 @@ def _learn_drain(boot: FleetLaneBoot) -> None:
         )
 
 
+def _learn_retirement(boot: FleetLaneBoot) -> None:
+    """Record, exactly once, that this lane's own clerk is retired (#2351).
+
+    Retirement is terminal and learned only through the typed
+    ``FleetLaneRetired`` refusal, never inferred from an unknown clerk or a
+    transient error. The durable act is the same tombstone a drain writes, so
+    no offline boot can bring the binding back; the in-process acts are the
+    start gate's latch (``boot.draining`` — a retired lane starts nothing
+    either) and ``boot.retired``, which ends re-registration and has the beat
+    stop every bot (``_stop_bots_after_retirement``).
+    """
+    if boot.retired:
+        return
+    marked = mark_confirmation_evidence_draining(boot.volume_root)
+    boot.draining = True
+    boot.retired = True
+    logger.error(
+        "This lane's clerk is retired; it stops its bots and its heartbeat.",
+        extra={
+            "clerk_id": boot.clerk_id,
+            "action": "fleet_lane_retirement_learned",
+            "evidence_marked": marked,
+        },
+    )
+
+
+async def _stop_bots_after_retirement(boot: FleetLaneBoot) -> bool:
+    """Stop every bot a retired lane still runs; whether the lane is done.
+
+    The lane-wide stop is the operator's own Stop for each bot, so each stays
+    stopped wherever the volume next boots, and the reconciliation sweep then
+    cancels any ENTER still working (#2370). An incomplete stop is logged and
+    retried on the next beat; only a complete one ends the beat.
+    """
+    if boot.stop_bots is None:
+        logger.warning(
+            "This retired lane runs no bot runner; there is nothing to stop.",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_no_bot_runner"},
+        )
+        return True
+    try:
+        all_stopped = await boot.stop_bots()
+    except Exception:
+        logger.exception(
+            "Stopping this retired lane's bots failed; the next beat retries.",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_stop_failed"},
+        )
+        return False
+    if not all_stopped:
+        logger.error(
+            "At least one bot on this retired lane did not stop; the next beat retries.",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_stop_incomplete"},
+        )
+        return False
+    logger.warning(
+        "Every bot on this retired lane is stopped; its heartbeat ends.",
+        extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_bots_stopped"},
+    )
+    return True
+
+
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     """Observe on a cadence; a refused beat repairs the lane.
 
@@ -767,6 +859,12 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
         try:
             while True:
                 await asyncio.sleep(interval_s)
+                if boot.retired:
+                    # Nothing to observe or repair for a retired lane: stop
+                    # its bots, and end the beat once they are all stopped.
+                    if await _stop_bots_after_retirement(boot):
+                        return
+                    continue
                 reported = boot.reported_facts
                 summary = reported.get("reported_summary")
                 if boot.session is None:
@@ -788,6 +886,10 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                         reported_state=reported.get("reported_state"),
                         reported_summary=live_summary,
                     )
+                except FleetLaneRetired:
+                    # Terminal news, not a transient refusal (#2351): no
+                    # re-registration; the next pass stops the bots.
+                    _learn_retirement(boot)
                 except FleetLaneDraining:
                     # The typed refusal is news about this lane, not a broken
                     # beat: learn it and keep beating — no repair is possible
@@ -850,7 +952,12 @@ async def _confirm_lane_quiet_if_draining(boot: FleetLaneBoot) -> None:
     are both logged and retried on the next beat.
     """
     session = boot.session
-    if not boot.draining or boot.lane_quiet_probe is None or session is None:
+    if (
+        not boot.draining
+        or boot.retired
+        or boot.lane_quiet_probe is None
+        or session is None
+    ):
         return
     try:
         answer = await asyncio.wait_for(
@@ -1123,6 +1230,11 @@ async def _repair_lane_after_refused_beat(boot: FleetLaneBoot) -> None:
             adapter_version=_ADAPTER.adapter_version,
             fleet_protocol_version=FLEET_PROTOCOL_VERSION,
         )
+    except FleetLaneRetired:
+        # The refused beat's cause was retirement (#2351): the beat stops
+        # the bots and ends instead of re-registering on every pass.
+        _learn_retirement(boot)
+        return
     except FleetLaneDraining:
         # Not repairable by re-registration: the refusal is the drain lesson
         # itself. Mark the evidence, leave the beat to keep observing what
@@ -1259,6 +1371,7 @@ __all__ = [
     "ConfirmedGrant",
     "FleetBootRefused",
     "FleetLaneBoot",
+    "LaneBotsStop",
     "LaneQuietAnswer",
     "LaneQuietProbe",
     "binding_is_granted",

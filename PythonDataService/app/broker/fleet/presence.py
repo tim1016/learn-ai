@@ -77,6 +77,21 @@ class FleetLaneDraining(FleetControlError):
     status_code = 409
 
 
+class FleetLaneRetired(FleetControlError):
+    """The coordinator refused this call because the lane's own clerk is retired.
+
+    Issue #2351: force-retire releases the account while a lane that could
+    not be made quiet may still be running bots. The lane must learn that
+    from its next beat — stop its bots, stop re-registering — so the refusal
+    is typed on both transports, like ``FleetLaneDraining`` and for the same
+    reason kept out of ``FleetPresenceError``: FR-066's offline fallback
+    catches that family, and a retired lane must not boot its binding back.
+    """
+
+    reason = "fleet_lane_retired"
+    status_code = 404
+
+
 def _superseded_beat(clerk_id: str, agent_instance_id: str) -> FleetPresenceError:
     """A beat the coordinator accepted but that touched no session (#2259).
 
@@ -219,7 +234,7 @@ class LocalPresence:
         fleet_protocol_version: int,
     ) -> SessionInfo:
         """Register through the service; the epoch is theirs to assign."""
-        from app.broker.fleet.errors import ClerkLaneDraining
+        from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired
 
         try:
             session = self._service.register_agent_session(
@@ -236,6 +251,8 @@ class LocalPresence:
             # reason: one type across both transports, neither of them the
             # unavailability family FR-066's offline fallback catches.
             raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
+        except ClerkLaneRetired as exc:
+            raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
         return SessionInfo(
             agent_instance_id=session.agent_instance_id,
             routing_epoch=session.routing_epoch,
@@ -270,7 +287,7 @@ class LocalPresence:
         lane-learnable type on both transports, so ``confirm_binding`` can
         mark the volume's evidence wherever the drain is first heard.
         """
-        from app.broker.fleet.errors import ClerkLaneDraining
+        from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired
 
         try:
             return self._service.confirm_assignment(
@@ -285,6 +302,8 @@ class LocalPresence:
             )
         except ClerkLaneDraining as exc:
             raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
+        except ClerkLaneRetired as exc:
+            raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
 
     async def observe(
         self,
@@ -296,15 +315,20 @@ class LocalPresence:
         reported_state: str | None = None,
         reported_summary: dict[str, object] | None = None,
     ) -> str | None:
-        """Observe through the service."""
-        observation = self._service.observe_session(
-            clerk_id=clerk_id,
-            agent_instance_id=agent_instance_id,
-            reported_binding_generation=reported_binding_generation,
-            reported_account_id=reported_account_id,
-            reported_state=reported_state,
-            reported_summary=reported_summary,
-        )
+        """Observe through the service, translating the retirement lesson."""
+        from app.broker.fleet.errors import ClerkLaneRetired
+
+        try:
+            observation = self._service.observe_session(
+                clerk_id=clerk_id,
+                agent_instance_id=agent_instance_id,
+                reported_binding_generation=reported_binding_generation,
+                reported_account_id=reported_account_id,
+                reported_state=reported_state,
+                reported_summary=reported_summary,
+            )
+        except ClerkLaneRetired as exc:
+            raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
         if not observation.touched:
             raise _superseded_beat(clerk_id, agent_instance_id)
         return observation.lifecycle_state.value
@@ -387,6 +411,15 @@ class RemotePresence:
                     detail or f"The fleet coordinator refused {path}: the lane is drained.",
                     next_step="Finish the drain ceremony on the coordinator; "
                     "this lane marks its own evidence drained and stays down.",
+                )
+            if _error_reason(response) == "clerk_lane_retired":
+                # Retirement is news about this lane, not an outage (#2351):
+                # the lane stops its bots and its beat rather than falling
+                # back to FR-066's offline boot or re-registering forever.
+                raise FleetLaneRetired(
+                    detail or f"The fleet coordinator refused {path}: the lane is retired.",
+                    next_step="Nothing re-enrols a retired lane; this lane "
+                    "stops its bots and decommissions.",
                 )
             raise FleetPresenceError(
                 f"The fleet coordinator refused {path}: {detail or response.status_code}",
@@ -694,6 +727,7 @@ def _optional_int(body: dict[str, object], key: str) -> int | None:
 
 __all__ = [
     "FleetLaneDraining",
+    "FleetLaneRetired",
     "FleetPresence",
     "FleetPresenceError",
     "LocalPresence",

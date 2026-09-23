@@ -25,6 +25,7 @@ from app.broker.v2panel.vocabulary import (
     DutyOutcomeKind,
     HoldReason,
     Phase,
+    QuiesceActionId,
     ReconciliationVerdict,
     StationId,
     StationState,
@@ -644,6 +645,17 @@ class PanelActionRequest(BaseModel):
     concurrency_token: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, max_length=512)
+
+
+class PanelQuiesceActionRequest(PanelActionRequest):
+    """Execute one presented action that only stops a bot or reduces exposure.
+
+    The same request as :class:`PanelActionRequest`, narrowed to the quiesce
+    actions a draining lane still routes (#2351): the action set is closed at
+    the schema, so a resume or continue sent here refuses before it runs.
+    """
+
+    action_id: QuiesceActionId  # type: ignore[assignment]
 
 
 class PanelActionResult(BaseModel):

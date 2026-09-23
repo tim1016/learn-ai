@@ -99,6 +99,22 @@ class OperationStream(StrEnum):
     SSE = "sse"
 
 
+class OperationDrainAdmission(StrEnum):
+    """Whether a draining lane still routes this mutation (#2351).
+
+    A draining lane accepts no new work, but ADR 0063 §2's amendment has the
+    operator make it quiet with panel actions — stop, cancel the verified
+    working orders, flatten and stop — and the lane must stay readable while
+    they do. ``quiesce`` marks a mutation that can only stop a bot or reduce
+    exposure, never open it; everything else refuses while draining. Reads
+    need no declaration: ``read`` idempotency already says they change
+    nothing (``ProviderOperation.routable_while_draining``).
+    """
+
+    REFUSED = "refused"
+    QUIESCE = "quiesce"
+
+
 _OPERATION_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 #: Path parameters may carry Starlette-style converters (``{order_ref:path}``);
 #: the converter is routing syntax, not part of the parameter identity.
@@ -144,10 +160,24 @@ class ProviderOperation:
     #: writing, only operation that widens it) -- it never special-cases an
     #: operation id.
     read_timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S
+    drain_admission: OperationDrainAdmission = OperationDrainAdmission.REFUSED
 
     def route_key(self) -> tuple[str, str]:
         """The (method, public path template) pair forwarding matches on."""
         return (self.method, self.path_template)
+
+    @property
+    def routable_while_draining(self) -> bool:
+        """The one allow-list a draining lane routes by (#2351, ADR 0063 §2).
+
+        A read, or a mutation declared ``quiesce``. Bot starts, arming,
+        deploys, manual orders and configuration writes are none of these,
+        so a drained lane keeps refusing everything that could open exposure.
+        """
+        return (
+            self.idempotency == OperationIdempotency.READ
+            or self.drain_admission == OperationDrainAdmission.QUIESCE
+        )
 
 
 def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None:
@@ -211,6 +241,15 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
         if operation.idempotency == OperationIdempotency.READ and operation.method in _MUTATING_METHODS:
             raise ValueError(
                 f"mutating operation {operation.operation_id!r} cannot declare read idempotency"
+            )
+        if (
+            operation.drain_admission == OperationDrainAdmission.QUIESCE
+            and operation.idempotency == OperationIdempotency.READ
+        ):
+            raise ValueError(
+                f"read operation {operation.operation_id!r} cannot declare quiesce drain "
+                "admission: a read already routes while draining, and quiesce names "
+                "only mutations that stop a bot or reduce exposure"
             )
         if operation.stream == OperationStream.SSE and operation.method != "GET":
             raise ValueError(f"streaming operation {operation.operation_id!r} must be a GET")
@@ -372,6 +411,7 @@ __all__ = [
     "PRODUCTION_PROVIDER_ADAPTERS",
     "BrokerProviderAdapter",
     "Capability",
+    "OperationDrainAdmission",
     "OperationIdempotency",
     "OperationReadiness",
     "OperationStream",

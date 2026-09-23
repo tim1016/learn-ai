@@ -77,6 +77,22 @@ class ClerkNotFound(FleetControlError):
     status_code: ClassVar[int] = 404
 
 
+class ClerkLaneRetired(ClerkNotFound):
+    """A lane's own session call names a retired clerk (issue #2351).
+
+    Registration, confirmation and the heartbeat refuse a retired clerk with
+    this typed refusal — a ``ClerkNotFound`` by family and status, so every
+    caller that treats retirement as absence still does — so the lane can
+    tell *its own retirement* from an unknown identity and from any transient
+    refusal. A force-retired lane that still runs bots must stop them; one
+    that read this as a generic refusal would keep trading an account the
+    registry has released.
+    """
+
+    reason: ClassVar[str] = "clerk_lane_retired"
+    status_code: ClassVar[int] = 404
+
+
 class ClerkBrokerMismatch(FleetControlError):
     """The path broker differs from the clerk's immutable broker (FR-071)."""
 
@@ -370,6 +386,7 @@ __all__ = [
     "ClerkEndpointNotApproved",
     "ClerkIdentityMismatch",
     "ClerkLaneQuietUnproven",
+    "ClerkLaneRetired",
     "ClerkNotFound",
     "ClerkReassignmentBlocked",
     "ClerkRoutingAttemptConflict",
