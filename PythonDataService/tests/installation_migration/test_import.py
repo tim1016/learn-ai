@@ -347,24 +347,47 @@ def test_import_refuses_a_member_the_manifest_does_not_declare(
     assert podman.volumes == {}
 
 
-def test_a_faithful_round_trip_resolves_a_lane_mounted_where_its_registry_says(
+def test_a_faithful_round_trip_needs_no_reapproval_even_where_the_registry_never_matched(
     tmp_path: Path, exported
 ) -> None:
-    """The Live scratch clerk is recorded the way the dev topology mounts it
-    (container path, the overlay's namespace), so it resolves on the new host
-    and a re-approval report is a finding, not the fake's default. The Paper
-    clerk cannot share that (namespace, root) — the registry's uniqueness
-    index — so it alone is reported, never silently re-approved."""
+    """#2269: the Paper scratch clerk's ``volume_root`` is a tmp path no
+    service mounts — like the owner's ``/paper-volume`` — and the Live one's
+    is its real mount path. Moved to an identical host, neither changed, so
+    neither is reported."""
     source, bundle = exported
     repo_root, podman = build_empty_destination(tmp_path)
 
     steps = _import(repo_root, podman, bundle)
 
     resolution = next(step for step in steps if step["step"] == "host-resolution")
+    assert resolution["reapproval_required"] == []
+    assert {entry["clerk_id"] for entry in resolution["clerks"]} == {
+        source.live_clerk_id,
+        source.paper_clerk_id,
+    }
+    assert steps[-1]["reapproval_required"] == []
+
+
+def test_a_lane_mounted_differently_on_the_new_host_is_reported_for_reapproval(
+    tmp_path: Path, exported
+) -> None:
+    source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    snapshot_path = repo_root / "deploy" / "fleet" / "topology.snapshot.json"
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    paper = snapshot["service_detail"]["alpaca-paper-clerk"]
+    paper["volumes"] = [
+        "alpaca-paper-clerk-data->/srv/paper:volume" if "paper-clerk-data" in mount else mount
+        for mount in paper["volumes"]
+    ]
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    steps = _import(repo_root, podman, bundle)
+
+    resolution = next(step for step in steps if step["step"] == "host-resolution")
     assert resolution["reapproval_required"] == [source.paper_clerk_id]
-    live = next(entry for entry in resolution["clerks"] if entry["clerk_id"] == source.live_clerk_id)
-    assert live["resolves"] is True
     assert steps[-1]["reapproval_required"] == [source.paper_clerk_id]
+    assert "approve-endpoint" in steps[-1]["next"]
 
 
 def test_volume_exports_have_no_dot_root_entry_like_real_podman(tmp_path: Path) -> None:

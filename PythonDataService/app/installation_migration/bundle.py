@@ -13,7 +13,8 @@ corruption evidence for the member as shipped) and content digest (the
 canonical tree digest the destination is re-verified against after restore),
 plus the identity facts import checks before anything is restored: registry
 identity, clerks, assignment and authority generations, volume markers, and
-the source git commit. Every instant is ``int64 ms UTC``.
+the source git commit — and the old host's topology facts the re-approval
+check compares with the new host's. Every instant is ``int64 ms UTC``.
 
 The manifest is untrusted input on import. It is parsed **once** into the
 strict, closed :class:`Manifest` model — every field present and of its exact
@@ -49,6 +50,7 @@ from app.installation_migration.facts import (
     RegistryFacts,
     StrictRecord,
 )
+from app.installation_migration.topology import HostTopologyFacts
 
 MANIFEST_MEMBER = "manifest.json"
 #: 2 (#2269): the manifest names the secret-shaped files export skipped and
@@ -120,6 +122,7 @@ class Manifest(StrictRecord):
     lanes: tuple[LaneEntry, ...]
     postgres: PostgresFacts
     skipped_secret_files: tuple[SkippedSecretFile, ...]
+    source_host: HostTopologyFacts
 
     @model_validator(mode="after")
     def _layout_is_this_builds(self) -> Manifest:

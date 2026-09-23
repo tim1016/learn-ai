@@ -23,9 +23,11 @@ until every check before step 6 has passed:
    read back from the staged copy — registry identity, clerks, assignment
    and authority generations, every lane marker proven through the
    canonical volume gate, the Postgres version — must equal the manifest's.
-   Registry ``volume_root``s and approved endpoints are checked against this
-   host's topology and any re-approval they need is **reported, never
-   performed**.
+   The old host's topology facts (from the manifest) are compared with this
+   host's: a clerk whose namespace or volume mounts changed needs
+   re-approval, which is **reported, never performed**. A registry value
+   that already disagreed with the old host's topology is carried over as it
+   was (#2269).
 5. **Existing data moved aside**, never deleted: each existing volume is
    exported to a dated aside directory and that copy read back whole before
    the volume is removed; each existing folder is moved there whole.
@@ -70,9 +72,10 @@ from app.installation_migration.podman import PodmanPort, VolumeInfo
 from app.installation_migration.topology import (
     containers_writing_folders,
     deployment_namespace,
-    host_resolution_report,
+    host_topology_facts,
     load_topology,
     postgres_image_major,
+    reapproval_report,
     required_env_files,
 )
 from app.installation_migration.tree import (
@@ -202,8 +205,12 @@ def run_import(
                     "clerks": [clerk.clerk_id for clerk in registry.clerks],
                 }
             )
-            resolution = host_resolution_report(
-                registry, topology, namespace=deployment_namespace(request.repo_root)
+            resolution = reapproval_report(
+                registry,
+                manifest.source_host,
+                host_topology_facts(
+                    registry, topology, namespace=deployment_namespace(request.repo_root)
+                ),
             )
             emit(
                 {

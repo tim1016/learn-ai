@@ -266,8 +266,9 @@ def _as_mounted_in_the_dev_topology(control_dir: Path) -> None:
     Only the Live lane can be re-homed: the dev topology mounts *both* lane
     volumes at ``/app/artifacts/alpaca_clerk`` under one namespace, and the
     registry's unique ``(deployment_namespace, volume_root)`` index admits
-    one active clerk there. The Paper lane keeps its tmp root, so a round
-    trip reports exactly it for re-approval.
+    one active clerk there. The Paper lane keeps its tmp root — a root no
+    service mounts, exactly like the owner's real ``/paper-volume`` — which
+    the re-approval check must carry over rather than report (#2269).
     """
     roots = _dev_topology_volume_roots()
     connection = sqlite3.connect(registry_database_path(control_dir))

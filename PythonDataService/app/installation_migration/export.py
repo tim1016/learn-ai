@@ -72,7 +72,12 @@ from app.installation_migration.facts import (
 from app.installation_migration.git import GitPort
 from app.installation_migration.lanes import FleetLanes, Lane
 from app.installation_migration.podman import PodmanPort, VolumeInfo
-from app.installation_migration.topology import containers_writing_folders, load_topology
+from app.installation_migration.topology import (
+    containers_writing_folders,
+    deployment_namespace,
+    host_topology_facts,
+    load_topology,
+)
 from app.installation_migration.tree import (
     build_folder_tar,
     require_bundleable,
@@ -167,6 +172,10 @@ def _export_bundle(
     volume_infos, folder_paths, source_tree_dirty, skipped = _preflight(
         request, bundle, podman, git
     )
+    # Read before any bot is stopped, so a checkout that cannot describe its
+    # own host refuses while nothing has changed.
+    topology = load_topology(request.repo_root)
+    namespace = deployment_namespace(request.repo_root)
     skipped_secrets = tuple(
         SkippedSecretFile(path=path, note=skipped_secret_note(PurePosixPath(path).name))
         for path in skipped
@@ -199,7 +208,6 @@ def _export_bundle(
     )
     emit({"step": "accounts-quiet", "accounts": [entry.answer.account_id for entry in quiet]})
 
-    topology = load_topology(request.repo_root)
     stopped = _quiesce_containers(podman, topology, emit)
     emit({"step": "containers-stopped", "containers": stopped})
 
@@ -246,6 +254,7 @@ def _export_bundle(
             ),
             postgres=postgres,
             skipped_secret_files=skipped_secrets,
+            source_host=host_topology_facts(identity.registry, topology, namespace=namespace),
         )
         members = [volume.member for volume in BUNDLED_VOLUMES] + [
             folder.member for folder in BUNDLED_FOLDERS
