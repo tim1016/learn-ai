@@ -127,6 +127,8 @@ from app.services.bot_run_terminal import (
     prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
+    LANE_GO_LIVE_HOLD_UNREADABLE,
+    LANE_GO_LIVE_PENDING,
     ActivationFailedCleanupProvenError,
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
@@ -161,6 +163,7 @@ from app.services.bot_start_admission import (
 )
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
+from app.services.go_live_hold import GoLiveHoldState
 from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.market_liveness import market_liveness_fact
@@ -345,6 +348,7 @@ class BotTaskRegistry:
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
         validation_fact: ValidationFactResolver | None = None,
         drained_lane_gate: Callable[[], bool] | None = None,
+        go_live_hold: Callable[[], GoLiveHoldState] | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -472,6 +476,45 @@ class BotTaskRegistry:
         # on the next operator action without a process restart. ``None`` is
         # a non-fleet deployment (legacy posture) — nothing to refuse.
         self._drained_lane_gate = drained_lane_gate
+        # #2269: a lane restored by installation migration starts no bot
+        # until go-live releases its hold. Read per start/resume, like the
+        # drain, so the release lands on the next operator action; ``None``
+        # (tests, non-lane deployments) holds nothing.
+        self._go_live_hold = go_live_hold
+
+    def _refuse_if_go_live_pending(self, strategy_instance_id: str) -> None:
+        """Fail a new-run request closed while the lane awaits go-live."""
+        if self._go_live_hold is None:
+            return
+        hold = self._go_live_hold()
+        if not hold.held:
+            return
+        reason_code = LANE_GO_LIVE_PENDING if hold.problem is None else LANE_GO_LIVE_HOLD_UNREADABLE
+        logger.warning(
+            "Bot start refused: lane awaits go-live",
+            extra={
+                "action": "bot_start_refused_go_live_pending",
+                "reason_code": reason_code,
+                "strategy_instance_id": strategy_instance_id,
+                "problem": hold.problem,
+            },
+        )
+        if hold.problem is not None:
+            raise RunAdmissionRefusedError(
+                "This lane cannot read its go-live hold, so it starts no bots.",
+                detail=f"{hold.problem}. Repair the lane volume, then run go-live "
+                "(migrate_installation go-live) to release the hold.",
+                reason_code=reason_code,
+            )
+        raise RunAdmissionRefusedError(
+            "This lane was restored by an installation migration and awaits go-live; "
+            "it starts no bots until then.",
+            detail="Run `python -m scripts.migrate_installation go-live` on this machine: "
+            "it proves IB Gateway delivers bars to every lane, takes your confirmation "
+            "that the old machine is off, then releases every lane at once. Bots stay "
+            "stopped until you start them.",
+            reason_code=reason_code,
+        )
 
     def _refuse_if_lane_drained(self) -> None:
         """Fail a new-run request closed when the lane learned its drain."""
@@ -537,6 +580,7 @@ class BotTaskRegistry:
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
         self._refuse_if_lane_drained()
+        self._refuse_if_go_live_pending(strategy_instance_id)
         require_start_configuration(
             carryover_policy,
             carryover_allowed=self._carryover_allowed,
@@ -657,6 +701,7 @@ class BotTaskRegistry:
     ) -> AdmittedBotResume:
         """Create a new run using the same policy exposed by preview."""
         self._refuse_if_lane_drained()
+        self._refuse_if_go_live_pending(strategy_instance_id)
         async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
             try:

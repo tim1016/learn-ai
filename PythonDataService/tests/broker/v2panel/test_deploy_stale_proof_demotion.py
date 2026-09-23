@@ -357,7 +357,16 @@ async def test_admission_preview_refuses_non_selectable_strategy_with_the_same_t
     detail = response.json()["detail"]
     # Same typed-conflict body shape as the actual deploy refusal above —
     # admission preview and deploy share one preflight and must not diverge.
-    assert set(detail) == {"outcome", "receipt_id", "recorded_at_ms", "message", "why", "next_action", "admission"}
+    assert set(detail) == {
+        "outcome",
+        "receipt_id",
+        "recorded_at_ms",
+        "message",
+        "why",
+        "next_action",
+        "admission",
+        "reason_code",
+    }
     assert detail["outcome"] == "conflict"
     assert detail["receipt_id"] is None
     assert detail["recorded_at_ms"] > 0

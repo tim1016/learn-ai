@@ -629,7 +629,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
                 reason_code=(
                     exc.admission_decision.reason_code
                     if exc.admission_decision is not None
-                    else None
+                    else exc.reason_code
                 ),
             ) from exc
         return (

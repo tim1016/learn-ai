@@ -145,6 +145,11 @@ def _raise_alpaca_deploy_error(error: panel_errors.PanelDataError) -> NoReturn:
                 if isinstance(error, panel_errors.PanelRunnerError) and error.admission_decision is not None
                 else None
             ),
+            # A lane-level start gate (the go-live hold, #2269) has no
+            # admission decision to carry its code in.
+            "reason_code": (
+                error.reason_code if isinstance(error, panel_errors.PanelRunnerError) else None
+            ),
         },
     ) from error
 

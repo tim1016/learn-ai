@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from app.installation_migration.bundle import MANIFEST_MEMBER
+from app.installation_migration.bundle import MANIFEST_MEMBER, read_manifest
 from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.export import ExportRequest, run_export
@@ -37,6 +37,7 @@ from app.installation_migration.tree import (
     tree_digest_from_dir,
     tree_digest_from_tar,
 )
+from app.services.go_live_hold import GO_LIVE_HOLD_MARKER, read_go_live_hold
 from tests.installation_migration._support import (
     CONTROL_VOLUME,
     LIVE_VOLUME,
@@ -160,7 +161,14 @@ def test_round_trip_restores_registry_clerk_volumes_and_lake_identically(
             volume, source.podman.volume_dir(volume)
         )
     for volume in BUNDLED_VOLUMES:
-        assert tree_digest_from_dir(podman.volume_dir(volume.name)) == tree_digest_from_dir(
+        restored = podman.volume_dir(volume.name)
+        # #2269: each clerk volume also carries its go-live hold; the rest of
+        # it is the source byte for byte.
+        hold = restored / GO_LIVE_HOLD_MARKER
+        assert hold.is_file() is (volume.role == "clerk")
+        if hold.is_file():
+            hold.unlink()
+        assert tree_digest_from_dir(restored) == tree_digest_from_dir(
             source.podman.volume_dir(volume.name)
         )
         assert podman.volumes[volume.name].labels == source.podman.volumes[volume.name].labels
@@ -388,6 +396,87 @@ def test_a_lane_mounted_differently_on_the_new_host_is_reported_for_reapproval(
     assert resolution["reapproval_required"] == [source.paper_clerk_id]
     assert steps[-1]["reapproval_required"] == [source.paper_clerk_id]
     assert "approve-endpoint" in steps[-1]["next"]
+
+
+def test_import_holds_every_clerk_volume_for_go_live(tmp_path: Path, exported) -> None:
+    """#2269: every restored lane starts no bot until go-live releases it."""
+    _source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    manifest = read_manifest(bundle)
+
+    steps = _import(repo_root, podman, bundle)
+
+    for volume in (LIVE_VOLUME, PAPER_VOLUME):
+        hold = read_go_live_hold(podman.volume_dir(volume))
+        assert hold.held is True
+        assert hold.problem is None
+        assert hold.marker is not None
+        assert hold.marker.volume == volume
+        assert hold.marker.source_commit == manifest.source_commit
+        assert hold.marker.registry_id == manifest.registry.registry_id
+    for volume in (CONTROL_VOLUME, PG_VOLUME):
+        assert not (podman.volume_dir(volume) / GO_LIVE_HOLD_MARKER).exists()
+    restored = next(step for step in steps if step["step"] == "restored")
+    assert restored["go_live_holds"] == sorted([LIVE_VOLUME, PAPER_VOLUME])
+    receipt_path = Path(steps[-1]["receipt"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["go_live_holds"] == sorted([LIVE_VOLUME, PAPER_VOLUME])
+    assert "go-live" in steps[-1]["next"]
+
+
+def test_a_hold_that_did_not_land_fails_verification_loudly(
+    tmp_path: Path, exported, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The marker is read back from the restored volume, not assumed: a
+    podman that drops it leaves the import ``restore_incomplete``."""
+    _source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    real_import = podman.import_volume
+
+    def dropping_holds(name: str, source: Path) -> None:
+        if name == PAPER_VOLUME and source.parent.name == "go-live-holds":
+            return
+        real_import(name, source)
+
+    monkeypatch.setattr(podman, "import_volume", dropping_holds)
+
+    with pytest.raises(MigrationRefused) as refused:
+        _import(repo_root, podman, bundle)
+
+    assert refused.value.reason == "restore_incomplete"
+    cause = refused.value.details["cause"]
+    assert cause["reason"] == "destination_verification_failed"
+    assert f"{PAPER_VOLUME} (go-live hold marker)" in cause["details"]["mismatched"]
+
+
+def test_a_bundle_from_a_host_never_released_imports_with_a_fresh_hold(
+    tmp_path: Path, exported
+) -> None:
+    """Going back before go-live: the reverse export carries the old marker,
+    and import replaces it with its own."""
+    source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    _import(repo_root, podman, bundle)
+    first = read_go_live_hold(podman.volume_dir(LIVE_VOLUME)).marker
+    assert first is not None
+    # Export again from the (never released) destination.
+    back = tmp_path / "back.tar"
+    run_export(
+        ExportRequest(
+            repo_root=repo_root, bundle_path=back, operator="inkant", change_ref="go-back"
+        ),
+        lanes=source.lanes,
+        podman=podman,
+        git=FakeGit(),
+        emit=lambda _step: None,
+    )
+    repo_again, podman_again = build_empty_destination(tmp_path, name="again")
+
+    _import(repo_again, podman_again, back)
+
+    again = read_go_live_hold(podman_again.volume_dir(LIVE_VOLUME))
+    assert again.held is True
+    assert again.marker is not None
 
 
 def test_volume_exports_have_no_dot_root_entry_like_real_podman(tmp_path: Path) -> None:

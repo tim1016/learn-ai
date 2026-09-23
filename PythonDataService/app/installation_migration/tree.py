@@ -203,17 +203,19 @@ def _member_path(name: str) -> str:
     return name.strip("/")
 
 
-def tree_digest_from_tar(archive: Path) -> str:
+def tree_digest_from_tar(archive: Path, *, exclude: frozenset[str] = frozenset()) -> str:
     """The content digest of a tar, comparable to :func:`tree_digest_from_dir`.
 
     A hardlink member digests as the regular file it is once extracted.
+    ``exclude`` names root-relative paths left out of the digest — import's
+    go-live hold marker, which it adds to a lane volume after the restore.
     """
     entries: list[tuple[str, str, str]] = []
     seen: set[str] = set()
     with _reading(archive), tarfile.open(archive, "r:*") as bundle:
         for member in bundle:
             path = _member_path(member.name)
-            if path in ("", "."):
+            if path in ("", ".") or path in exclude:
                 continue
             if path in seen:
                 raise MigrationRefused(
