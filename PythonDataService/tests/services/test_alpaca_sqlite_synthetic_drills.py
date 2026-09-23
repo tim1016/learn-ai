@@ -139,7 +139,9 @@ async def test_synthetic_custody_drills_capture_real_identity_and_broker_proofs(
     restart = by_id[SyntheticScenarioId.RESTART_IN_FLIGHT_WORK].evidence
     assert len(restart.order_refs) == 2
     assert restart.broker_after.submit_calls == restart.broker_before.submit_calls
-    assert restart.broker_after.lookup_calls[len(restart.broker_before.lookup_calls) :] == restart.order_refs
+    boot_lookups = restart.broker_after.lookup_calls[len(restart.broker_before.lookup_calls) :]
+    assert boot_lookups[:2] == restart.order_refs
+    assert len(restart.broker_after.cancel_calls) - len(restart.broker_before.cancel_calls) == 2
 
 
 async def test_cancel_fill_fault_is_folded_while_cancel_is_in_flight(
@@ -205,11 +207,15 @@ async def test_restart_in_flight_uses_active_authority_boot_recovery_for_accepte
     assert observation.status is SyntheticScenarioStatus.PASSED
     assert len(observation.evidence.order_refs) == 2
     assert after.submit_calls == before.submit_calls
-    assert after.lookup_calls[len(before.lookup_calls) :] == observation.evidence.order_refs
-    assert "accepted_state=in_progress" in observation.evidence.observed
-    assert "unknown_state=in_progress" in observation.evidence.observed
+    # Recovery resolves both by exact identity first; the boot pass then
+    # cancels both, because boot retired the runs that placed them (#2362).
+    assert after.lookup_calls[len(before.lookup_calls) :][:2] == observation.evidence.order_refs
+    assert len(after.cancel_calls) - len(before.cancel_calls) == 2
+    assert "accepted_broker_state=canceled" in observation.evidence.observed
+    assert "unknown_broker_state=canceled" in observation.evidence.observed
     assert "unknown_hold=False" in observation.evidence.observed
     assert "boot_submit_count=0" in observation.evidence.observed
+    assert "boot_cancel_count=2" in observation.evidence.observed
 
 
 async def test_restart_in_flight_closes_pre_restart_repository_on_setup_failure(

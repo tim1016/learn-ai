@@ -117,6 +117,28 @@ WORKING_BROKER_STATES: frozenset[str] = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
 )
 
+#: Alpaca order states in which an owned ENTRY can still fill, so an ENTRY in
+#: one of them outliving its run must be cancelled. Operator Stop's cancel set
+#: (``runtime.cancel_working_entries_for_instance``) and the reconciliation
+#: sweep's stopped-run step (``stopped_run_entries``) read this one
+#: definition, so the two cancellers cannot disagree about which orders are
+#: still live. Deliberately wider than :data:`WORKING_BROKER_STATES`: an
+#: auction-bound, suspended or replace-pending order can still fill.
+CANCELLABLE_ENTRY_BROKER_STATES: frozenset[str] = frozenset(
+    {
+        "new",
+        "accepted",
+        "pending_new",
+        "partially_filled",
+        "accepted_for_bidding",
+        "pending_cancel",
+        "pending_replace",
+        "stopped",
+        "suspended",
+        "calculated",
+    }
+)
+
 #: Effect-operation states that have not reached a terminal outcome. An effect
 #: here can still create broker custody, so a registration carrying one is not
 #: inert however flat it currently reads.
@@ -530,6 +552,26 @@ def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: st
         "WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         (strategy_instance_id,),
+    ).fetchall()
+    return [OrderResource(**dict(row)) for row in rows]
+
+
+def cancellable_strategy_entry_orders(conn: sqlite3.Connection) -> list[OrderResource]:
+    """Every strategy-owned ENTRY order the broker may still fill, account-wide.
+
+    One read per sweep pass instead of every strategy's whole order history.
+    Manual-custody orders (effects with no ``strategy_instance_id``) are
+    excluded: they belong to no run.
+    """
+    states = ", ".join("?" for _ in CANCELLABLE_ENTRY_BROKER_STATES)
+    rows = conn.execute(
+        "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
+        "o.role, o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE o.role = 'ENTRY' AND e.strategy_instance_id IS NOT NULL "
+        f"AND LOWER(o.broker_state) IN ({states}) "
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
+        tuple(sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
     ).fetchall()
     return [OrderResource(**dict(row)) for row in rows]
 
