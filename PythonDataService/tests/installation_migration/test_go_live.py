@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker_configuration.runtime import CLERK_DIR_ENV_VAR
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.export import ExportRequest, run_export
 from app.installation_migration.golive import CONFIRMATION_PROMPT, GoLiveRequest, run_go_live
@@ -29,6 +30,7 @@ from app.services.go_live_hold import (
     go_live_marker_bytes,
     read_go_live_hold,
 )
+from app.services.lane_go_live import lane_go_live_hold
 from tests.installation_migration._support import (
     LIVE_VOLUME,
     PAPER_VOLUME,
@@ -118,6 +120,22 @@ def test_go_live_proves_bars_everywhere_then_confirms_then_releases_every_lane(
     assert "No bot was started" in steps[-1]["next"]
 
 
+def test_completion_claims_only_the_lanes_the_coordinator_listed(tmp_path: Path) -> None:
+    """Go-live cannot see a held volume the coordinator does not list, so its
+    completion names what it released instead of calling every lane live."""
+    lanes = _held_lanes(tmp_path)
+    lanes.lanes = [lane for lane in lanes.lanes if lane.clerk_id == "clrk_live"]
+
+    steps = _go_live(lanes, _Operator())
+
+    complete = steps[-1]
+    assert complete["released"] == ["clrk_live"]
+    assert "Every lane the coordinator listed is released: clrk_live." in complete["next"]
+    assert "does not list was not released and still holds its bots" in complete["next"]
+    assert "Every lane is live" not in complete["next"]
+    assert _held(lanes) == {"clrk_live": False, "clrk_paper": True}
+
+
 @pytest.mark.parametrize("typed", ["", "yes", "the old machine is on", "THE OLD MACHINE"])
 def test_the_bar_check_alone_is_not_enough(tmp_path: Path, typed: str) -> None:
     lanes = _held_lanes(tmp_path)
@@ -197,11 +215,13 @@ def test_no_live_lane_refuses(tmp_path: Path) -> None:
 
 
 async def test_after_import_a_bot_start_refuses_until_go_live_and_nothing_starts_after(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The whole seam, end to end: export, import, then each restored lane's
-    own start gate — the one the clerk wires over its volume root — refuses
-    until go-live has released it; go-live itself starts nothing."""
+    own start gate — ``lane_go_live_hold``, exactly as ``app.main`` wires it,
+    with the clerk directory at the restored volume's root and the runner's
+    artifacts root elsewhere — refuses until go-live has released it;
+    go-live itself starts nothing."""
     source = build_installation(tmp_path)
     bundle = tmp_path / "bundle.tar"
     run_export(
@@ -226,14 +246,15 @@ async def test_after_import_a_bot_start_refuses_until_go_live_and_nothing_starts
     }
     registries = {
         clerk_id: BotTaskRegistry(
-            root,
+            tmp_path / "artifacts" / clerk_id,
             feed_resolver=lambda: None,
             boot_recovery_required=False,
-            go_live_hold=lambda root=root: read_go_live_hold(root),
+            go_live_hold=lane_go_live_hold,
         )
-        for clerk_id, root in roots.items()
+        for clerk_id in roots
     }
-    for registry in registries.values():
+    for clerk_id, registry in registries.items():
+        monkeypatch.setenv(CLERK_DIR_ENV_VAR, str(roots[clerk_id]))
         with pytest.raises(RunAdmissionRefusedError) as refused:
             await registry.deploy(broker="alpaca", strategy_instance_id="ema-1", symbol="SPY")
         assert refused.value.reason_code == LANE_GO_LIVE_PENDING
@@ -241,7 +262,8 @@ async def test_after_import_a_bot_start_refuses_until_go_live_and_nothing_starts
     lanes = FakeGoLiveLanes(lanes=source.lanes.lanes, roots=roots)
     _go_live(lanes, _Operator())
 
-    for registry in registries.values():
+    for clerk_id, registry in registries.items():
+        monkeypatch.setenv(CLERK_DIR_ENV_VAR, str(roots[clerk_id]))
         # Go-live started nothing; released, the hold no longer answers a
         # start — a later admission gate (no clerk in this test) does.
         assert registry.any_running() is False

@@ -10,7 +10,10 @@ start on the new host. The order is the safety argument:
 2. **The operator types that the old machine is off** — only after every
    lane passed, so the confirmation is never asked for, or given, on a host
    that cannot see bars.
-3. **Every lane is released** (``lane_go_live_release``). The lane itself
+3. **Every lane the coordinator lists is released** (``lane_go_live_release``);
+   this command cannot see a restored clerk volume whose lane the coordinator
+   does not list, so its completion names the lanes it released and says so
+   rather than claiming every lane is live. The lane itself
    also refuses a release without the confirmation words or without its own
    fresh passing bar check, so neither half alone releases a lane even for
    a caller that skips this command.
@@ -77,9 +80,11 @@ def run_go_live(
         {
             "step": "complete",
             "released": released,
-            "next": "Every lane is live. No bot was started: start each one by hand when "
-            "you are ready. Never restart the old machine's copy; going back is a reverse "
-            "migration (export here, import there, go-live there).",
+            "next": f"Every lane the coordinator listed is released: {', '.join(released)}. "
+            "A restored clerk volume whose lane the coordinator does not list was not "
+            "released and still holds its bots. No bot was started: start each one by hand "
+            "when you are ready. Never restart the old machine's copy; going back is a "
+            "reverse migration (export here, import there, go-live there).",
         }
     )
 
