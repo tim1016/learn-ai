@@ -63,12 +63,37 @@ def test_list_lanes_reads_the_directory_with_the_control_secret() -> None:
     assert seen[0].headers["X-Data-Plane-Control-Secret"] == "s3cret"
 
 
+_RECEIPT = {
+    "receipt_id": "rcpt-1",
+    "requested_at_ms": 1,
+    "completed_at_ms": 2,
+    "operator": "inkant",
+    "change_ref": "migrate",
+    "reason": "lane_stop_all",
+    "stopped": [{"strategy_instance_id": "ema-1", "run_id": "run-1"}],
+    "refused": [],
+    "still_running": False,
+    "all_stopped": True,
+}
+_QUIET = {
+    "account_id": "PA-1",
+    "observed_at_ms": 5,
+    "runner_idle": True,
+    "broker_work_ended": True,
+    "account_flat": True,
+    "intents_resolved": True,
+    "quiet": True,
+    "outstanding": [],
+}
+
+
 def test_stop_all_bots_posts_the_command_envelope_to_the_clerk_scoped_route() -> None:
-    lanes, seen = _lanes(lambda _request: httpx.Response(200, json={"all_stopped": True}))
+    lanes, seen = _lanes(lambda _request: httpx.Response(200, json=_RECEIPT))
 
     receipt = lanes.stop_all_bots(_LANE, operator="inkant", change_ref="migrate")
 
-    assert receipt == {"all_stopped": True}
+    assert receipt.receipt_id == "rcpt-1"
+    assert [bot.strategy_instance_id for bot in receipt.stopped] == ["ema-1"]
     request = seen[0]
     assert request.method == "POST"
     assert request.url.path == "/api/brokers/alpaca/clerks/clrk_live/lane/stop-all-bots"
@@ -79,10 +104,22 @@ def test_stop_all_bots_posts_the_command_envelope_to_the_clerk_scoped_route() ->
 
 
 def test_account_quiet_reads_the_clerk_scoped_route() -> None:
-    lanes, seen = _lanes(lambda _request: httpx.Response(200, json={"quiet": True}))
+    lanes, seen = _lanes(lambda _request: httpx.Response(200, json=_QUIET))
 
-    assert lanes.account_quiet(_LANE) == {"quiet": True}
+    answer = lanes.account_quiet(_LANE)
+
+    assert (answer.account_id, answer.account_flat) == ("PA-1", True)
     assert seen[0].url.path == "/api/brokers/alpaca/clerks/clrk_live/lane/account-quiet"
+
+
+def test_a_200_body_that_is_not_the_route_s_model_is_a_refusal_naming_the_lane() -> None:
+    lanes, _seen = _lanes(lambda _request: httpx.Response(200, json={"quiet": True}))
+
+    with pytest.raises(MigrationRefused) as refused:
+        lanes.account_quiet(_LANE)
+
+    assert refused.value.reason == "coordinator_answer_unreadable"
+    assert refused.value.details["clerk_id"] == "clrk_live"
 
 
 def test_an_incomplete_stop_refuses_naming_the_lane() -> None:

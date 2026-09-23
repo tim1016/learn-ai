@@ -10,10 +10,16 @@ draining a lane.
 from __future__ import annotations
 
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.installation_migration.bundle import MANIFEST_MEMBER, read_manifest
 from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
@@ -22,6 +28,7 @@ from tests.installation_migration._support import (
     LIVE_ACCOUNT,
     LIVE_VOLUME,
     PAPER_ACCOUNT,
+    PG_VOLUME,
     SOURCE_COMMIT,
     FakeGit,
     Installation,
@@ -101,9 +108,9 @@ def test_check_refuses_a_non_flat_account_naming_it_and_its_open_work(
     assert not bundle.exists()
 
 
-def test_export_refuses_a_non_flat_account_after_stopping_bots_and_writes_nothing(
-    tmp_path: Path,
-) -> None:
+def test_export_refuses_a_non_flat_account_before_stopping_any_bot(tmp_path: Path) -> None:
+    """A live lane holding a position keeps its bots: stopping them first would
+    cancel their working entry orders and leave the position unmanaged."""
     installation = build_installation(tmp_path)
     _open_position(installation)
     bundle = tmp_path / "bundle.tar"
@@ -112,14 +119,150 @@ def test_export_refuses_a_non_flat_account_after_stopping_bots_and_writes_nothin
         _export(installation, bundle)
 
     assert refused.value.reason == "accounts_not_flat"
-    assert "stays stopped" in refused.value.message
-    assert sorted(installation.lanes.stopped) == sorted(
-        [installation.live_clerk_id, installation.paper_clerk_id]
-    )
-    # Containers keep running and nothing is copied: the refusal comes first.
+    assert "Nothing was stopped" in refused.value.message
+    assert installation.lanes.stopped == []
+    assert {kind for kind, _clerk in installation.lanes.calls} == {"quiet"}
     assert installation.podman.stopped == []
-    assert not bundle.exists()
     assert list(tmp_path.glob("bundle.tar*")) == []
+
+
+def test_export_reads_every_account_before_it_stops_a_single_bot(tmp_path: Path) -> None:
+    installation = build_installation(tmp_path)
+
+    _export(installation, tmp_path / "bundle.tar")
+
+    kinds = [kind for kind, _clerk in installation.lanes.calls]
+    assert kinds == ["quiet", "quiet", "stop", "stop", "quiet", "quiet"]
+
+
+def test_an_account_that_goes_non_flat_after_the_stop_is_refused_saying_bots_were_stopped(
+    tmp_path: Path,
+) -> None:
+    installation = build_installation(tmp_path)
+    installation.lanes.after_stop[installation.live_clerk_id] = {"account_flat": False}
+    bundle = tmp_path / "bundle.tar"
+
+    with pytest.raises(MigrationRefused) as refused:
+        _export(installation, bundle)
+
+    assert refused.value.reason == "accounts_not_flat"
+    message = refused.value.message
+    assert "were stopped and stay stopped" in message
+    assert "nothing was cancelled" not in message.lower()
+    assert refused.value.details["bots_stopped_on"] == [
+        installation.live_clerk_id,
+        installation.paper_clerk_id,
+    ]
+    assert installation.podman.stopped == []
+    assert list(tmp_path.glob("bundle.tar*")) == []
+
+
+def test_a_container_that_fails_to_stop_names_the_ones_already_stopped(
+    tmp_path: Path,
+) -> None:
+    installation = build_installation(tmp_path)
+    installation.podman.fail_stop.add("polygon-data-service")
+    steps: list[dict] = []
+
+    with pytest.raises(MigrationRefused) as refused:
+        run_export(
+            ExportRequest(
+                repo_root=installation.repo_root,
+                bundle_path=tmp_path / "bundle.tar",
+                operator="inkant",
+                change_ref="migrate-2026-09-22",
+            ),
+            lanes=installation.lanes,
+            podman=installation.podman,
+            git=FakeGit(),
+            emit=steps.append,
+        )
+
+    assert refused.value.reason == "container_stop_failed"
+    assert refused.value.details["container"] == "polygon-data-service"
+    assert refused.value.details["already_stopped"] == ["alpaca-live-clerk", "alpaca-paper-clerk"]
+    assert "alpaca-live-clerk" in refused.value.message
+    assert [step["container"] for step in steps if step["step"] == "container-stopped"] == [
+        "alpaca-live-clerk",
+        "alpaca-paper-clerk",
+    ]
+    assert not (tmp_path / "bundle.tar").exists()
+
+
+def test_a_bot_whose_copied_desired_state_is_not_stopped_refuses(tmp_path: Path) -> None:
+    """A bot started between the quiet read and ``podman stop`` would restart
+    on the new host; the copy itself must show every bot STOPPED."""
+    installation = build_installation(tmp_path)
+    lane_root = installation.podman.volume_dir(LIVE_VOLUME)
+    for sid, state in (("bot-stopped", DesiredState.STOPPED), ("bot-sneaked", DesiredState.RUNNING)):
+        DesiredStateRepo(stable_desired_state_path(lane_root, sid)).set(
+            state, updated_by="inkant", now_ms=1, reason="test"
+        )
+    bundle = tmp_path / "bundle.tar"
+
+    with pytest.raises(MigrationRefused) as refused:
+        _export(installation, bundle)
+
+    assert refused.value.reason == "bots_not_stopped_in_copy"
+    assert refused.value.details["bots"] == [
+        {"volume": LIVE_VOLUME, "strategy_instance_id": "bot-sneaked", "desired_state": "RUNNING"}
+    ]
+    assert not bundle.exists()
+
+
+def test_a_dirty_source_tree_refuses_before_any_bot_stops_unless_overridden(
+    tmp_path: Path,
+) -> None:
+    installation = build_installation(tmp_path)
+    request = ExportRequest(
+        repo_root=installation.repo_root,
+        bundle_path=tmp_path / "bundle.tar",
+        operator="inkant",
+        change_ref="migrate-2026-09-22",
+    )
+
+    with pytest.raises(MigrationRefused) as refused:
+        run_export(
+            request,
+            lanes=installation.lanes,
+            podman=installation.podman,
+            git=FakeGit(dirty=True),
+            emit=lambda _step: None,
+        )
+
+    assert refused.value.reason == "source_tree_dirty"
+    assert installation.lanes.calls == []
+
+    run_export(
+        replace(request, allow_dirty_tree=True),
+        lanes=installation.lanes,
+        podman=installation.podman,
+        git=FakeGit(dirty=True),
+        emit=lambda _step: None,
+    )
+    manifest = read_manifest(tmp_path / "bundle.tar")
+    assert manifest.source_tree_dirty is True
+    assert manifest.dirty_tree_override is True
+
+
+def test_an_uncleanly_stopped_postgres_refuses(tmp_path: Path) -> None:
+    installation = build_installation(tmp_path)
+    (installation.podman.volume_dir(PG_VOLUME) / "postmaster.pid").write_text("42\n", encoding="utf-8")
+    bundle = tmp_path / "bundle.tar"
+
+    with pytest.raises(MigrationRefused) as refused:
+        _export(installation, bundle)
+
+    assert refused.value.reason == "postgres_not_cleanly_stopped"
+    assert not bundle.exists()
+
+
+def test_the_manifest_records_the_postgres_major_version(tmp_path: Path) -> None:
+    installation = build_installation(tmp_path)
+
+    _export(installation, tmp_path / "bundle.tar")
+
+    assert read_manifest(tmp_path / "bundle.tar").postgres.pg_version == "16"
 
 
 def test_export_writes_exactly_the_listed_contents_plus_the_manifest(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.installation_migration.bundle import read_manifest
 from scripts import migrate_installation
 from scripts.migrate_installation import Ports, main
 from tests.installation_migration._support import (
@@ -131,3 +132,29 @@ def test_the_control_secret_comes_from_the_environment_then_the_root_dotenv(
 
     monkeypatch.setenv("DATA_PLANE_CONTROL_SECRET", "from-env")
     assert migrate_installation._control_secret(tmp_path) == "from-env"
+
+
+def test_export_allow_dirty_tree_is_passed_through_and_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    installation = build_installation(tmp_path)
+    bundle = tmp_path / "bundle.tar"
+    monkeypatch.setattr(
+        migrate_installation,
+        "build_ports",
+        lambda _args: Ports(
+            podman=installation.podman, git=FakeGit(dirty=True), lanes=installation.lanes
+        ),
+    )
+    argv = [
+        "export",
+        "--repo-root", str(installation.repo_root),
+        "--bundle", str(bundle),
+        "--operator", "inkant",
+        "--change-ref", "migrate-2026-09-22",
+    ]
+
+    assert main(argv) == 2
+    assert _lines(capsys)[-1]["reason"] == "source_tree_dirty"
+    assert main([*argv, "--allow-dirty-tree"]) == 0
+    assert read_manifest(bundle).dirty_tree_override is True

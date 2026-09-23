@@ -18,7 +18,7 @@ import shutil
 import sqlite3
 import tempfile
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,9 +27,15 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from app.broker.fleet.errors import FleetControlError
 from app.broker.fleet.store import registry_database_path
 from app.broker.fleet.volume import read_volume_marker, verify_volume_identity
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.installation_migration.contents import BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
-from app.installation_migration.tree import extract_tar
+from app.installation_migration.tree import extract_tar, root_member_bytes
 
 #: The Alpaca clerk's account-database layout under its volume root:
 #: ``accounts/alpaca/<account_id>/clerk.db``. Duplicated from
@@ -267,9 +273,16 @@ def read_clerk_volume_facts(volume_name: str, volume_root: Path) -> ClerkVolumeF
     )
 
 
-def staged_identity_facts(
-    volume_tars: Mapping[str, Path], scratch: Path
-) -> tuple[RegistryFacts, tuple[ClerkVolumeFacts, ...]]:
+@dataclass(frozen=True, slots=True)
+class StagedIdentity:
+    """Identity facts read from staged volume tars, and where they were read."""
+
+    registry: RegistryFacts
+    clerk_volumes: tuple[ClerkVolumeFacts, ...]
+    lane_roots: Mapping[str, Path]
+
+
+def staged_identity_facts(volume_tars: Mapping[str, Path], scratch: Path) -> StagedIdentity:
     """Registry and lane-volume facts read from staged volume tars.
 
     Shared by export (facts for the manifest) and import (facts to compare
@@ -318,7 +331,86 @@ def staged_identity_facts(
                 f"{clerk.clerk_id}'s identity: {exc.message}",
                 details={"clerk_id": clerk.clerk_id, "volume": clerk.attestation_id},
             ) from exc
-    return registry, clerk_volumes
+    lane_roots = {
+        volume.name: roots[volume.name] for volume in BUNDLED_VOLUMES if volume.role == "clerk"
+    }
+    return StagedIdentity(registry=registry, clerk_volumes=clerk_volumes, lane_roots=lane_roots)
+
+
+#: The per-bot state directory under a lane's artifact root, the layout
+#: ``stable_desired_state_path`` writes (``<root>/live_state/<sid>/…``).
+_LIVE_STATE_DIRECTORY = "live_state"
+
+
+def bots_not_stopped(lane_roots: Mapping[str, Path]) -> list[dict[str, str]]:
+    """Every bot in a copied lane volume whose durable desired state is not STOPPED.
+
+    Read through the canonical desired-state repository, from the copy that
+    will travel: a bot started between the quiet read and ``podman stop``
+    would otherwise restart on the new host.
+    """
+    found: list[dict[str, str]] = []
+    for volume, root in sorted(lane_roots.items()):
+        live_state = root / _LIVE_STATE_DIRECTORY
+        if not live_state.is_dir():
+            continue
+        for bot_dir in sorted(child for child in live_state.iterdir() if child.is_dir()):
+            try:
+                path = stable_desired_state_path(root, bot_dir.name)
+                if not path.is_file():
+                    continue
+                state = DesiredStateRepo(path).read_state()
+            except (ValueError, DesiredStateCorruptError) as exc:
+                raise MigrationRefused(
+                    "bot_desired_state_unreadable",
+                    f"Bot {bot_dir.name!r} in volume {volume} has no readable desired "
+                    f"state: {exc}",
+                    details={"volume": volume, "strategy_instance_id": bot_dir.name},
+                ) from exc
+            if state is not DesiredState.STOPPED:
+                found.append(
+                    {
+                        "volume": volume,
+                        "strategy_instance_id": bot_dir.name,
+                        "desired_state": state.value,
+                    }
+                )
+    return found
+
+
+class PostgresFacts(StrictRecord):
+    """What the bundled database cluster says about itself."""
+
+    pg_version: str
+
+
+_PG_VERSION = "PG_VERSION"
+_POSTMASTER_PID = "postmaster.pid"
+
+
+def read_postgres_facts(pg_tar: Path, *, volume: str) -> PostgresFacts:
+    """The cluster's major version; refuses a copy of a cluster still running.
+
+    A ``postmaster.pid`` in the copy means Postgres did not shut down
+    cleanly, so the copy may need crash recovery on the new host — not a
+    copy of quiescent data.
+    """
+    files = root_member_bytes(pg_tar, (_PG_VERSION, _POSTMASTER_PID))
+    if _POSTMASTER_PID in files:
+        raise MigrationRefused(
+            "postgres_not_cleanly_stopped",
+            f"The copy of {volume} holds {_POSTMASTER_PID}: Postgres did not shut down "
+            "cleanly. Start the database container, stop it cleanly, then retry.",
+            details={"volume": volume},
+        )
+    version = files.get(_PG_VERSION, b"").decode("utf-8", errors="replace").strip()
+    if not version:
+        raise MigrationRefused(
+            "postgres_version_unknown",
+            f"The copy of {volume} has no {_PG_VERSION}; it is not a Postgres cluster.",
+            details={"volume": volume},
+        )
+    return PostgresFacts(pg_version=version)
 
 
 __all__ = [
@@ -326,13 +418,17 @@ __all__ = [
     "CLERK_DB_FILENAME",
     "ClerkAccountFacts",
     "ClerkVolumeFacts",
+    "PostgresFacts",
     "RegistryAssignment",
     "RegistryClerk",
     "RegistryEndpoint",
     "RegistryFacts",
+    "StagedIdentity",
     "StrictRecord",
     "VolumeMarkerFacts",
+    "bots_not_stopped",
     "read_clerk_volume_facts",
+    "read_postgres_facts",
     "read_registry_facts",
     "staged_identity_facts",
 ]

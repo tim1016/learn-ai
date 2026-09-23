@@ -130,10 +130,11 @@ def run_import(
         staged = extract_verified_members(request.bundle_path, manifest, staging / "members")
         emit({"step": "bundle-verified", "members": sorted(staged)})
         _require_digests(manifest, staged)
-        registry, clerk_volumes = staged_identity_facts(
+        identity = staged_identity_facts(
             {volume.name: staged[volume.member] for volume in BUNDLED_VOLUMES}, staging
         )
-        _require_identity(manifest, registry, clerk_volumes)
+        registry = identity.registry
+        _require_identity(manifest, registry, identity.clerk_volumes)
         emit(
             {
                 "step": "identity-verified",

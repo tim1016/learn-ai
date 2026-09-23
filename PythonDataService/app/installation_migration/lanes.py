@@ -15,12 +15,14 @@ or changes an assignment.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 from app.broker.fleet.internal_http import LANE_STOP_ALL_READ_TIMEOUT_S
 from app.installation_migration.errors import MigrationRefused
+from app.schemas.lane_quiesce import LaneAccountQuietRead, LaneStopAllBotsReceipt
 
 CONTROL_SECRET_HEADER = "X-Data-Plane-Control-Secret"
 DEFAULT_COORDINATOR_URL = "http://127.0.0.1:8000"
@@ -46,9 +48,14 @@ class FleetLanes(Protocol):
 
     def list_lanes(self) -> list[Lane]: ...
 
-    def stop_all_bots(self, lane: Lane, *, operator: str, change_ref: str) -> dict[str, Any]: ...
+    def stop_all_bots(
+        self, lane: Lane, *, operator: str, change_ref: str
+    ) -> LaneStopAllBotsReceipt: ...
 
-    def account_quiet(self, lane: Lane) -> dict[str, Any]: ...
+    def account_quiet(self, lane: Lane) -> LaneAccountQuietRead: ...
+
+
+_Answer = TypeVar("_Answer", bound=BaseModel)
 
 
 def _refusal_text(body: object) -> str:
@@ -137,7 +144,24 @@ class CoordinatorLanes:
             for row in body.get("clerks", [])
         ]
 
-    def stop_all_bots(self, lane: Lane, *, operator: str, change_ref: str) -> dict[str, Any]:
+    def _answer(
+        self, response: httpx.Response, model: type[_Answer], *, lane: Lane
+    ) -> _Answer:
+        """A 200 body validated into the lane route's own wire model."""
+        body = self._json(response, subject=lane.clerk_id)
+        try:
+            return model.model_validate(body)
+        except ValidationError as exc:
+            raise MigrationRefused(
+                "coordinator_answer_unreadable",
+                f"Lane {lane.clerk_id} answered {response.request.url.path} with a body "
+                f"that is not a {model.__name__}: {exc}",
+                details={"clerk_id": lane.clerk_id, "body": body},
+            ) from exc
+
+    def stop_all_bots(
+        self, lane: Lane, *, operator: str, change_ref: str
+    ) -> LaneStopAllBotsReceipt:
         path = f"/api/brokers/{lane.broker}/clerks/{lane.clerk_id}/lane/stop-all-bots"
         response = self._call(
             "POST",
@@ -158,9 +182,9 @@ class CoordinatorLanes:
             self._refuse(
                 response, reason="lane_stop_all_refused", lane=lane, what="to stop every bot"
             )
-        return self._json(response, subject=lane.clerk_id)
+        return self._answer(response, LaneStopAllBotsReceipt, lane=lane)
 
-    def account_quiet(self, lane: Lane) -> dict[str, Any]:
+    def account_quiet(self, lane: Lane) -> LaneAccountQuietRead:
         path = f"/api/brokers/{lane.broker}/clerks/{lane.clerk_id}/lane/account-quiet"
         response = self._call("GET", path, subject=lane.clerk_id, timeout_s=_READ_TIMEOUT_S)
         if response.status_code != 200:
@@ -170,7 +194,7 @@ class CoordinatorLanes:
                 lane=lane,
                 what="the account-quiet read",
             )
-        return self._json(response, subject=lane.clerk_id)
+        return self._answer(response, LaneAccountQuietRead, lane=lane)
 
 
 __all__ = [

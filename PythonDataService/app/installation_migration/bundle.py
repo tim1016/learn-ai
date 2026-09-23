@@ -42,7 +42,12 @@ from app.installation_migration.contents import (
     VolumeRole,
 )
 from app.installation_migration.errors import MigrationRefused
-from app.installation_migration.facts import ClerkVolumeFacts, RegistryFacts, StrictRecord
+from app.installation_migration.facts import (
+    ClerkVolumeFacts,
+    PostgresFacts,
+    RegistryFacts,
+    StrictRecord,
+)
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MANIFEST_MEMBER = "manifest.json"
@@ -97,6 +102,7 @@ class Manifest(StrictRecord):
     created_at_ms: InstantMs
     source_commit: str = Field(pattern=_GIT_COMMIT)
     source_tree_dirty: bool
+    dirty_tree_override: bool
     operator: str
     change_ref: str
     volumes: tuple[VolumeEntry, ...]
@@ -104,6 +110,7 @@ class Manifest(StrictRecord):
     registry: RegistryFacts
     clerk_volumes: tuple[ClerkVolumeFacts, ...]
     lanes: tuple[LaneEntry, ...]
+    postgres: PostgresFacts
 
     @model_validator(mode="after")
     def _layout_is_this_builds(self) -> Manifest:

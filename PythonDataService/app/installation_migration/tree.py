@@ -236,6 +236,25 @@ def tree_digest_from_tar(archive: Path) -> str:
     return _digest(entries)
 
 
+def root_member_bytes(archive: Path, names: Iterable[str]) -> dict[str, bytes]:
+    """The content of each named regular file at the root of ``archive``.
+
+    Names absent from the tar are absent from the answer; the tar is read
+    to the end, so a truncated one refuses rather than answering short.
+    """
+    wanted = set(names)
+    found: dict[str, bytes] = {}
+    with _reading(archive), tarfile.open(archive, "r:*") as bundle:
+        for member in bundle:
+            path = _member_path(member.name)
+            if path in wanted and member.isreg():
+                handle = bundle.extractfile(member)
+                if handle is not None:
+                    with handle:
+                        found[path] = handle.read()
+    return found
+
+
 def build_folder_tar(root: Path, archive: Path) -> None:
     """Write ``root``'s walk as a new tar at ``archive`` (never overwriting).
 
@@ -288,6 +307,7 @@ __all__ = [
     "build_folder_tar",
     "extract_tar",
     "require_bundleable",
+    "root_member_bytes",
     "sha256_file",
     "tree_digest_from_dir",
     "tree_digest_from_tar",

@@ -23,6 +23,7 @@ from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.lanes import Lane
 from app.installation_migration.podman import ContainerUse, VolumeInfo
+from app.schemas.lane_quiesce import LaneAccountQuietRead, LaneStopAllBotsReceipt
 from tests.broker.fleet.conftest import FrozenClock, bind_lane, fake_alpha
 
 REPO = Path(__file__).resolve().parents[3]
@@ -47,6 +48,7 @@ class FakePodman:
         self.containers: dict[str, tuple[bool, frozenset[str]]] = {}
         self.stopped: list[str] = []
         self.removed: list[str] = []
+        self.fail_stop: set[str] = set()
 
     def volume_dir(self, name: str) -> Path:
         return self.root / name
@@ -98,6 +100,8 @@ class FakePodman:
         return None if state is None else state[0]
 
     def stop_container(self, name: str) -> None:
+        if name in self.fail_stop:
+            raise MigrationRefused("podman_command_failed", f"`podman stop {name}` exited 125")
         _running, volumes = self.containers[name]
         self.containers[name] = (False, volumes)
         self.stopped.append(name)
@@ -105,45 +109,61 @@ class FakePodman:
 
 @dataclass
 class FakeLanes:
-    """The coordinator's lane surface, answered from a script."""
+    """The coordinator's lane surface, answered from a script.
+
+    ``calls`` records every read and stop in order; ``after_stop`` holds, per
+    lane, the quiet fields a lane reports once its bots were stopped (an
+    account that goes non-flat between the first read and the re-check).
+    """
 
     lanes: list[Lane]
     quiet: dict[str, dict[str, Any]]
     receipt_roots: dict[str, Path] = field(default_factory=dict)
     stopped: list[str] = field(default_factory=list)
+    calls: list[tuple[str, str]] = field(default_factory=list)
+    after_stop: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def list_lanes(self) -> list[Lane]:
         return list(self.lanes)
 
-    def stop_all_bots(self, lane: Lane, *, operator: str, change_ref: str) -> dict[str, Any]:
+    def stop_all_bots(
+        self, lane: Lane, *, operator: str, change_ref: str
+    ) -> LaneStopAllBotsReceipt:
+        self.calls.append(("stop", lane.clerk_id))
         self.stopped.append(lane.clerk_id)
-        self.quiet[lane.clerk_id] = {**self.quiet[lane.clerk_id], "runner_idle": True}
-        receipt = {
-            "receipt_id": f"rcpt-{lane.clerk_id}",
-            "requested_at_ms": T0,
-            "completed_at_ms": T0 + 1,
-            "operator": operator,
-            "change_ref": change_ref,
-            "stopped": [],
-            "refused": [],
-            "still_running": False,
-            "all_stopped": True,
+        self.quiet[lane.clerk_id] = {
+            **self.quiet[lane.clerk_id],
+            "runner_idle": True,
+            **self.after_stop.get(lane.clerk_id, {}),
         }
+        receipt = LaneStopAllBotsReceipt(
+            receipt_id=f"rcpt-{lane.clerk_id}",
+            requested_at_ms=T0,
+            completed_at_ms=T0 + 1,
+            operator=operator,
+            change_ref=change_ref,
+            reason="lane_stop_all",
+            stopped=[],
+            refused=[],
+            still_running=False,
+            all_stopped=True,
+        )
         root = self.receipt_roots.get(lane.clerk_id)
         if root is not None:
             directory = root / "lane_stop_all_receipts"
             directory.mkdir(exist_ok=True)
-            (directory / f"{T0}-{receipt['receipt_id']}.json").write_text("{}", encoding="utf-8")
+            (directory / f"{T0}-{receipt.receipt_id}.json").write_text("{}", encoding="utf-8")
         return receipt
 
-    def account_quiet(self, lane: Lane) -> dict[str, Any]:
+    def account_quiet(self, lane: Lane) -> LaneAccountQuietRead:
+        self.calls.append(("quiet", lane.clerk_id))
         answer = self.quiet[lane.clerk_id]
         outstanding = [
             name
             for name in ("runner_idle", "broker_work_ended", "account_flat", "intents_resolved")
             if not answer[name]
         ]
-        return {**answer, "quiet": not outstanding, "outstanding": outstanding}
+        return LaneAccountQuietRead(**answer, quiet=not outstanding, outstanding=outstanding)
 
 
 @dataclass

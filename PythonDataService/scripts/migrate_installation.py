@@ -117,6 +117,7 @@ def _export(args: argparse.Namespace, ports: Ports) -> int:
             change_ref=args.change_ref or "",
             check_only=args.check,
             lake_dir=Path(args.lake_dir) if args.lake_dir else None,
+            allow_dirty_tree=args.allow_dirty_tree,
         ),
         lanes=ports.lanes,
         podman=ports.podman,
@@ -167,6 +168,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="Only ask every lane whether its account is flat; stop and write nothing",
+    )
+    export.add_argument(
+        "--allow-dirty-tree",
+        action="store_true",
+        help="Export although tracked files have uncommitted changes (recorded in the manifest)",
     )
     export.add_argument("--coordinator-url", default=DEFAULT_COORDINATOR_URL)
     export.set_defaults(func=_export)
