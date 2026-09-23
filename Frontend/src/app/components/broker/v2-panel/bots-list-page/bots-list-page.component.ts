@@ -16,6 +16,7 @@ import { MessageService } from 'primeng/api';
 import { fmtElapsedSince } from '../../format';
 import { BotsPageActionsBridgeService } from '../../../brokers/alpaca-workspace/bots-page-actions-bridge.service';
 import { CohortArchiveDrawerComponent } from '../cohort-archive/cohort-archive-drawer.component';
+import { CohortFlattenDrawerComponent } from '../cohort-flatten/cohort-flatten-drawer.component';
 import { BotTriageDetailComponent } from '../bot-triage-detail/bot-triage-detail.component';
 import {
   BotsRosterComponent,
@@ -61,9 +62,10 @@ interface ScopedSnapshot<T> {
  * One account's Bots tab inside the account workspace (ADR 0064). The
  * account it serves, that account's mode and equity are the workspace
  * header's, one line above — this page owns the roster and the triage detail
- * beside it. Refresh and Archive finished stay this page's own commands (its
- * `catalog` resource, its `archiveOpen` state) but render in that same header,
- * via `BotsPageActionsBridgeService` — the same single-active-host pattern
+ * beside it. Refresh, Archive finished and Flatten cohort stay this page's own
+ * commands (its `catalog` resource, its `archiveOpen`/`flattenOpen` state) but
+ * render in that same header, via `BotsPageActionsBridgeService` — the same
+ * single-active-host pattern
  * `ActiveLensBridgeService` uses to hoist the Trader/Operator switch, so the
  * header need not know this page's internals to host its buttons.
  */
@@ -72,6 +74,7 @@ interface ScopedSnapshot<T> {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CohortArchiveDrawerComponent,
+    CohortFlattenDrawerComponent,
     BotTriageDetailComponent,
     BotsRosterComponent,
   ],
@@ -98,6 +101,8 @@ export class BotsListPageComponent {
   );
   protected readonly pendingBotIds = signal<ReadonlySet<string>>(new Set());
   protected readonly archiveOpen = signal(false);
+  protected readonly flattenOpen = signal(false);
+  private flattenOpener: HTMLElement | null = null;
   private readonly requestedSid = signal<string | null>(null);
   /** Bumped after an action lands so the detail pane refetches its panel. */
   protected readonly detailRefreshToken = signal(0);
@@ -235,6 +240,7 @@ export class BotsListPageComponent {
       initialLoading: this.initialLoading,
       refresh: () => this.refreshBots(),
       openArchive: () => this.openArchive(),
+      openCohortFlatten: () => this.openCohortFlatten(),
     });
     this.destroyRef.onDestroy(actionsUnregister);
   }
@@ -246,6 +252,25 @@ export class BotsListPageComponent {
 
   protected openArchive(): void {
     this.archiveOpen.set(true);
+  }
+
+  protected openCohortFlatten(): void {
+    // The command lives in the workspace header, outside this page; remember
+    // it so closing the drawer hands the keyboard back where it was.
+    const opener = this.document.activeElement;
+    this.flattenOpener = opener instanceof HTMLElement ? opener : null;
+    this.flattenOpen.set(true);
+  }
+
+  protected closeCohortFlatten(): void {
+    this.flattenOpen.set(false);
+    const opener = this.flattenOpener;
+    this.flattenOpener = null;
+    if (opener === null) return;
+    afterNextRender(
+      { write: () => { if (opener.isConnected) opener.focus(); } },
+      { injector: this.injector },
+    );
   }
 
   protected closeArchive(): void {

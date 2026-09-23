@@ -23,6 +23,8 @@ import type {
   CohortActionResult,
   CohortArchiveRequest,
   CohortArchiveView,
+  CohortFlattenRequest,
+  CohortFlattenView,
   BotPanelLiveSnapshot,
   BotRunHistoryPage,
   BotRunView,
@@ -207,6 +209,33 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.post<CohortActionResult>(
         operationUrl('bot_cohort_archive', target),
+        this.commandBody(target, 'bot_action', request),
+      ),
+    );
+  }
+
+  /**
+   * The cohort-flatten presentation: (strategy, symbol) cohorts with each
+   * member's presented flatten facts (ADR 0051 Decision 3).
+   *
+   * Fetched on demand, never polled — like the archive view, it builds a
+   * panel projection per cohort member, priced for an operator opening a
+   * surface rather than for a poll loop.
+   */
+  getCohortFlattenView(target: ResourceTarget): Promise<CohortFlattenView> {
+    return firstValueFrom(
+      this.http.get<CohortFlattenView>(operationUrl('bot_cohort_flatten_read', target)),
+    );
+  }
+
+  /** Flatten exactly the named legs; every attempted leg comes back typed. */
+  runCohortFlatten(
+    target: ResourceTarget,
+    request: CohortFlattenRequest,
+  ): Promise<CohortActionResult> {
+    return firstValueFrom(
+      this.http.post<CohortActionResult>(
+        operationUrl('bot_cohort_flatten', target),
         this.commandBody(target, 'bot_action', request),
       ),
     );

@@ -92,8 +92,8 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
-  /** The Bots tab's own Refresh/Archive finished commands, while that tab is
-   * the one mounted — rendered in the header's action slot below. */
+  /** The Bots tab's own Refresh/Archive finished/Flatten cohort commands, while
+   * that tab is the one mounted — rendered in the header's action slot below. */
   protected readonly botsPageActions = inject(BotsPageActionsBridgeService).host;
   private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
   private readonly currentUrl = inject(CurrentUrlService).url;

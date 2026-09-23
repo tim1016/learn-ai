@@ -1,0 +1,117 @@
+<p-drawer
+  [visible]="visible()"
+  (visibleChange)="$event || onClose()"
+  position="right"
+  [modal]="true"
+  [dismissible]="true"
+  [showCloseIcon]="false"
+  styleClass="cohort-flatten-drawer"
+  [style]="{ width: 'min(720px, 96vw)' }"
+>
+  <ng-template #header>
+    <div class="cohort-flatten__header">
+      <div>
+        <span>{{ copy.eyebrow(accountId()) }}</span>
+        <h2>{{ copy.title }}</h2>
+        <p>{{ copy.intro }}</p>
+      </div>
+      <button type="button" [attr.aria-label]="copy.closeLabel" (click)="onClose()">
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </div>
+  </ng-template>
+
+  @if (visible()) {
+    @if (submitting()) {
+      <p #progress class="cohort-flatten__progress" role="status" tabindex="-1">
+        {{ copy.inFlight(sentSids().length) }}
+      </p>
+    }
+
+    @if (dispatchFailure(); as failure) {
+      <div #failureAlert class="cohort-flatten__failure" role="alert" tabindex="-1">
+        @if (failure.kind === 'refused') {
+          <p><strong>{{ copy.requestRefused }}</strong></p>
+          @if (failure.reasonCode; as code) {
+            <p class="cohort-flatten__reason">{{ code | receiptLabel }}</p>
+          }
+          <p>{{ failure.message }}</p>
+          @if (failure.why; as why) {
+            <p>{{ why }}</p>
+          }
+          <p>{{ copy.requestRefusedNext }}</p>
+        } @else {
+          <p>{{ copy.requestUnknown }}</p>
+        }
+      </div>
+    }
+
+    @if (directoryRefreshFailed()) {
+      <p role="alert">{{ refreshFailedMessage }}</p>
+    }
+
+    @if (outcome(); as result) {
+      <app-cohort-flatten-outcome [result]="result" [requested]="sentSids()" />
+    }
+
+    @if (canRetry()) {
+      <button type="button" class="cohort-flatten__retry" (click)="retry()">
+        {{ copy.retry }}
+      </button>
+    }
+
+    @if (laneConflict()) {
+      <p role="alert">{{ laneConflictMessage() }}</p>
+    }
+
+    @if (view() === null && loading()) {
+      <p role="status">{{ copy.reading }}</p>
+    } @else if (loadFailed()) {
+      <p role="alert">{{ copy.loadFailed }}</p>
+    } @else if (emptyMessage(); as message) {
+      <p role="status">{{ message }}</p>
+    } @else {
+      @for (cohort of view()?.cohorts ?? []; track keyOf(cohort)) {
+        <app-cohort-flatten-group
+          [cohort]="cohort"
+          [active]="activeKey() === keyOf(cohort)"
+          [selected]="selected()"
+          [capReached]="capReached()"
+          (toggled)="toggle($event)"
+          (chosen)="chooseCohort(cohort)"
+        />
+      }
+
+      @if (overCap()) {
+        <p role="status">{{ copy.capReached(maxLegs) }}</p>
+      }
+
+      <div class="cohort-flatten__commit">
+        <button
+          #reviewButton
+          type="button"
+          class="cohort-flatten__review"
+          [disabled]="!canReview()"
+          [attr.aria-busy]="submitting()"
+          (click)="review()"
+        >
+          {{ copy.review(selectedLegs().length) }}
+        </button>
+      </div>
+    }
+
+    @if (pending(); as wave) {
+      <app-typed-halt-confirm
+        [open]="true"
+        [heading]="wave.heading"
+        [message]="wave.message"
+        [consequence]="copy.confirmConsequence"
+        [assetSymbol]="wave.symbol"
+        [requiredToken]="copy.confirmToken"
+        [confirmLabel]="wave.confirmLabel"
+        (confirmed)="confirm()"
+        (cancelled)="cancelReview()"
+      />
+    }
+  }
+</p-drawer>

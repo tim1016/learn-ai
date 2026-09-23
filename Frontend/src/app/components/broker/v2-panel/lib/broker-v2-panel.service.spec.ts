@@ -143,6 +143,63 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(sent).resolves.toMatchObject({ receipt_id: 'order-1', applied: true });
   });
 
+  it('reads the cohort-flatten presentation from the clerk-scoped roster route (ADR 0051)', async () => {
+    const response = service.getCohortFlattenView(
+      resourceTarget('alpaca', CLERK, { accountId: 'account/1', bindingGeneration: 3 }),
+    );
+    const request = http.expectOne(
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/bots/cohort-flatten',
+    );
+    expect(request.request.method).toBe('GET');
+    request.flush({ account_id: 'account/1', cohorts: [], observed_at_ms: 1 });
+
+    await expect(response).resolves.toMatchObject({ account_id: 'account/1', cohorts: [] });
+  });
+
+  it('posts exactly the confirmed flatten legs under the frozen durable key (ADR 0051)', async () => {
+    const legs = [
+      {
+        strategy_instance_id: 'qqq-1',
+        action_id: 'execute_safe_flatten' as const,
+        revision: 7,
+        concurrency_token: 'tok-1',
+      },
+    ];
+    const sent = service.runCohortFlatten(target('account/1'), {
+      idempotency_key: 'command-key-1',
+      reason: 'Cohort flatten from the bots roster',
+      legs,
+    });
+    const request = http.expectOne(
+      '/api/brokers/alpaca/clerks/clrk_spec/accounts/account%2F1/bots/cohort-flatten',
+    );
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toMatchObject({
+      idempotency_key: 'command-key-1',
+      legs,
+      command_context: expect.objectContaining({
+        capability: 'bot_action',
+        idempotency_key: 'command-key-1',
+        expected_effective_binding_generation: 3,
+      }),
+    });
+    request.flush({
+      account_id: 'account/1', receipt_id: 'command-key-1', recorded_at_ms: 2, legs: [],
+      applied_count: 0, replayed_count: 0, refused_count: 0, failed_count: 0,
+    });
+
+    await expect(sent).resolves.toMatchObject({ receipt_id: 'command-key-1' });
+  });
+
+  it('refuses a cohort flatten whose body key disagrees with its frozen target', () => {
+    expect(() =>
+      service.runCohortFlatten(target('account/1'), {
+        idempotency_key: 'a-different-key',
+        legs: [],
+      }),
+    ).toThrow(/must match its frozen target/);
+  });
+
   it('prepares and confirms one exact strategy/account Paper-access pairing', async () => {
     const prepared = service.preparePaperAccess(
       resourceTarget('alpaca paper', CLERK, {

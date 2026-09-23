@@ -1,0 +1,59 @@
+.cohort-flatten__group {
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--surface-border, rgb(0 0 0 / 12%));
+  border-radius: 6px;
+
+  h3 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0 0 0.35rem;
+    font-size: 0.95rem;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+    padding: 0.25rem 0;
+  }
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+}
+
+.cohort-flatten__group--active {
+  border-color: var(--verdict-blocked, currentColor);
+}
+
+.cohort-flatten__choose {
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+}
+
+.cohort-flatten__exposure {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+}
+
+.cohort-flatten__count,
+.cohort-flatten__blocker {
+  font-size: 0.8rem;
+}
+
+.cohort-flatten__leg--blocked label {
+  cursor: not-allowed;
+}

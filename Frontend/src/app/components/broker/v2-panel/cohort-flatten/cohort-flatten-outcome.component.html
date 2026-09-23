@@ -1,0 +1,67 @@
+<section
+  #region
+  class="cohort-flatten__outcome"
+  [attr.aria-label]="copy.outcomeRegion"
+  tabindex="-1"
+>
+  <p class="cohort-flatten__summary" [attr.role]="unresolved() ? 'alert' : 'status'">
+    <strong>{{ summary() }}</strong>
+  </p>
+
+  @if (accountBlocker(); as blocker) {
+    <div
+      class="cohort-flatten__account-blocker"
+      role="alert"
+      aria-labelledby="cohort-flatten-account-blocker-heading"
+    >
+      <h4 id="cohort-flatten-account-blocker-heading">{{ copy.accountBlockerHeading }}</h4>
+      <p>{{ copy.accountBlockerBody(result().legs.length, requested().length) }}</p>
+      @if (blocker.reason_code) {
+        <p class="cohort-flatten__reason">{{ blocker.reason_code | receiptLabel }}</p>
+      }
+      <p>{{ blocker.message }}</p>
+      @if (blocker.why; as why) {
+        <p>{{ why }}</p>
+      }
+    </div>
+  }
+
+  @if (notAttempted().length > 0) {
+    <p class="cohort-flatten__not-attempted">
+      {{ copy.notAttempted }}
+      @for (sid of notAttempted(); track sid; let last = $last) {
+        <code>{{ sid }}</code>{{ last ? '' : ', ' }}
+      }
+    </p>
+  }
+
+  @if (staleRefusals() > 0) {
+    <p>{{ copy.staleRefusals(staleRefusals()) }}</p>
+  }
+
+  <ol>
+    @for (leg of result().legs; track leg.strategy_instance_id) {
+      <li [class.cohort-flatten__leg-outcome--unresolved]="leg.error !== null">
+        <code>{{ leg.strategy_instance_id }}</code>
+        <strong>{{ copy.outcomeLabel[leg.outcome] }}</strong>
+        @if (leg.result; as receipt) {
+          <span>{{ copy.receipt }} <code>{{ receipt.receipt_id }}</code></span>
+          <span>{{ receipt.message }}</span>
+          <app-timestamp-display [value]="receipt.recorded_at_ms" mode="local" />
+        }
+        @if (leg.error; as error) {
+          @if (error.reason_code) {
+            <span class="cohort-flatten__reason">{{ error.reason_code | receiptLabel }}</span>
+          }
+          <span>{{ error.message }}</span>
+          @if (error.why; as why) {
+            <span>{{ why }}</span>
+          }
+          @if (error.receipt_id; as receiptId) {
+            <span>{{ copy.receipt }} <code>{{ receiptId }}</code></span>
+          }
+        }
+      </li>
+    }
+  </ol>
+</section>

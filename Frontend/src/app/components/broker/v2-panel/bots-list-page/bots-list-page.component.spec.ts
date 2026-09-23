@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,6 +36,9 @@ async function renderPage(
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
     getDeployView: vi.fn(() => new Promise<never>(() => undefined)),
+    getCohortFlattenView: vi.fn((_target: ResourceTarget) =>
+      Promise.resolve({ account_id: 'PA9', observed_at_ms: 1, cohorts: [] }),
+    ),
     getPanel: vi.fn((_target: ResourceTarget, sid: string) =>
       Promise.resolve(
         fakeBotPanelView({ strategy_instance_id: sid, actions: overrides.panelActions ?? [] }),
@@ -154,6 +158,40 @@ describe('BotsListPageComponent', () => {
     const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
     await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
     expect(typeof bridge.host()?.refresh).toBe('function');
+  });
+
+  it('opens the cohort-flatten drawer from the workspace header command (#1909)', async () => {
+    const view = await renderPage([fakeCatalogBot()]);
+    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
+    await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+    expect(view.mockPanelService.getCohortFlattenView).not.toHaveBeenCalled();
+
+    bridge.host()?.openCohortFlatten();
+    view.fixture.detectChanges();
+
+    expect(await screen.findByRole('heading', { name: 'Flatten a cohort' })).toBeTruthy();
+    await vi.waitFor(() => expect(view.mockPanelService.getCohortFlattenView).toHaveBeenCalledTimes(1));
+    const [target] = view.mockPanelService.getCohortFlattenView.mock.calls[0];
+    expect(target).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9' });
+  });
+
+  it('returns focus to the command that opened the cohort-flatten drawer when it closes', async () => {
+    const view = await renderPage([fakeCatalogBot()]);
+    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
+    await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+    const opener = document.createElement('button');
+    opener.textContent = 'Flatten cohort';
+    document.body.appendChild(opener);
+    opener.focus();
+
+    bridge.host()?.openCohortFlatten();
+    view.fixture.detectChanges();
+    const close = await screen.findByRole('button', { name: 'Close flatten a cohort' });
+    await userEvent.setup().click(close);
+    view.fixture.detectChanges();
+
+    await vi.waitFor(() => expect(document.activeElement).toBe(opener));
+    opener.remove();
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {

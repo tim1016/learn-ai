@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import {
   Router,
   RouterOutlet,
@@ -33,6 +33,7 @@ import { AlpacaAccountListPageComponent } from '../alpaca-desk/alpaca-account-li
 import { BrokerConfigurationService } from '../alpaca-desk/configuration/broker-configuration.service';
 import { AlpacaAccountWorkspaceComponent } from './alpaca-account-workspace.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
+import { BotsPageActionsBridgeService } from './bots-page-actions-bridge.service';
 
 const LANE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}`;
 const WORKSPACE_URL = `${LANE_URL}/accounts/${TEST_ACCOUNT_ID}`;
@@ -237,6 +238,26 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(
       screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page'),
     ).toHaveLength(1);
+  });
+
+  it('hosts the Bots tab’s roster commands, including Flatten cohort, while it is registered', async () => {
+    const { view } = await renderWorkspace({ url: `${WORKSPACE_URL}/bots` });
+    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
+    const host = {
+      refreshing: signal(false),
+      initialLoading: signal(false),
+      refresh: vi.fn(),
+      openArchive: vi.fn(),
+      openCohortFlatten: vi.fn(),
+    };
+    expect(screen.queryByRole('button', { name: 'Flatten cohort' })).toBeNull();
+
+    bridge.register(host);
+    view.fixture.detectChanges();
+    fireEvent.click(await screen.findByRole('button', { name: 'Flatten cohort' }));
+
+    expect(host.openCohortFlatten).toHaveBeenCalledTimes(1);
+    expect(host.openArchive).not.toHaveBeenCalled();
   });
 
   it('has no detectable accessibility violations', async () => {
