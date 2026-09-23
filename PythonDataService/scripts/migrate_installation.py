@@ -64,8 +64,6 @@ from app.installation_migration.importer import ImportRequest, run_import
 from app.installation_migration.lanes import (
     DEFAULT_COORDINATOR_URL,
     CoordinatorLanes,
-    FleetLanes,
-    GoLiveLanes,
 )
 from app.installation_migration.podman import PodmanPort, SubprocessPodman
 from app.installation_migration.topology import compose_variable
@@ -92,30 +90,29 @@ class Ports:
 
     podman: PodmanPort
     git: GitPort
-    lanes: FleetLanes | None
-    go_live_lanes: GoLiveLanes | None = None
+    #: The coordinator's lane surface, for the commands that talk to it
+    #: (export, go-live); ``None`` for import, which runs without one.
+    coordinator: CoordinatorLanes | None
 
 
 def build_ports(args: argparse.Namespace) -> Ports:
     """The real adapters; tests replace this function."""
     repo_root = Path(args.repo_root)
-    coordinator = (
-        CoordinatorLanes(base_url=args.coordinator_url, control_secret=_control_secret(repo_root))
-        if args.operation in ("export", "go-live")
-        else None
-    )
     return Ports(
         podman=SubprocessPodman(),
         git=SubprocessGit(repo_root),
-        lanes=coordinator if args.operation == "export" else None,
-        go_live_lanes=coordinator if args.operation == "go-live" else None,
+        coordinator=(
+            CoordinatorLanes(base_url=args.coordinator_url, control_secret=_control_secret(repo_root))
+            if args.operation in ("export", "go-live")
+            else None
+        ),
     )
 
 
 def _export(args: argparse.Namespace, ports: Ports) -> int:
     if not args.check and (not args.bundle or not args.operator or not args.change_ref):
         raise ValueError("export needs --bundle, --operator and --change-ref (or --check)")
-    if ports.lanes is None:
+    if ports.coordinator is None:
         raise ValueError("export needs the coordinator's lane surface")
     run_export(
         ExportRequest(
@@ -127,7 +124,7 @@ def _export(args: argparse.Namespace, ports: Ports) -> int:
             lake_dir=Path(args.lake_dir) if args.lake_dir else None,
             allow_dirty_tree=args.allow_dirty_tree,
         ),
-        lanes=ports.lanes,
+        lanes=ports.coordinator,
         podman=ports.podman,
         git=ports.git,
         emit=_write,
@@ -159,11 +156,11 @@ def _read_confirmation(prompt: str) -> str:
 
 
 def _go_live(args: argparse.Namespace, ports: Ports) -> int:
-    if ports.go_live_lanes is None:
+    if ports.coordinator is None:
         raise ValueError("go-live needs the coordinator's lane surface")
     run_go_live(
         GoLiveRequest(operator=args.operator, change_ref=args.change_ref),
-        lanes=ports.go_live_lanes,
+        lanes=ports.coordinator,
         confirm=_read_confirmation,
         emit=_write,
     )
@@ -249,10 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         _write({"error": str(exc)})
         return 1
     finally:
-        if ports is not None:
-            for surface in (ports.lanes, ports.go_live_lanes):
-                if isinstance(surface, CoordinatorLanes):
-                    surface.close()
+        if ports is not None and ports.coordinator is not None:
+            ports.coordinator.close()
 
 
 if __name__ == "__main__":

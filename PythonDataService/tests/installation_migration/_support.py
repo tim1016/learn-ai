@@ -142,6 +142,10 @@ class FakeLanes:
     stopped: list[str] = field(default_factory=list)
     calls: list[tuple[str, str]] = field(default_factory=list)
     after_stop: dict[str, dict[str, Any]] = field(default_factory=dict)
+    closed: int = 0
+
+    def close(self) -> None:
+        self.closed += 1
 
     def list_lanes(self) -> list[Lane]:
         return list(self.lanes)
@@ -431,6 +435,10 @@ class FakeGoLiveLanes:
     fail_release: set[str] = field(default_factory=set)
     passed: set[str] = field(default_factory=set)
     calls: list[tuple[str, str]] = field(default_factory=list)
+    closed: int = 0
+
+    def close(self) -> None:
+        self.closed += 1
 
     def list_lanes(self) -> list[Lane]:
         return list(self.lanes)

@@ -46,12 +46,13 @@ def test_export_check_on_an_open_position_exits_2_naming_the_account(
     monkeypatch.setattr(
         migrate_installation,
         "build_ports",
-        lambda _args: Ports(podman=installation.podman, git=FakeGit(), lanes=installation.lanes),
+        lambda _args: Ports(podman=installation.podman, git=FakeGit(), coordinator=installation.lanes),
     )
 
     code = main(["export", "--check", "--repo-root", str(installation.repo_root)])
 
     assert code == 2
+    assert installation.lanes.closed == 1
     refusal = _lines(capsys)[-1]
     assert refusal["reason"] == "accounts_not_flat"
     assert LIVE_ACCOUNT in refusal["error"]
@@ -66,7 +67,7 @@ def test_export_then_import_round_trips_with_exit_0(
     monkeypatch.setattr(
         migrate_installation,
         "build_ports",
-        lambda _args: Ports(podman=installation.podman, git=FakeGit(), lanes=installation.lanes),
+        lambda _args: Ports(podman=installation.podman, git=FakeGit(), coordinator=installation.lanes),
     )
     assert (
         main(
@@ -87,7 +88,7 @@ def test_export_then_import_round_trips_with_exit_0(
     monkeypatch.setattr(
         migrate_installation,
         "build_ports",
-        lambda _args: Ports(podman=podman, git=FakeGit(), lanes=None),
+        lambda _args: Ports(podman=podman, git=FakeGit(), coordinator=None),
     )
     code = main(
         [
@@ -121,7 +122,7 @@ def test_export_without_a_bundle_exits_1(
     monkeypatch.setattr(
         migrate_installation,
         "build_ports",
-        lambda _args: Ports(podman=installation.podman, git=FakeGit(), lanes=installation.lanes),
+        lambda _args: Ports(podman=installation.podman, git=FakeGit(), coordinator=installation.lanes),
     )
 
     code = main(["export", "--repo-root", str(installation.repo_root), "--operator", "inkant"])
@@ -155,7 +156,7 @@ def test_export_allow_dirty_tree_is_passed_through_and_recorded(
         migrate_installation,
         "build_ports",
         lambda _args: Ports(
-            podman=installation.podman, git=FakeGit(dirty=True), lanes=installation.lanes
+            podman=installation.podman, git=FakeGit(dirty=True), coordinator=installation.lanes
         ),
     )
     argv = [
@@ -181,7 +182,7 @@ def test_import_accept_dirty_source_is_passed_through(
         migrate_installation,
         "build_ports",
         lambda _args: Ports(
-            podman=installation.podman, git=FakeGit(dirty=True), lanes=installation.lanes
+            podman=installation.podman, git=FakeGit(dirty=True), coordinator=installation.lanes
         ),
     )
     exported = main(
@@ -199,7 +200,7 @@ def test_import_accept_dirty_source_is_passed_through(
     monkeypatch.setattr(
         migrate_installation,
         "build_ports",
-        lambda _args: Ports(podman=podman, git=FakeGit(), lanes=None),
+        lambda _args: Ports(podman=podman, git=FakeGit(), coordinator=None),
     )
     argv = [
         "import",
@@ -250,7 +251,7 @@ def test_go_live_reads_the_typed_confirmation_from_stdin(
     monkeypatch.setattr(
         migrate_installation,
         "build_ports",
-        lambda _args: Ports(podman=None, git=FakeGit(), lanes=None, go_live_lanes=lanes),  # type: ignore[arg-type]
+        lambda _args: Ports(podman=None, git=FakeGit(), coordinator=lanes),  # type: ignore[arg-type]
     )
     monkeypatch.setattr("sys.stdin", io.StringIO(typed))
 
@@ -260,6 +261,7 @@ def test_go_live_reads_the_typed_confirmation_from_stdin(
     lines = [json.loads(line) for line in captured.out.splitlines() if line]
     assert exit_code == code
     assert read_go_live_hold(lanes.roots["clrk_live"]).held is held
+    assert lanes.closed == 1
     # The prompt is on stderr; stdout stays one JSON object per line.
     assert "the old machine is off" in captured.err
     if code == 2:
