@@ -113,6 +113,24 @@ def _install_session_timeout(session: Session, *, timeout_s: float) -> None:
 _STALE_CONNECTION_RETRY_METHODS: frozenset[str] = frozenset({"GET", "HEAD"})
 
 
+def _disable_sdk_status_retry(client: Any) -> None:
+    """Turn off alpaca-py's own 429/504 retry loop for every method.
+
+    ``RESTClient._request`` re-issues ANY request, POST included, on those
+    codes. A 504 does not prove Alpaca dropped the order, so the re-POST came
+    back as a duplicate-client_order_id reject that the Clerk folded as "never
+    reached the broker" (#2304), and an abandoned worker kept re-POSTing past
+    the Clerk's absence window (#2342). This client owns retry itself: the
+    bounded 429 retry on writes, the GET/HEAD stale-connection retry, and none
+    on reads. ``TradingClient`` takes no retry arguments and the base class
+    treats ``0`` as "use the default", so the attribute is set after
+    construction; the guard fails loudly if a new SDK renames it.
+    """
+    if not hasattr(client, "_retry"):
+        raise RuntimeError("alpaca-py no longer exposes RESTClient._retry; re-check #2304 before upgrading")
+    client._retry = 0
+
+
 def _connection_failure_kind(exc: BaseException) -> str:
     """The underlying urllib3/http.client error name, for the retry log line."""
     cause = exc.args[0] if exc.args else None
@@ -220,6 +238,7 @@ class AlpacaTradingClient:
             paper=settings.is_paper,
             raw_data=True,
         )
+        _disable_sdk_status_retry(client)
         _install_session_timeout(client._session, timeout_s=self._timeout_s)
         _install_stale_connection_retry(client._session)
         journal = self._journal or get_capture_journal()
