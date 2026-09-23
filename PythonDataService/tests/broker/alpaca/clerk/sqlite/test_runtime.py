@@ -863,10 +863,11 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     tmp_path: Path,
 ) -> None:
     """#1396 P1: custody proof must count a live EXIT's still-working
-    REDUCING child, not just ENTRY orders. `_working_order_refs` (ENTRY-only,
-    the exact STOP cancel-target set) must NOT see it, but the proof-facing
-    `_working_order_refs_for_proof` must — otherwise a STOP proof can return
-    `clean` with an empty working set while a reducing order is still live.
+    REDUCING child, not just ENTRY orders. The proof-facing
+    `_working_order_refs_for_proof` must see it — otherwise a STOP proof can
+    return `clean` with an empty working set while a reducing order is still
+    live. (The ENTRY-only STOP cancel set is gone since #2362: the
+    reconciliation step cancels a stopped run's entries.)
     """
     from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
@@ -905,7 +906,6 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     broker = _Broker()
     facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
 
-    assert result.reducing_order_ref not in facade._working_order_refs(SID)
     assert result.reducing_order_ref in facade._working_order_refs_for_proof(SID)
     repo.close()
 

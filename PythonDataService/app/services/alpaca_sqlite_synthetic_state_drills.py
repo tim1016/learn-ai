@@ -263,26 +263,37 @@ async def restart_in_flight(artifacts_root: Path) -> SyntheticScenarioObservatio
         )
         boot_submit_count = len(broker.submit_calls) - len(before.submit_calls)
         boot_lookups = tuple(broker.lookup_calls[len(before.lookup_calls) :])
+        boot_cancels = tuple(broker.cancel_calls[len(before.cancel_calls) :])
+        # Boot retires every pre-restart run, so both recovered ENTERs are
+        # working orders no ACTIVE run owns: the same pass cancels them
+        # (#2362), each proven by a second exact lookup, and each unfilled
+        # ENTER ends ``failed`` (acknowledged, then ended unfilled).
         passed = (
             meta_after.db_identity_token == meta_before.db_identity_token
             and accepted_order is not None
             and accepted_order.broker_order_id is not None
+            and accepted_order.broker_state == "canceled"
             and unknown_order is not None
             and unknown_order.broker_order_id is not None
+            and unknown_order.broker_state == "canceled"
             and accepted_effect is not None
-            and accepted_effect.state == "in_progress"
+            and accepted_effect.state == "failed"
             and unknown_effect is not None
-            and unknown_effect.state == "in_progress"
+            and unknown_effect.state == "failed"
             and unknown_hold is None
             and boot_submit_count == 0
-            and boot_lookups == (accepted.order_ref, unknown.order_ref)
+            and boot_lookups
+            == (accepted.order_ref, unknown.order_ref, accepted.order_ref, unknown.order_ref)
+            and boot_cancels
+            == (accepted_order.broker_order_id, unknown_order.broker_order_id)
         )
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.RESTART_IN_FLIGHT_WORK,
             status=SyntheticScenarioStatus.PASSED if passed else SyntheticScenarioStatus.FAILED,
             assertion=(
                 "The active-authority boot path reopened the same SQLite generation and "
-                "recovered accepted and unknown work by exact identity without resubmission."
+                "recovered accepted and unknown work by exact identity without resubmission, "
+                "then cancelled both ENTERs of the retired runs."
             ),
             evidence=worksheet(
                 recovered,
@@ -291,14 +302,18 @@ async def restart_in_flight(artifacts_root: Path) -> SyntheticScenarioObservatio
                 broker_after=broker.proof(),
                 expected=(
                     "same db identity; accepted and unknown work resolve during service boot; "
-                    "two exact lookups; zero boot submit calls"
+                    "two exact recovery lookups then two cancel-proof lookups; zero boot "
+                    "submit calls; both orphaned ENTERs cancelled and failed"
                 ),
                 observed=(
                     f"same_identity={meta_after.db_identity_token == meta_before.db_identity_token}; "
                     f"accepted_state={accepted_effect.state if accepted_effect else None}; "
                     f"unknown_state={unknown_effect.state if unknown_effect else None}; "
                     f"unknown_hold={unknown_hold is not None}; "
-                    f"boot_lookups={boot_lookups}; boot_submit_count={boot_submit_count}"
+                    f"accepted_broker_state={accepted_order.broker_state if accepted_order else None}; "
+                    f"unknown_broker_state={unknown_order.broker_state if unknown_order else None}; "
+                    f"boot_lookups={boot_lookups}; boot_submit_count={boot_submit_count}; "
+                    f"boot_cancel_count={len(boot_cancels)}"
                 ),
                 action="RESTART_AND_RECOVER",
                 source_event_at_ms=restart_source_event_at_ms,

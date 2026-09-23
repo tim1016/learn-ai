@@ -47,6 +47,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.stopped_run_entries import (
+    cancel_entries_of_inactive_runs,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
@@ -825,6 +828,11 @@ async def _reconcile_account_serialized(
     await redrive_or_escalate_stale_exits(
         repo, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
     )
+
+    # No ENTER may stay working once its run is no longer ACTIVE (#2362):
+    # re-driven every pass, so a crash, a Stop that lost a claim race, or a
+    # POST that landed after Stop is cancelled within one sweep.
+    await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.
     # Re-read broker truth and fold the newest open-order evidence before the

@@ -108,6 +108,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
 )
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
+from app.broker.alpaca.clerk.sqlite.reads import (
+    CANCELLABLE_ENTRY_BROKER_STATES,
+    NONTERMINAL_EFFECT_STATES,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -145,20 +149,6 @@ if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
 
-_WORKING_ORDER_STATES = frozenset(
-    {
-        "new",
-        "accepted",
-        "pending_new",
-        "partially_filled",
-        "accepted_for_bidding",
-        "pending_cancel",
-        "pending_replace",
-        "stopped",
-        "suspended",
-        "calculated",
-    }
-)
 _ENCODED_DECISION_PREFIX = "encoded-"
 # The authorities whose fills are synthesized from evidence, so every effect
 # must carry the exact retained decision bar it was priced from.
@@ -1387,15 +1377,6 @@ class SqliteAlpacaClerkFacade:
         """Read-only twin of :meth:`start_admission_snapshot` (#1776 WP2)."""
         yield await self.custody_snapshot_projection(strategy_instance_id)
 
-    async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[OrderResource, ...]:
-        order_refs = self._working_order_refs(strategy_instance_id)
-        if not order_refs:
-            return ()
-        return await self.cancel_verified_working_orders(
-            strategy_instance_id=strategy_instance_id,
-            order_refs=order_refs,
-        )
-
     async def cancel_verified_working_orders(
         self,
         *,
@@ -1456,19 +1437,6 @@ class SqliteAlpacaClerkFacade:
             observed_at_ms=self._repo.clock(),
         )
 
-    def _working_order_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
-        """ENTRY-only: the exact cancel-target set for STOP (#1396 P1 —
-        `cancel_verified_working_orders` rejects anything but an owned
-        ENTRY). Custody-proof callers must use
-        :meth:`_working_order_refs_for_proof` instead, which also counts a
-        live EXIT's still-working REDUCING child.
-        """
-        return tuple(
-            order.order_ref
-            for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
-            if _is_working_order(order)
-        )
-
     def _working_order_refs_for_proof(self, strategy_instance_id: str) -> tuple[str, ...]:
         """Every still-working order (ENTRY or REDUCING) for custody proof.
 
@@ -1484,7 +1452,19 @@ class SqliteAlpacaClerkFacade:
         )
 
     def _unresolved_order_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
-        return tuple(
+        """Order intents whose broker outcome is not yet known.
+
+        One definition for the STOP/Resume proof and the custody snapshot
+        alike, of two kinds: an order under an ``unknown`` effect, and an
+        owned ENTRY with no broker state under a nonterminal effect -- its
+        POST is in flight. ``ENTER_ACCEPTED`` writes the row with
+        ``broker_state`` NULL and the POST runs outside intake, so until the
+        response (or a websocket frame) folds, neither a broker state nor an
+        ``unknown`` effect marks it; a STOP proven in that window read as
+        flat while the order was about to land (#2358). A voided ENTER is
+        terminal and never counted.
+        """
+        uncertain = tuple(
             order.order_ref
             for order in self._repo.uncertain_orders()
             if (
@@ -1492,6 +1472,15 @@ class SqliteAlpacaClerkFacade:
                 and effect.strategy_instance_id == strategy_instance_id
             )
         )
+        in_flight = tuple(
+            order.order_ref
+            for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
+            if order.broker_state is None
+            and order.order_ref not in uncertain
+            and (effect := self._repo.effect_operation(order.effect_operation_id)) is not None
+            and effect.state in NONTERMINAL_EFFECT_STATES
+        )
+        return uncertain + in_flight
 
 
 def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:
@@ -1549,7 +1538,7 @@ def _live_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
 
 
 def _is_working_order(order: OrderResource) -> bool:
-    return (order.broker_state or "").lower() in _WORKING_ORDER_STATES
+    return (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
 
 
 def _strategy_display_name(strategy_key: str) -> str:

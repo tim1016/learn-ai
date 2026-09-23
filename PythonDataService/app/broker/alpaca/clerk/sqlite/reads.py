@@ -117,6 +117,28 @@ WORKING_BROKER_STATES: frozenset[str] = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
 )
 
+#: Alpaca order states in which an owned ENTRY can still fill, so an ENTRY in
+#: one of them outliving its run must be cancelled. The operator's
+#: ``cancel_verified_working_orders`` and the reconciliation sweep's
+#: stopped-run step (:func:`entry_orders_owed_a_cancel`) read this one
+#: definition, so the two cancellers cannot disagree about which orders are
+#: still live. Deliberately wider than :data:`WORKING_BROKER_STATES`: an
+#: auction-bound, suspended or replace-pending order can still fill.
+CANCELLABLE_ENTRY_BROKER_STATES: frozenset[str] = frozenset(
+    {
+        "new",
+        "accepted",
+        "pending_new",
+        "partially_filled",
+        "accepted_for_bidding",
+        "pending_cancel",
+        "pending_replace",
+        "stopped",
+        "suspended",
+        "calculated",
+    }
+)
+
 #: Effect-operation states that have not reached a terminal outcome. An effect
 #: here can still create broker custody, so a registration carrying one is not
 #: inert however flat it currently reads.
@@ -530,6 +552,38 @@ def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: st
         "WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         (strategy_instance_id,),
+    ).fetchall()
+    return [OrderResource(**dict(row)) for row in rows]
+
+
+def entry_orders_owed_a_cancel(conn: sqlite3.Connection) -> list[OrderResource]:
+    """Working strategy ENTRYs whose run is not ACTIVE and that no EXIT owns.
+
+    The reconciliation sweep's stopped-run worklist (#2362), account-wide in
+    one read:
+
+    * the order may still fill (:data:`CANCELLABLE_ENTRY_BROKER_STATES`);
+    * its effect belongs to a strategy -- manual-custody orders belong to no
+      run;
+    * the effect's run is not ``ACTIVE`` (at most one run per strategy is);
+    * no nonterminal EXIT links the order -- that EXIT's machine owns its
+      cancel, the predicate of :func:`active_exit_for_order`.
+    """
+    states = ", ".join("?" for _ in CANCELLABLE_ENTRY_BROKER_STATES)
+    rows = conn.execute(
+        "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
+        "o.role, o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE o.role = 'ENTRY' AND e.strategy_instance_id IS NOT NULL "
+        f"AND LOWER(o.broker_state) IN ({states}) "
+        "AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.run_id = e.run_id "
+        "AND r.strategy_instance_id = e.strategy_instance_id AND r.state = 'ACTIVE') "
+        "AND NOT EXISTS (SELECT 1 FROM operation_order_links l "
+        "JOIN effect_operations x ON x.effect_operation_id = l.effect_operation_id "
+        "WHERE l.order_ref = o.order_ref AND x.kind = 'EXIT' "
+        "AND x.state NOT IN ('succeeded','failed','rejected')) "
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
+        tuple(sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
     ).fetchall()
     return [OrderResource(**dict(row)) for row in rows]
 

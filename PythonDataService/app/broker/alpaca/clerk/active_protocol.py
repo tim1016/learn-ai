@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
-    from app.broker.alpaca.clerk.sqlite.models import OrderResource
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
@@ -147,11 +146,6 @@ class ActiveAlpacaClerk(Protocol):
         contacts no broker and appends nothing to the ledger.
         """
         ...
-
-    async def cancel_working_entries_for_instance(
-        self,
-        strategy_instance_id: str,
-    ) -> tuple[OrderResource, ...]: ...
 
 
 __all__ = [

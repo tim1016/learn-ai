@@ -48,8 +48,6 @@ class CarryoverBinding(Protocol):
 
 
 class CustodyClerk(Protocol):
-    async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple: ...
-
     async def prove_instance_custody(self, strategy_instance_id: str) -> InstanceCustodyProof: ...
 
 
@@ -137,9 +135,16 @@ async def prove_stop_outcome(
     checkpoint_path: Path,
     now_ms: Callable[[], int],
 ) -> StopCustodyOutcome:
-    """Cancel entries, obtain fresh custody, and persist the STOP checkpoint."""
+    """Obtain fresh custody and persist the STOP checkpoint.
+
+    The run is already ``STOPPED`` when this runs, so the reconciliation
+    inside ``prove_instance_custody`` cancels its working entries (#2362) --
+    the same step every sweep re-drives. A cancel another owner's claim
+    blocked right now leaves the order in the proof's working set, so the
+    outcome is ``STOPPED_CUSTODY_UNPROVABLE`` without Stop racing the sweep
+    for the claim (#2361).
+    """
     try:
-        await clerk.cancel_working_entries_for_instance(binding.strategy_instance_id)
         proof = await clerk.prove_instance_custody(binding.strategy_instance_id)
     except Exception:
         logger.exception(

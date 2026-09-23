@@ -465,6 +465,10 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.entry_orders_for_strategy(self._conn, strategy_instance_id)
 
+    def entry_orders_owed_a_cancel(self: ClerkSqliteRepository) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.entry_orders_owed_a_cancel(self._conn)
+
     def orders_for_strategy(
         self: ClerkSqliteRepository,
         strategy_instance_id: str,
