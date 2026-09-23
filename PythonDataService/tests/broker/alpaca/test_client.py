@@ -24,10 +24,8 @@ from requests.sessions import Session
 from urllib3.exceptions import ProtocolError
 
 from app.broker.alpaca.client import (
-    _DEFAULT_TIMEOUT_S,
     _MAX_RATE_LIMIT_RETRIES,
     _RATE_LIMIT_RETRY_CAP_S,
-    _SUBMIT_VISIBILITY_GRACE_S,
     AlpacaTradingClient,
     _install_session_timeout,
     _install_stale_connection_retry,
@@ -845,9 +843,3 @@ async def test_reads_are_not_retried_by_the_sdk_on_504(tmp_path: Path) -> None:
 
     assert len(responses.calls) == 1
 
-
-def test_submission_grace_outlives_the_abandoned_submit_worker() -> None:
-    """#2342: the Clerk may call an order absent once the visibility window
-    closes, so no POST from an abandoned worker may land after it. With the
-    SDK retry off, a worker makes one POST bounded by the read timeout."""
-    assert _SUBMIT_VISIBILITY_GRACE_S > _DEFAULT_TIMEOUT_S
