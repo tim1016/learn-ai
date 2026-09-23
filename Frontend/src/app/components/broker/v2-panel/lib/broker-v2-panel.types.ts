@@ -24,6 +24,10 @@ export type ActionId = components['schemas']['PanelAction']['action_id'];
 
 // ── Cohort-scoped affordances (ADR 0051 flatten, ADR 0052 archive) ──────────
 
+export type CohortFlattenView = components['schemas']['CohortFlattenView'];
+export type CohortFlattenCohort = components['schemas']['CohortFlattenCohort'];
+export type CohortFlattenLeg = components['schemas']['CohortFlattenLeg'];
+export type CohortFlattenRequest = components['schemas']['CohortFlattenRequest'];
 export type CohortArchiveView = components['schemas']['CohortArchiveView'];
 export type CohortArchiveCohort = components['schemas']['CohortArchiveCohort'];
 export type CohortArchiveLeg = components['schemas']['CohortArchiveLeg'];
