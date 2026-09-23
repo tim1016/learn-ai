@@ -13,6 +13,7 @@ container and carrying podman's own stderr — never a swallowed exit code.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,6 +29,12 @@ DEFAULT_COMMAND_TIMEOUT_S = 120.0
 #: Seconds ``podman stop`` gives a container before it kills it: long enough
 #: for uvicorn's own 10 s graceful shutdown and a clean Postgres checkpoint.
 STOP_GRACE_S = 60
+
+#: ``podman system df --verbose`` prints sizes through go-units' decimal
+#: ``HumanSize`` ("106.2MB", "24.58kB", "0B"); ``--format`` cannot be combined
+#: with ``--verbose``, so the one per-volume size podman reports is this text.
+_HUMAN_SIZE = re.compile(r"^(?P<number>\d+(?:\.\d+)?)(?P<unit>[kMGTP]?B)$")
+_DECIMAL_UNITS = {"B": 1, "kB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12, "PB": 10**15}
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +66,8 @@ class PodmanPort(Protocol):
     def import_volume(self, name: str, source: Path) -> None: ...
 
     def remove_volume(self, name: str) -> None: ...
+
+    def volume_size_bytes(self, name: str) -> int | None: ...
 
     def containers_using_volume(self, name: str) -> list[ContainerUse]: ...
 
@@ -171,6 +180,27 @@ class SubprocessPodman:
             subject=name,
             timeout_s=self._transfer_timeout_s,
         )
+
+    def volume_size_bytes(self, name: str) -> int | None:
+        """The volume's size as podman reports it, or ``None`` when it does not.
+
+        ``None`` is "unknown", never zero: the caller estimates instead.
+        """
+        listed = self._call(["system", "df", "--verbose"], subject=name)
+        in_volumes = False
+        for line in listed.stdout.splitlines():
+            if line.startswith("Local Volumes space usage"):
+                in_volumes = True
+                continue
+            if in_volumes and line.endswith("space usage:"):
+                break
+            fields = line.split()
+            if in_volumes and len(fields) == 3 and fields[0] == name:
+                match = _HUMAN_SIZE.match(fields[2])
+                if match is None:
+                    return None
+                return round(float(match["number"]) * _DECIMAL_UNITS[match["unit"]])
+        return None
 
     def remove_volume(self, name: str) -> None:
         # Never --force: a volume a container still references must refuse,

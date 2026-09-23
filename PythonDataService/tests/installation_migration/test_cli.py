@@ -95,6 +95,7 @@ def test_export_then_import_round_trips_with_exit_0(
         "manifest",
         "code",
         "bundle-verified",
+        "folders-staged",
         "identity-verified",
         "host-resolution",
         "moved-aside",
@@ -158,3 +159,44 @@ def test_export_allow_dirty_tree_is_passed_through_and_recorded(
     assert _lines(capsys)[-1]["reason"] == "source_tree_dirty"
     assert main([*argv, "--allow-dirty-tree"]) == 0
     assert read_manifest(bundle).dirty_tree_override is True
+
+
+def test_import_accept_dirty_source_is_passed_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    installation = build_installation(tmp_path)
+    bundle = tmp_path / "bundle.tar"
+    monkeypatch.setattr(
+        migrate_installation,
+        "build_ports",
+        lambda _args: Ports(
+            podman=installation.podman, git=FakeGit(dirty=True), lanes=installation.lanes
+        ),
+    )
+    exported = main(
+        [
+            "export",
+            "--repo-root", str(installation.repo_root),
+            "--bundle", str(bundle),
+            "--operator", "inkant",
+            "--change-ref", "migrate-2026-09-22",
+            "--allow-dirty-tree",
+        ]
+    )
+    assert exported == 0
+    repo_root, podman = build_empty_destination(tmp_path)
+    monkeypatch.setattr(
+        migrate_installation,
+        "build_ports",
+        lambda _args: Ports(podman=podman, git=FakeGit(), lanes=None),
+    )
+    argv = [
+        "import",
+        "--repo-root", str(repo_root),
+        "--bundle", str(bundle),
+        "--aside-dir", str(tmp_path / "aside"),
+    ]
+
+    assert main(argv) == 2
+    assert _lines(capsys)[-1]["reason"] == "source_tree_dirty_unacknowledged"
+    assert main([*argv, "--accept-dirty-source"]) == 0

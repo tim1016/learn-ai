@@ -49,6 +49,8 @@ class FakePodman:
         self.stopped: list[str] = []
         self.removed: list[str] = []
         self.fail_stop: set[str] = set()
+        self.fail_import: set[str] = set()
+        self.truncate_export: set[str] = set()
 
     def volume_dir(self, name: str) -> Path:
         return self.root / name
@@ -70,6 +72,8 @@ class FakePodman:
     def export_volume(self, name: str, destination: Path) -> None:
         with tarfile.open(destination, "x") as archive:
             archive.add(self.volume_dir(name), arcname=".")
+        if name in self.truncate_export:
+            destination.write_bytes(destination.read_bytes()[:700])
 
     def create_volume(self, info: VolumeInfo) -> None:
         if info.name in self.volumes:
@@ -78,8 +82,15 @@ class FakePodman:
         self.volume_dir(info.name).mkdir(parents=True)
 
     def import_volume(self, name: str, source: Path) -> None:
+        if name in self.fail_import:
+            raise MigrationRefused("podman_command_failed", f"`podman volume import {name}` exited 125")
         with tarfile.open(source, "r:*") as archive:
             archive.extractall(self.volume_dir(name), filter="tar")
+
+    def volume_size_bytes(self, name: str) -> int | None:
+        return sum(
+            path.stat().st_size for path in self.volume_dir(name).rglob("*") if path.is_file()
+        )
 
     def remove_volume(self, name: str) -> None:
         if self.containers_using_volume(name):
@@ -224,6 +235,13 @@ def write_fleet_env_files(repo_root: Path) -> None:
         (env / name).write_text("FLEET_WORKER_KEY=secret\n", encoding="utf-8")
 
 
+def write_host_env_files(repo_root: Path) -> None:
+    """The repo-root and data-plane ``.env`` files the operator copies by hand."""
+    (repo_root / ".env").write_text("POSTGRES_PASSWORD=secret\n", encoding="utf-8")
+    (repo_root / "PythonDataService").mkdir(parents=True, exist_ok=True)
+    (repo_root / "PythonDataService" / ".env").write_text("POLYGON_API_KEY=secret\n", encoding="utf-8")
+
+
 def build_installation(tmp_path: Path, *, name: str = "source") -> Installation:
     """A complete, flat scratch installation: five volumes, three folders."""
     repo_root = make_repo(tmp_path / name / "learn-ai")
@@ -325,4 +343,5 @@ def build_empty_destination(tmp_path: Path, *, name: str = "destination") -> tup
     """A fresh host: a checkout with its env files, and no volumes at all."""
     repo_root = make_repo(tmp_path / name / "learn-ai")
     write_fleet_env_files(repo_root)
+    write_host_env_files(repo_root)
     return repo_root, FakePodman(tmp_path / name / "podman")

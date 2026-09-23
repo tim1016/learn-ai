@@ -133,3 +133,40 @@ def test_a_missing_executable_refuses() -> None:
         SubprocessPodman(run=run).volume_info("v")
 
     assert refused.value.reason == "podman_unavailable"
+
+
+_SYSTEM_DF = """Images space usage:
+
+REPOSITORY  TAG  IMAGE ID  CREATED  SIZE  SHARED SIZE  UNIQUE SIZE  CONTAINERS
+
+Local Volumes space usage:
+
+VOLUME NAME                          LINKS       SIZE
+learn-ai_pgdata                      1           106.2MB
+learn-ai-alpaca-clerk-data           1           2.5GB
+learn-ai_alpaca-fleet-control        1           24.58kB
+empty-volume                         0           0B
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("learn-ai_pgdata", 106_200_000),
+        ("learn-ai-alpaca-clerk-data", 2_500_000_000),
+        ("learn-ai_alpaca-fleet-control", 24_580),
+        ("empty-volume", 0),
+        ("not-listed", None),
+    ],
+)
+def test_volume_size_reads_podman_system_df(name: str, expected: int | None) -> None:
+    run = _ScriptedRun((0, _SYSTEM_DF, ""))
+
+    assert SubprocessPodman(run=run).volume_size_bytes(name) == expected
+    assert run.calls[0][0] == ["podman", "system", "df", "--verbose"]
+
+
+def test_an_unreadable_volume_size_is_unknown_not_a_guess() -> None:
+    run = _ScriptedRun((0, "Local Volumes space usage:\n\nVOLUME NAME LINKS SIZE\nv 1 lots\n", ""))
+
+    assert SubprocessPodman(run=run).volume_size_bytes("v") is None

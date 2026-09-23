@@ -134,6 +134,7 @@ def _import(args: argparse.Namespace, ports: Ports) -> int:
             bundle_path=Path(args.bundle).expanduser().resolve(),
             aside_dir=Path(args.aside_dir).expanduser().resolve() if args.aside_dir else None,
             lake_dir=Path(args.lake_dir) if args.lake_dir else None,
+            accept_dirty_source=args.accept_dirty_source,
         ),
         podman=ports.podman,
         git=ports.git,
@@ -186,6 +187,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--aside-dir",
         default=None,
         help="Where existing data is moved (default: <checkout>-migration-aside beside it)",
+    )
+    restore.add_argument(
+        "--accept-dirty-source",
+        action="store_true",
+        help="Restore a bundle exported from a checkout with uncommitted changes",
     )
     restore.set_defaults(func=_import)
     return parser

@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 TOPOLOGY_SNAPSHOT = Path("deploy") / "fleet" / "topology.snapshot.json"
 FLEET_OVERLAY = Path("compose.fleet.dev.yaml")
 FLEET_ENV_DIRECTORY = Path("deploy") / "fleet" / "env"
+#: The two non-fleet ``.env`` files the stack cannot start without: the
+#: repo-root one Compose interpolates from and the data plane's own. Import
+#: checks only that they exist; their values are never read or printed.
+HOST_ENV_FILES = (Path(".env"), Path("PythonDataService") / ".env")
 NAMESPACE_ENV = "FLEET_DEPLOYMENT_NAMESPACE"
 
 _DEFAULTED = re.compile(r"^\$\{[A-Z0-9_]+:-(?P<default>[^}]+)\}$")
@@ -86,6 +90,31 @@ def required_fleet_env_files(repo_root: Path, topology: Mapping[str, Any]) -> li
             if path.parent == FLEET_ENV_DIRECTORY and path.suffix == ".env":
                 required.add(repo_root / path)
     return sorted(required)
+
+
+def required_env_files(repo_root: Path, topology: Mapping[str, Any]) -> list[Path]:
+    """Every env file the operator copies by hand: the fleet's and the host's."""
+    return sorted(
+        {*required_fleet_env_files(repo_root, topology), *(repo_root / f for f in HOST_ENV_FILES)}
+    )
+
+
+_IMAGE_MAJOR = re.compile(r":(?P<major>\d+)(?:[.\-@][^/]*)?$")
+
+
+def postgres_image_major(topology: Mapping[str, Any], *, volume_key: str) -> str | None:
+    """The major version of the Postgres image that mounts ``volume_key``.
+
+    ``None`` when no service mounts it or its image tag names no major
+    (``latest``, a digest): the caller then reports rather than compares.
+    """
+    for service in topology["service_detail"].values():
+        if any(
+            source == volume_key and kind == "volume" for source, _target, kind in _mounts(service)
+        ):
+            match = _IMAGE_MAJOR.search(str(service.get("image") or ""))
+            return None if match is None else match["major"]
+    return None
 
 
 def deployment_namespace(repo_root: Path) -> str:
@@ -179,5 +208,7 @@ __all__ = [
     "deployment_namespace",
     "host_resolution_report",
     "load_topology",
+    "postgres_image_major",
+    "required_env_files",
     "required_fleet_env_files",
 ]
