@@ -24,7 +24,8 @@ from collections.abc import Callable
 from app.research.grid_search.models import CellResult, SearchRow
 from app.research.grid_search.service import GridSearchSpec, window_dates
 from app.research.sweep.grid import RunSpec
-from app.routers.engine import EngineBacktestRequest, EngineBacktestResponse, execute_engine_backtest
+from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
+from app.services.engine_backtest_service import execute_engine_backtest
 
 
 def engine_request(row: SearchRow, spec: GridSearchSpec, candidate: RunSpec) -> EngineBacktestRequest:

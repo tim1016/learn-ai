@@ -73,7 +73,7 @@ SIGNAL_ENGINE_PHASES: tuple[Phase, ...] = (
 
 # ── Engine Lab Python backtest (canonical engine) ───────────────────────
 # Coarse phases emitted by ``execute_engine_backtest`` in
-# ``app/routers/engine.py``. Matches the LEAN sidecar's coarse taxonomy
+# ``app/services/engine_backtest_service.py``. Matches the LEAN sidecar's coarse taxonomy
 # (#470) so the Engine Lab run dock shows consistent terminology
 # regardless of which engine the user picked. ``fetching_data`` only
 # fires when ``auto_fetch=True``; the other phases always fire on the

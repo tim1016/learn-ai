@@ -482,7 +482,7 @@ class DatasetGenerationResponse(BaseModel):
 # LEAN-parity statistics response models
 #
 # Moved from app/routers/backtest.py (deleted as dark code — PR 4) because
-# app/routers/engine.py (the live backtest path) depends on these shapes.
+# app/services/engine_backtest_service.py (the live backtest path) depends on these shapes.
 # ---------------------------------------------------------------------------
 class LeanPortfolioStatsResponse(BaseModel):
     """LEAN PortfolioStatistics — 25 fields matching PS.cs exactly."""

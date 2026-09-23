@@ -3,7 +3,7 @@
 The Engine Lab run dock subscribes to SSE ``job.phase`` events and
 renders the phase id alongside its friendly label. Drift between the
 labels in ``app/jobs/phases.py`` and the ``on_phase(...)`` call sites
-in ``app/routers/engine.execute_engine_backtest`` would silently
+in ``app/services/engine_backtest_service.execute_engine_backtest`` would silently
 desync the user-facing run-state chrome from the underlying engine.
 
 These tests pin the contract two ways:
@@ -27,9 +27,9 @@ from __future__ import annotations
 import inspect
 import re
 
-import app.routers.engine as engine_module
+import app.services.engine_backtest_service as engine_module
 from app.jobs.phases import ENGINE_BACKTEST_PHASES, JOB_PHASES, friendly
-from app.routers.engine import (
+from app.services.engine_backtest_service import (
     _aggregate_backtest_response,
     _execute_engine_backtest_core,
     _persist_and_dispatch_companion,
@@ -107,10 +107,10 @@ class TestExecuteEngineBacktestPhaseSequence:
             f"phase emission sequence drifted from the registry; "
             f"saw {emitted!r}, expected {list(EXPECTED_PHASE_IDS)!r}. "
             f"Update both the registry in app/jobs/phases.py and the "
-            f"on_phase(...) call sites in app/routers/engine.py together."
+            f"on_phase(...) call sites in app/services/engine_backtest_service.py together."
         )
 
-    def test_the_router_emits_no_phase_outside_the_registry(self) -> None:
+    def test_the_workflow_module_emits_no_phase_outside_the_registry(self) -> None:
         """Membership, scanned over the whole module rather than the listed stages.
 
         ``WORKFLOW_STAGES`` is hand-maintained, which is fine for the *ordering*
@@ -124,7 +124,7 @@ class TestExecuteEngineBacktestPhaseSequence:
         registered = {phase.id for phase in ENGINE_BACKTEST_PHASES}
         emitted = set(re.findall(r'on_phase\("([a-z_]+)"\)', inspect.getsource(engine_module)))
         unknown = emitted - registered
-        assert unknown == set(), f"app/routers/engine.py emits unregistered phase(s): {sorted(unknown)}"
+        assert unknown == set(), f"app/services/engine_backtest_service.py emits unregistered phase(s): {sorted(unknown)}"
 
     def test_the_gate_reports_the_wait_before_the_workflow_starts(self) -> None:
         """``waiting_for_engine`` is the gate's, not the workflow's (#1957)."""

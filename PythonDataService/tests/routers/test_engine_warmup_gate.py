@@ -17,8 +17,9 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.data_lake.path_policy import lake_subpath
-from app.routers import engine as engine_router
-from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+from app.schemas.engine_backtest import EngineBacktestRequest
+from app.services import engine_backtest_service as engine_service
+from app.services.engine_backtest_service import execute_engine_backtest
 from app.utils.session_anchors import et_day_end_ms, et_midnight_ms, et_wall_clock_ms
 from tests._helpers.lean_store import seed_store_day
 
@@ -55,9 +56,9 @@ def recorded_persistence(monkeypatch) -> dict[str, list]:
         calls["save"].append(kwargs)
         return 42
 
-    monkeypatch.setattr(engine_router, "persist_engine_response_sync", _save)
+    monkeypatch.setattr(engine_service, "persist_engine_response_sync", _save)
     monkeypatch.setattr(
-        engine_router,
+        engine_service,
         "_dispatch_requested_parity_companion",
         lambda **kwargs: calls["parity"].append(kwargs),
     )
@@ -218,7 +219,7 @@ def test_a_trade_accounting_failure_is_reported_not_raised(seeded_lake, recorded
     def _reject(**_kwargs):
         raise ValueError("invalid_trade_times: Trade 0: entry_time_ms >= exit_time_ms")
 
-    monkeypatch.setattr(engine_router, "summarize", _reject)
+    monkeypatch.setattr(engine_service, "summarize", _reject)
     logs: list[str] = []
 
     response = execute_engine_backtest(request=_request(), on_phase=_noop, on_log=logs.append)

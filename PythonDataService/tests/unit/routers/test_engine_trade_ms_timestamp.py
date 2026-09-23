@@ -10,7 +10,7 @@ import pytest
 
 from app.engine.strategy.base import LoggedTrade
 from app.models.responses import LeanTradeStatsResponse
-from app.routers.engine import _format_trade, _format_trade_record
+from app.services.engine_backtest_service import _format_trade, _format_trade_record
 from app.utils.timestamps import to_ms_utc
 
 

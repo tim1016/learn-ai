@@ -275,7 +275,7 @@ def test_the_engine_entry_point_holds_the_gate_for_its_callers(monkeypatch: pyte
     job worker, Grid Search and Walk-Forward cells and the Recency runner
     converge; gating it is what counts those five together.
     """
-    from app.routers import engine as engine_router
+    from app.services import engine_backtest_service as engine_service
 
     concurrent: list[int] = []
     running = 0
@@ -303,11 +303,11 @@ def test_the_engine_entry_point_holds_the_gate_for_its_callers(monkeypatch: pyte
         phases.append(phase)
         queued.release()
 
-    monkeypatch.setattr(engine_router, "_execute_engine_backtest_core", counting_core)
+    monkeypatch.setattr(engine_service, "_execute_engine_backtest_core", counting_core)
 
     threads = [
         _spawn(
-            lambda: engine_router.execute_engine_backtest(
+            lambda: engine_service.execute_engine_backtest(
                 request=object(),  # type: ignore[arg-type] - the core is stubbed out
                 on_phase=record_phase,
                 on_log=lambda _: None,
@@ -393,19 +393,26 @@ def test_an_engine_built_anywhere_still_runs_one_at_a_time(monkeypatch: pytest.M
     assert len(concurrent) == 2
 
 
-def test_only_the_engine_router_may_call_the_ungated_core() -> None:
+def test_only_the_engine_backtest_service_may_call_the_ungated_core() -> None:
     """The gate is a wrapper, so a caller reaching past it silently loses the gate.
 
     Naming the private core in another module is how that would happen — a
     sweep author dodging what looks like double-gating, say — so it fails here
-    rather than in production memory.
+    rather than in production memory. The one module allowed to name it is the
+    one that defines it beside its gated wrapper, ``execute_engine_backtest``
+    (moved out of ``app/routers/engine.py`` by #1999; the allowance follows it).
     """
     from pathlib import Path
 
     app_root = Path(__file__).resolve().parents[2] / "app"
+    home = "services/engine_backtest_service.py"
+    assert "def _execute_engine_backtest_core(" in (app_root / home).read_text(encoding="utf-8"), (
+        f"the ungated core moved out of {home}; move this allowance with it rather than widening it"
+    )
     offenders = [
         path.relative_to(app_root).as_posix()
         for path in app_root.rglob("*.py")
-        if path.name != "engine.py" and "_execute_engine_backtest_core" in path.read_text(encoding="utf-8")
+        if path.relative_to(app_root).as_posix() != home
+        and "_execute_engine_backtest_core" in path.read_text(encoding="utf-8")
     ]
     assert offenders == [], f"these modules run the engine without the gate: {offenders}"

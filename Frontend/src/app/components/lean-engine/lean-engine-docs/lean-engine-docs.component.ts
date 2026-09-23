@@ -212,9 +212,9 @@ export class LeanEngineDocsComponent {
     {
       n: 9,
       label: "Serialize response",
-      module: "routers/engine.py",
+      module: "services/engine_backtest_service.py",
       detail:
-        "The router converts LoggedTrade into EngineTradeResponse with an " +
+        "The backtest service converts LoggedTrade into EngineTradeResponse with an " +
         "indicators dict (per-strategy keys) and signal_reason, then wraps " +
         "the summary stats and trade list into EngineBacktestResponse for " +
         "the /api/engine/backtest endpoint.",

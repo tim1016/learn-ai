@@ -51,14 +51,15 @@ from app.research.sweep.grid import (
     StrategyGridConfig,
     ValueListRange,
 )
-from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.routers.research_records import require_live_redelivery
+from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.http_errors import ErrorDetailResponse
 from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
 )
 from app.services.dataset_service import RunCancelledError
+from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.polygon_client import PolygonClientService
 from app.services.rule_based_backtest import (
     RuleBasedBacktestResult,

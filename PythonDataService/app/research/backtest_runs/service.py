@@ -29,7 +29,7 @@ from app.research.persistence.db import run_sync, with_connection
 from app.utils.background_loop import CallerStoppedWaitingError
 
 if TYPE_CHECKING:
-    from app.routers.engine import EngineBacktestResponse
+    from app.schemas.engine_backtest import EngineBacktestResponse
 
 logger = logging.getLogger(__name__)
 

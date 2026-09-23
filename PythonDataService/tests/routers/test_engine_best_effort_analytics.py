@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from app.routers import engine as engine_module
-from app.routers.engine import _lean_parity_statistics, _validation_analytics
+from app.services import engine_backtest_service as engine_module
+from app.services.engine_backtest_service import _lean_parity_statistics, _validation_analytics
 
 
 class _Result:
@@ -52,7 +52,7 @@ def test_a_validation_analytics_failure_is_reported_and_absent_not_raised(
     """An analytics failure is a missing panel; the operator is told, not the stack."""
     logs: list[str] = []
 
-    with caplog.at_level(logging.ERROR, logger="app.routers.engine"):
+    with caplog.at_level(logging.ERROR, logger="app.services.engine_backtest_service"):
         result = _validation_analytics(
             result=_Result(),
             request=object(),  # type: ignore[arg-type] - rejected before it is read

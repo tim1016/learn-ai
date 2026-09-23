@@ -114,7 +114,7 @@ def _default_data_source_factory(symbol: str, start: Date, end: Date):
     """Build a real LEAN data reader for the given symbol + date range.
 
     Reads the LEAN_DATA_ROOT / LEAN_DATA_CACHE env vars the same way
-    ``app/routers/engine.py`` does. Tests override via
+    ``app/services/engine_backtest_service.py`` does. Tests override via
     ``app.dependency_overrides[get_data_source_factory]``.
     """
     import os
