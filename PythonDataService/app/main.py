@@ -811,11 +811,10 @@ async def _service_lifespan(
 
     bot_task_registry = None
     if _ROLE_RUNS_CLERK:
-        from app.services.go_live_hold import read_go_live_hold
+        from app.services.lane_go_live import lane_go_live_hold
 
-        lane_artifacts_root = Path(ibkr_settings.live_runs_root).parent
         bot_task_registry = BotTaskRegistry(
-            artifacts_root=lane_artifacts_root,
+            artifacts_root=Path(ibkr_settings.live_runs_root).parent,
             feed_resolver=get_market_data_feed,
             supported_broker_ids=frozenset({"alpaca"}),
             validation_fact=current_deployment_strategy_validation_fact,
@@ -825,8 +824,10 @@ async def _service_lifespan(
             drained_lane_gate=lambda: fleet_lane is not None and fleet_lane.draining,
             # #2269: a lane restored by installation migration starts no bot
             # until `migrate_installation go-live` removes the hold marker
-            # import wrote at its volume root. Read per start; fails closed.
-            go_live_hold=lambda: read_go_live_hold(lane_artifacts_root),
+            # import wrote at its clerk volume root — read there, not at the
+            # artifacts root above, which the combined role keeps outside the
+            # volume. Read per start; fails closed.
+            go_live_hold=lane_go_live_hold,
         )
         set_bot_task_registry(bot_task_registry)
         logger.info("In-container bot runner installed (task registry, daemon-free).")

@@ -11,7 +11,7 @@ auto-resumes after a restart.
 
 ``migrate-installation go-live`` removes the marker through the lane's own
 ``lane_go_live_release`` operation (:func:`release_go_live_hold`), which
-writes a receipt on the same volume.
+writes a receipt on the same volume first — no lane is released without one.
 
 The hold fails closed: a marker that exists but cannot be parsed still
 holds, and a lane that cannot tell whether its marker exists — the stat
@@ -108,6 +108,10 @@ class GoLiveHoldUnreadableError(Exception):
     """The lane cannot establish whether it is held, so it cannot release."""
 
 
+class GoLiveReleaseFailedError(Exception):
+    """The release's receipt could not be written, or its marker not removed."""
+
+
 @dataclass(frozen=True, slots=True)
 class GoLiveReleaseReceipt:
     """The durable record of one go-live release on this lane."""
@@ -143,7 +147,12 @@ def release_go_live_hold(
     bar_check: dict[str, Any],
     clock: Callable[[], int] = now_ms_utc,
 ) -> GoLiveReleaseReceipt:
-    """Remove this lane's marker (if any) durably, then record the release.
+    """Record the release durably, then remove this lane's marker (if any).
+
+    Receipt first: a lane is never released without its durable record, so a
+    receipt that cannot be written raises and leaves the marker — the lane
+    stays held. A receipt whose marker then could not be removed is a record
+    of an attempt, and the lane still holds; re-running go-live finishes it.
 
     Idempotent: a lane with no marker writes a receipt saying so. A marker
     that exists but does not parse is still removed — go-live is exactly the
@@ -153,9 +162,6 @@ def release_go_live_hold(
     state = read_go_live_hold(lane_root)
     if state.held and state.marker is None and not _marker_path(lane_root).is_file():
         raise GoLiveHoldUnreadableError(state.problem or "the go-live hold is unreadable")
-    if state.held:
-        _marker_path(lane_root).unlink()
-        fsync_parent_dir(_marker_path(lane_root))
     receipt = GoLiveReleaseReceipt(
         receipt_id=uuid4().hex,
         released_at_ms=clock(),
@@ -166,12 +172,36 @@ def release_go_live_hold(
         marker_problem=state.problem,
         bar_check=bar_check,
     )
-    atomic_write_bytes(
-        lane_root
-        / GO_LIVE_RECEIPTS_DIRECTORY
-        / f"{receipt.released_at_ms}-{receipt.receipt_id}.json",
-        json.dumps(receipt.to_json(), sort_keys=True, indent=2).encode("utf-8"),
+    receipt_path = (
+        lane_root / GO_LIVE_RECEIPTS_DIRECTORY / f"{receipt.released_at_ms}-{receipt.receipt_id}.json"
     )
+    try:
+        atomic_write_bytes(
+            receipt_path,
+            json.dumps(receipt.to_json(), sort_keys=True, indent=2).encode("utf-8"),
+        )
+    except OSError as exc:
+        raise GoLiveReleaseFailedError(
+            f"The release receipt {receipt_path} could not be written ({exc}); the "
+            "go-live hold was left in place, so this lane still starts no bots."
+        ) from exc
+    if state.held:
+        try:
+            _marker_path(lane_root).unlink()
+        except OSError as exc:
+            raise GoLiveReleaseFailedError(
+                f"The go-live hold {_marker_path(lane_root)} could not be removed ({exc}); "
+                f"receipt {receipt_path} records the attempt, and this lane still starts "
+                "no bots. Re-run go-live."
+            ) from exc
+        try:
+            fsync_parent_dir(_marker_path(lane_root))
+        except OSError as exc:
+            raise GoLiveReleaseFailedError(
+                f"The go-live hold {_marker_path(lane_root)} was removed, but the removal "
+                f"could not be made durable ({exc}); receipt {receipt_path} records it. "
+                "Re-run go-live to confirm the release."
+            ) from exc
     logger.warning(
         "Go-live hold released",
         extra={
@@ -192,6 +222,7 @@ __all__ = [
     "GoLiveHoldMarker",
     "GoLiveHoldState",
     "GoLiveHoldUnreadableError",
+    "GoLiveReleaseFailedError",
     "GoLiveReleaseReceipt",
     "go_live_marker_bytes",
     "read_go_live_hold",

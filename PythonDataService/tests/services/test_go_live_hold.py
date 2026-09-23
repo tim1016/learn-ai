@@ -7,11 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from app.services import go_live_hold
 from app.services.go_live_hold import (
     GO_LIVE_HOLD_MARKER,
     GO_LIVE_RECEIPTS_DIRECTORY,
     GoLiveHoldMarker,
     GoLiveHoldUnreadableError,
+    GoLiveReleaseFailedError,
     go_live_marker_bytes,
     read_go_live_hold,
     release_go_live_hold,
@@ -129,3 +131,48 @@ def test_release_refuses_when_the_lane_cannot_tell_whether_it_is_held(tmp_path: 
 
     assert read_go_live_hold(tmp_path).held is True
     assert not (tmp_path / GO_LIVE_RECEIPTS_DIRECTORY).exists()
+
+
+def test_a_receipt_that_cannot_be_written_leaves_the_lane_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receipt first: no lane is released without its durable record."""
+    (tmp_path / GO_LIVE_HOLD_MARKER).write_bytes(go_live_marker_bytes(_MARKER))
+
+    def failing_write(_path: Path, _payload: bytes) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(go_live_hold, "atomic_write_bytes", failing_write)
+
+    with pytest.raises(GoLiveReleaseFailedError) as failed:
+        release_go_live_hold(
+            tmp_path, operator="inkant", change_ref="go-live-1", bar_check=_BAR_CHECK
+        )
+
+    assert "No space left on device" in str(failed.value)
+    assert "still starts no bots" in str(failed.value)
+    assert read_go_live_hold(tmp_path).marker == _MARKER
+
+
+def test_a_marker_that_cannot_be_removed_is_a_named_failure_after_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / GO_LIVE_HOLD_MARKER).write_bytes(go_live_marker_bytes(_MARKER))
+    real_unlink = Path.unlink
+
+    def refusing_unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.name == GO_LIVE_HOLD_MARKER:
+            raise PermissionError(13, "Permission denied")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refusing_unlink)
+
+    with pytest.raises(GoLiveReleaseFailedError) as failed:
+        release_go_live_hold(
+            tmp_path, operator="inkant", change_ref="go-live-1", bar_check=_BAR_CHECK
+        )
+
+    assert "could not be removed" in str(failed.value)
+    assert read_go_live_hold(tmp_path).held is True
+    [receipt] = _receipts(tmp_path)
+    assert receipt["was_held"] is True

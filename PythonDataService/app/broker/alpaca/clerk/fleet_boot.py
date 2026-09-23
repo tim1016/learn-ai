@@ -1204,6 +1204,12 @@ def _fence_writable_roots(*, volume_root: Path) -> None:
     that left them on the shared artifacts tree would let two lanes write one
     root, which is exactly what the fleet exists to prevent (fleet A2
     inventory; audit 2026-09-13, finding 5).
+
+    The bot-binding root must moreover **be** the volume root, not merely
+    sit inside it (#2269): export's "every bot stopped" check reads the
+    copied volume's bot state at its root, exactly where the lane-wide
+    stop's intent sweep must have written it, so a deeper state root would
+    hide every bot from that check.
     """
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -1224,6 +1230,15 @@ def _fence_writable_roots(*, volume_root: Path) -> None:
                 "(e.g. <clerk_dir>/live_runs and <clerk_dir>/live_bars) and "
                 "restart the agent.",
             )
+    state_root = fenced["live_state_root"].resolve()
+    if state_root != volume:
+        raise FleetBootRefused(
+            f"The live_state_root at {state_root} is not the clerk volume root {volume}; "
+            "a lane's bot state lives at its volume root, where the lane-wide stop and "
+            "installation export read it.",
+            next_step="Set IBKR_LIVE_RUNS_ROOT to <clerk_dir>/live_runs and restart the "
+            "agent.",
+        )
 
 
 def _verify_root_against_expectation(

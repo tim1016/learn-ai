@@ -31,7 +31,13 @@ from typing import Any
 
 from app.broker.ibkr.bars import IBKRBarStreamError, fetch_historical_minute_bars
 from app.broker.ibkr.client import BrokerError, get_client
-from app.services.go_live_hold import GoLiveReleaseReceipt, release_go_live_hold
+from app.broker_configuration.runtime import resolve_clerk_dir
+from app.services.go_live_hold import (
+    GoLiveHoldState,
+    GoLiveReleaseReceipt,
+    read_go_live_hold,
+    release_go_live_hold,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -79,6 +85,47 @@ class LaneBarCheck:
             "last_bar_end_ms": self.last_bar_end_ms,
             "checked_at_ms": self.checked_at_ms,
         }
+
+
+class GoLiveHoldRootUnresolvedError(Exception):
+    """This process cannot name the clerk volume root its go-live hold lives at."""
+
+
+def lane_go_live_hold_root() -> Path:
+    """Where this process's go-live hold lives: its clerk volume root.
+
+    Import lays the marker at the root of each clerk volume, and every role
+    that hosts a bot runner mounts that volume at the clerk directory
+    (``ALPACA_CLERK_DIR``, else its default) — the same root
+    ``open_fleet_lane`` proves a fleet lane's identity against. Not the bot
+    runner's artifacts root: the combined role keeps that on the shared
+    ``/app/artifacts`` bind, outside the volume, where no marker ever lands.
+
+    A relative clerk directory names no volume; it raises rather than
+    resolving against whatever the working directory happens to be.
+    """
+    root = resolve_clerk_dir()
+    if not root.is_absolute():
+        raise GoLiveHoldRootUnresolvedError(
+            f"The clerk directory {root} is not an absolute path, so this process cannot "
+            "tell which clerk volume carries its go-live hold. Set ALPACA_CLERK_DIR to the "
+            "clerk volume's mount point."
+        )
+    return root
+
+
+def lane_go_live_hold() -> GoLiveHoldState:
+    """This lane's go-live hold, read at its clerk volume root; fails closed.
+
+    A root that cannot be resolved holds, exactly as an unreadable one does
+    (:func:`read_go_live_hold`); only a readable root without a marker — a
+    machine never migrated, or one already released — does not.
+    """
+    try:
+        root = lane_go_live_hold_root()
+    except GoLiveHoldRootUnresolvedError as exc:
+        return GoLiveHoldState(held=True, problem=str(exc))
+    return read_go_live_hold(root)
 
 
 _LAST_PASSING: LaneBarCheck | None = None
@@ -208,9 +255,12 @@ __all__ = [
     "BAR_CHECK_SYMBOL",
     "IBKR_BAR_CHECK_TIMEOUT_S",
     "GoLiveBarCheckRequired",
+    "GoLiveHoldRootUnresolvedError",
     "LaneBarCheck",
     "LaneBarCheckFailed",
     "check_ibkr_historical_bars",
     "forget_bar_checks",
+    "lane_go_live_hold",
+    "lane_go_live_hold_root",
     "release_lane_go_live",
 ]

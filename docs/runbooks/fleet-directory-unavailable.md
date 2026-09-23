@@ -115,7 +115,7 @@ volumes:
 
 Notes from the 2026-09-14 incident:
 
-- The **writable-root fence** refuses boot while `IBKR_LIVE_RUNS_ROOT`'s parent resolves outside the clerk volume. `compose.yaml` pins the shared-artifacts default for the deprecated host-side IBKR reconcile workflow, so the override must re-point it and the existing `live_state`/`live_bars` trees should be copied into the volume first (`cp -a` from a one-shot container, service stopped).
+- The **writable-root fence** refuses boot unless `IBKR_LIVE_RUNS_ROOT`'s parent resolves to the clerk volume root itself (`<clerk_dir>/live_runs`; #2269). `compose.yaml` pins the shared-artifacts default for the deprecated host-side IBKR reconcile workflow, so the override must re-point it and the existing `live_state`/`live_bars` trees should be copied into the volume first (`cp -a` from a one-shot container, service stopped).
 - `fleet-local` in `TRUSTED_HOSTS` is required because the combined posture's raw-ASGI lane dispatch presents that synthetic host and no default trusted-host list includes it.
 - The combined posture dispatches in-process (`local_app`); `approve-endpoint` is not needed. It becomes required only in the split overlay posture.
 

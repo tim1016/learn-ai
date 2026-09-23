@@ -117,11 +117,13 @@ from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
-from app.services.go_live_hold import GoLiveHoldUnreadableError
+from app.services.go_live_hold import GoLiveHoldUnreadableError, GoLiveReleaseFailedError
 from app.services.lane_go_live import (
     GoLiveBarCheckRequired,
+    GoLiveHoldRootUnresolvedError,
     LaneBarCheckFailed,
     check_ibkr_historical_bars,
+    lane_go_live_hold_root,
     release_lane_go_live,
 )
 from app.services.lane_quiesce import (
@@ -946,20 +948,25 @@ async def release_lane_go_live_hold(
         )
     try:
         receipt = release_lane_go_live(
-            registry.artifacts_root, operator=request.operator, change_ref=request.change_ref
+            lane_go_live_hold_root(), operator=request.operator, change_ref=request.change_ref
         )
     except GoLiveBarCheckRequired as exc:
         raise HTTPException(
             status_code=409,
             detail={"reason": "lane_go_live_bar_check_required", "message": str(exc)},
         ) from exc
-    except GoLiveHoldUnreadableError as exc:
+    except (GoLiveHoldUnreadableError, GoLiveHoldRootUnresolvedError) as exc:
         raise HTTPException(
             status_code=503,
             detail={
                 "reason": "lane_go_live_hold_unreadable",
                 "message": f"This lane cannot tell whether it is held, so it stays held: {exc}",
             },
+        ) from exc
+    except GoLiveReleaseFailedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "lane_go_live_release_failed", "message": str(exc)},
         ) from exc
     return LaneGoLiveReleaseReceipt.model_validate(receipt.to_json())
 

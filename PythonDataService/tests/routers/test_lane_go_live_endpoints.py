@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.broker_configuration.runtime import CLERK_DIR_ENV_VAR
 from app.config import settings
 from app.main import app
 from app.services import lane_go_live
@@ -70,7 +71,20 @@ def _bars() -> list[SimpleNamespace]:
     return [SimpleNamespace(start_ms=_T0 - 60_000, end_ms=_T0)]
 
 
+def _volume(tmp_path: Path) -> Path:
+    """The clerk volume's mount point — deliberately not the runner's artifacts root."""
+    return tmp_path / "clerk_volume"
+
+
+@pytest.fixture(autouse=True)
+def _clerk_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _volume(tmp_path).mkdir()
+    monkeypatch.setenv(CLERK_DIR_ENV_VAR, str(_volume(tmp_path)))
+
+
 def _held_lane(tmp_path: Path) -> None:
+    """A hold at the clerk volume root, and a bot runner whose artifacts root
+    is elsewhere — as in the combined role, where it is ``/app/artifacts``."""
     marker = GoLiveHoldMarker(
         kind="learn-ai-go-live-hold",
         schema_version=1,
@@ -79,8 +93,10 @@ def _held_lane(tmp_path: Path) -> None:
         source_commit="a" * 40,
         registry_id="reg_1",
     )
-    (tmp_path / GO_LIVE_HOLD_MARKER).write_bytes(go_live_marker_bytes(marker))
-    set_bot_task_registry(_registry(tmp_path, _FakeFeed([], mode="hold")))
+    (_volume(tmp_path) / GO_LIVE_HOLD_MARKER).write_bytes(go_live_marker_bytes(marker))
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    set_bot_task_registry(_registry(artifacts, _FakeFeed([], mode="hold")))
 
 
 def _client() -> AsyncClient:
@@ -126,8 +142,8 @@ async def test_release_after_a_passing_check_removes_the_hold_and_starts_nothing
     assert body["was_held"] is True
     assert body["marker"]["volume"] == "learn-ai-alpaca-clerk-data"
     assert body["bar_check"]["bar_count"] == 1
-    assert read_go_live_hold(tmp_path).held is False
-    assert len(list((tmp_path / GO_LIVE_RECEIPTS_DIRECTORY).glob("*.json"))) == 1
+    assert read_go_live_hold(_volume(tmp_path)).held is False
+    assert len(list((_volume(tmp_path) / GO_LIVE_RECEIPTS_DIRECTORY).glob("*.json"))) == 1
 
 
 async def test_the_bar_check_alone_does_not_release(
@@ -147,7 +163,7 @@ async def test_the_bar_check_alone_does_not_release(
 
     assert missing.status_code == 422
     assert wrong.status_code == 422
-    assert read_go_live_hold(tmp_path).held is True
+    assert read_go_live_hold(_volume(tmp_path)).held is True
 
 
 async def test_the_confirmation_alone_does_not_release(tmp_path: Path) -> None:
@@ -158,7 +174,7 @@ async def test_the_confirmation_alone_does_not_release(tmp_path: Path) -> None:
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "lane_go_live_bar_check_required"
-    assert read_go_live_hold(tmp_path).held is True
+    assert read_go_live_hold(_volume(tmp_path)).held is True
 
 
 async def test_release_without_a_bot_runner_refuses() -> None:
@@ -181,4 +197,43 @@ async def test_both_routes_are_guarded(tmp_path: Path, monkeypatch: pytest.Monke
 
     assert check.status_code == 403
     assert release.status_code == 403
-    assert read_go_live_hold(tmp_path).held is True
+    assert read_go_live_hold(_volume(tmp_path)).held is True
+
+
+async def test_a_marker_that_cannot_be_removed_is_a_named_503_not_a_500(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _held_lane(tmp_path)
+    _gateway(monkeypatch, _bars())
+    real_unlink = Path.unlink
+
+    def refusing_unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.name == GO_LIVE_HOLD_MARKER:
+            raise PermissionError(13, "Permission denied")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refusing_unlink)
+
+    async with _client() as client:
+        assert (await client.get(_CHECK_PATH)).status_code == 200
+        response = await client.post(_RELEASE_PATH, json=_BODY)
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "lane_go_live_release_failed"
+    assert read_go_live_hold(_volume(tmp_path)).held is True
+
+
+async def test_a_lane_that_cannot_name_its_clerk_volume_does_not_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _held_lane(tmp_path)
+    _gateway(monkeypatch, _bars())
+    monkeypatch.setenv(CLERK_DIR_ENV_VAR, "relative/clerk")
+
+    async with _client() as client:
+        assert (await client.get(_CHECK_PATH)).status_code == 200
+        response = await client.post(_RELEASE_PATH, json=_BODY)
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "lane_go_live_hold_unreadable"
+    assert read_go_live_hold(_volume(tmp_path)).held is True

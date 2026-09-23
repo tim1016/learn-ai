@@ -425,7 +425,7 @@ def _fence_satisfying_roots(monkeypatch: pytest.MonkeyPatch, volume_root: Path) 
         ibkr_config,
         "get_settings",
         lambda: ibkr_config.IbkrSettings(
-            live_runs_root=str(volume_root / "live_runs" / "runs"),
+            live_runs_root=str(volume_root / "live_runs"),
             live_bars_root=str(volume_root / "live_bars"),
         ),
     )
@@ -3070,6 +3070,46 @@ async def test_a_lane_root_outside_the_clerk_volume_refuses_before_authority(
         with pytest.raises(FleetBootRefused, match="escapes the clerk volume"):
             await open_fleet_lane(settings=settings, volume_root=root)
         # The refusal precedes session registration: nothing was registered.
+        assert service._store.read_session(provisioned.clerk.clerk_id) is None
+    finally:
+        service.close()
+
+
+async def test_a_bot_state_root_nested_inside_the_volume_refuses_before_authority(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2269: inside the volume is not enough for the bot state root — it
+    must be the volume root, where export's stopped-bots check and the
+    lane-wide stop both read bot state."""
+    from app.broker.ibkr import config as ibkr_config
+
+    service = FleetControlService(
+        store=FleetRegistryStore.open(control_dir=control_dir),
+        provider_adapters=production_provider_adapters(),
+        clock=clock,
+    )
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        root = Path(provisioned.clerk.volume_root)
+        monkeypatch.setattr(
+            ibkr_config,
+            "get_settings",
+            lambda: ibkr_config.IbkrSettings(
+                live_runs_root=str(root / "lanes" / "live_runs"),
+                live_bars_root=str(root / "live_bars"),
+            ),
+        )
+        settings = FleetSettings(
+            ROLE="clerk_agent",
+            CONTROL_DIR=str(control_dir),
+            CLERK_ID=provisioned.clerk.clerk_id,
+            WORKER_KEY=provisioned.clerk.worker_key,
+            DEPLOYMENT_NAMESPACE="compose:test",
+        )
+        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused, open_fleet_lane
+
+        with pytest.raises(FleetBootRefused, match="is not the clerk volume root"):
+            await open_fleet_lane(settings=settings, volume_root=root)
         assert service._store.read_session(provisioned.clerk.clerk_id) is None
     finally:
         service.close()
