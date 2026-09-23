@@ -12,6 +12,7 @@ from app.services.go_live_hold import (
     GO_LIVE_HOLD_MARKER,
     GO_LIVE_RECEIPTS_DIRECTORY,
     GoLiveHoldMarker,
+    GoLiveHoldState,
     GoLiveHoldUnreadableError,
     GoLiveReleaseFailedError,
     go_live_marker_bytes,
@@ -61,6 +62,7 @@ def test_an_unparseable_marker_holds_with_the_problem_named(tmp_path: Path) -> N
 
     assert state.held is True
     assert state.marker is None
+    assert state.problem_kind == "marker_unparseable"
     assert GO_LIVE_HOLD_MARKER in (state.problem or "")
 
 
@@ -68,6 +70,7 @@ def test_a_missing_lane_root_holds(tmp_path: Path) -> None:
     state = read_go_live_hold(tmp_path / "absent")
 
     assert state.held is True
+    assert state.problem_kind == "root_unreadable"
     assert "not a readable directory" in (state.problem or "")
 
 
@@ -79,7 +82,58 @@ def test_a_marker_the_lane_cannot_read_holds(tmp_path: Path) -> None:
     state = read_go_live_hold(tmp_path)
 
     assert state.held is True
+    assert state.problem_kind == "marker_unreachable"
     assert "could not be read" in (state.problem or "")
+
+
+def _unreadable_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A marker file that is present but whose bytes cannot be read."""
+    real_read_bytes = Path.read_bytes
+
+    def refusing_read_bytes(self: Path) -> bytes:
+        if self.name == GO_LIVE_HOLD_MARKER:
+            raise PermissionError(13, "Permission denied")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", refusing_read_bytes)
+
+
+def test_a_present_marker_whose_bytes_cannot_be_read_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / GO_LIVE_HOLD_MARKER).write_bytes(go_live_marker_bytes(_MARKER))
+    _unreadable_marker(monkeypatch)
+
+    state = read_go_live_hold(tmp_path)
+
+    assert state.held is True
+    assert state.marker is None
+    assert state.problem_kind == "marker_unreadable"
+    assert "could not be read" in (state.problem or "")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"held": True},
+        {"held": False, "marker": _MARKER},
+        {"held": True, "problem": "unreadable"},
+        {"held": True, "problem_kind": "marker_unparseable"},
+        {"held": False, "problem": "unreadable", "problem_kind": "root_unreadable"},
+        {"held": True, "marker": _MARKER, "problem": "x", "problem_kind": "marker_unparseable"},
+    ],
+    ids=[
+        "held-without-marker-or-problem",
+        "marker-but-not-held",
+        "problem-without-kind",
+        "kind-without-problem",
+        "problem-but-not-held",
+        "marker-and-problem",
+    ],
+)
+def test_a_hold_state_cannot_take_an_impossible_shape(fields: dict) -> None:
+    with pytest.raises(ValueError):
+        GoLiveHoldState(**fields)
 
 
 def test_release_removes_the_marker_and_records_what_it_released(tmp_path: Path) -> None:
@@ -119,6 +173,30 @@ def test_release_removes_a_corrupt_marker_and_names_the_problem(tmp_path: Path) 
     assert receipt.was_held is True
     assert receipt.marker is None
     assert receipt.marker_problem is not None
+
+
+def test_release_removes_a_present_marker_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / GO_LIVE_HOLD_MARKER).write_bytes(go_live_marker_bytes(_MARKER))
+    _unreadable_marker(monkeypatch)
+
+    receipt = release_go_live_hold(
+        tmp_path, operator="inkant", change_ref="go-live-1", bar_check=_BAR_CHECK
+    )
+
+    assert not (tmp_path / GO_LIVE_HOLD_MARKER).exists()
+    assert receipt.was_held is True
+    assert "could not be read" in (receipt.marker_problem or "")
+
+
+def test_release_refuses_when_the_lane_root_is_unreadable(tmp_path: Path) -> None:
+    missing = tmp_path / "volume-not-mounted"
+
+    with pytest.raises(GoLiveHoldUnreadableError, match="not a readable directory"):
+        release_go_live_hold(missing, operator="inkant", change_ref="go-live-1", bar_check=_BAR_CHECK)
+
+    assert not missing.exists()
 
 
 def test_release_refuses_when_the_lane_cannot_tell_whether_it_is_held(tmp_path: Path) -> None:

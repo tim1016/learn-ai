@@ -64,21 +64,62 @@ def go_live_marker_bytes(marker: GoLiveHoldMarker) -> bytes:
     return marker.model_dump_json(indent=2).encode("utf-8")
 
 
+#: Why a lane holds without a marker it could read.
+#:
+#: - ``root_unreadable``: the lane's artifact root is not a readable directory,
+#:   or could not be resolved at all.
+#: - ``marker_unreachable``: the marker could not be read, and nothing at its
+#:   path is a regular file this lane can see — whether a marker exists
+#:   cannot be established.
+#: - ``marker_unreadable``: a marker file is present but its bytes could not
+#:   be read.
+#: - ``marker_unparseable``: a marker file was read but is not a go-live hold
+#:   marker.
+GoLiveHoldProblemKind = Literal[
+    "root_unreadable", "marker_unreachable", "marker_unreadable", "marker_unparseable"
+]
+
+#: The problems under which a marker file is known to be present, so release
+#: may remove it; under every other problem the lane cannot tell and refuses.
+_MARKER_PRESENT_PROBLEMS: frozenset[GoLiveHoldProblemKind] = frozenset(
+    {"marker_unreadable", "marker_unparseable"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class GoLiveHoldState:
     """Whether this lane is held, and what it could read about the hold.
 
-    ``held`` is true when the marker exists **or** its existence could not
-    be established; ``problem`` then says what could not be read.
+    Exactly one of three shapes: not held (nothing else set); held by a
+    marker it read (``marker``); or held because something could not be read
+    (``problem_kind`` and its ``problem`` text, no ``marker``).
     """
 
     held: bool
     marker: GoLiveHoldMarker | None = None
     problem: str | None = None
+    problem_kind: GoLiveHoldProblemKind | None = None
+
+    def __post_init__(self) -> None:
+        if (self.problem is None) != (self.problem_kind is None):
+            raise ValueError("a go-live hold problem needs both its kind and its text")
+        if self.problem_kind is not None:
+            if not self.held or self.marker is not None:
+                raise ValueError("a go-live hold problem holds the lane without a marker")
+        elif self.held != (self.marker is not None):
+            raise ValueError("a go-live hold without a problem is held exactly when it has a marker")
 
 
 def _marker_path(lane_root: Path) -> Path:
     return lane_root / GO_LIVE_HOLD_MARKER
+
+
+def _is_visible_file(path: Path) -> bool:
+    """Whether a regular file is visibly at ``path``; ``False`` when unsure."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 def read_go_live_hold(lane_root: Path) -> GoLiveHoldState:
@@ -88,19 +129,28 @@ def read_go_live_hold(lane_root: Path) -> GoLiveHoldState:
             return GoLiveHoldState(
                 held=True,
                 problem=f"the lane's artifact root {lane_root} is not a readable directory",
+                problem_kind="root_unreadable",
             )
         raw = _marker_path(lane_root).read_bytes()
     except FileNotFoundError:
         return GoLiveHoldState(held=False)
     except OSError as exc:
         return GoLiveHoldState(
-            held=True, problem=f"{_marker_path(lane_root)} could not be read: {exc}"
+            held=True,
+            problem=f"{_marker_path(lane_root)} could not be read: {exc}",
+            problem_kind=(
+                "marker_unreadable"
+                if _is_visible_file(_marker_path(lane_root))
+                else "marker_unreachable"
+            ),
         )
     try:
         return GoLiveHoldState(held=True, marker=GoLiveHoldMarker.model_validate_json(raw))
     except ValidationError as exc:
         return GoLiveHoldState(
-            held=True, problem=f"{_marker_path(lane_root)} is not a go-live hold marker: {exc}"
+            held=True,
+            problem=f"{_marker_path(lane_root)} is not a go-live hold marker: {exc}",
+            problem_kind="marker_unparseable",
         )
 
 
@@ -160,8 +210,8 @@ def release_go_live_hold(
     cannot tell whether a marker exists raises, and stays held.
     """
     state = read_go_live_hold(lane_root)
-    if state.held and state.marker is None and not _marker_path(lane_root).is_file():
-        raise GoLiveHoldUnreadableError(state.problem or "the go-live hold is unreadable")
+    if state.problem is not None and state.problem_kind not in _MARKER_PRESENT_PROBLEMS:
+        raise GoLiveHoldUnreadableError(state.problem)
     receipt = GoLiveReleaseReceipt(
         receipt_id=uuid4().hex,
         released_at_ms=clock(),
@@ -220,6 +270,7 @@ __all__ = [
     "GO_LIVE_HOLD_MARKER",
     "GO_LIVE_RECEIPTS_DIRECTORY",
     "GoLiveHoldMarker",
+    "GoLiveHoldProblemKind",
     "GoLiveHoldState",
     "GoLiveHoldUnreadableError",
     "GoLiveReleaseFailedError",

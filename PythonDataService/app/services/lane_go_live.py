@@ -124,7 +124,7 @@ def lane_go_live_hold() -> GoLiveHoldState:
     try:
         root = lane_go_live_hold_root()
     except GoLiveHoldRootUnresolvedError as exc:
-        return GoLiveHoldState(held=True, problem=str(exc))
+        return GoLiveHoldState(held=True, problem=str(exc), problem_kind="root_unreadable")
     return read_go_live_hold(root)
 
 
