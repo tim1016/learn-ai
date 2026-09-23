@@ -90,7 +90,8 @@ EXCLUDED_BIND_MOUNTS: dict[str, str] = {
     ),
 }
 
-#: The secret-shaped names no bundled folder may contain. The operator copies
+#: The secret-shaped names the bundle never carries: export skips each one
+#: and lists it (#2269; it refused before). The operator copies
 #: ``deploy/fleet/env/*.env`` (and the other ``.env`` files) by hand; every
 #: token a process mints under ``artifacts/`` is minted afresh on the new
 #: host. ``LAUNCHER_TOKEN_FILENAME`` is the LEAN launcher's live token, named
@@ -120,6 +121,25 @@ def is_secret_shaped(name: str) -> bool:
         or any(word in lowered for word in _SECRET_WORDS)
         or (name.startswith(".") and any(word in lowered for word in _HIDDEN_SECRET_WORDS))
     )
+
+
+#: Why a skipped secret-shaped file asks nothing of the operator, by name.
+_SKIPPED_SECRET_NOTES = {
+    LAUNCHER_TOKEN_FILENAME: (
+        "The LEAN launcher's token; ensure_launcher_token mints a fresh one on the new host."
+    ),
+    ".host-daemon-token": "Retired host-daemon token (ADR 0007); nothing reads it.",
+    ".clerk-host-binding-capability": "Retired clerk host-binding capability; nothing reads it.",
+}
+_DEFAULT_SKIPPED_SECRET_NOTE = (
+    "Secret-shaped, so the bundle does not carry it; copy it by hand only if the new "
+    "host needs it."
+)
+
+
+def skipped_secret_note(name: str) -> str:
+    """What the operator needs to know about one secret-shaped file export skipped."""
+    return _SKIPPED_SECRET_NOTES.get(name, _DEFAULT_SKIPPED_SECRET_NOTE)
 
 
 def resolve_folder_path(
@@ -152,4 +172,5 @@ __all__ = [
     "BundledVolume",
     "is_secret_shaped",
     "resolve_folder_path",
+    "skipped_secret_note",
 ]

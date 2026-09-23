@@ -51,7 +51,9 @@ from app.installation_migration.facts import (
 )
 
 MANIFEST_MEMBER = "manifest.json"
-MANIFEST_SCHEMA_VERSION = 1
+#: 2 (#2269): the manifest names the secret-shaped files export skipped and
+#: the source host's topology facts the re-approval check compares.
+MANIFEST_SCHEMA_VERSION = 2
 MANIFEST_KIND = "learn-ai-installation-bundle"
 
 _CHUNK_BYTES = 1 << 20
@@ -83,6 +85,13 @@ class FolderEntry(StrictRecord):
     content_digest: str = Field(pattern=_SHA256_HEX)
 
 
+class SkippedSecretFile(StrictRecord):
+    """One secret-shaped file export left out, and what it asks of the operator."""
+
+    path: str
+    note: str
+
+
 class LaneEntry(StrictRecord):
     """One lane's quiet observation and stop receipt at export."""
 
@@ -97,7 +106,7 @@ class Manifest(StrictRecord):
     """The whole manifest, parsed once and trusted only after this validates."""
 
     kind: Literal["learn-ai-installation-bundle"]
-    manifest_schema_version: Literal[1]
+    manifest_schema_version: Literal[2]
     created_at_ms: InstantMs
     source_commit: str = Field(pattern=_GIT_COMMIT)
     source_tree_dirty: bool
@@ -110,6 +119,7 @@ class Manifest(StrictRecord):
     clerk_volumes: tuple[ClerkVolumeFacts, ...]
     lanes: tuple[LaneEntry, ...]
     postgres: PostgresFacts
+    skipped_secret_files: tuple[SkippedSecretFile, ...]
 
     @model_validator(mode="after")
     def _layout_is_this_builds(self) -> Manifest:
@@ -337,6 +347,7 @@ __all__ = [
     "FolderEntry",
     "LaneEntry",
     "Manifest",
+    "SkippedSecretFile",
     "VolumeEntry",
     "extract_verified_members",
     "parse_manifest",

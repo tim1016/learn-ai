@@ -149,6 +149,7 @@ def run_import(
             "created_at_ms": manifest.created_at_ms,
             "registry_id": manifest.registry.registry_id,
             "pg_version": manifest.postgres.pg_version,
+            "skipped_secret_files": [entry.model_dump() for entry in manifest.skipped_secret_files],
         }
     )
     _require_dirty_source_acknowledged(manifest, request)

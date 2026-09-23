@@ -134,16 +134,23 @@ def test_sha256_file_is_the_hex_digest_of_the_bytes(tmp_path: Path) -> None:
     )
 
 
-def test_the_folder_tar_builder_itself_refuses_a_secret(tmp_path: Path) -> None:
+def test_the_folder_tar_builder_itself_leaves_a_secret_out(tmp_path: Path) -> None:
+    """Even a caller that skipped preflight cannot write a tar carrying a
+    secret: the builder drops it, and the digest is of what was written."""
     root = tmp_path / "root"
     (root / "lean-sidecar").mkdir(parents=True)
     (root / "lean-sidecar" / ".launcher-token").write_text("live", encoding="utf-8")
+    (root / "lean-sidecar" / "state.json").write_text("{}", encoding="utf-8")
+    archive = tmp_path / "out.tar"
 
-    with pytest.raises(MigrationRefused) as refused:
-        build_folder_tar(root, tmp_path / "out.tar")
+    build_folder_tar(root, archive)
 
-    assert refused.value.reason == "secret_in_bundle_source"
-    assert not (tmp_path / "out.tar").exists()
+    with tarfile.open(archive) as written:
+        assert sorted(written.getnames()) == ["lean-sidecar", "lean-sidecar/state.json"]
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    extract_tar(archive, restored)
+    assert tree_digest_from_dir(restored) == tree_digest_from_tar(archive)
 
 
 @pytest.mark.parametrize(
@@ -157,7 +164,7 @@ def test_a_symlink_the_safe_extraction_would_refuse_is_refused_at_the_source(
     os.symlink(target, root / "link")
 
     with pytest.raises(MigrationRefused) as refused:
-        require_bundleable([root])
+        require_bundleable({"root": root})
     with pytest.raises(MigrationRefused):
         build_folder_tar(root, tmp_path / "out.tar")
 
@@ -172,7 +179,7 @@ def test_a_symlink_inside_the_folder_is_bundleable(tmp_path: Path) -> None:
     os.symlink("sub/a.txt", root / "latest")
     os.symlink("../latest", root / "sub" / "back")
 
-    require_bundleable([root])
+    require_bundleable({"root": root})
 
 
 def test_a_corrupt_tar_is_a_refusal_not_a_traceback(tmp_path: Path) -> None:
