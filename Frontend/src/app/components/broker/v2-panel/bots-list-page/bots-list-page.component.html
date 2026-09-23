@@ -67,6 +67,6 @@
   [broker]="broker()"
   [clerkId]="clerkId()"
   [accountId]="accountId()"
-  (closed)="flattenOpen.set(false)"
+  (closed)="closeCohortFlatten()"
   (flattened)="catalog.reload()"
 />

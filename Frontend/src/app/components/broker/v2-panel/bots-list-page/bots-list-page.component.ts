@@ -102,6 +102,7 @@ export class BotsListPageComponent {
   protected readonly pendingBotIds = signal<ReadonlySet<string>>(new Set());
   protected readonly archiveOpen = signal(false);
   protected readonly flattenOpen = signal(false);
+  private flattenOpener: HTMLElement | null = null;
   private readonly requestedSid = signal<string | null>(null);
   /** Bumped after an action lands so the detail pane refetches its panel. */
   protected readonly detailRefreshToken = signal(0);
@@ -239,7 +240,7 @@ export class BotsListPageComponent {
       initialLoading: this.initialLoading,
       refresh: () => this.refreshBots(),
       openArchive: () => this.openArchive(),
-      openCohortFlatten: () => this.flattenOpen.set(true),
+      openCohortFlatten: () => this.openCohortFlatten(),
     });
     this.destroyRef.onDestroy(actionsUnregister);
   }
@@ -251,6 +252,25 @@ export class BotsListPageComponent {
 
   protected openArchive(): void {
     this.archiveOpen.set(true);
+  }
+
+  protected openCohortFlatten(): void {
+    // The command lives in the workspace header, outside this page; remember
+    // it so closing the drawer hands the keyboard back where it was.
+    const opener = this.document.activeElement;
+    this.flattenOpener = opener instanceof HTMLElement ? opener : null;
+    this.flattenOpen.set(true);
+  }
+
+  protected closeCohortFlatten(): void {
+    this.flattenOpen.set(false);
+    const opener = this.flattenOpener;
+    this.flattenOpener = null;
+    if (opener === null) return;
+    afterNextRender(
+      { write: () => { if (opener.isConnected) opener.focus(); } },
+      { injector: this.injector },
+    );
   }
 
   protected closeArchive(): void {
