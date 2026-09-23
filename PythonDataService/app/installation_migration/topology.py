@@ -20,10 +20,13 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from app.installation_migration.errors import MigrationRefused
+
+if TYPE_CHECKING:
+    from app.installation_migration.facts import RegistryFacts
 
 TOPOLOGY_SNAPSHOT = Path("deploy") / "fleet" / "topology.snapshot.json"
 FLEET_OVERLAY = Path("compose.fleet.dev.yaml")
@@ -113,7 +116,7 @@ def deployment_namespace(repo_root: Path) -> str:
 
 
 def host_resolution_report(
-    registry: Mapping[str, Any], topology: Mapping[str, Any], *, namespace: str
+    registry: RegistryFacts, topology: Mapping[str, Any], *, namespace: str
 ) -> list[dict[str, Any]]:
     """Whether each live clerk's volume root and endpoint resolve on this host.
 
@@ -126,43 +129,43 @@ def host_resolution_report(
     volume_names = {
         key: str(spec.get("name") or key) for key, spec in topology["volumes"].items()
     }
-    endpoints = {row["clerk_id"]: row for row in registry["approved_endpoints"]}
+    endpoints = {row.clerk_id: row for row in registry.approved_endpoints}
     report: list[dict[str, Any]] = []
-    for clerk in registry["clerks"]:
-        if clerk["lifecycle_state"] == "retired":
+    for clerk in registry.clerks:
+        if clerk.lifecycle_state == "retired":
             continue
         serving: dict[str, set[str]] = {}
         for service_name, service in topology["service_detail"].items():
             for source, target, kind in _mounts(service):
-                if kind == "volume" and volume_names.get(source) == clerk["attestation_id"]:
+                if kind == "volume" and volume_names.get(source) == clerk.attestation_id:
                     names = {service_name, str(service.get("container_name") or service_name)}
                     serving.setdefault(target, set()).update(names)
         issues: list[str] = []
-        if clerk["deployment_namespace"] != namespace:
+        if clerk.deployment_namespace != namespace:
             issues.append(
-                f"registered under namespace {clerk['deployment_namespace']!r}; this "
+                f"registered under namespace {clerk.deployment_namespace!r}; this "
                 f"host registers under {namespace!r}"
             )
-        hosts = serving.get(clerk["volume_root"])
+        hosts = serving.get(clerk.volume_root)
         if hosts is None:
             issues.append(
-                f"no service here mounts volume {clerk['attestation_id']!r} at "
-                f"{clerk['volume_root']!r}"
+                f"no service here mounts volume {clerk.attestation_id!r} at "
+                f"{clerk.volume_root!r}"
             )
-        endpoint = endpoints.get(clerk["clerk_id"])
+        endpoint = endpoints.get(clerk.clerk_id)
         if endpoint is not None:
-            endpoint_host = urlsplit(endpoint["base_url"]).hostname
+            endpoint_host = urlsplit(endpoint.base_url).hostname
             if hosts is None or endpoint_host not in hosts:
                 issues.append(
-                    f"approved endpoint {endpoint['base_url']!r} does not name the "
+                    f"approved endpoint {endpoint.base_url!r} does not name the "
                     "service that mounts this clerk's volume here"
                 )
         report.append(
             {
-                "clerk_id": clerk["clerk_id"],
-                "volume_root": clerk["volume_root"],
-                "endpoint_ref": None if endpoint is None else endpoint["endpoint_ref"],
-                "base_url": None if endpoint is None else endpoint["base_url"],
+                "clerk_id": clerk.clerk_id,
+                "volume_root": clerk.volume_root,
+                "endpoint_ref": None if endpoint is None else endpoint.endpoint_ref,
+                "base_url": None if endpoint is None else endpoint.base_url,
                 "resolves": not issues,
                 "reapproval_required": bool(issues),
                 "issues": issues,

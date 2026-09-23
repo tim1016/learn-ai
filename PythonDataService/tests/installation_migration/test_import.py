@@ -86,9 +86,10 @@ def _rewrite_bundle(
     target: Path,
     *,
     edit_member: Callable[[str, bytes], bytes] | None = None,
-    edit_manifest: Callable[[dict], None] | None = None,
+    edit_manifest: Callable[[dict], object] | None = None,
+    rename: dict[str, str] | None = None,
 ) -> None:
-    """Copy a bundle, altering one member's bytes or the manifest in flight."""
+    """Copy a bundle, altering one member's bytes, name or the manifest in flight."""
     with tarfile.open(bundle) as source, tarfile.open(target, "x") as sink:
         for member in source.getmembers():
             data = source.extractfile(member).read()  # type: ignore[union-attr]
@@ -98,7 +99,7 @@ def _rewrite_bundle(
                 data = json.dumps(manifest).encode("utf-8")
             elif edit_member is not None:
                 data = edit_member(member.name, data)
-            info = tarfile.TarInfo(member.name)
+            info = tarfile.TarInfo((rename or {}).get(member.name, member.name))
             info.size = len(data)
             sink.addfile(info, io.BytesIO(data))
 
@@ -321,3 +322,79 @@ def test_import_reports_that_a_scratch_registry_needs_reapproval(
     # mounts: reported, never silently re-approved.
     assert len(resolution["reapproval_required"]) == 2
     assert steps[-1]["reapproval_required"] == resolution["reapproval_required"]
+
+
+_LEAN_CACHE_MEMBER = "folders/PythonDataService__lean-cache.tar"
+
+
+@pytest.mark.parametrize(
+    "hostile_member",
+    ["../../../ESCAPED.tar", "<absolute>", "folders/../../ESCAPED.tar"],
+    ids=["dot_dot", "absolute", "nested_dot_dot"],
+)
+def test_import_refuses_a_manifest_member_outside_the_declared_layout(
+    tmp_path: Path, exported, hostile_member: str
+) -> None:
+    _source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    hostile = tmp_path / "hostile.tar"
+    if hostile_member == "<absolute>":
+        hostile_member = str(tmp_path / "outside" / "ESCAPED-absolute.tar")
+
+    def point_member_elsewhere(manifest: dict) -> None:
+        for entry in manifest["folders"]:
+            if entry["member"] == _LEAN_CACHE_MEMBER:
+                entry["member"] = hostile_member
+
+    _rewrite_bundle(
+        bundle,
+        hostile,
+        edit_manifest=point_member_elsewhere,
+        rename={_LEAN_CACHE_MEMBER: hostile_member},
+    )
+
+    with pytest.raises(MigrationRefused) as refused:
+        _import(repo_root, podman, hostile)
+
+    assert refused.value.reason == "bundle_manifest_invalid"
+    assert not list(tmp_path.rglob("ESCAPED*.tar"))
+    assert podman.volumes == {}
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        lambda manifest: manifest["volumes"][0].pop("sha256"),
+        lambda manifest: manifest.pop("registry"),
+        lambda manifest: manifest["folders"][0].update(size_bytes="big"),
+        lambda manifest: manifest.update(created_at_ms="yesterday"),
+        lambda manifest: manifest.update(source_tree_dirty=1),
+        lambda manifest: manifest["volumes"][0].update(size_bytes=True),
+        lambda manifest: manifest["registry"]["clerks"][0].update(volume_id=7),
+        lambda manifest: manifest["volumes"].append(dict(manifest["volumes"][0])),
+    ],
+    ids=[
+        "missing_sha256",
+        "missing_registry",
+        "size_not_int",
+        "instant_not_int",
+        "flag_not_bool",
+        "bool_as_int",
+        "nested_wrong_type",
+        "duplicated_volume",
+    ],
+)
+def test_a_malformed_manifest_refuses_with_a_reason_never_a_traceback(
+    tmp_path: Path, exported, corrupt: Callable[[dict], object]
+) -> None:
+    _source, bundle = exported
+    repo_root, podman = build_empty_destination(tmp_path)
+    malformed = tmp_path / "malformed.tar"
+    _rewrite_bundle(bundle, malformed, edit_manifest=corrupt)
+
+    with pytest.raises(MigrationRefused) as refused:
+        _import(repo_root, podman, malformed)
+
+    assert refused.value.reason == "bundle_manifest_invalid"
+    assert refused.value.details["errors"]
+    assert podman.volumes == {}

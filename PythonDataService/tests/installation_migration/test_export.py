@@ -137,15 +137,13 @@ def test_export_writes_exactly_the_listed_contents_plus_the_manifest(tmp_path: P
         + [folder.member for folder in BUNDLED_FOLDERS]
     )
     manifest = read_manifest(bundle)
-    assert manifest["source_commit"] == SOURCE_COMMIT
-    assert isinstance(manifest["created_at_ms"], int)
-    assert {entry["name"] for entry in manifest["volumes"]} == {v.name for v in BUNDLED_VOLUMES}
+    assert manifest.source_commit == SOURCE_COMMIT
+    assert isinstance(manifest.created_at_ms, int)
+    assert {entry.name for entry in manifest.volumes} == {v.name for v in BUNDLED_VOLUMES}
     # No lane was drained and no assignment changed state.
-    assert {clerk["lifecycle_state"] for clerk in manifest["registry"]["clerks"]} == {
-        "provisioned"
-    }
-    assert {row["state"] for row in manifest["registry"]["assignments"]} == {"effective"}
-    assert [lane["stop_receipt_id"] for lane in manifest["lanes"]] == [
+    assert {clerk.lifecycle_state for clerk in manifest.registry.clerks} == {"provisioned"}
+    assert {row.state for row in manifest.registry.assignments} == {"effective"}
+    assert [lane.stop_receipt_id for lane in manifest.lanes] == [
         f"rcpt-{installation.live_clerk_id}",
         f"rcpt-{installation.paper_clerk_id}",
     ]
@@ -173,15 +171,15 @@ def test_the_manifest_records_markers_and_authority_generations(tmp_path: Path) 
     _export(installation, bundle)
 
     manifest = read_manifest(bundle)
-    live = next(v for v in manifest["clerk_volumes"] if v["volume"] == LIVE_VOLUME)
-    assert live["marker"]["clerk_id"] == installation.live_clerk_id
-    assert [account["account_id"] for account in live["accounts"]] == [LIVE_ACCOUNT]
-    assert live["accounts"][0]["authority_generation"] >= 1
+    live = next(v for v in manifest.clerk_volumes if v.volume == LIVE_VOLUME)
+    assert live.marker.clerk_id == installation.live_clerk_id
+    assert [account.account_id for account in live.accounts] == [LIVE_ACCOUNT]
+    assert live.accounts[0].authority_generation >= 1
     assignment = next(
-        row for row in manifest["registry"]["assignments"] if row["clerk_id"] == installation.live_clerk_id
+        row for row in manifest.registry.assignments if row.clerk_id == installation.live_clerk_id
     )
-    assert assignment["assignment_generation"] >= 1
-    assert assignment["confirmed_binding_generation"] == 1
+    assert assignment.assignment_generation >= 1
+    assert assignment.confirmed_binding_generation == 1
 
 
 def test_the_bundle_carries_no_secret_file(tmp_path: Path) -> None:

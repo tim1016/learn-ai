@@ -36,6 +36,10 @@ from app.broker.fleet.records import LANE_QUIET_CONDITIONS
 from app.installation_migration.bundle import (
     MANIFEST_KIND,
     MANIFEST_SCHEMA_VERSION,
+    FolderEntry,
+    LaneEntry,
+    Manifest,
+    VolumeEntry,
     write_bundle,
 )
 from app.installation_migration.contents import (
@@ -174,34 +178,33 @@ def _export_bundle(
         registry, clerk_volumes = staged_identity_facts(
             {volume.name: staging / volume.member for volume in BUNDLED_VOLUMES}, staging
         )
-        manifest = {
-            "kind": MANIFEST_KIND,
-            "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
-            "created_at_ms": clock(),
-            "source_commit": source_commit,
-            "source_tree_dirty": source_tree_dirty,
-            "operator": request.operator,
-            "change_ref": request.change_ref,
-            "volumes": volume_entries,
-            "folders": folder_entries,
-            "registry": registry,
-            "clerk_volumes": clerk_volumes,
-            "lanes": [
-                {
-                    "clerk_id": answer["clerk_id"],
-                    "broker": answer["broker"],
-                    "account_id": answer["account_id"],
-                    "quiet_observed_at_ms": answer["observed_at_ms"],
-                    "stop_receipt_id": receipts[answer["clerk_id"]],
-                }
+        manifest = Manifest(
+            kind=MANIFEST_KIND,
+            manifest_schema_version=MANIFEST_SCHEMA_VERSION,
+            created_at_ms=clock(),
+            source_commit=source_commit,
+            source_tree_dirty=source_tree_dirty,
+            operator=request.operator,
+            change_ref=request.change_ref,
+            volumes=tuple(volume_entries),
+            folders=tuple(folder_entries),
+            registry=registry,
+            clerk_volumes=clerk_volumes,
+            lanes=tuple(
+                LaneEntry(
+                    clerk_id=answer["clerk_id"],
+                    broker=answer["broker"],
+                    account_id=answer["account_id"],
+                    quiet_observed_at_ms=answer["observed_at_ms"],
+                    stop_receipt_id=receipts[answer["clerk_id"]],
+                )
                 for answer in answers
-            ],
-        }
-        write_bundle(
-            bundle,
-            manifest,
-            [(entry["member"], staging / entry["member"]) for entry in volume_entries + folder_entries],
+            ),
         )
+        members = [volume.member for volume in BUNDLED_VOLUMES] + [
+            folder.member for folder in BUNDLED_FOLDERS
+        ]
+        write_bundle(bundle, manifest, [(member, staging / member) for member in members])
     emit(
         {
             "step": "complete",
@@ -346,39 +349,37 @@ def _quiesce_containers(podman: PodmanPort, topology: Mapping[str, Any]) -> list
 
 def _export_volume(
     podman: PodmanPort, volume: BundledVolume, info: VolumeInfo, staging: Path, emit: Emit
-) -> dict[str, Any]:
+) -> VolumeEntry:
     target = staging / volume.member
     target.parent.mkdir(parents=True, exist_ok=True)
     podman.export_volume(volume.name, target)
-    entry = {
-        "name": volume.name,
-        "compose_key": volume.compose_key,
-        "role": volume.role,
-        "driver": info.driver,
-        "labels": dict(info.labels),
-        "member": volume.member,
-        "size_bytes": target.stat().st_size,
-        "sha256": sha256_file(target),
-        "content_digest": tree_digest_from_tar(target),
-    }
-    emit({"step": "volume-exported", "volume": volume.name, "size_bytes": entry["size_bytes"]})
+    entry = VolumeEntry(
+        name=volume.name,
+        compose_key=volume.compose_key,
+        role=volume.role,
+        driver=info.driver,
+        labels=dict(info.labels),
+        member=volume.member,
+        size_bytes=target.stat().st_size,
+        sha256=sha256_file(target),
+        content_digest=tree_digest_from_tar(target),
+    )
+    emit({"step": "volume-exported", "volume": volume.name, "size_bytes": entry.size_bytes})
     return entry
 
 
-def _export_folder(
-    key: str, member: str, path: Path, staging: Path, emit: Emit
-) -> dict[str, Any]:
+def _export_folder(key: str, member: str, path: Path, staging: Path, emit: Emit) -> FolderEntry:
     target = staging / member
     target.parent.mkdir(parents=True, exist_ok=True)
     build_folder_tar(path, target)
-    entry = {
-        "key": key,
-        "member": member,
-        "size_bytes": target.stat().st_size,
-        "sha256": sha256_file(target),
-        "content_digest": tree_digest_from_tar(target),
-    }
-    emit({"step": "folder-exported", "folder": key, "size_bytes": entry["size_bytes"]})
+    entry = FolderEntry(
+        key=key,
+        member=member,
+        size_bytes=target.stat().st_size,
+        sha256=sha256_file(target),
+        content_digest=tree_digest_from_tar(target),
+    )
+    emit({"step": "folder-exported", "folder": key, "size_bytes": entry.size_bytes})
     return entry
 
 

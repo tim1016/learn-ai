@@ -14,6 +14,13 @@ canonical tree digest the destination is re-verified against after restore),
 plus the identity facts import checks before anything is restored: registry
 identity, clerks, assignment and authority generations, volume markers, and
 the source git commit. Every instant is ``int64 ms UTC``.
+
+The manifest is untrusted input on import. It is parsed **once** into the
+strict, closed :class:`Manifest` model — every field present and of its exact
+type, no field unknown — and every member name must be the one
+:mod:`app.installation_migration.contents` defines for that volume or folder,
+so no manifest string ever chooses where a byte lands. A malformed manifest is
+a :class:`MigrationRefused`, never a traceback.
 """
 
 from __future__ import annotations
@@ -23,76 +30,161 @@ import io
 import json
 import os
 import tarfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Literal
 
+from pydantic import Field, ValidationError, model_validator
+
+from app.installation_migration.contents import (
+    BUNDLED_FOLDERS,
+    BUNDLED_VOLUMES,
+    VolumeRole,
+)
 from app.installation_migration.errors import MigrationRefused
+from app.installation_migration.facts import ClerkVolumeFacts, RegistryFacts, StrictRecord
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MANIFEST_MEMBER = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_KIND = "learn-ai-installation-bundle"
 
 _CHUNK_BYTES = 1 << 20
-_REQUIRED_KEYS: Mapping[str, type] = {
-    "kind": str,
-    "manifest_schema_version": int,
-    "created_at_ms": int,
-    "source_commit": str,
-    "source_tree_dirty": bool,
-    "operator": str,
-    "change_ref": str,
-    "volumes": list,
-    "folders": list,
-    "registry": dict,
-    "clerk_volumes": list,
-    "lanes": list,
-}
+_SHA256_HEX = r"^[0-9a-f]{64}$"
+_GIT_COMMIT = r"^[0-9a-f]{40}$"
+InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 
 
-def validate_manifest(manifest: Mapping[str, Any], *, bundle: Path) -> dict[str, Any]:
-    """Refuse a manifest this build cannot trust as a complete description."""
-    for key, expected in _REQUIRED_KEYS.items():
-        value = manifest.get(key)
-        if isinstance(value, bool) and expected is int:
-            value = None
-        if not isinstance(value, expected):
-            raise MigrationRefused(
-                "bundle_manifest_invalid",
-                f"The manifest of {bundle} has no valid {key!r}.",
-                details={"bundle": str(bundle), "key": key},
+class VolumeEntry(StrictRecord):
+    """One bundled podman volume."""
+
+    name: str
+    compose_key: str
+    role: VolumeRole
+    driver: str
+    labels: dict[str, str]
+    member: str
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=_SHA256_HEX)
+    content_digest: str = Field(pattern=_SHA256_HEX)
+
+
+class FolderEntry(StrictRecord):
+    """One bundled host folder."""
+
+    key: str
+    member: str
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=_SHA256_HEX)
+    content_digest: str = Field(pattern=_SHA256_HEX)
+
+
+class LaneEntry(StrictRecord):
+    """One lane's quiet observation and stop receipt at export."""
+
+    clerk_id: str
+    broker: str
+    account_id: str
+    quiet_observed_at_ms: InstantMs
+    stop_receipt_id: str
+
+
+class Manifest(StrictRecord):
+    """The whole manifest, parsed once and trusted only after this validates."""
+
+    kind: Literal["learn-ai-installation-bundle"]
+    manifest_schema_version: Literal[1]
+    created_at_ms: InstantMs
+    source_commit: str = Field(pattern=_GIT_COMMIT)
+    source_tree_dirty: bool
+    operator: str
+    change_ref: str
+    volumes: tuple[VolumeEntry, ...]
+    folders: tuple[FolderEntry, ...]
+    registry: RegistryFacts
+    clerk_volumes: tuple[ClerkVolumeFacts, ...]
+    lanes: tuple[LaneEntry, ...]
+
+    @model_validator(mode="after")
+    def _layout_is_this_builds(self) -> Manifest:
+        """Exactly the bundled volumes and folders, each at its defined member."""
+        expected_volumes = sorted(
+            (volume.name, volume.compose_key, volume.role, volume.member)
+            for volume in BUNDLED_VOLUMES
+        )
+        declared_volumes = sorted(
+            (entry.name, entry.compose_key, entry.role, entry.member) for entry in self.volumes
+        )
+        if declared_volumes != expected_volumes:
+            raise ValueError(
+                f"the manifest declares volumes {declared_volumes}; this build bundles "
+                f"exactly {expected_volumes}"
             )
-    if manifest["kind"] != MANIFEST_KIND:
-        raise MigrationRefused(
-            "bundle_manifest_invalid",
-            f"{bundle} is not an installation bundle (kind {manifest['kind']!r}).",
-            details={"bundle": str(bundle)},
-        )
-    if manifest["manifest_schema_version"] != MANIFEST_SCHEMA_VERSION:
-        raise MigrationRefused(
-            "bundle_manifest_unsupported",
-            f"{bundle} has manifest schema {manifest['manifest_schema_version']}; this "
-            f"build reads {MANIFEST_SCHEMA_VERSION}.",
-            details={"bundle": str(bundle)},
-        )
-    return dict(manifest)
+        expected_folders = sorted((folder.key, folder.member) for folder in BUNDLED_FOLDERS)
+        declared_folders = sorted((entry.key, entry.member) for entry in self.folders)
+        if declared_folders != expected_folders:
+            raise ValueError(
+                f"the manifest declares folders {declared_folders}; this build bundles "
+                f"exactly {expected_folders}"
+            )
+        return self
+
+    def volume(self, name: str) -> VolumeEntry:
+        """The entry of one bundled volume (the layout validator guarantees it)."""
+        return next(entry for entry in self.volumes if entry.name == name)
+
+    def folder(self, key: str) -> FolderEntry:
+        """The entry of one bundled folder (the layout validator guarantees it)."""
+        return next(entry for entry in self.folders if entry.key == key)
+
+    def member_entries(self) -> dict[str, VolumeEntry | FolderEntry]:
+        """Every payload member, keyed by the member name ``contents`` defines."""
+        return {
+            **{volume.member: self.volume(volume.name) for volume in BUNDLED_VOLUMES},
+            **{folder.member: self.folder(folder.key) for folder in BUNDLED_FOLDERS},
+        }
 
 
-def manifest_members(manifest: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    """Every payload member the manifest declares, keyed by member name."""
-    entries = [*manifest["volumes"], *manifest["folders"]]
-    members = {str(entry["member"]): entry for entry in entries}
-    if len(members) != len(entries):
+def _manifest_invalid(bundle: Path, exc: ValidationError) -> MigrationRefused:
+    errors = [
+        {"field": ".".join(str(part) for part in error["loc"]) or "<manifest>", "problem": error["msg"]}
+        for error in exc.errors()
+    ]
+    listing = "; ".join(f"{error['field']}: {error['problem']}" for error in errors[:5])
+    return MigrationRefused(
+        "bundle_manifest_invalid",
+        f"The manifest of {bundle} is not one this build can trust: {listing}.",
+        details={"bundle": str(bundle), "errors": errors},
+    )
+
+
+def parse_manifest(payload: bytes, *, bundle: Path) -> Manifest:
+    """Parse manifest bytes into a :class:`Manifest`, or refuse by reason."""
+    try:
+        loose = json.loads(payload.decode("utf-8"))
+    except ValueError as exc:
         raise MigrationRefused(
             "bundle_manifest_invalid",
-            "The manifest declares one bundle member twice.",
-            details={},
-        )
-    return members
+            f"The manifest of {bundle} is not JSON: {exc}",
+            details={"bundle": str(bundle), "errors": [{"field": "<manifest>", "problem": str(exc)}]},
+        ) from exc
+    if isinstance(loose, dict) and loose.get("kind") == MANIFEST_KIND:
+        version = loose.get("manifest_schema_version")
+        if type(version) is int and version != MANIFEST_SCHEMA_VERSION:
+            raise MigrationRefused(
+                "bundle_manifest_unsupported",
+                f"{bundle} has manifest schema {version}; this build reads "
+                f"{MANIFEST_SCHEMA_VERSION}.",
+                details={"bundle": str(bundle)},
+            )
+    try:
+        return Manifest.model_validate_json(payload)
+    except ValidationError as exc:
+        raise _manifest_invalid(bundle, exc) from exc
 
 
 def write_bundle(
-    bundle: Path, manifest: Mapping[str, Any], members: Sequence[tuple[str, Path]]
+    bundle: Path, manifest: Manifest, members: Sequence[tuple[str, Path]]
 ) -> None:
     """Write the bundle atomically; refuse to overwrite anything."""
     if bundle.exists():
@@ -102,12 +194,12 @@ def write_bundle(
             details={"bundle": str(bundle)},
         )
     partial = bundle.with_name(f"{bundle.name}.partial")
-    payload = json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")
+    payload = manifest.model_dump_json(indent=2).encode("utf-8")
     try:
         with tarfile.open(partial, "x", format=tarfile.PAX_FORMAT) as archive:
             info = tarfile.TarInfo(MANIFEST_MEMBER)
             info.size = len(payload)
-            info.mtime = int(manifest["created_at_ms"]) // 1000
+            info.mtime = manifest.created_at_ms // 1000
             info.mode = 0o600
             archive.addfile(info, io.BytesIO(payload))
             for name, source in members:
@@ -120,7 +212,7 @@ def write_bundle(
         raise
 
 
-def read_manifest(bundle: Path) -> dict[str, Any]:
+def read_manifest(bundle: Path) -> Manifest:
     """The bundle's manifest, which must be its first member."""
     if not bundle.is_file():
         raise MigrationRefused(
@@ -137,33 +229,27 @@ def read_manifest(bundle: Path) -> dict[str, Any]:
                 )
             handle = archive.extractfile(first)
             assert handle is not None  # a regular member always has content
-            manifest = json.loads(handle.read().decode("utf-8"))
-    except (tarfile.TarError, OSError, ValueError) as exc:
+            payload = handle.read()
+    except (tarfile.TarError, OSError) as exc:
         raise MigrationRefused(
             "bundle_unreadable",
             f"{bundle} is not a readable installation bundle: {exc}",
             details={"bundle": str(bundle)},
         ) from exc
-    if not isinstance(manifest, dict):
-        raise MigrationRefused(
-            "bundle_manifest_invalid",
-            f"The manifest of {bundle} is not an object.",
-            details={"bundle": str(bundle)},
-        )
-    return validate_manifest(manifest, bundle=bundle)
+    return parse_manifest(payload, bundle=bundle)
 
 
-def extract_verified_members(
-    bundle: Path, manifest: Mapping[str, Any], staging: Path
-) -> dict[str, Path]:
+def extract_verified_members(bundle: Path, manifest: Manifest, staging: Path) -> dict[str, Path]:
     """Stage every payload member, verifying each one's SHA-256 as it streams.
 
-    A member the manifest does not declare, a declared member the bundle
-    lacks, or a member whose bytes disagree with the manifest refuses — the
-    staged copy of a mismatched member is removed with it, and nothing is
-    ever restored from a bundle that failed here.
+    The members expected are the ones :mod:`contents` defines, never names
+    read from the manifest or the tar. A member outside that set, a defined
+    member the bundle lacks, or a member whose bytes disagree with the
+    manifest refuses — the staged copy of a mismatched member is removed
+    with it, and nothing is ever restored from a bundle that failed here.
     """
-    declared = manifest_members(manifest)
+    declared = manifest.member_entries()
+    root = staging.resolve()
     staged: dict[str, Path] = {}
     try:
         with tarfile.open(bundle, "r:") as archive:
@@ -174,11 +260,17 @@ def extract_verified_members(
                 if entry is None or not member.isreg() or member.name in staged:
                     raise MigrationRefused(
                         "bundle_member_unexpected",
-                        f"{bundle} carries {member.name!r}, which its manifest does not "
-                        "declare exactly once.",
+                        f"{bundle} carries {member.name!r}, which is not a member this "
+                        "build defines exactly once.",
                         details={"bundle": str(bundle), "member": member.name},
                     )
-                target = staging / member.name
+                target = root / member.name
+                if not target.resolve().is_relative_to(root):
+                    raise MigrationRefused(
+                        "bundle_member_unsafe",
+                        f"{member.name!r} in {bundle} would land outside the staging area.",
+                        details={"bundle": str(bundle), "member": member.name},
+                    )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 source = archive.extractfile(member)
                 assert source is not None  # isreg() above
@@ -187,7 +279,7 @@ def extract_verified_members(
                     while chunk := source.read(_CHUNK_BYTES):
                         digest.update(chunk)
                         sink.write(chunk)
-                if digest.hexdigest() != entry["sha256"]:
+                if digest.hexdigest() != entry.sha256:
                     target.unlink()
                     raise MigrationRefused(
                         "bundle_member_hash_mismatch",
@@ -196,7 +288,7 @@ def extract_verified_members(
                         details={
                             "bundle": str(bundle),
                             "member": member.name,
-                            "expected_sha256": entry["sha256"],
+                            "expected_sha256": entry.sha256,
                             "actual_sha256": digest.hexdigest(),
                         },
                     )
@@ -221,9 +313,12 @@ __all__ = [
     "MANIFEST_KIND",
     "MANIFEST_MEMBER",
     "MANIFEST_SCHEMA_VERSION",
+    "FolderEntry",
+    "LaneEntry",
+    "Manifest",
+    "VolumeEntry",
     "extract_verified_members",
-    "manifest_members",
+    "parse_manifest",
     "read_manifest",
-    "validate_manifest",
     "write_bundle",
 ]

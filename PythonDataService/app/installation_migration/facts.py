@@ -22,6 +22,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 from app.broker.fleet.errors import FleetControlError
 from app.broker.fleet.store import registry_database_path
 from app.broker.fleet.volume import read_volume_marker, verify_volume_identity
@@ -39,6 +41,87 @@ CLERK_ACCOUNTS_RELATIVE = Path("accounts") / "alpaca"
 CLERK_DB_FILENAME = "clerk.db"
 
 _SQLITE_SIDECARS = ("-wal", "-shm")
+
+
+class StrictRecord(BaseModel):
+    """A frozen, closed, strictly typed fact: no coercion, no unknown field.
+
+    Strict so a manifest that says ``1`` where a flag belongs, or ``true``
+    where a generation belongs, is refused rather than read as the other.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+class RegistryClerk(StrictRecord):
+    """One clerk row of the fleet registry, as identity compares it."""
+
+    clerk_id: str
+    broker: str
+    volume_id: str
+    volume_root: str
+    deployment_namespace: str
+    attestation_kind: str
+    attestation_id: str
+    lifecycle_state: str
+
+
+class RegistryAssignment(StrictRecord):
+    """One account assignment and its generations."""
+
+    broker: str
+    account_id: str
+    clerk_id: str
+    assignment_generation: int
+    state: str
+    confirmed_binding_generation: int | None
+
+
+class RegistryEndpoint(StrictRecord):
+    """One approved agent endpoint."""
+
+    endpoint_ref: str
+    clerk_id: str
+    base_url: str
+
+
+class RegistryFacts(StrictRecord):
+    """The fleet registry's identity, clerks, assignments and approved endpoints."""
+
+    registry_id: str
+    schema_version: int
+    clerks: tuple[RegistryClerk, ...]
+    assignments: tuple[RegistryAssignment, ...]
+    approved_endpoints: tuple[RegistryEndpoint, ...]
+
+
+class VolumeMarkerFacts(StrictRecord):
+    """A lane volume's identity marker, exactly as the canonical reader returns it."""
+
+    marker_version: int
+    broker: str
+    clerk_id: str
+    volume_id: str
+    attestation_kind: str
+    attestation_id: str
+    created_at_ms: int
+
+
+class ClerkAccountFacts(StrictRecord):
+    """One account database's identity and authority generation."""
+
+    account_id: str
+    authority_generation: int
+    schema_version: int
+    db_identity_token: str
+
+
+class ClerkVolumeFacts(StrictRecord):
+    """A lane volume's marker and each account database's generation."""
+
+    volume: str
+    marker: VolumeMarkerFacts
+    accounts: tuple[ClerkAccountFacts, ...]
 
 
 def _query_copy(database: Path, queries: dict[str, str]) -> dict[str, list[dict[str, Any]]]:
@@ -74,7 +157,7 @@ def _query_copy(database: Path, queries: dict[str, str]) -> dict[str, list[dict[
             connection.close()
 
 
-def read_registry_facts(control_root: Path) -> dict[str, Any]:
+def read_registry_facts(control_root: Path) -> RegistryFacts:
     """The fleet registry's identity, clerks, assignments and approved endpoints."""
     database = registry_database_path(control_root)
     if not database.is_file():
@@ -111,16 +194,25 @@ def read_registry_facts(control_root: Path) -> dict[str, Any]:
             details={"database": str(database)},
         )
     meta = rows["meta"][0]
-    return {
-        "registry_id": meta["registry_id"],
-        "schema_version": meta["schema_version"],
-        "clerks": rows["clerks"],
-        "assignments": rows["assignments"],
-        "approved_endpoints": rows["approved_endpoints"],
-    }
+    try:
+        return RegistryFacts(
+            registry_id=meta["registry_id"],
+            schema_version=meta["schema_version"],
+            clerks=tuple(RegistryClerk(**row) for row in rows["clerks"]),
+            assignments=tuple(RegistryAssignment(**row) for row in rows["assignments"]),
+            approved_endpoints=tuple(
+                RegistryEndpoint(**row) for row in rows["approved_endpoints"]
+            ),
+        )
+    except ValidationError as exc:
+        raise MigrationRefused(
+            "registry_unreadable",
+            f"The fleet registry at {database} holds a value of an unexpected type: {exc}",
+            details={"database": str(database)},
+        ) from exc
 
 
-def read_clerk_volume_facts(volume_name: str, volume_root: Path) -> dict[str, Any]:
+def read_clerk_volume_facts(volume_name: str, volume_root: Path) -> ClerkVolumeFacts:
     """A lane volume's identity marker and each account's authority generation."""
     try:
         marker = read_volume_marker(volume_root)
@@ -137,7 +229,7 @@ def read_clerk_volume_facts(volume_name: str, volume_root: Path) -> dict[str, An
             "is moved with the identity it was provisioned with, never without one.",
             details={"volume": volume_name},
         )
-    accounts: list[dict[str, Any]] = []
+    accounts: list[ClerkAccountFacts] = []
     accounts_root = volume_root / CLERK_ACCOUNTS_RELATIVE
     if accounts_root.is_dir():
         for account_dir in sorted(accounts_root.iterdir()):
@@ -159,13 +251,25 @@ def read_clerk_volume_facts(volume_name: str, volume_root: Path) -> dict[str, An
                     f"{database} in volume {volume_name} has no control_meta row.",
                     details={"volume": volume_name, "database": str(database)},
                 )
-            accounts.append(rows[0])
-    return {"volume": volume_name, "marker": asdict(marker), "accounts": accounts}
+            try:
+                accounts.append(ClerkAccountFacts(**rows[0]))
+            except ValidationError as exc:
+                raise MigrationRefused(
+                    "clerk_database_unreadable",
+                    f"{database} in volume {volume_name} holds a control_meta value of "
+                    f"an unexpected type: {exc}",
+                    details={"volume": volume_name, "database": str(database)},
+                ) from exc
+    return ClerkVolumeFacts(
+        volume=volume_name,
+        marker=VolumeMarkerFacts(**asdict(marker)),
+        accounts=tuple(accounts),
+    )
 
 
 def staged_identity_facts(
     volume_tars: Mapping[str, Path], scratch: Path
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[RegistryFacts, tuple[ClerkVolumeFacts, ...]]:
     """Registry and lane-volume facts read from staged volume tars.
 
     Shared by export (facts for the manifest) and import (facts to compare
@@ -182,37 +286,37 @@ def staged_identity_facts(
             roots[volume.name] = root
     control = next(v.name for v in BUNDLED_VOLUMES if v.role == "fleet_control")
     registry = read_registry_facts(roots[control])
-    clerk_volumes = [
+    clerk_volumes = tuple(
         read_clerk_volume_facts(volume.name, roots[volume.name])
         for volume in BUNDLED_VOLUMES
         if volume.role == "clerk"
-    ]
-    for clerk in registry["clerks"]:
-        if clerk["lifecycle_state"] == "retired":
+    )
+    for clerk in registry.clerks:
+        if clerk.lifecycle_state == "retired":
             continue
-        root = roots.get(clerk["attestation_id"])
+        root = roots.get(clerk.attestation_id)
         if root is None:
             raise MigrationRefused(
                 "clerk_volume_not_bundled",
-                f"Clerk {clerk['clerk_id']} lives on volume {clerk['attestation_id']!r}, "
+                f"Clerk {clerk.clerk_id} lives on volume {clerk.attestation_id!r}, "
                 "which the bundle does not carry; a lane is never moved without its volume.",
-                details={"clerk_id": clerk["clerk_id"], "volume": clerk["attestation_id"]},
+                details={"clerk_id": clerk.clerk_id, "volume": clerk.attestation_id},
             )
         try:
             verify_volume_identity(
                 root,
-                expected_broker=clerk["broker"],
-                expected_clerk_id=clerk["clerk_id"],
-                expected_volume_id=clerk["volume_id"],
-                expected_attestation_kind=clerk["attestation_kind"],
-                expected_attestation_id=clerk["attestation_id"],
+                expected_broker=clerk.broker,
+                expected_clerk_id=clerk.clerk_id,
+                expected_volume_id=clerk.volume_id,
+                expected_attestation_kind=clerk.attestation_kind,
+                expected_attestation_id=clerk.attestation_id,
             )
         except FleetControlError as exc:
             raise MigrationRefused(
                 "clerk_volume_identity_mismatch",
-                f"Volume {clerk['attestation_id']} does not prove clerk "
-                f"{clerk['clerk_id']}'s identity: {exc.message}",
-                details={"clerk_id": clerk["clerk_id"], "volume": clerk["attestation_id"]},
+                f"Volume {clerk.attestation_id} does not prove clerk "
+                f"{clerk.clerk_id}'s identity: {exc.message}",
+                details={"clerk_id": clerk.clerk_id, "volume": clerk.attestation_id},
             ) from exc
     return registry, clerk_volumes
 
@@ -220,6 +324,14 @@ def staged_identity_facts(
 __all__ = [
     "CLERK_ACCOUNTS_RELATIVE",
     "CLERK_DB_FILENAME",
+    "ClerkAccountFacts",
+    "ClerkVolumeFacts",
+    "RegistryAssignment",
+    "RegistryClerk",
+    "RegistryEndpoint",
+    "RegistryFacts",
+    "StrictRecord",
+    "VolumeMarkerFacts",
     "read_clerk_volume_facts",
     "read_registry_facts",
     "staged_identity_facts",

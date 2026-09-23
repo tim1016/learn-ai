@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.installation_migration.contents import BUNDLED_FOLDERS
+from app.installation_migration.facts import RegistryClerk, RegistryEndpoint, RegistryFacts
 from app.installation_migration.topology import (
     containers_writing_folders,
     deployment_namespace,
@@ -18,7 +19,7 @@ from app.installation_migration.topology import (
 _REPO = Path(__file__).resolve().parents[3]
 
 
-def _registry(**overrides: str) -> dict:
+def _registry(**overrides: str) -> RegistryFacts:
     clerk = {
         "clerk_id": "clrk_live",
         "broker": "alpaca",
@@ -29,17 +30,19 @@ def _registry(**overrides: str) -> dict:
         "attestation_id": "learn-ai-alpaca-clerk-data",
         "lifecycle_state": "provisioned",
     }
+    base_url = overrides.pop("base_url", "http://alpaca-live-clerk:8000")
     clerk.update(overrides)
-    return {
-        "clerks": [clerk],
-        "approved_endpoints": [
-            {
-                "endpoint_ref": "alpaca-live-agent",
-                "clerk_id": "clrk_live",
-                "base_url": overrides.get("base_url", "http://alpaca-live-clerk:8000"),
-            }
-        ],
-    }
+    return RegistryFacts(
+        registry_id="reg_1",
+        schema_version=1,
+        clerks=(RegistryClerk(**clerk),),
+        assignments=(),
+        approved_endpoints=(
+            RegistryEndpoint(
+                endpoint_ref="alpaca-live-agent", clerk_id="clrk_live", base_url=base_url
+            ),
+        ),
+    )
 
 
 def test_only_the_coordinator_writes_a_bundled_host_folder() -> None:

@@ -36,14 +36,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.installation_migration.bundle import extract_verified_members, read_manifest
+from app.installation_migration.bundle import Manifest, extract_verified_members, read_manifest
 from app.installation_migration.contents import (
     BUNDLED_FOLDERS,
     BUNDLED_VOLUMES,
     resolve_folder_path,
 )
 from app.installation_migration.errors import MigrationRefused
-from app.installation_migration.facts import staged_identity_facts
+from app.installation_migration.facts import (
+    ClerkVolumeFacts,
+    RegistryFacts,
+    staged_identity_facts,
+)
 from app.installation_migration.git import GitPort
 from app.installation_migration.podman import PodmanPort, VolumeInfo
 from app.installation_migration.topology import (
@@ -93,18 +97,17 @@ def run_import(
 ) -> None:
     """Run the import; every refusal raises :class:`MigrationRefused`."""
     manifest = read_manifest(request.bundle_path)
-    _require_known_contents(manifest)
     emit(
         {
             "step": "manifest",
-            "source_commit": manifest["source_commit"],
-            "created_at_ms": manifest["created_at_ms"],
-            "registry_id": manifest["registry"]["registry_id"],
+            "source_commit": manifest.source_commit,
+            "created_at_ms": manifest.created_at_ms,
+            "registry_id": manifest.registry.registry_id,
         }
     )
     topology = load_topology(request.repo_root)
     _require_env_files(request.repo_root, topology)
-    destination_commit = _require_code_not_older(git, manifest["source_commit"])
+    destination_commit = _require_code_not_older(git, manifest.source_commit)
     emit({"step": "code", "destination_commit": destination_commit})
     folder_paths = {
         folder.key: resolve_folder_path(request.repo_root, folder, lake_dir=request.lake_dir)
@@ -134,8 +137,8 @@ def run_import(
         emit(
             {
                 "step": "identity-verified",
-                "registry_id": registry["registry_id"],
-                "clerks": [clerk["clerk_id"] for clerk in registry["clerks"]],
+                "registry_id": registry.registry_id,
+                "clerks": [clerk.clerk_id for clerk in registry.clerks],
             }
         )
         resolution = host_resolution_report(
@@ -162,9 +165,9 @@ def run_import(
         "imported_at_ms": started_at_ms,
         "completed_at_ms": clock(),
         "bundle": str(request.bundle_path),
-        "source_commit": manifest["source_commit"],
+        "source_commit": manifest.source_commit,
         "destination_commit": destination_commit,
-        "registry_id": manifest["registry"]["registry_id"],
+        "registry_id": manifest.registry.registry_id,
         "moved_aside": moved,
         "host_resolution": resolution,
         "stack": "stopped",
@@ -189,23 +192,6 @@ def run_import(
             "off) is a separate step. Bots stay stopped until the operator starts them.",
         }
     )
-
-
-def _require_known_contents(manifest: Mapping[str, Any]) -> None:
-    bundled_volumes = {entry["name"] for entry in manifest["volumes"]}
-    bundled_folders = {entry["key"] for entry in manifest["folders"]}
-    expected_volumes = {volume.name for volume in BUNDLED_VOLUMES}
-    expected_folders = {folder.key for folder in BUNDLED_FOLDERS}
-    if bundled_volumes != expected_volumes or bundled_folders != expected_folders:
-        raise MigrationRefused(
-            "bundle_contents_mismatch",
-            "The bundle does not carry exactly the volumes and folders this code "
-            "restores; restore it with the code that can read it.",
-            details={
-                "unexpected": sorted((bundled_volumes - expected_volumes) | (bundled_folders - expected_folders)),
-                "missing": sorted((expected_volumes - bundled_volumes) | (expected_folders - bundled_folders)),
-            },
-        )
 
 
 def _require_env_files(repo_root: Path, topology: Mapping[str, Any]) -> None:
@@ -260,11 +246,11 @@ def _require_stack_stopped(podman: PodmanPort, topology: Mapping[str, Any]) -> N
         )
 
 
-def _require_digests(manifest: Mapping[str, Any], staged: Mapping[str, Path]) -> None:
+def _require_digests(manifest: Manifest, staged: Mapping[str, Path]) -> None:
     mismatched = [
-        entry["member"]
-        for entry in [*manifest["volumes"], *manifest["folders"]]
-        if tree_digest_from_tar(staged[entry["member"]]) != entry["content_digest"]
+        member
+        for member, entry in manifest.member_entries().items()
+        if tree_digest_from_tar(staged[member]) != entry.content_digest
     ]
     if mismatched:
         raise MigrationRefused(
@@ -275,15 +261,15 @@ def _require_digests(manifest: Mapping[str, Any], staged: Mapping[str, Path]) ->
 
 
 def _require_identity(
-    manifest: Mapping[str, Any],
-    registry: Mapping[str, Any],
-    clerk_volumes: list[dict[str, Any]],
+    manifest: Manifest,
+    registry: RegistryFacts,
+    clerk_volumes: tuple[ClerkVolumeFacts, ...],
 ) -> None:
-    if dict(registry) != manifest["registry"]:
+    if registry != manifest.registry:
         differing = sorted(
-            key
-            for key in set(registry) | set(manifest["registry"])
-            if registry.get(key) != manifest["registry"].get(key)
+            name
+            for name in RegistryFacts.model_fields
+            if getattr(registry, name) != getattr(manifest.registry, name)
         )
         raise MigrationRefused(
             "registry_identity_mismatch",
@@ -291,22 +277,22 @@ def _require_identity(
             "(registry id, clerks, assignment generations or endpoints).",
             details={"fields": differing},
         )
-    recorded = {entry["volume"]: entry for entry in manifest["clerk_volumes"]}
+    recorded = {entry.volume: entry for entry in manifest.clerk_volumes}
     for observed in clerk_volumes:
-        expected = recorded.get(observed["volume"])
+        expected = recorded.get(observed.volume)
         if expected != observed:
             raise MigrationRefused(
                 "volume_identity_mismatch",
-                f"Volume {observed['volume']}'s marker or account authority generations "
+                f"Volume {observed.volume}'s marker or account authority generations "
                 "disagree with the manifest; a lane volume is restored only with the "
                 "identity it was exported with.",
                 details={
-                    "volume": observed["volume"],
-                    "expected": expected,
-                    "observed": observed,
+                    "volume": observed.volume,
+                    "expected": None if expected is None else expected.model_dump(),
+                    "observed": observed.model_dump(),
                 },
             )
-    if set(recorded) != {entry["volume"] for entry in clerk_volumes}:
+    if set(recorded) != {entry.volume for entry in clerk_volumes}:
         raise MigrationRefused(
             "volume_identity_mismatch",
             "The manifest's lane volumes are not the bundle's lane volumes.",
@@ -316,7 +302,7 @@ def _require_identity(
 
 def _move_aside(
     podman: PodmanPort,
-    manifest: Mapping[str, Any],
+    manifest: Manifest,
     folder_paths: Mapping[str, Path],
     aside: Path,
 ) -> dict[str, Any]:
@@ -325,8 +311,8 @@ def _move_aside(
     (aside / "folders").mkdir()
     volumes: list[dict[str, Any]] = []
     existing: list[str] = []
-    for entry in manifest["volumes"]:
-        info = podman.volume_info(entry["name"])
+    for entry in manifest.volumes:
+        info = podman.volume_info(entry.name)
         if info is None:
             continue
         copy = aside / "volumes" / f"{info.name}.tar"
@@ -342,13 +328,13 @@ def _move_aside(
         )
         existing.append(info.name)
     folders: list[dict[str, str]] = []
-    for entry in manifest["folders"]:
-        path = folder_paths[entry["key"]]
+    for entry in manifest.folders:
+        path = folder_paths[entry.key]
         if not path.exists():
             continue
-        destination = aside / "folders" / entry["key"].replace("/", "__")
+        destination = aside / "folders" / entry.key.replace("/", "__")
         shutil.move(str(path), str(destination))
-        folders.append({"key": entry["key"], "from": str(path), "copy": str(destination)})
+        folders.append({"key": entry.key, "from": str(path), "copy": str(destination)})
     record = {"volumes": volumes, "folders": folders}
     atomic_write_bytes(
         aside / ASIDE_RECORD, json.dumps(record, sort_keys=True, indent=2).encode("utf-8")
@@ -360,37 +346,35 @@ def _move_aside(
 
 def _restore(
     podman: PodmanPort,
-    manifest: Mapping[str, Any],
+    manifest: Manifest,
     folder_paths: Mapping[str, Path],
     staged: Mapping[str, Path],
 ) -> None:
-    for entry in manifest["volumes"]:
-        podman.create_volume(
-            VolumeInfo(name=entry["name"], driver=entry["driver"], labels=entry["labels"])
-        )
-        podman.import_volume(entry["name"], staged[entry["member"]])
-    for entry in manifest["folders"]:
-        path = folder_paths[entry["key"]]
+    for entry in manifest.volumes:
+        podman.create_volume(VolumeInfo(name=entry.name, driver=entry.driver, labels=entry.labels))
+        podman.import_volume(entry.name, staged[entry.member])
+    for entry in manifest.folders:
+        path = folder_paths[entry.key]
         path.mkdir(parents=True)
-        extract_tar(staged[entry["member"]], path)
+        extract_tar(staged[entry.member], path)
 
 
 def _verify_destination(
     podman: PodmanPort,
-    manifest: Mapping[str, Any],
+    manifest: Manifest,
     folder_paths: Mapping[str, Path],
     scratch: Path,
 ) -> None:
     scratch.mkdir(parents=True)
     mismatched: list[str] = []
-    for entry in manifest["volumes"]:
-        export = scratch / f"{entry['name']}.tar"
-        podman.export_volume(entry["name"], export)
-        if tree_digest_from_tar(export) != entry["content_digest"]:
-            mismatched.append(entry["name"])
-    for entry in manifest["folders"]:
-        if tree_digest_from_dir(folder_paths[entry["key"]]) != entry["content_digest"]:
-            mismatched.append(str(folder_paths[entry["key"]]))
+    for entry in manifest.volumes:
+        export = scratch / f"{entry.name}.tar"
+        podman.export_volume(entry.name, export)
+        if tree_digest_from_tar(export) != entry.content_digest:
+            mismatched.append(entry.name)
+    for entry in manifest.folders:
+        if tree_digest_from_dir(folder_paths[entry.key]) != entry.content_digest:
+            mismatched.append(str(folder_paths[entry.key]))
     if mismatched:
         raise MigrationRefused(
             "destination_verification_failed",
