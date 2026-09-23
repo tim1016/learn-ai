@@ -8,17 +8,26 @@ names what it refused.
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 import pytest
 
 from app.installation_migration.bundle import read_manifest
+from app.installation_migration.lanes import Lane
+from app.services.go_live_hold import (
+    GO_LIVE_HOLD_MARKER,
+    GoLiveHoldMarker,
+    go_live_marker_bytes,
+    read_go_live_hold,
+)
 from scripts import migrate_installation
 from scripts.migrate_installation import Ports, main
 from tests.installation_migration._support import (
     LIVE_ACCOUNT,
     FakeGit,
+    FakeGoLiveLanes,
     build_empty_destination,
     build_installation,
 )
@@ -202,3 +211,58 @@ def test_import_accept_dirty_source_is_passed_through(
     assert main(argv) == 2
     assert _lines(capsys)[-1]["reason"] == "source_tree_dirty_unacknowledged"
     assert main([*argv, "--accept-dirty-source"]) == 0
+
+
+def _go_live_lanes(tmp_path: Path) -> FakeGoLiveLanes:
+    root = tmp_path / "lane"
+    root.mkdir()
+    (root / GO_LIVE_HOLD_MARKER).write_bytes(
+        go_live_marker_bytes(
+            GoLiveHoldMarker(
+                kind="learn-ai-go-live-hold",
+                schema_version=1,
+                written_at_ms=1,
+                volume="learn-ai-alpaca-clerk-data",
+                source_commit="a" * 40,
+                registry_id="reg_1",
+            )
+        )
+    )
+    return FakeGoLiveLanes(
+        lanes=[Lane("clrk_live", "alpaca", "provisioned", "Live")], roots={"clrk_live": root}
+    )
+
+
+@pytest.mark.parametrize(
+    ("typed", "code", "held"),
+    [("the old machine is off\n", 0, False), ("yes\n", 2, True), ("", 2, True)],
+    ids=["confirmed", "wrong_words", "no_input"],
+)
+def test_go_live_reads_the_typed_confirmation_from_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    typed: str,
+    code: int,
+    held: bool,
+) -> None:
+    lanes = _go_live_lanes(tmp_path)
+    monkeypatch.setattr(
+        migrate_installation,
+        "build_ports",
+        lambda _args: Ports(podman=None, git=FakeGit(), lanes=None, go_live_lanes=lanes),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(typed))
+
+    exit_code = main(["go-live", "--operator", "inkant", "--change-ref", "go-live-1"])
+
+    captured = capsys.readouterr()
+    lines = [json.loads(line) for line in captured.out.splitlines() if line]
+    assert exit_code == code
+    assert read_go_live_hold(lanes.roots["clrk_live"]).held is held
+    # The prompt is on stderr; stdout stays one JSON object per line.
+    assert "the old machine is off" in captured.err
+    if code == 2:
+        assert lines[-1]["reason"] == "old_machine_off_not_confirmed"
+    else:
+        assert lines[-1]["step"] == "complete"

@@ -3,7 +3,9 @@
 Nothing here touches podman, a running container, or a live lane: volumes
 are directories under the test's tmp path, ``FakePodman`` exports and imports
 them as tars exactly as ``podman volume export/import`` would, and
-``FakeLanes`` answers the coordinator's two lane operations from a script.
+``FakeLanes`` answers the coordinator's two export lane operations from a
+script, and ``FakeGoLiveLanes`` its two go-live operations over real lane
+roots.
 """
 
 from __future__ import annotations
@@ -25,7 +27,9 @@ from app.installation_migration.contents import BUNDLED_FOLDERS, BUNDLED_VOLUMES
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.lanes import Lane
 from app.installation_migration.podman import ContainerUse, VolumeInfo
+from app.schemas.lane_go_live import LaneGoLiveReleaseReceipt, LaneIbkrBarCheckRead
 from app.schemas.lane_quiesce import LaneAccountQuietRead, LaneStopAllBotsReceipt
+from app.services.go_live_hold import release_go_live_hold
 from tests.broker.fleet.conftest import FrozenClock, bind_lane, fake_alpha
 
 REPO = Path(__file__).resolve().parents[3]
@@ -408,3 +412,62 @@ def build_empty_destination(tmp_path: Path, *, name: str = "destination") -> tup
     write_fleet_env_files(repo_root)
     write_host_env_files(repo_root)
     return repo_root, FakePodman(tmp_path / name / "podman")
+
+
+@dataclass
+class FakeGoLiveLanes:
+    """The coordinator's go-live lane surface over real lane roots.
+
+    Each lane's bar check answers from ``bars`` (a bar count, or a
+    ``MigrationRefused`` the lane's 503 would become); a release removes the
+    real hold file under ``roots`` through the lane's own
+    ``release_go_live_hold``, and — like the lane — refuses one whose lane has
+    not passed a bar check. ``calls`` records every call in order.
+    """
+
+    lanes: list[Lane]
+    roots: dict[str, Path]
+    bars: dict[str, int | MigrationRefused] = field(default_factory=dict)
+    fail_release: set[str] = field(default_factory=set)
+    passed: set[str] = field(default_factory=set)
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def list_lanes(self) -> list[Lane]:
+        return list(self.lanes)
+
+    def ibkr_bar_check(self, lane: Lane) -> LaneIbkrBarCheckRead:
+        self.calls.append(("bar-check", lane.clerk_id))
+        answer = self.bars.get(lane.clerk_id, 390)
+        if isinstance(answer, MigrationRefused):
+            self.passed.discard(lane.clerk_id)
+            raise answer
+        self.passed.add(lane.clerk_id)
+        return LaneIbkrBarCheckRead(
+            symbol="SPY",
+            bar_count=answer,
+            first_bar_start_ms=T0 - 60_000 * answer,
+            last_bar_end_ms=T0,
+            checked_at_ms=T0,
+        )
+
+    def release_go_live(
+        self, lane: Lane, *, operator: str, change_ref: str
+    ) -> LaneGoLiveReleaseReceipt:
+        self.calls.append(("release", lane.clerk_id))
+        if lane.clerk_id in self.fail_release or lane.clerk_id not in self.passed:
+            raise MigrationRefused(
+                "lane_go_live_release_refused",
+                f"Lane {lane.clerk_id} refused to release its go-live hold.",
+                details={"clerk_id": lane.clerk_id},
+            )
+        check = {
+            "symbol": "SPY",
+            "bar_count": 1,
+            "first_bar_start_ms": T0 - 60_000,
+            "last_bar_end_ms": T0,
+            "checked_at_ms": T0,
+        }
+        receipt = release_go_live_hold(
+            self.roots[lane.clerk_id], operator=operator, change_ref=change_ref, bar_check=check
+        )
+        return LaneGoLiveReleaseReceipt.model_validate(receipt.to_json())

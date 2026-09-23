@@ -30,7 +30,15 @@ the repo-root ``.env`` and ``PythonDataService/.env``) by hand::
 
 ``import`` verifies everything before it changes anything, moves existing
 data aside (never deletes it), restores, re-verifies, and leaves the stack
-stopped. Go-live is a separate step.
+stopped with every lane **held for go-live**: no bot can start. Then bring
+the stack up and::
+
+    python -m scripts.migrate_installation go-live \
+        --operator inkant --change-ref migrate-2026-09-22
+
+``go-live`` proves IB Gateway returns historical bars to every lane, then
+asks you to type that the old machine is off, then releases every lane. It
+starts no bot. The procedure is ``docs/runbooks/migrate-installation.md``.
 
 The coordinator is reached at ``--coordinator-url`` (default
 ``http://127.0.0.1:8000``) with ``DATA_PLANE_CONTROL_SECRET`` from the
@@ -51,11 +59,13 @@ from pathlib import Path
 from app.installation_migration.errors import MigrationRefused
 from app.installation_migration.export import ExportRequest, run_export
 from app.installation_migration.git import GitPort, SubprocessGit
+from app.installation_migration.golive import GoLiveRequest, run_go_live
 from app.installation_migration.importer import ImportRequest, run_import
 from app.installation_migration.lanes import (
     DEFAULT_COORDINATOR_URL,
     CoordinatorLanes,
     FleetLanes,
+    GoLiveLanes,
 )
 from app.installation_migration.podman import PodmanPort, SubprocessPodman
 from app.installation_migration.topology import compose_variable
@@ -78,22 +88,28 @@ def _control_secret(repo_root: Path) -> str | None:
 
 @dataclass
 class Ports:
-    """The three outside worlds the migration talks to."""
+    """The outside worlds the migration talks to."""
 
     podman: PodmanPort
     git: GitPort
     lanes: FleetLanes | None
+    go_live_lanes: GoLiveLanes | None = None
 
 
 def build_ports(args: argparse.Namespace) -> Ports:
     """The real adapters; tests replace this function."""
     repo_root = Path(args.repo_root)
-    lanes = (
+    coordinator = (
         CoordinatorLanes(base_url=args.coordinator_url, control_secret=_control_secret(repo_root))
-        if args.operation == "export"
+        if args.operation in ("export", "go-live")
         else None
     )
-    return Ports(podman=SubprocessPodman(), git=SubprocessGit(repo_root), lanes=lanes)
+    return Ports(
+        podman=SubprocessPodman(),
+        git=SubprocessGit(repo_root),
+        lanes=coordinator if args.operation == "export" else None,
+        go_live_lanes=coordinator if args.operation == "go-live" else None,
+    )
 
 
 def _export(args: argparse.Namespace, ports: Ports) -> int:
@@ -130,6 +146,25 @@ def _import(args: argparse.Namespace, ports: Ports) -> int:
         ),
         podman=ports.podman,
         git=ports.git,
+        emit=_write,
+    )
+    return 0
+
+
+def _read_confirmation(prompt: str) -> str:
+    """Prompt on stderr (stdout is the JSON-line channel); read one typed line."""
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    return sys.stdin.readline().rstrip("\r\n")
+
+
+def _go_live(args: argparse.Namespace, ports: Ports) -> int:
+    if ports.go_live_lanes is None:
+        raise ValueError("go-live needs the coordinator's lane surface")
+    run_go_live(
+        GoLiveRequest(operator=args.operator, change_ref=args.change_ref),
+        lanes=ports.go_live_lanes,
+        confirm=_read_confirmation,
         emit=_write,
     )
     return 0
@@ -186,6 +221,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restore a bundle exported from a checkout with uncommitted changes",
     )
     restore.set_defaults(func=_import)
+
+    go_live = subparsers.add_parser(
+        "go-live",
+        help="Prove IB Gateway bars on every lane, confirm the old machine is off, "
+        "release every lane (starts no bot)",
+    )
+    go_live.add_argument("--repo-root", default=str(REPO_ROOT), help="The checkout to act for")
+    go_live.add_argument("--operator", required=True, help="Who is taking the lanes live")
+    go_live.add_argument("--change-ref", required=True, help="Change record (recorded)")
+    go_live.add_argument("--coordinator-url", default=DEFAULT_COORDINATOR_URL)
+    go_live.set_defaults(func=_go_live)
     return parser
 
 
@@ -203,8 +249,10 @@ def main(argv: list[str] | None = None) -> int:
         _write({"error": str(exc)})
         return 1
     finally:
-        if ports is not None and isinstance(ports.lanes, CoordinatorLanes):
-            ports.lanes.close()
+        if ports is not None:
+            for surface in (ports.lanes, ports.go_live_lanes):
+                if isinstance(surface, CoordinatorLanes):
+                    surface.close()
 
 
 if __name__ == "__main__":

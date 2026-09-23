@@ -3430,6 +3430,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/go-live/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Lane Go Live Release
+         * @description Fleet-routed POST /lane/go-live/release (bot_action).
+         */
+        post: operations["fleet_lane_go_live_release_api_brokers__broker__clerks__clerk_id__lane_go_live_release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/lane/ibkr-bar-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Lane Ibkr Bar Check
+         * @description Fleet-routed GET /lane/ibkr-bar-check (market_status_read).
+         */
+        get: operations["fleet_lane_ibkr_bar_check_api_brokers__broker__clerks__clerk_id__lane_ibkr_bar_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/lane/stop-all-bots": {
         parameters: {
             query?: never;
@@ -3625,6 +3665,59 @@ export interface paths {
          *     observe its broker answers 503, never "not quiet".
          */
         get: operations["get_lane_account_quiet_api_brokers__broker__lane_account_quiet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/lane/go-live/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Lane Go Live Hold
+         * @description Release this lane's go-live hold after an installation migration (#2269).
+         *
+         *     The request must carry the operator's "old machine is off" confirmation
+         *     (422 without it), and this lane must have passed the IB Gateway bar
+         *     check within the last few minutes (409 otherwise) — neither alone
+         *     releases. Removes the hold marker import wrote and records a receipt on
+         *     the lane's volume; idempotent. Starts no bot: they stay stopped until
+         *     the operator starts them.
+         */
+        post: operations["release_lane_go_live_hold_api_brokers__broker__lane_go_live_release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/lane/ibkr-bar-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lane Ibkr Bar Check
+         * @description Prove IB Gateway returns real historical bars to this lane (#2269).
+         *
+         *     Recent historical SPY minute bars, so the check answers off-hours too;
+         *     200 only when at least one bar came back. An unreachable gateway, a
+         *     refused or timed-out request, or zero bars answers 503 with the named
+         *     reason — never a pass. Read-only: it subscribes to nothing and trades
+         *     nothing.
+         */
+        get: operations["get_lane_ibkr_bar_check_api_brokers__broker__lane_ibkr_bar_check_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14762,6 +14855,30 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
+        /**
+         * GoLiveHoldMarker
+         * @description What import records in each marker: which bundle put the lane on hold.
+         */
+        GoLiveHoldMarker: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "learn-ai-go-live-hold";
+            /** Registry Id */
+            registry_id: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Source Commit */
+            source_commit: string;
+            /** Volume */
+            volume: string;
+            /** Written At Ms */
+            written_at_ms: number;
+        };
         /** GoldenFixturesCatalog */
         GoldenFixturesCatalog: {
             /** Fixtures */
@@ -16723,6 +16840,60 @@ export interface components {
             account_id: string | null;
             /** Items */
             items: components["schemas"]["LaneAttentionItem"][];
+        };
+        /**
+         * LaneGoLiveReleaseReceipt
+         * @description The durable receipt of one go-live release, as recorded on the lane.
+         */
+        LaneGoLiveReleaseReceipt: {
+            bar_check: components["schemas"]["LaneIbkrBarCheckRead"];
+            /** Change Ref */
+            change_ref: string;
+            marker: components["schemas"]["GoLiveHoldMarker"] | null;
+            /** Marker Problem */
+            marker_problem: string | null;
+            /** Operator */
+            operator: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Released At Ms */
+            released_at_ms: number;
+            /** Was Held */
+            was_held: boolean;
+        };
+        /**
+         * LaneGoLiveReleaseRequest
+         * @description Who releases the lane, under which change record, and their confirmation.
+         */
+        LaneGoLiveReleaseRequest: {
+            /** Change Ref */
+            change_ref: string;
+            /**
+             * Old Machine Off Confirmation
+             * @constant
+             */
+            old_machine_off_confirmation: "the old machine is off";
+            /** Operator */
+            operator: string;
+        };
+        /**
+         * LaneIbkrBarCheckRead
+         * @description Proof that IB Gateway returned real historical bars to this lane.
+         *
+         *     Only a check that returned at least one bar answers 200; the instants are
+         *     the first bar's start and the last bar's end (``int64 ms UTC``).
+         */
+        LaneIbkrBarCheckRead: {
+            /** Bar Count */
+            bar_count: number;
+            /** Checked At Ms */
+            checked_at_ms: number;
+            /** First Bar Start Ms */
+            first_bar_start_ms: number;
+            /** Last Bar End Ms */
+            last_bar_end_ms: number;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * LaneIntentStoppedBotRead
@@ -33609,6 +33780,78 @@ export interface operations {
             };
         };
     };
+    fleet_lane_go_live_release_api_brokers__broker__clerks__clerk_id__lane_go_live_release_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_lane_ibkr_bar_check_api_brokers__broker__clerks__clerk_id__lane_ibkr_bar_check_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_lane_stop_all_bots_api_brokers__broker__clerks__clerk_id__lane_stop_all_bots_post: {
         parameters: {
             query?: never;
@@ -33939,6 +34182,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LaneAccountQuietRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_lane_go_live_hold_api_brokers__broker__lane_go_live_release_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LaneGoLiveReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaneGoLiveReleaseReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_lane_ibkr_bar_check_api_brokers__broker__lane_ibkr_bar_check_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaneIbkrBarCheckRead"];
                 };
             };
             /** @description Validation Error */

@@ -327,6 +327,16 @@
       "path_template": "/lane/account-quiet",
       "requires_account": false
     },
+    "lane_go_live_release": {
+      "method": "POST",
+      "path_template": "/lane/go-live/release",
+      "requires_account": false
+    },
+    "lane_ibkr_bar_check": {
+      "method": "GET",
+      "path_template": "/lane/ibkr-bar-check",
+      "requires_account": false
+    },
     "lane_stop_all_bots": {
       "method": "POST",
       "path_template": "/lane/stop-all-bots",
