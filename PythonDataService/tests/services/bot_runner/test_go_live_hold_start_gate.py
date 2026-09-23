@@ -18,6 +18,8 @@ from app.services.bot_runner import (
     BotTaskRegistry,
     MarketDataFeedUnavailableError,
     RunAdmissionRefusedError,
+    drained_lane_start_gate,
+    go_live_start_gate,
 )
 from app.services.bot_runner_errors import (
     LANE_GO_LIVE_HOLD_UNREADABLE,
@@ -48,7 +50,7 @@ def _registry(lane_root: Path) -> BotTaskRegistry:
         lane_root,
         feed_resolver=lambda: None,
         boot_recovery_required=False,
-        go_live_hold=lambda: read_go_live_hold(lane_root),
+        lane_start_gates=(go_live_start_gate(lambda: read_go_live_hold(lane_root)),),
     )
 
 
@@ -110,7 +112,7 @@ async def test_a_lane_that_cannot_read_its_root_fails_closed(tmp_path: Path) -> 
         tmp_path,
         feed_resolver=lambda: None,
         boot_recovery_required=False,
-        go_live_hold=lambda: read_go_live_hold(missing),
+        lane_start_gates=(go_live_start_gate(lambda: read_go_live_hold(missing)),),
     )
 
     with pytest.raises(RunAdmissionRefusedError) as refused:
@@ -132,3 +134,21 @@ async def test_the_refusal_reaches_the_wire_with_its_reason_code(tmp_path: Path)
 
     assert translated.value.status_code == 409
     assert translated.value.detail["reason_code"] == LANE_GO_LIVE_PENDING
+
+
+async def test_the_drain_answers_before_the_go_live_hold(tmp_path: Path) -> None:
+    _hold(tmp_path)
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: None,
+        boot_recovery_required=False,
+        lane_start_gates=(
+            drained_lane_start_gate(lambda: True),
+            go_live_start_gate(lambda: read_go_live_hold(tmp_path)),
+        ),
+    )
+
+    with pytest.raises(RunAdmissionRefusedError, match="lane is drained") as refused:
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    assert refused.value.reason_code != LANE_GO_LIVE_PENDING

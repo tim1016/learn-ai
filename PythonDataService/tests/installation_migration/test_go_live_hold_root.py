@@ -29,6 +29,7 @@ from app.services.bot_runner import (
     BotRunnerError,
     BotTaskRegistry,
     RunAdmissionRefusedError,
+    go_live_start_gate,
 )
 from app.services.bot_runner_errors import LANE_GO_LIVE_HOLD_UNREADABLE, LANE_GO_LIVE_PENDING
 from app.services.go_live_hold import GO_LIVE_HOLD_MARKER, GoLiveHoldMarker, go_live_marker_bytes
@@ -172,7 +173,7 @@ async def test_a_combined_lane_holds_though_its_artifacts_root_is_elsewhere(
         artifacts,
         feed_resolver=lambda: None,
         boot_recovery_required=False,
-        go_live_hold=lane_go_live_hold,
+        lane_start_gates=(go_live_start_gate(lane_go_live_hold),),
     )
 
     with pytest.raises(RunAdmissionRefusedError) as refused:
@@ -192,7 +193,7 @@ async def test_a_process_that_cannot_resolve_its_clerk_volume_refuses_starts(
         tmp_path,
         feed_resolver=lambda: None,
         boot_recovery_required=False,
-        go_live_hold=lane_go_live_hold,
+        lane_start_gates=(go_live_start_gate(lane_go_live_hold),),
     )
 
     with pytest.raises(RunAdmissionRefusedError) as refused:
@@ -211,7 +212,7 @@ async def test_a_never_migrated_clerk_volume_is_not_held(
         tmp_path / "artifacts",
         feed_resolver=lambda: None,
         boot_recovery_required=False,
-        go_live_hold=lane_go_live_hold,
+        lane_start_gates=(go_live_start_gate(lane_go_live_hold),),
     )
 
     assert lane_go_live_hold().held is False

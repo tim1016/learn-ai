@@ -22,6 +22,7 @@ from app.services.bot_runner import (
     BotRunnerError,
     BotTaskRegistry,
     RunAdmissionRefusedError,
+    go_live_start_gate,
 )
 from app.services.bot_runner_errors import LANE_GO_LIVE_PENDING
 from app.services.go_live_hold import (
@@ -249,7 +250,7 @@ async def test_after_import_a_bot_start_refuses_until_go_live_and_nothing_starts
             tmp_path / "artifacts" / clerk_id,
             feed_resolver=lambda: None,
             boot_recovery_required=False,
-            go_live_hold=lane_go_live_hold,
+            lane_start_gates=(go_live_start_gate(lane_go_live_hold),),
         )
         for clerk_id in roots
     }

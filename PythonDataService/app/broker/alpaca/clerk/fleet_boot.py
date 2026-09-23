@@ -188,7 +188,7 @@ def lane_quiet_probe(
     the account observation and holds only if both reads find nothing, so a
     bot still winding down while the broker was read cannot slip between
     them. Once the lane has learned its drain a new start or resume refuses
-    (``bot_runner._refuse_if_lane_drained``), which is what keeps the answer
+    (``bot_runner.drained_lane_start_gate``), which is what keeps the answer
     true after it is taken. The gate is checked at admission, so a start
     already past it when the drain is learned can still create its task a
     moment later; the next beat then reports the bot running, and the gate
