@@ -61,3 +61,12 @@
   (closed)="closeArchive()"
   (archived)="catalog.reload()"
 />
+
+<app-cohort-flatten-drawer
+  [visible]="flattenOpen()"
+  [broker]="broker()"
+  [clerkId]="clerkId()"
+  [accountId]="accountId()"
+  (closed)="flattenOpen.set(false)"
+  (flattened)="catalog.reload()"
+/>

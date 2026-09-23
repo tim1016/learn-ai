@@ -35,6 +35,9 @@ async function renderPage(
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
     getDeployView: vi.fn(() => new Promise<never>(() => undefined)),
+    getCohortFlattenView: vi.fn((_target: ResourceTarget) =>
+      Promise.resolve({ account_id: 'PA9', observed_at_ms: 1, cohorts: [] }),
+    ),
     getPanel: vi.fn((_target: ResourceTarget, sid: string) =>
       Promise.resolve(
         fakeBotPanelView({ strategy_instance_id: sid, actions: overrides.panelActions ?? [] }),
@@ -154,6 +157,21 @@ describe('BotsListPageComponent', () => {
     const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
     await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
     expect(typeof bridge.host()?.refresh).toBe('function');
+  });
+
+  it('opens the cohort-flatten drawer from the workspace header command (#1909)', async () => {
+    const view = await renderPage([fakeCatalogBot()]);
+    const bridge = view.fixture.debugElement.injector.get(BotsPageActionsBridgeService);
+    await vi.waitFor(() => expect(bridge.host()).not.toBeNull());
+    expect(view.mockPanelService.getCohortFlattenView).not.toHaveBeenCalled();
+
+    bridge.host()?.openCohortFlatten();
+    view.fixture.detectChanges();
+
+    expect(await screen.findByRole('heading', { name: 'Flatten a cohort' })).toBeTruthy();
+    await vi.waitFor(() => expect(view.mockPanelService.getCohortFlattenView).toHaveBeenCalledTimes(1));
+    const [target] = view.mockPanelService.getCohortFlattenView.mock.calls[0];
+    expect(target).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9' });
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {
