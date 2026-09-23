@@ -1,8 +1,7 @@
 """Canonical account-level operator posture for Alpaca (issue #1664).
 
 One evidence cut decides one dominant ``OperatorCondition`` (or none, when
-healthy) and projects it onto the ``account_desk`` and ``fleet_roster``
-hosts per ADR 0027. The evidence is exactly the facts that already author
+healthy) and projects it onto the ``account_desk`` host per ADR 0027. The evidence is exactly the facts that already author
 ``ClerkProjectionResponse.guidance`` / ``recovery_actions``
 (``authority_health``, uncertainty count, the recovery catalog) plus the
 account-eligibility facts that already gate paper-deploy readiness
@@ -10,9 +9,9 @@ account-eligibility facts that already gate paper-deploy readiness
 active account status, Alpaca trading/account block flags, unresolved
 Clerk intents, and Clerk-channel health.
 
-Frontends render only their own host projection (``account_desk`` for the
-Alpaca desk operator card, ``fleet_roster`` for the bot-roster Account
-Strip) and must never re-derive a verdict from raw evidence — see
+The Alpaca desk operator card renders the ``account_desk`` projection (the
+former ``fleet_roster`` host for the bot-roster Account Strip was retired in
+#2192) and must never re-derive a verdict from raw evidence — see
 ``docs/audits/non-numeric-operator-verdict-census-2026-08-18.md`` and
 ``docs/architecture/adrs/0035-alpaca-clerk-sqlite-event-sourced-authority.md``
 Decision 12.
@@ -34,11 +33,9 @@ from app.schemas.account_authority import (
     world_admits_account_mode,
 )
 from app.schemas.operator_blocker import (
-    SURFACE_ANCHOR,
     AccountOperatorPosture,
     ConfirmInFormAction,
     Disposition,
-    NavigateAction,
     OpenRunbookAction,
     OperatorBlocker,
     OperatorBlockerAnchor,
@@ -56,10 +53,6 @@ _OPEN_RECOVERY_MOVE = OperatorMove(
     label="Open Clerk recovery",
     action=ConfirmInFormAction(kind="confirm_in_form", anchor=ACCOUNT_DESK_RECOVERY_ANCHOR),
 )
-_OPEN_OPERATOR_DESK_MOVE = OperatorMove(
-    label="Open Account Operator desk",
-    action=NavigateAction(kind="navigate", route="/brokers/alpaca"),
-)
 _RUNBOOK_MOVE = OperatorMove(
     label="Open Clerk recovery runbook",
     action=OpenRunbookAction(kind="open_runbook", slug="alpaca-account-clerk-authority-recovery"),
@@ -72,11 +65,9 @@ _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE = OperatorMove(
     action=OpenRunbookAction(kind="open_runbook", slug="alpaca-account-configuration"),
 )
 
-# One (disposition, move) pair per host, keyed by the custody-side
-# disposition. `fix_here` on account_desk (it owns the in-place recovery
-# panel) always projects as `fix_elsewhere` on fleet_roster (it can only
-# point the operator at the desk) — the same condition, different honest
-# cures, per ADR 0027. `wait`/`terminal` are host-symmetric.
+# The account_desk (disposition, move) pair, keyed by the custody-side
+# disposition. `fix_here` carries the in-place recovery panel move the desk
+# owns, per ADR 0027.
 # ADR 0047: the only condition whose copy the recovery catalog cannot author,
 # because its cure is not a panel action at all. The lens deliberately does not
 # render an `open_runbook` button, so the ceremony must be in the prose too.
@@ -89,10 +80,10 @@ _AUTHORITY_FAILED_DETAIL = (
 )
 
 _HostProjection = tuple[Disposition, OperatorMove | None]
-_CUSTODY_HOST_PROJECTIONS: dict[Disposition, tuple[_HostProjection, _HostProjection]] = {
-    "fix_here": (("fix_here", _OPEN_RECOVERY_MOVE), ("fix_elsewhere", _OPEN_OPERATOR_DESK_MOVE)),
-    "wait": (("wait", None), ("wait", None)),
-    "terminal": (("terminal", _RUNBOOK_MOVE), ("terminal", _RUNBOOK_MOVE)),
+_CUSTODY_DESK_PROJECTIONS: dict[Disposition, _HostProjection] = {
+    "fix_here": ("fix_here", _OPEN_RECOVERY_MOVE),
+    "wait": ("wait", None),
+    "terminal": ("terminal", _RUNBOOK_MOVE),
 }
 
 
@@ -168,7 +159,6 @@ def build_account_operator_posture(ctx: AccountOperatorPostureContext) -> Accoun
     return AccountOperatorPosture(
         condition=None,
         account_desk=None,
-        fleet_roster=None,
         status_headline=ctx.guidance.headline,
         status_detail=ctx.guidance.explanation,
     )
@@ -181,15 +171,13 @@ def _posture(
     headline: str,
     detail: str,
     account_desk: _HostProjection,
-    fleet_roster: _HostProjection,
     evidence: dict[str, str | int | float | bool | None],
 ) -> AccountOperatorPosture:
-    """Build both host projections of one condition. The sole constructor
-    of `OperatorBlocker` in this module — every branch below only decides
-    *which* (disposition, move) pair each host gets."""
+    """Build the account_desk projection of one condition. The sole
+    constructor of `OperatorBlocker` in this module — every branch below only
+    decides *which* (disposition, move) pair the desk gets."""
     condition = OperatorCondition(id=condition_id, severity=severity, scope="account", evidence=evidence)
     desk_disposition, desk_move = account_desk
-    roster_disposition, roster_move = fleet_roster
     return AccountOperatorPosture(
         condition=condition,
         account_desk=OperatorBlocker(
@@ -201,17 +189,6 @@ def _posture(
             headline=headline,
             detail=detail,
             primary_move=desk_move,
-            applies_to="both",
-        ),
-        fleet_roster=OperatorBlocker(
-            condition=condition,
-            host="fleet_roster",
-            anchor=SURFACE_ANCHOR,
-            audience="operator",
-            disposition=roster_disposition,
-            headline=headline,
-            detail=detail,
-            primary_move=roster_move,
             applies_to="both",
         ),
         status_headline=headline,
@@ -280,14 +257,12 @@ def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPos
         condition_id = "alpaca_clerk_evidence_review"
         severity = "warning"
 
-    account_desk, fleet_roster = _CUSTODY_HOST_PROJECTIONS[disposition]
     return _posture(
         condition_id=condition_id,
         severity=severity,
         headline=headline,
         detail=detail,
-        account_desk=account_desk,
-        fleet_roster=fleet_roster,
+        account_desk=_CUSTODY_DESK_PROJECTIONS[disposition],
         evidence={
             "authority_health": ctx.authority_health,
             "uncertainty_count": ctx.uncertainty_count,
@@ -316,7 +291,6 @@ def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperato
             ),
             evidence={"account_identity_mismatch": True},
             account_desk=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
-            fleet_roster=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
         )
     if ctx.account_mode is None:
         return _eligibility_posture(
@@ -347,7 +321,6 @@ def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperato
             ),
             evidence={"account_mode": ctx.account_mode, "custody_world": ctx.custody_world},
             account_desk=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
-            fleet_roster=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
         )
     if ctx.account_status.upper() != "ACTIVE":
         return _eligibility_posture(
@@ -407,7 +380,6 @@ def _eligibility_posture(
     detail: str,
     evidence: dict[str, str | int | float | bool | None],
     account_desk: _HostProjection = ("wait", None),
-    fleet_roster: _HostProjection = ("wait", None),
 ) -> AccountOperatorPosture:
     return _posture(
         condition_id=condition_id,
@@ -415,6 +387,5 @@ def _eligibility_posture(
         headline=headline,
         detail=detail,
         account_desk=account_desk,
-        fleet_roster=fleet_roster,
         evidence=evidence,
     )

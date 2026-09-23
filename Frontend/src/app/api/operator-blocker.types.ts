@@ -4,7 +4,6 @@ export type Disposition = 'fix_here' | 'fix_elsewhere' | 'wait' | 'terminal';
 export type OperatorHost =
   | 'bot_cockpit'
   | 'deploy_preflight'
-  | 'fleet_roster'
   | 'account_monitor'
   | 'account_desk';
 export type OperatorConditionScope = 'bot' | 'account' | 'broker' | 'fleet' | 'host' | 'strategy';
@@ -144,24 +143,19 @@ export interface OperatorBlocker {
 /**
  * One canonical account-level operator decision, authored from one evidence
  * cut (issue #1664). `condition` is `null` exactly when the account is
- * healthy — in that case both host projections are also `null` and
+ * healthy — in that case `account_desk` is also `null` and
  * `status_headline` / `status_detail` carry the backend-authored healthy
- * copy. When `condition` is set, `account_desk` and `fleet_roster` share
- * that one condition's identity/severity but carry host-relative
- * disposition, copy, and moves per ADR 0027. Consumers read only their own
- * host projection via `accountOperatorPostureBlocker` below and must never
- * fall back to the other host's projection or re-derive a verdict from raw
- * evidence.
+ * copy. When `condition` is set, `account_desk` carries that condition's
+ * identity/severity plus the desk's disposition, copy, and moves per ADR
+ * 0027. The former `fleet_roster` projection was retired with its host
+ * (#2192). Never re-derive a verdict from raw evidence.
  */
 export interface AccountOperatorPosture {
   condition: OperatorCondition | null;
   account_desk: OperatorBlocker | null;
-  fleet_roster: OperatorBlocker | null;
   status_headline: string;
   status_detail: string | null;
 }
-
-export type AccountOperatorPostureHost = 'account_desk' | 'fleet_roster';
 
 /**
  * The `confirm_in_form` anchor the Alpaca operator lens recognizes to open
@@ -199,22 +193,6 @@ export function movesForBlocker(blocker: OperatorBlocker): readonly OperatorMove
   const secondaryMoves = blocker.secondary_moves ?? [];
   if (blocker.disposition === 'wait') return [];
   return blocker.primary_move ? [blocker.primary_move, ...secondaryMoves] : secondaryMoves;
-}
-
-/**
- * Selects the one host projection a surface may render. Returns `null`
- * (fail closed, never re-derive from raw evidence) when `posture` itself
- * is `null` — the only case this function guards. The backend's
- * `AccountOperatorPosture` validator (not this selector) is what makes a
- * partial projection — a non-null `condition` with one host's blocker
- * missing — impossible on the wire in the first place.
- */
-export function accountOperatorPostureBlocker(
-  posture: AccountOperatorPosture | null,
-  host: AccountOperatorPostureHost,
-): OperatorBlocker | null {
-  if (posture === null) return null;
-  return host === 'account_desk' ? posture.account_desk : posture.fleet_roster;
 }
 
 /** Returns the projections whose full backend-authored guidance belongs in a lens. */

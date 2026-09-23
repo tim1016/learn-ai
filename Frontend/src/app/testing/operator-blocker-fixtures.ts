@@ -69,7 +69,6 @@ export function healthyAccountOperatorPostureFixture(): AccountOperatorPosture {
   return {
     condition: null,
     account_desk: null,
-    fleet_roster: null,
     status_headline: 'Account Clerk custody is healthy',
     status_detail: 'Durable Clerk state has no active hold or unresolved uncertainty in this scope.',
   };

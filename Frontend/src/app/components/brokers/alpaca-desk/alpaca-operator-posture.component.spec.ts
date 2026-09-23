@@ -10,7 +10,6 @@ function healthyPosture(): AccountOperatorPosture {
   return {
     condition: null,
     account_desk: null,
-    fleet_roster: null,
     status_headline: 'Account Clerk custody is healthy',
     status_detail: 'Durable Clerk state has no active hold or unresolved uncertainty in this scope.',
   };
@@ -23,7 +22,6 @@ function blockedPosture(
   return {
     condition: blocker.condition,
     account_desk: blocker,
-    fleet_roster: { ...blocker, host: 'fleet_roster' },
     status_headline: blocker.headline,
     status_detail: blocker.detail ?? null,
   };
@@ -52,7 +50,7 @@ describe('AlpacaOperatorPostureComponent', () => {
     expect(screen.queryByText('Account status')).toBeNull();
   });
 
-  it('renders the account_desk projection verbatim, not the fleet_roster projection', async () => {
+  it('renders the account_desk projection verbatim over the posture status copy', async () => {
     const blocker = operatorBlockerFixture({
       host: 'account_desk',
       disposition: 'fix_elsewhere',
@@ -61,15 +59,14 @@ describe('AlpacaOperatorPostureComponent', () => {
     const posture: AccountOperatorPosture = {
       condition: blocker.condition,
       account_desk: blocker,
-      fleet_roster: { ...blocker, headline: 'Roster headline', host: 'fleet_roster' },
-      status_headline: blocker.headline,
-      status_detail: blocker.detail ?? null,
+      status_headline: 'Status headline',
+      status_detail: null,
     };
 
     await render(AlpacaOperatorPostureComponent, { inputs: { posture } });
 
     expect(screen.getByRole('heading', { name: 'Desk headline' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Roster headline' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Status headline' })).toBeNull();
   });
 
   it('emits the exact OperatorMove for a fix_here disposition the host declares supported', async () => {

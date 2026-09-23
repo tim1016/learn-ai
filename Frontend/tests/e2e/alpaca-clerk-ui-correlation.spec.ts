@@ -358,7 +358,6 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
             operator_posture: {
               account_desk: null,
               condition: null,
-              fleet_roster: null,
               status_detail: null,
               status_headline: 'Clerk and broker are in sync.',
             },

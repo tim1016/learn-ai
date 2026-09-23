@@ -498,8 +498,8 @@ class ClerkStatus(BaseModel):
     authority_kind: AuthorityKind = "real_paper"
     # #1664: the one canonical account-level operator decision, authored from
     # this same evidence cut. See app/broker/alpaca/clerk/sqlite/
-    # account_operator_posture.py. Account Desk and Account Strip render only
-    # their own host projection and never re-derive a verdict from the raw
+    # account_operator_posture.py. The Account Desk renders its
+    # account_desk projection and never re-derives a verdict from the raw
     # facts above.
     operator_posture: AccountOperatorPosture
 

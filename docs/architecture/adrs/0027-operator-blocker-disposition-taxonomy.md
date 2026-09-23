@@ -101,3 +101,15 @@ title/body/consequence/confirm-label/token copy, and the operator surface
 provides the non-move safety confirmations used by mark-poisoned and
 crash-recovery override flows. The typed confirmation dialog renders those
 fields verbatim and has no domain-language fallback defaults.
+
+As of #2192 (2026-09-22), the `fleet_roster` host is retired end to end. Its
+last renderer, the Bots-roster account strip, was removed by #2185, and the
+owner chose to retire the host rather than re-wire it. `fleet_roster` is gone
+from the `OperatorHost` literal, and `AccountOperatorPosture` carries only the
+`account_desk` projection. That is enforced in the backend schema, the
+committed OpenAPI contract, the generated frontend types and the hand-written
+TS mirror. The Alpaca desk card is the only account-posture surface. The
+Stage 8 note above is superseded on this point: by 2026-09-22, roster rows no
+longer carried `host=fleet_roster` projections, and the only producer left was
+the account posture, which this change removed. `fleet_roster` in the Decision's
+host list (item 2) is historical.

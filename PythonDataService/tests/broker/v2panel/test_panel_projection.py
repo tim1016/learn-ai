@@ -333,7 +333,6 @@ def _clerk_status(
         operator_posture=AccountOperatorPosture(
             condition=None,
             account_desk=None,
-            fleet_roster=None,
             status_headline="Account Clerk custody is healthy",
             status_detail=None,
         ),

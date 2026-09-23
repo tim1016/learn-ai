@@ -45,7 +45,6 @@ function fixHereAccountDeskPosture(): AccountOperatorPosture {
   return {
     condition: blocker.condition,
     account_desk: blocker,
-    fleet_roster: { ...blocker, host: 'fleet_roster', disposition: 'fix_elsewhere' },
     status_headline: blocker.headline,
     status_detail: blocker.detail ?? null,
   };
@@ -67,7 +66,6 @@ function terminalRunbookPosture(): AccountOperatorPosture {
   return {
     condition: blocker.condition,
     account_desk: blocker,
-    fleet_roster: { ...blocker, host: 'fleet_roster' },
     status_headline: blocker.headline,
     status_detail: blocker.detail ?? null,
   };
