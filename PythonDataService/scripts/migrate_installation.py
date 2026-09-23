@@ -16,10 +16,12 @@ Old machine::
         --operator inkant --change-ref migrate-2026-09-22
 
 ``export --check`` asks every lane whether its account is flat and stops
-nothing and writes nothing. ``export`` stops every bot on every lane (they
-stay stopped), refuses unless every account is flat, stops the containers
-that write the bundled data, and writes one bundle file. It never drains a
-lane, never flattens or cancels anything, and does not lock the machine.
+nothing and writes nothing. ``export`` refuses unless every account is flat
+— before it stops anything — then stops every bot on every lane (they stay
+stopped), re-checks, stops the containers that write the bundled data, and
+writes one bundle file. It never drains a lane, never flattens anything,
+cancels nothing but the stopped bots' own entry orders, and does not lock
+the machine.
 
 New machine, after copying the bundle and ``deploy/fleet/env/*.env`` (and
 the repo-root ``.env`` and ``PythonDataService/.env``) by hand::
@@ -149,7 +151,7 @@ def _build_parser() -> argparse.ArgumentParser:
         )
 
     export = subparsers.add_parser(
-        "export", help="Stop every bot, require every account flat, write one bundle"
+        "export", help="Require every account flat, stop every bot, write one bundle"
     )
     _common(export)
     export.add_argument("--bundle", default=None, help="Bundle file to write (never overwritten)")
