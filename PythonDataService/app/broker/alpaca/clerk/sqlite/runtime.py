@@ -119,7 +119,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account as reconcile_sqlite_account,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
@@ -1377,15 +1377,6 @@ class SqliteAlpacaClerkFacade:
         """Read-only twin of :meth:`start_admission_snapshot` (#1776 WP2)."""
         yield await self.custody_snapshot_projection(strategy_instance_id)
 
-    async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[OrderResource, ...]:
-        order_refs = self._working_order_refs(strategy_instance_id)
-        if not order_refs:
-            return ()
-        return await self.cancel_verified_working_orders(
-            strategy_instance_id=strategy_instance_id,
-            order_refs=order_refs,
-        )
-
     async def cancel_verified_working_orders(
         self,
         *,
@@ -1409,32 +1400,14 @@ class SqliteAlpacaClerkFacade:
                 requested.append(order)
 
         resolved: list[OrderResource] = []
-        contended: list[OperationClaimError] = []
         for order in requested:
             if _is_working_order(order):
-                try:
-                    order = await cancel_and_prove_owned_entry(
-                        self._repo,
-                        entry_order_ref=order.order_ref,
-                        trade=self._trade,
-                    )
-                except OperationClaimError as exc:
-                    # Another owner holds this order right now (#2361). Still
-                    # attempt the rest; the caller learns the set was not fully
-                    # cancelled, and the sweep re-drives a stopped run's entry.
-                    logger.warning(
-                        "cancel of a working ENTRY deferred: its operation is claimed",
-                        extra={
-                            "action": "cancel_working_entry_contended",
-                            "account_id": self.account_id,
-                            "strategy_instance_id": strategy_instance_id,
-                            "order_ref": order.order_ref,
-                        },
-                    )
-                    contended.append(exc)
+                order = await cancel_and_prove_owned_entry(
+                    self._repo,
+                    entry_order_ref=order.order_ref,
+                    trade=self._trade,
+                )
             resolved.append(order)
-        if contended:
-            raise contended[0]
         return tuple(resolved)
 
     def _proof(
@@ -1444,17 +1417,7 @@ class SqliteAlpacaClerkFacade:
     ) -> InstanceCustodyProof:
         verdict = _legacy_verdict(result.verdict)
         working = self._working_order_refs_for_proof(strategy_instance_id)
-        # An ENTER whose POST has not folded yet is an intent the broker may
-        # still accept (#2358): STOP must not read it as flat, nor Resume as
-        # free of order work.
-        unresolved = tuple(
-            dict.fromkeys(
-                (
-                    *self._unresolved_order_refs(strategy_instance_id),
-                    *self._inflight_entry_refs(strategy_instance_id),
-                )
-            )
-        )
+        unresolved = self._unresolved_order_refs(strategy_instance_id)
         freeze = _freeze_state(result, observed_at_ms=self._repo.clock())
         exposure = {
             symbol: quantity
@@ -1474,19 +1437,6 @@ class SqliteAlpacaClerkFacade:
             observed_at_ms=self._repo.clock(),
         )
 
-    def _working_order_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
-        """ENTRY-only: the exact cancel-target set for STOP (#1396 P1 —
-        `cancel_verified_working_orders` rejects anything but an owned
-        ENTRY). Custody-proof callers must use
-        :meth:`_working_order_refs_for_proof` instead, which also counts a
-        live EXIT's still-working REDUCING child.
-        """
-        return tuple(
-            order.order_ref
-            for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
-            if _is_working_order(order)
-        )
-
     def _working_order_refs_for_proof(self, strategy_instance_id: str) -> tuple[str, ...]:
         """Every still-working order (ENTRY or REDUCING) for custody proof.
 
@@ -1501,27 +1451,20 @@ class SqliteAlpacaClerkFacade:
             if _is_working_order(order)
         )
 
-    def _inflight_entry_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
-        """Owned ENTRYs with no broker state yet under a nonterminal effect.
-
-        ``ENTER_ACCEPTED`` writes the order row with ``broker_state`` NULL and
-        the POST runs outside intake; the row stays NULL until the response
-        (or a websocket frame) folds. Neither :meth:`_working_order_refs_for_proof`
-        (a broker state) nor :meth:`_unresolved_order_refs` (an ``unknown``
-        effect) sees that window, so a STOP proven inside it read as flat
-        while the order was about to land (#2358). A voided ENTER is terminal
-        and never counted here.
-        """
-        return tuple(
-            order.order_ref
-            for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
-            if order.broker_state is None
-            and (effect := self._repo.effect_operation(order.effect_operation_id)) is not None
-            and effect.state in NONTERMINAL_EFFECT_STATES
-        )
-
     def _unresolved_order_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
-        return tuple(
+        """Order intents whose broker outcome is not yet known.
+
+        One definition for the STOP/Resume proof and the custody snapshot
+        alike, of two kinds: an order under an ``unknown`` effect, and an
+        owned ENTRY with no broker state under a nonterminal effect -- its
+        POST is in flight. ``ENTER_ACCEPTED`` writes the row with
+        ``broker_state`` NULL and the POST runs outside intake, so until the
+        response (or a websocket frame) folds, neither a broker state nor an
+        ``unknown`` effect marks it; a STOP proven in that window read as
+        flat while the order was about to land (#2358). A voided ENTER is
+        terminal and never counted.
+        """
+        uncertain = tuple(
             order.order_ref
             for order in self._repo.uncertain_orders()
             if (
@@ -1529,6 +1472,15 @@ class SqliteAlpacaClerkFacade:
                 and effect.strategy_instance_id == strategy_instance_id
             )
         )
+        in_flight = tuple(
+            order.order_ref
+            for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
+            if order.broker_state is None
+            and order.order_ref not in uncertain
+            and (effect := self._repo.effect_operation(order.effect_operation_id)) is not None
+            and effect.state in NONTERMINAL_EFFECT_STATES
+        )
+        return uncertain + in_flight
 
 
 def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:

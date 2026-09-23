@@ -140,7 +140,7 @@ async def test_synthetic_custody_drills_capture_real_identity_and_broker_proofs(
     assert len(restart.order_refs) == 2
     assert restart.broker_after.submit_calls == restart.broker_before.submit_calls
     boot_lookups = restart.broker_after.lookup_calls[len(restart.broker_before.lookup_calls) :]
-    assert boot_lookups[:2] == restart.order_refs
+    assert boot_lookups == (*restart.order_refs, *restart.order_refs)
     assert len(restart.broker_after.cancel_calls) - len(restart.broker_before.cancel_calls) == 2
 
 
@@ -209,8 +209,11 @@ async def test_restart_in_flight_uses_active_authority_boot_recovery_for_accepte
     assert after.submit_calls == before.submit_calls
     # Recovery resolves both by exact identity first; the boot pass then
     # cancels both, because boot retired the runs that placed them (#2362).
-    assert after.lookup_calls[len(before.lookup_calls) :][:2] == observation.evidence.order_refs
+    order_refs = observation.evidence.order_refs
+    assert after.lookup_calls[len(before.lookup_calls) :] == (*order_refs, *order_refs)
     assert len(after.cancel_calls) - len(before.cancel_calls) == 2
+    assert "accepted_state=failed" in observation.evidence.observed
+    assert "unknown_state=failed" in observation.evidence.observed
     assert "accepted_broker_state=canceled" in observation.evidence.observed
     assert "unknown_broker_state=canceled" in observation.evidence.observed
     assert "unknown_hold=False" in observation.evidence.observed

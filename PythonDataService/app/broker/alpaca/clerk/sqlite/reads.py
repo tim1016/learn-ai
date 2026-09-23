@@ -118,9 +118,9 @@ WORKING_BROKER_STATES: frozenset[str] = frozenset(
 )
 
 #: Alpaca order states in which an owned ENTRY can still fill, so an ENTRY in
-#: one of them outliving its run must be cancelled. Operator Stop's cancel set
-#: (``runtime.cancel_working_entries_for_instance``) and the reconciliation
-#: sweep's stopped-run step (``stopped_run_entries``) read this one
+#: one of them outliving its run must be cancelled. The operator's
+#: ``cancel_verified_working_orders`` and the reconciliation sweep's
+#: stopped-run step (:func:`entry_orders_owed_a_cancel`) read this one
 #: definition, so the two cancellers cannot disagree about which orders are
 #: still live. Deliberately wider than :data:`WORKING_BROKER_STATES`: an
 #: auction-bound, suspended or replace-pending order can still fill.
@@ -556,12 +556,18 @@ def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: st
     return [OrderResource(**dict(row)) for row in rows]
 
 
-def cancellable_strategy_entry_orders(conn: sqlite3.Connection) -> list[OrderResource]:
-    """Every strategy-owned ENTRY order the broker may still fill, account-wide.
+def entry_orders_owed_a_cancel(conn: sqlite3.Connection) -> list[OrderResource]:
+    """Working strategy ENTRYs whose run is not ACTIVE and that no EXIT owns.
 
-    One read per sweep pass instead of every strategy's whole order history.
-    Manual-custody orders (effects with no ``strategy_instance_id``) are
-    excluded: they belong to no run.
+    The reconciliation sweep's stopped-run worklist (#2362), account-wide in
+    one read:
+
+    * the order may still fill (:data:`CANCELLABLE_ENTRY_BROKER_STATES`);
+    * its effect belongs to a strategy -- manual-custody orders belong to no
+      run;
+    * the effect's run is not ``ACTIVE`` (at most one run per strategy is);
+    * no nonterminal EXIT links the order -- that EXIT's machine owns its
+      cancel, the predicate of :func:`active_exit_for_order`.
     """
     states = ", ".join("?" for _ in CANCELLABLE_ENTRY_BROKER_STATES)
     rows = conn.execute(
@@ -570,6 +576,12 @@ def cancellable_strategy_entry_orders(conn: sqlite3.Connection) -> list[OrderRes
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "WHERE o.role = 'ENTRY' AND e.strategy_instance_id IS NOT NULL "
         f"AND LOWER(o.broker_state) IN ({states}) "
+        "AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.run_id = e.run_id "
+        "AND r.strategy_instance_id = e.strategy_instance_id AND r.state = 'ACTIVE') "
+        "AND NOT EXISTS (SELECT 1 FROM operation_order_links l "
+        "JOIN effect_operations x ON x.effect_operation_id = l.effect_operation_id "
+        "WHERE l.order_ref = o.order_ref AND x.kind = 'EXIT' "
+        "AND x.state NOT IN ('succeeded','failed','rejected')) "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         tuple(sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
     ).fetchall()

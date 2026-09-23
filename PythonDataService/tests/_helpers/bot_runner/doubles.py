@@ -226,7 +226,6 @@ class _CustodyClerk:
         # from every snapshot the double yields.
         self.account_id = proof.account_id
         self.repository = _TestDecisionReceiptRepository()
-        self.cancel_calls: list[str] = []
         self.registered_runs: list[str] = []
         self.stopped_runs: list[str] = []
         self.active_runs: dict[str, str] = {}
@@ -308,10 +307,6 @@ class _CustodyClerk:
 
     def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
         return tuple(sorted(self.active_runs.items()))
-
-    async def cancel_working_entries_for_instance(self, sid: str) -> tuple:
-        self.cancel_calls.append(sid)
-        return ()
 
     async def prove_instance_custody(self, sid: str) -> InstanceCustodyProof:
         assert sid == self.proof.strategy_instance_id
@@ -451,7 +446,6 @@ class _FakeClerk:
         repository: ClerkSqliteRepository | None = None,
     ) -> None:
         self.calls: list[dict] = []
-        self.stop_cancellations: list[str] = []
         self.registered_runs: list[str] = []
         self.stopped_runs: list[str] = []
         self._should_raise = should_raise
@@ -523,10 +517,6 @@ class _FakeClerk:
     def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
         return tuple(sorted(self.active_runs.items()))
 
-    async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[()]:
-        """Test-double boundary for Clerk-owned STOP custody."""
-        self.stop_cancellations.append(strategy_instance_id)
-        return ()
 
     async def execute_for_instance(
         self,
