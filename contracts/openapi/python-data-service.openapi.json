@@ -7196,6 +7196,82 @@
         "title": "ChartDataResponse",
         "type": "object"
       },
+      "ChartFeedView": {
+        "additionalProperties": false,
+        "description": "The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).\n\nThe chart runs its own ``reqRealTimeBars`` line, separate from the bot's\nfeed that ``MarketPulseView`` describes, so a chart that stopped drawing\nsays so here instead of freezing silently under a live headline.\n``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;\n``STARTING`` is the first subscription before its first bar; ``STALLED``,\n``ERRORED`` and ``RECOVERING`` are a line that is not delivering.\n``last_error`` is the aggregator's diagnostic, shown verbatim.",
+        "properties": {
+          "attention_required": {
+            "title": "Attention Required",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "last_bar_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar At Ms"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "state": {
+            "enum": [
+              "LIVE",
+              "STARTING",
+              "STALLED",
+              "ERRORED",
+              "RECOVERING",
+              "NOT_EXPECTED"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "headline",
+          "explanation",
+          "next_step",
+          "attention_required",
+          "last_bar_at_ms",
+          "last_error"
+        ],
+        "title": "ChartFeedView",
+        "type": "object"
+      },
       "ChartFillMarker": {
         "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
         "properties": {
@@ -7598,7 +7674,7 @@
         "type": "object"
       },
       "ChartLiveResponse": {
-        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.",
+        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.\n``feed`` is the chart line's own health (#2355).",
         "properties": {
           "as_of_ms": {
             "title": "As Of Ms",
@@ -7610,6 +7686,9 @@
             },
             "title": "Bars",
             "type": "array"
+          },
+          "feed": {
+            "$ref": "#/components/schemas/ChartFeedView"
           },
           "fill_markers": {
             "items": {
@@ -7659,6 +7738,7 @@
           "bars",
           "fill_markers",
           "overlay_notices",
+          "feed",
           "as_of_ms"
         ],
         "title": "ChartLiveResponse",

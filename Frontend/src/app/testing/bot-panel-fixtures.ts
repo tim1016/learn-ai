@@ -8,10 +8,25 @@
 import type {
   BotCatalogView,
   BotPanelView,
+  ChartFeedView,
   PanelAction,
 } from '../components/broker/v2-panel/lib/broker-v2-panel.types';
 
 const OBSERVED_AT_MS = 1_700_000_001_000;
+
+/** A `ChartLiveResponse.feed` (#2355): quiet (`LIVE`) unless a spec is about the chart line. */
+export function fakeChartFeed(overrides: Partial<ChartFeedView> = {}): ChartFeedView {
+  return {
+    state: 'LIVE',
+    headline: 'Chart feed live',
+    explanation: "The chart's IBKR bar line is delivering bars within its expected cadence.",
+    next_step: null,
+    attention_required: false,
+    last_bar_at_ms: null,
+    last_error: null,
+    ...overrides,
+  };
+}
 
 export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPanelView {
   return {

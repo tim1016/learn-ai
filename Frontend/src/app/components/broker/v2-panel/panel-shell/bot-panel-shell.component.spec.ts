@@ -17,6 +17,7 @@ import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
 import { MarketDataService } from '../../../../services/market-data.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -316,6 +317,7 @@ const LIVE_CHART = {
   bars: [],
   fill_markers: [],
   overlay_notices: [],
+  feed: fakeChartFeed(),
   as_of_ms: 1_753_800_000_000,
 };
 
@@ -506,6 +508,7 @@ const mockService = {
     bars: [],
     fill_markers: [],
     overlay_notices: [],
+    feed: fakeChartFeed(),
     as_of_ms: 1_753_800_000_000,
   }),
   getHistoryChart: vi.fn().mockResolvedValue({
@@ -823,6 +826,48 @@ describe('BotPanelShellComponent', () => {
       expect(screen.getByText('Bot start requested.')).toBeTruthy();
       expect(screen.getByText('receipt-001')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    });
+  });
+
+  describe("while only the chart's own line is down (#2355)", () => {
+    it('shows the chart-line notice and the backend headline, not the producer stall', async () => {
+      const chartDown: BotPanelLiveSnapshot = {
+        ...liveSnapshot({
+          ...PANEL,
+          market_pulse: {
+            ...PANEL.market_pulse,
+            headline: 'Bot market data live; chart feed not live',
+            explanation: "The bot's feed is delivering bars; the chart's own IBKR bar line is not.",
+            attention_required: true,
+          },
+        }),
+        live_chart: {
+          ...LIVE_CHART,
+          feed: fakeChartFeed({
+            state: 'STALLED',
+            headline: 'Chart feed stalled',
+            explanation: "The chart's IBKR bar line has not delivered a bar within its expected cadence.",
+            next_step: 'Do not read the chart as current.',
+            attention_required: true,
+            last_bar_at_ms: 1_753_800_000_000,
+          }),
+        },
+      };
+      mockService.getLiveSnapshot.mockResolvedValueOnce(chartDown);
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService }],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const notice = screen.getByRole('alert', { name: 'Chart feed stalled' });
+      expect(within(notice).getByText('Do not read the chart as current.')).toBeTruthy();
+      expect(screen.getByText('Bot market data live; chart feed not live')).toBeTruthy();
+      expect(screen.queryByText('Market data live')).toBeNull();
+      expect(screen.queryByRole('alert', { name: 'The live panel stopped updating.' })).toBeNull();
+      expect(fixture.nativeElement.classList.contains('is-stale')).toBe(false);
     });
   });
 

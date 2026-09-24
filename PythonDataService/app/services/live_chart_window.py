@@ -79,12 +79,34 @@ class ChartOverlayNotice:
     source: Literal["polygon"] = "polygon"
 
 
+ChartFeedState = Literal["LIVE", "STARTING", "STALLED", "ERRORED", "RECOVERING", "NOT_EXPECTED"]
+
+
+@dataclass(frozen=True)
+class ChartFeedStatus:
+    """The chart's own IBKR bar line, as the live aggregator reports it (#2355).
+
+    The chart runs a separate ``reqRealTimeBars`` line from the bot's feed, so
+    its health is its own fact: the bot's feed being live proves nothing about
+    it. ``NOT_EXPECTED`` means no live bar is due for this window (outside
+    RTH, or the window does not reach now); every other non-``LIVE`` state is
+    a chart line that is not delivering.
+    """
+
+    state: ChartFeedState
+    last_bar_ms: int | None = None
+    last_error: str | None = None
+
+
+CHART_FEED_NOT_EXPECTED = ChartFeedStatus(state="NOT_EXPECTED")
+
+
 @dataclass(frozen=True)
 class ChartWindowResult:
     bars: list[IbkrMinuteBar]
     timeframe: ChartTimeframe
     resolution: Literal["5s", "1m"]
-    is_streaming: bool
+    feed: ChartFeedStatus
     overlay_notices: list[ChartOverlayNotice] = field(default_factory=list)
 
 
@@ -138,7 +160,7 @@ async def resolve_chart_window(
             bars=[],
             timeframe=timeframe,
             resolution=resolution,
-            is_streaming=False,
+            feed=CHART_FEED_NOT_EXPECTED,
         )
 
     recorded = _recorded_bars(
@@ -172,7 +194,7 @@ async def resolve_chart_window(
         bars=bars,
         timeframe=timeframe,
         resolution=resolution,
-        is_streaming=_is_streaming(
+        feed=_chart_feed_status(
             symbol=symbol,
             resolution=resolution,
             from_ms=from_ms,
@@ -445,7 +467,7 @@ def _merge_base_bars(recorded: list[IbkrMinuteBar], overlay: list[IbkrMinuteBar]
     return sorted(by_start.values(), key=lambda bar: bar.start_ms)
 
 
-def _is_streaming(
+def _chart_feed_status(
     *,
     symbol: str,
     resolution: Literal["5s", "1m"],
@@ -453,20 +475,34 @@ def _is_streaming(
     to_ms: int,
     now_ms: int,
     live_aggregator: LiveChartAggregator,
-) -> bool:
+) -> ChartFeedStatus:
+    """Classify the chart's own bar line from the aggregator's status (#2355).
+
+    A pump error is sticky on the aggregator until the next bar arrives, so an
+    ``errored`` line reads ``ERRORED`` through every restart that has not yet
+    delivered. A ``streaming`` line whose newest bar is older than the
+    resolution's freshness budget is ``STALLED`` (the IBKR stall watchdog only
+    errors the line later).
+    """
     threshold_ms = 30_000 if resolution == "5s" else 180_000
     if from_ms > now_ms or to_ms < now_ms - threshold_ms:
-        return False
+        return CHART_FEED_NOT_EXPECTED
     if session_state_at_ms(now_ms) != "RTH_OPEN":
-        return False
-    status, _last_error, last_bar_ms = (
+        return CHART_FEED_NOT_EXPECTED
+    status, last_error, last_bar_ms = (
         live_aggregator.status_5s(symbol)
         if resolution == "5s"
         else live_aggregator.status(symbol)
     )
-    if status != "streaming" or last_bar_ms is None:
-        return False
-    return now_ms - int(last_bar_ms) <= threshold_ms
+    if status == "errored":
+        return ChartFeedStatus(state="ERRORED", last_bar_ms=last_bar_ms, last_error=last_error)
+    if status == "resubscribing":
+        return ChartFeedStatus(state="RECOVERING", last_bar_ms=last_bar_ms)
+    if status != "streaming":
+        return ChartFeedStatus(state="STARTING", last_bar_ms=last_bar_ms)
+    if last_bar_ms is None or now_ms - int(last_bar_ms) > threshold_ms:
+        return ChartFeedStatus(state="STALLED", last_bar_ms=last_bar_ms)
+    return ChartFeedStatus(state="LIVE", last_bar_ms=last_bar_ms)
 
 
 def _expected_minute_starts(window: SessionWindow, from_ms: int, to_ms: int) -> set[int]:

@@ -222,6 +222,15 @@ export function snapshotAtRevision(
       bars: [],
       fill_markers: [],
       overlay_notices: [],
+      feed: {
+        state: 'LIVE',
+        headline: 'Chart feed live',
+        explanation: "The chart's IBKR bar line is delivering bars within its expected cadence.",
+        next_step: null,
+        attention_required: false,
+        last_bar_at_ms: null,
+        last_error: null,
+      },
       as_of_ms: BASE_TIMESTAMP_MS + revision,
     },
   };

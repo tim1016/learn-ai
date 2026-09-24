@@ -290,6 +290,36 @@
   color: var(--ind-cat-momentum);
 }
 
+// The chart's own line is down (#2355): the lit live signal goes dark and the
+// clock stops claiming a live refresh.
+.source-tab--feed-down .source-tab__signal,
+.feed-clock--down .feed-clock__dot {
+  background: var(--bear);
+  box-shadow: none;
+  animation: none;
+}
+
+.feed-clock--down { color: var(--text-primary); }
+
+.feed-notice {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+
+  &--down {
+    border-bottom-color: rgba(239, 83, 80, 0.5);
+    background: var(--bear-soft);
+  }
+}
+
+.feed-notice__meta {
+  color: var(--text-secondary);
+  font-size: var(--fs-xxs);
+}
+
 .overlay-notice {
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(255, 152, 0, 0.2);

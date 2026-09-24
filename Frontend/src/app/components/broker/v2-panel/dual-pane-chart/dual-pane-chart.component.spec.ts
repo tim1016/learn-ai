@@ -16,6 +16,7 @@ import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/in
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import type { ChartIndicatorBatchResponse } from './dual-pane-chart-indicators';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -189,6 +190,60 @@ describe('DualPaneChartComponent', () => {
     expect(
       screen.getByText('Live feed unavailable — showing Polygon (delayed).'),
     ).toBeTruthy();
+  });
+
+  describe("the chart's own feed line (#2355)", () => {
+    const ERRORED_FEED = fakeChartFeed({
+      state: 'ERRORED',
+      headline: 'Chart feed interrupted',
+      explanation: "The chart's IBKR bar line failed and is being retried.",
+      next_step: 'Do not read the chart as current.',
+      attention_required: true,
+      last_bar_at_ms: 1_777_905_300_000,
+      last_error: 'IBKRBarSubscriptionStalled: no bar for 60s',
+    });
+
+    it('says the chart line is down instead of claiming a live refresh', async () => {
+      const { container } = await render(DualPaneChartComponent, {
+        inputs: { symbol: 'SPY', liveBars: [], histBars: [], liveFeed: ERRORED_FEED },
+      });
+
+      const notice = screen.getByRole('alert', { name: 'Chart feed interrupted' });
+      expect(within(notice).getByText(ERRORED_FEED.explanation)).toBeTruthy();
+      expect(within(notice).getByText('Do not read the chart as current.')).toBeTruthy();
+      expect(within(notice).getByText('IBKRBarSubscriptionStalled: no bar for 60s')).toBeTruthy();
+      expect(within(notice).getByText(
+        formatTimestampDisplay(1_777_905_300_000, { mode: 'local' }),
+        { exact: false },
+      )).toBeTruthy();
+      expect(screen.queryByText('Refreshes every 5s')).toBeNull();
+      expect(screen.getByText('Errored')).toBeTruthy();
+      expect(container.querySelector('.source-tab--feed-down')).not.toBeNull();
+    });
+
+    it('keeps the live refresh copy and no notice while the chart line delivers', async () => {
+      const { container } = await render(DualPaneChartComponent, {
+        inputs: { symbol: 'SPY', liveBars: [], histBars: [], liveFeed: fakeChartFeed() },
+      });
+
+      expect(screen.getByText('Refreshes every 5s')).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(container.querySelector('.source-tab--feed-down')).toBeNull();
+    });
+
+    it('reports a starting line as status, not an alarm', async () => {
+      await render(DualPaneChartComponent, {
+        inputs: {
+          symbol: 'SPY',
+          liveBars: [],
+          histBars: [],
+          liveFeed: fakeChartFeed({ state: 'STARTING', headline: 'Chart feed starting' }),
+        },
+      });
+
+      expect(screen.getByRole('status', { name: 'Chart feed starting' })).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
   });
 
   it('renders all Polygon timeframe buttons after switching source', async () => {

@@ -39,12 +39,18 @@ from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
     build_history_chart,
     build_live_chart,
+    chart_feed_view,
     coerce_history_timeframe,
     history_fill_window,
     live_window,
 )
 from app.services.chart_indicator_service import ChartIndicatorService
-from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
+from app.services.live_chart_window import (
+    CHART_FEED_NOT_EXPECTED,
+    MAX_CHART_RANGE_MS,
+    ChartFeedStatus,
+    ChartWindowResult,
+)
 from tests.broker.v2panel.fixtures import SID
 
 _NOW = 1_700_000_000_000
@@ -700,7 +706,7 @@ def test_live_chart_tags_source_and_markers() -> None:
         source="ibkr",
     )
     chart_window = ChartWindowResult(
-        bars=[bar], timeframe="1m", resolution="1m", is_streaming=True
+        bars=[bar], timeframe="1m", resolution="1m", feed=ChartFeedStatus(state="LIVE")
     )
     fills = [_sqlite_fill(event_key="exec-live", filled_at_ms=_NOW - 30_000)]
 
@@ -725,7 +731,7 @@ def test_live_chart_markers_match_googl_fixture_fills_today() -> None:
 
     fills, open_ms, close_ms, fills_today = _googl_fixture_fills()
     chart = build_live_chart(
-        ChartWindowResult(bars=[], timeframe="1m", resolution="1m", is_streaming=False),
+        ChartWindowResult(bars=[], timeframe="1m", resolution="1m", feed=CHART_FEED_NOT_EXPECTED),
         fills,
         strategy_instance_id="sqlite-cohort-googl-0810",
         symbol="GOOGL",
@@ -803,7 +809,7 @@ async def test_live_chart_forwards_selected_resolution(
             (kwargs["timeframe"], kwargs["polygon_overlay_enabled"])
         )
         return ChartWindowResult(
-            bars=[], timeframe="5s", resolution="5s", is_streaming=True
+            bars=[], timeframe="5s", resolution="5s", feed=ChartFeedStatus(state="LIVE")
         )
 
     subscribed: list[str] = []
@@ -837,7 +843,7 @@ async def test_live_snapshot_uses_its_captured_sqlite_fills(
     captured: list[tuple[FillRecord, ...]] = []
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        return SimpleNamespace(symbol="SPY"), [], expected_fills
+        return SimpleNamespace(symbol="SPY", market_pulse=None), [], expected_fills
 
     async def build_from_fills(
         _sid: str,
@@ -846,7 +852,7 @@ async def test_live_snapshot_uses_its_captured_sqlite_fills(
         **_kwargs: object,
     ) -> SimpleNamespace:
         captured.append(fills)
-        return SimpleNamespace()
+        return SimpleNamespace(feed=chart_feed_view(CHART_FEED_NOT_EXPECTED))
 
     monkeypatch.setattr(
         panel_chart_data_source,

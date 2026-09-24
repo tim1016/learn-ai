@@ -44,6 +44,7 @@
         role="tab"
         data-chart-pane="live"
         class="source-tab source-tab--live"
+        [class.source-tab--feed-down]="liveFeedDown()"
         [class.source-tab--active]="activePane() === 'live'"
         [attr.aria-selected]="activePane() === 'live'"
         [attr.tabindex]="activePane() === 'live' ? 0 : -1"
@@ -115,10 +116,17 @@
               >{{ resolution }}</button>
             }
           </div>
-          <div class="feed-clock">
-            <span class="feed-clock__dot" aria-hidden="true"></span>
-            Refreshes every 5s
-          </div>
+          @if (liveFeedNotice(); as feed) {
+            <div class="feed-clock" [class.feed-clock--down]="feed.attention_required">
+              <span class="feed-clock__dot" aria-hidden="true"></span>
+              {{ feed.state | receiptLabel }}
+            </div>
+          } @else {
+            <div class="feed-clock">
+              <span class="feed-clock__dot" aria-hidden="true"></span>
+              Refreshes every 5s
+            </div>
+          }
         } @else {
           <div class="interval-group" role="group" aria-label="Polygon chart timeframe">
             <span class="toolbar-label">Timeframe</span>
@@ -137,6 +145,29 @@
       </div>
 
       @if (activePane() === 'live') {
+        @if (liveFeedNotice(); as feed) {
+          <section
+            class="feed-notice"
+            [class.feed-notice--down]="feed.attention_required"
+            [attr.role]="feed.attention_required ? 'alert' : 'status'"
+            aria-labelledby="live-feed-notice-title"
+          >
+            <strong id="live-feed-notice-title">{{ feed.headline }}</strong>
+            <span>{{ feed.explanation }}</span>
+            @if (feed.next_step; as nextStep) {
+              <span>{{ nextStep }}</span>
+            }
+            @if (feed.last_bar_at_ms !== null) {
+              <span class="feed-notice__meta">
+                Last chart bar
+                <app-timestamp-display [value]="feed.last_bar_at_ms" [mode]="timeZone()" />
+              </span>
+            }
+            @if (feed.last_error; as lastError) {
+              <code class="feed-notice__meta">{{ lastError }}</code>
+            }
+          </section>
+        }
         @for (notice of liveNotices(); track notice.code) {
           <div class="overlay-notice" role="status" aria-live="polite">
             {{ notice.message }}

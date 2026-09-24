@@ -26,6 +26,7 @@ import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
 import { MarketDataService } from '../../../../services/market-data.service';
+import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
@@ -194,6 +195,7 @@ const LIVE_CHART = {
   bars: [],
   fill_markers: [],
   overlay_notices: [],
+  feed: fakeChartFeed(),
   as_of_ms: 1_753_800_000_000,
 };
 

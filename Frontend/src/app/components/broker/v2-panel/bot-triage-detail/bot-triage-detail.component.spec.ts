@@ -3,7 +3,7 @@ import { provideRouter } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
-import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import { fakeBotPanelView, fakeChartFeed, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
 import type { DeskLens } from '../../../../shared/lens/lens';
 import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import type {
@@ -40,6 +40,7 @@ function fakeLiveChart(overrides: Partial<ChartLiveResponse> = {}): ChartLiveRes
     bars: [],
     fill_markers: [],
     overlay_notices: [],
+    feed: fakeChartFeed(),
     resolution: '1m',
     strategy_instance_id: 'spy-momentum-01',
     symbol: 'SPY',
