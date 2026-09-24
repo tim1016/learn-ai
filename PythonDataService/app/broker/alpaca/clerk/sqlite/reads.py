@@ -14,7 +14,10 @@ import json
 import sqlite3
 from typing import NamedTuple
 
-from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    FILL_QTY_EPSILON,
+    FINAL_CUMULATIVE_BROKER_STATES,
+)
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -971,12 +974,12 @@ def _effective_fill_totals_for_order(
 def _latest_reported_filled_quantity_sql(order_ref_sql: str) -> str:
     """SQL scalar: the cumulative filled quantity the order's LATEST acknowledgement reported.
 
-    The one reading of ``ORDER_SUBMIT_ACKED.facts_json.reported_filled_quantity``
-    (#2305). It is the latest acknowledgement by sequence, not the largest:
-    a later exact REST lookup that reports less than an earlier websocket
-    frame is the broker's current word, and it must be able to close the
-    gap -- a maximum would keep the order short for ever. ``NULL`` when the
-    latest acknowledgement reported no fill (and for every pre-#2305 row).
+    The acknowledgement fold's change check (#2305): an incoming snapshot is
+    new evidence when it differs from the literal latest row. The shortfall
+    reads :func:`_governing_reported_filled_quantity_sql` instead; comparing
+    the change check against that one would re-append the same stale
+    working-state answer on every re-fold (#2385). ``NULL`` when the latest
+    acknowledgement reported no fill (and for every pre-#2305 row).
     """
     return (
         "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
@@ -985,16 +988,52 @@ def _latest_reported_filled_quantity_sql(order_ref_sql: str) -> str:
     )
 
 
-def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
-    """SQL predicate: the latest broker-reported cumulative exceeds the effective fills.
+#: SQL ``IN`` list of :data:`FINAL_CUMULATIVE_BROKER_STATES` -- code-owned
+#: literals, the same set :func:`latest_acknowledgement_in_states` is handed
+#: by the order-total proof (#2346).
+_FINAL_BROKER_STATES_SQL = ", ".join(f"'{state}'" for state in sorted(FINAL_CUMULATIVE_BROKER_STATES))
 
-    ``NULL`` (never short) when the latest acknowledgement reported no fill.
-    ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON` last. The
-    fill sum is covered by ``ix_fills_order_ref`` and the effective-fill
-    predicate by ``ix_fills_superseded_execution_ref`` (schema v15).
+
+def _governing_reported_filled_quantity_sql(order_ref_sql: str) -> str:
+    """SQL scalar: the cumulative the shortfall compares against (#2305, #2385).
+
+    The order's latest acknowledgement whose OWN state is final, falling back
+    to the latest acknowledgement only while none is. A REST fold records its
+    acknowledgement even when stale (``append_stale_ack``), so a working-state
+    answer captured before the cancel can land after the ``canceled`` frame;
+    keyed on the plain latest acknowledgement, its pre-terminal cumulative
+    would read the order complete and drop it off the worklist with a lost
+    slice never re-derived (#2385). A working-state cumulative is never the
+    broker's last word once a final one exists.
+
+    Among final acknowledgements the latest still wins, never the largest: an
+    exact lookup reporting a final total below an earlier frame (a broker
+    execution correction, #2348's 10 -> 5 -> 10) is the broker's current
+    word and must close the gap -- a maximum would keep the order short for
+    ever (#2305 review). ``NULL`` when the governing acknowledgement reported
+    no fill. The state and the total come from the same row, as in
+    :func:`latest_acknowledgement_in_states`.
     """
     return (
-        "(" + _latest_reported_filled_quantity_sql(order_ref_sql) + " - "
+        "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
+        "FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
+        "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' "
+        "ORDER BY (lower(t.broker_state) IN (" + _FINAL_BROKER_STATES_SQL + ")) DESC, "
+        "t.sequence DESC LIMIT 1)"
+    )
+
+
+def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
+    """SQL predicate: the governing broker-reported cumulative exceeds the effective fills.
+
+    ``NULL`` (never short) when the governing acknowledgement reported no
+    fill (:func:`_governing_reported_filled_quantity_sql`). ``order_ref_sql``
+    appears twice; binds :data:`FILL_QTY_EPSILON` last. The fill sum is
+    covered by ``ix_fills_order_ref`` and the effective-fill predicate by
+    ``ix_fills_superseded_execution_ref`` (schema v15).
+    """
+    return (
+        "(" + _governing_reported_filled_quantity_sql(order_ref_sql) + " - "
         "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
         "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
     )
@@ -1035,7 +1074,7 @@ def latest_acknowledgement_in_states(
 
 
 def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
-    """Whether the order's effective fills fall short of the broker's latest cumulative (#2305).
+    """Whether the order's effective fills fall short of the broker's governing cumulative (#2305).
 
     The one definition shared by the reconciliation worklist
     (:func:`reconcilable_effect_operations`) and the EXIT machine's
