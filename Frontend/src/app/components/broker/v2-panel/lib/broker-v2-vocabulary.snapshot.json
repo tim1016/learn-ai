@@ -32,6 +32,7 @@
     "clean",
     "continue",
     "deploy",
+    "discharge_attributed_residue",
     "execute_safe_flatten",
     "flatten_stop",
     "healthy",
@@ -163,6 +164,10 @@
     "deploy": {
       "label": "Deploy",
       "explanation": "Create and start a new bot bound to this account. The bot begins evaluating bars immediately after creation."
+    },
+    "discharge_attributed_residue": {
+      "label": "Discharge stranded residue",
+      "explanation": "Write off an attributed position the broker does not hold. The Clerk re-reads the broker first and sends no order."
     },
     "execute_safe_flatten": {
       "label": "Execute safe flatten",

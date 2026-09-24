@@ -1586,8 +1586,11 @@ class FleetControlService:
                 "proves that lane stopped writing, so the account does not move "
                 "to another lane (#2157, #2154).",
                 next_step="A released account moves only when its release was "
-                "covered by the draining lane's own lane-quiet confirmation. Use "
-                "whole-machine migration, which needs no successor (#2151).",
+                "covered by the draining lane's own lane-quiet confirmation; an "
+                "absent release never moves, and whole-machine migration does not "
+                "reassign it either. Before force-retiring a lane whose custody "
+                "still attributes a position the broker does not hold, discharge "
+                "that residue from the bot panel so the lane answers quiet (#2381).",
             )
         if predecessor.lifecycle_state == StoredLifecycleState.DRAINING:
             # Checked after the release's own evidence: an absent release can

@@ -313,12 +313,15 @@ def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -
     assert quiesce <= set(ACTION_IDS)
     assert quiesce <= set(get_args(PanelQuiesceActionRequest.model_fields["action_id"].annotation))
     # Every recovery id whose executor only stops decisions, cancels owned
-    # verified working orders, submits a reduction or reconciles.
+    # verified working orders, submits a reduction, reconciles, or discharges
+    # a residue the broker proves it does not hold (#2381: a draining lane
+    # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs it to answer quiet).
     assert quiesce & set(get_args(RecoveryActionId)) == {
         "stop_bot_decisions",
         "cancel_verified_working_orders",
         "execute_safe_flatten",
         "reconcile_now",
+        "discharge_attributed_residue",
     }
     # Rewrites fill evidence and can lift a hold a running bot is under.
     assert "resolve_execution_coverage" not in quiesce

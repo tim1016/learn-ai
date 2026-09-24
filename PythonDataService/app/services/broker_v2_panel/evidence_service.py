@@ -123,6 +123,11 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Execution correction recorded",
         "The Account Clerk replaced a prior execution slice with corrected broker evidence.",
     ),
+    "ATTRIBUTED_RESIDUE_DISCHARGED": (
+        "Stranded residue discharged",
+        "The operator wrote off an attributed position the broker did not hold, "
+        "after a fresh broker read proved the account flat for it. No order was sent.",
+    ),
     "EXTERNAL_ORDER_OBSERVED": (
         "External order observed",
         "The Account Clerk recorded an order outside the configured bot namespaces.",

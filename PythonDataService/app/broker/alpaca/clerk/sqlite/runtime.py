@@ -120,6 +120,10 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.residue_discharge import (
+    ResidueDischargeReceipt,
+    discharge_attributed_residue,
+)
 from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner, RunOwnership
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
@@ -1414,6 +1418,23 @@ class SqliteAlpacaClerkFacade:
     ) -> AsyncIterator[ClerkCustodySnapshot]:
         """Read-only twin of :meth:`start_admission_snapshot` (#1776 WP2)."""
         yield await self.custody_snapshot_projection(strategy_instance_id)
+
+    async def discharge_attributed_residue(
+        self,
+        *,
+        strategy_instance_id: str,
+        symbol: str,
+        reason: str | None,
+    ) -> ResidueDischargeReceipt:
+        """Zero one bot's stranded residue once a fresh broker read proves it (#2381)."""
+        return await discharge_attributed_residue(
+            self._repo,
+            read=self._read,
+            intake=self._intake,
+            strategy_instance_id=strategy_instance_id,
+            symbol=symbol,
+            operator_reason=reason,
+        )
 
     async def cancel_verified_working_orders(
         self,

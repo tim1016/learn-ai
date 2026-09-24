@@ -31,6 +31,7 @@ export const ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   cancel_verified_working_orders: 'danger',
   prepare_safe_flatten: 'neutral',
   execute_safe_flatten: 'danger',
+  discharge_attributed_residue: 'danger',
   open_custody_timeline: 'neutral',
 };
 

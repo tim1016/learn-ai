@@ -168,7 +168,7 @@ def _attributed_quantity_by_symbol(attributed_positions: dict[str, float]) -> di
     return attributed_by_symbol
 
 
-def _broker_symbol_reader(
+def broker_symbol_reader(
     repo: ClerkSqliteRepository,
     *,
     broker_orders: list[BrokerOrder],
@@ -194,13 +194,12 @@ def _broker_symbol_reader(
         attributed_qty = _attributed_quantity_by_symbol(
             repo.attributed_positions_by_symbol()
         ).get(normalized, 0.0)
+        working = normalized in in_flight
         return BrokerSymbolView(
             broker_qty=broker_qty,
             attributed_qty=attributed_qty,
-            agrees=(
-                not position_quantity_is_nonzero(broker_qty - attributed_qty)
-                and normalized not in in_flight
-            ),
+            working=working,
+            agrees=not position_quantity_is_nonzero(broker_qty - attributed_qty) and not working,
         )
 
     return read
@@ -1067,7 +1066,7 @@ async def _reconcile_account_serialized(
         repo,
         trade=trade,
         intake=intake,
-        broker_symbol=_broker_symbol_reader(
+        broker_symbol=broker_symbol_reader(
             repo, broker_orders=broker_orders, broker_positions=broker_positions
         ),
         pricing=pricing,

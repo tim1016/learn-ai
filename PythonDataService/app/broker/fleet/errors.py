@@ -298,8 +298,10 @@ class ClerkReassignmentBlocked(FleetControlError):
     Raised when a released account is re-reserved but its release carried
     ``lane_confirmation: absent``: the lane that held it never proved it had
     stopped writing — it could not answer, so a transfer would risk two
-    writers against one account (#2154). Whole-machine migration moves a lane
-    without a successor and is unaffected (#2151).
+    writers against one account (#2154). Nothing moves such an account
+    afterwards: whole-machine migration carries lanes, not a released
+    assignment. A lane stranded only by attributed residue the broker does not
+    hold is cured before retirement by the residue discharge (#2381).
     """
 
     reason: ClassVar[str] = "clerk_reassignment_blocked"

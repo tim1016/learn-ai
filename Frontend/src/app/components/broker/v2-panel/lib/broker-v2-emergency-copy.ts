@@ -171,6 +171,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     explanation:
       'Submit the prepared reduction as recovery EXIT custody with exact attributed quantities.',
   },
+  discharge_attributed_residue: {
+    label: 'Discharge stranded residue',
+    explanation:
+      'Write off an attributed position the broker does not hold. The Clerk re-reads the broker first and sends no order.',
+  },
   archive: {
     label: 'Archive',
     explanation:

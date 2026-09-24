@@ -100,12 +100,13 @@ class BrokerSymbolView(NamedTuple):
 
     ``attributed_qty`` is the account-wide attributed total across every
     strategy instance — the quantity the broker's signed position must equal.
-    ``agrees`` is that equality with no order for the symbol working in the
-    snapshot.
+    ``working`` is whether an order for the symbol is working in the snapshot.
+    ``agrees`` is that equality with no order working.
     """
 
     broker_qty: float
     attributed_qty: float
+    working: bool
     agrees: bool
 
 
@@ -384,7 +385,7 @@ def _accept_admissible_redrive(
     remaining = repo.position(strategy_instance_id, symbol)
     if not position_quantity_is_nonzero(remaining):
         return None
-    if _clerk_work_in_flight(repo, symbol):
+    if clerk_work_in_flight(repo, symbol):
         return _RedriveRefused(
             action="exit_redrive_deferred_work_in_flight",
             message=(
@@ -438,7 +439,7 @@ def _accept_admissible_redrive(
     )
 
 
-def _clerk_work_in_flight(repo: ClerkSqliteRepository, symbol: str) -> bool:
+def clerk_work_in_flight(repo: ClerkSqliteRepository, symbol: str) -> bool:
     """Whether the Clerk has broker intent on ``symbol`` the snapshot may not show yet.
 
     Any nonterminal effect of a strategy instance on the symbol (an ENTER in
