@@ -56,12 +56,8 @@ from app.services.broker_v2_panel.chart_projection_service import (
     live_window,
     markers_in_window,
 )
-from app.services.live_bar_aggregator import (
-    BarLineState,
-    BarLineStatus,
-    SubscriptionStatus,
-    classify_bar_line,
-)
+from app.services.live_bar_aggregator import LiveLineStatus
+from app.services.live_chart_window import ChartFeedState, ChartFeedStatus, classify_live_line
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -191,18 +187,20 @@ class GalleryBarAggregator(Protocol):
 
     def snapshot_5s(self, symbol: str, since_ms: int | None = None) -> list[object]: ...
 
-    def status(self, symbol: str) -> tuple[SubscriptionStatus, str | None, int | None]: ...
+    def status(self, symbol: str) -> LiveLineStatus: ...
 
-    def status_5s(self, symbol: str) -> tuple[SubscriptionStatus, str | None, int | None]: ...
+    def status_5s(self, symbol: str) -> LiveLineStatus: ...
 
 
 # Operator copy per feed state (#2330): (headline, detail). The wall's
 # transport can be open while a symbol's IBKR line is down, so each tile says
 # what its own candles are doing.
-_FEED_COPY: dict[BarLineState, tuple[str, str]] = {
+_FEED_COPY: dict[ChartFeedState, tuple[str, str]] = {
     "LIVE": ("Feed live", "IBKR bars are arriving on schedule."),
+    # Not "Market closed": extended-hours bots trade outside the regular
+    # session, which is only when no regular-session chart bar is due.
     "NOT_EXPECTED": (
-        "Market closed",
+        "Outside regular hours",
         "No regular-session IBKR bar is due now; the chart shows the last bars received.",
     ),
     "STARTING": (
@@ -227,10 +225,10 @@ _FEED_COPY: dict[BarLineState, tuple[str, str]] = {
 }
 # States in which the line is not failing: nothing is due, it is delivering,
 # or it has not had time to deliver its first bar of the session.
-_QUIET_FEED_STATES: frozenset[BarLineState] = frozenset({"LIVE", "NOT_EXPECTED", "STARTING"})
+_QUIET_FEED_STATES: frozenset[ChartFeedState] = frozenset({"LIVE", "NOT_EXPECTED", "STARTING"})
 
 
-def _feed_view(line: BarLineStatus) -> GalleryFeedView:
+def _feed_view(line: ChartFeedStatus) -> GalleryFeedView:
     headline, detail = _FEED_COPY[line.state]
     return GalleryFeedView(
         state=line.state,
@@ -451,21 +449,20 @@ class GalleryHub:
         """Each symbol's chart line state at ``now_ms`` (#2330).
 
         Reads the line the tile draws (``status_5s`` on a 5-second wall), a
-        synchronous in-memory read like ``snapshot``. The stream sends a
+        synchronous in-memory read like ``snapshot``, and classifies it with
+        ``classify_live_line``, the classifier the panel chart uses. The stream sends a
         frame every poll whether or not a bar arrived, so this per-frame fact
         is what tells a frozen chart apart from a quiet market.
         """
         feeds: dict[str, GalleryFeedView] = {}
         for symbol in symbols:
-            status, last_error, last_bar_ms = (
+            line = (
                 self._aggregator.status_5s(symbol)
                 if self._resolution == "5s"
                 else self._aggregator.status(symbol)
             )
             feeds[symbol] = _feed_view(
-                classify_bar_line(
-                    status, last_error, last_bar_ms, resolution=self._resolution, now_ms=now_ms
-                )
+                classify_live_line(line, resolution=self._resolution, now_ms=now_ms)
             )
         return feeds
 

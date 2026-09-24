@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.broker_v2_panel import ChartBar, ChartFillMarker
+from app.services.live_chart_window import ChartFeedState
 
 GalleryResolution = Literal["5s", "1m"]
 
@@ -31,7 +32,8 @@ class GalleryPrimaryAction(BaseModel):
     disabled_reason: str | None = None
 
 
-GalleryFeedState = Literal["LIVE", "STARTING", "STALLED", "ERRORED", "RECOVERING", "NOT_EXPECTED"]
+# The tile states are the chart-line states: one classifier owns both (#2330).
+GalleryFeedState = ChartFeedState
 
 
 class GalleryFeedView(BaseModel):

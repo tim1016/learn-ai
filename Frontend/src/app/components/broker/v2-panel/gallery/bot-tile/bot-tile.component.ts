@@ -157,12 +157,21 @@ export class BotTileComponent {
    * The tile's own IBKR line (#2330). Hidden only while it is `LIVE`: every
    * other state (market closed, starting, or a line that is not delivering)
    * is shown, so frozen candles never read as current. Copy is backend-authored.
+   * `description` (the detail and the line's error) is the badge's hover
+   * title and, for keyboard and screen-reader users, the description of the
+   * focusable chart (`aria-describedby`).
    */
   protected readonly feedBadge = computed(() => {
-    const feed = this.bot().feed;
+    const view = this.bot();
+    const feed = view.feed;
     if (feed.state === 'LIVE') return null;
-    const title = feed.last_error ? `${feed.detail} (${feed.last_error})` : feed.detail;
-    return { headline: feed.headline, title, alert: feed.attention_required };
+    const description = feed.last_error ? `${feed.detail} (${feed.last_error})` : feed.detail;
+    return {
+      headline: feed.headline,
+      description,
+      descriptionId: `bot-tile-feed-${view.sid}`,
+      alert: feed.attention_required,
+    };
   });
 
   /** Keeps `needs_attention` and a down feed available as text on an existing interactive element. */

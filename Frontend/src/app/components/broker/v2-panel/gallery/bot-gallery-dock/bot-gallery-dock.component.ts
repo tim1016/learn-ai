@@ -80,16 +80,20 @@ const TRANSPORT_TONE: Record<GalleryLiveStatus, IndicatorTone> = {
  * delivering wins, then a wall where no bar is due, then a line still
  * starting. Only a wall whose every line is delivering (or starting beside
  * delivering ones) reads `Live`. A non-live transport keeps its own label.
+ * A wall-wide line state reads the tiles' own backend-authored headline, so
+ * the footer and the tiles never word one state two ways.
  */
 function wallIndicator(status: GalleryLiveStatus, bots: readonly GalleryBotView[]): WallIndicator {
   if (status !== 'live') return { label: STATUS_LABEL[status], tone: TRANSPORT_TONE[status] };
   const down = bots.filter((bot) => bot.feed.attention_required).length;
   if (down > 0) return { label: `Feed down · ${down}`, tone: 'stale' };
-  if (bots.length > 0 && bots.every((bot) => bot.feed.state === 'NOT_EXPECTED')) {
-    return { label: 'Market closed', tone: 'muted' };
+  const [first] = bots;
+  if (first !== undefined && bots.every((bot) => bot.feed.state === 'NOT_EXPECTED')) {
+    return { label: first.feed.headline, tone: 'muted' };
   }
-  if (bots.length > 0 && bots.every((bot) => bot.feed.state !== 'LIVE')) {
-    return { label: 'Feed starting', tone: 'muted' };
+  const starting = bots.find((bot) => bot.feed.state === 'STARTING');
+  if (starting !== undefined && bots.every((bot) => bot.feed.state !== 'LIVE')) {
+    return { label: starting.feed.headline, tone: 'muted' };
   }
   return { label: STATUS_LABEL.live, tone: 'live' };
 }

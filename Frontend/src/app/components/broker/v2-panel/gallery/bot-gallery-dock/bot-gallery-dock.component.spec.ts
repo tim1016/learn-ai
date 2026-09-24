@@ -364,11 +364,24 @@ describe('BotGalleryDockComponent', () => {
       expect(screen.queryByText('Live')).toBeNull();
     });
 
-    it('says the market is closed, not Live, when no bar is expected on any tile', async () => {
-      await renderDock({ bots: [bot({ feed: feed('NOT_EXPECTED') })], status: 'live' });
+    it('reads the tiles’ own headline, not Live, when no bar is expected on any tile', async () => {
+      const outside = { ...feed('NOT_EXPECTED'), headline: 'Outside regular hours' };
+      const { container } = await renderDock({ bots: [bot({ feed: outside })], status: 'live' });
 
-      expect(screen.getByText('Market closed')).toBeTruthy();
+      expect(container.querySelector('.gallery-dock__live')?.textContent?.trim()).toBe('Outside regular hours');
       expect(screen.queryByText('Live')).toBeNull();
+    });
+
+    it('reads a starting tile’s own headline while no line is delivering yet', async () => {
+      const { container } = await renderDock({
+        bots: [
+          bot({ sid: 'a', symbol: 'SPY', feed: feed('NOT_EXPECTED') }),
+          bot({ sid: 'b', symbol: 'QQQ', feed: feed('STARTING') }),
+        ],
+        status: 'live',
+      });
+
+      expect(container.querySelector('.gallery-dock__live')?.textContent?.trim()).toBe('headline STARTING');
     });
 
     it('keeps the transport state when the stream itself is delayed', async () => {

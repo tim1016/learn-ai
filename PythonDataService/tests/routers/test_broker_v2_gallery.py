@@ -35,7 +35,7 @@ from app.services.broker_v2_panel import panel_chart_data_source, panel_data_sou
 from app.services.broker_v2_panel.chart_projection_service import aggregator_bars_to_chart_bars
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
 from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
-from app.services.live_bar_aggregator import _RING_BUFFER_SIZE_5S
+from app.services.live_bar_aggregator import _RING_BUFFER_SIZE_5S, LiveLineStatus
 
 _BROKER = "alpaca"
 _ACCOUNT_ID = "PA3"
@@ -103,8 +103,8 @@ class _FakeAggregator:
     async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
 
-    def status(self, symbol: str) -> tuple[str, str | None, int | None]:
-        return "streaming", None, 1_700_000_000_000
+    def status(self, symbol: str) -> LiveLineStatus:
+        return LiveLineStatus(status="streaming", last_bar_ms=1_700_000_000_000)
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]:
         return [
@@ -444,8 +444,8 @@ class _FullFiveSecondBufferAggregator(_FakeAggregator):
         bars = self._buffers.get(symbol, [])
         return list(bars) if since_ms is None else [b for b in bars if b.start_ms > since_ms]
 
-    def status_5s(self, symbol: str) -> tuple[str, str | None, int | None]:
-        return "streaming", None, 1_700_000_000_000
+    def status_5s(self, symbol: str) -> LiveLineStatus:
+        return LiveLineStatus(status="streaming", last_bar_ms=1_700_000_000_000)
 
 
 def _five_second_hub(rows: list[_Cat2]) -> GalleryHub:

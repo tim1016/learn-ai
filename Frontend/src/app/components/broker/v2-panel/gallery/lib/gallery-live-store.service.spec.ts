@@ -90,7 +90,7 @@ function snapshot(overrides: Partial<GalleryLiveSnapshot> = {}): GalleryLiveSnap
   return {
     stream_epoch: 'epoch-a',
     surface_version: 1,
-    as_of_ms: 1_700_000_000_000,
+    as_of_ms: Date.now(),
     resolution: '5s',
     bots: [bot('sid-1'), bot('sid-2', { symbol: 'QQQ' })],
     symbols: [
@@ -132,7 +132,7 @@ describe('GalleryLiveStore', () => {
 
       const update: GalleryLiveUpdate = {
         surface_version: 2,
-        as_of_ms: 1_700_000_060_000,
+        as_of_ms: Date.now(),
         symbols: [{ symbol: 'SPY', bars: [bar(2_000, '101.00'), bar(3_000)] }],
         markers_delta: {},
         bots_delta: [bot('sid-1', { fills_today: 1 }), bot('sid-3', { symbol: 'IWM' })],
@@ -160,7 +160,7 @@ describe('GalleryLiveStore', () => {
       // in place, not duplicates.
       store.ingestUpdate({
         surface_version: 2,
-        as_of_ms: 2,
+        as_of_ms: Date.now(),
         symbols: [],
         markers_delta: { 'sid-1': [marker('order-1', 99, 'exec-1')] },
         bots_delta: [],
@@ -181,7 +181,7 @@ describe('GalleryLiveStore', () => {
       // first, not overwrite it.
       store.ingestUpdate({
         surface_version: 2,
-        as_of_ms: 2,
+        as_of_ms: Date.now(),
         symbols: [],
         markers_delta: { 'sid-1': [marker('order-1', 2, 'exec-2')] },
         bots_delta: [],
@@ -199,7 +199,7 @@ describe('GalleryLiveStore', () => {
 
       store.ingestUpdate({
         surface_version: 5,
-        as_of_ms: 1,
+        as_of_ms: Date.now(),
         symbols: [{ symbol: 'SPY', bars: [bar(9_999)] }],
         markers_delta: {},
         bots_delta: [bot('sid-9')],
@@ -244,7 +244,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 2,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [],
           markers_delta: {},
           bots_delta: [bot('sid-9')],
@@ -254,6 +254,54 @@ describe('GalleryLiveStore', () => {
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-1', 'sid-9']);
 
       source.emit('error');
+      expect(store.status()).toBe('stale');
+    });
+
+    // #2330 / #2326: a hung frame build leaves the stream open and silent.
+    it('reads stale once the newest frame ages past twice the poll interval, and live again on a fresh frame', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2 })));
+      expect(store.status()).toBe('live');
+
+      // The transport stays open, but no frame arrives.
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(store.status()).toBe('live');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(store.status()).toBe('stale');
+
+      source.emit(
+        'update',
+        JSON.stringify({
+          surface_version: 3,
+          as_of_ms: Date.now(),
+          symbols: [],
+          markers_delta: {},
+          bots_delta: [bot('sid-1')],
+          removed_sids: [],
+        }),
+      );
+      expect(store.status()).toBe('live');
+    });
+
+    it('reads stale at once when the frame it adopts is already old', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2, as_of_ms: Date.now() - 60_000 })));
+
       expect(store.status()).toBe('stale');
     });
 
@@ -284,7 +332,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 2,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [{ symbol: 'SPY', bars: [bar(3_000)] }],
           markers_delta: {},
           bots_delta: [bot('sid-9')],
@@ -389,7 +437,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 6,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }],
           markers_delta: {},
           bots_delta: [],
@@ -453,7 +501,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 3,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }],
           markers_delta: {},
           bots_delta: [],

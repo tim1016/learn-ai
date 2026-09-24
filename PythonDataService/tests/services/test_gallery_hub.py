@@ -13,6 +13,7 @@ from app.schemas.broker_v2_panel import PanelAction
 from app.services.broker_v2_panel import catalog_projection_service, gallery_hub
 from app.services.broker_v2_panel.chart_projection_service import markers_in_window
 from app.services.broker_v2_panel.gallery_hub import GalleryHub, shown_symbols
+from app.services.live_bar_aggregator import LiveLineStatus
 
 
 def _row_action(action_id: ActionId, *, enabled: bool, explanation: str = "") -> PanelAction:
@@ -34,6 +35,7 @@ def _row_action(action_id: ActionId, *, enabled: bool, explanation: str = "") ->
 # calendar-day fallback instead of a real NYSE session lookup — mirrors
 # ``test_chart_projection.py``'s ``test_live_window_falls_back_when_market_closed``.
 _NOW = 1_700_319_600_000
+_DEFAULT_LINE = LiveLineStatus(status="streaming", last_bar_ms=1_700_000_000_000)
 _OPEN_MS = 1_700_265_600_000
 _CLOSE_MS = _OPEN_MS + 86_400_000
 
@@ -229,16 +231,16 @@ class _FakeAggregator:
         self.subscribed_5s: list[str] = []
         self.bars_by_symbol: dict[str, list[object]] = bars_by_symbol or {}
         self.bars_5s_by_symbol: dict[str, list[object]] = {}
-        # (status, last_error, last_bar_ms) per symbol, as the real
-        # aggregator's ``status``/``status_5s`` report it (#2330).
-        self.status_by_symbol: dict[str, tuple[str, str | None, int | None]] = {}
-        self.status_5s_by_symbol: dict[str, tuple[str, str | None, int | None]] = {}
+        # Each line's health per symbol, in the real aggregator's
+        # ``status``/``status_5s`` return shape (#2330).
+        self.status_by_symbol: dict[str, LiveLineStatus] = {}
+        self.status_5s_by_symbol: dict[str, LiveLineStatus] = {}
 
-    def status(self, symbol: str) -> tuple[str, str | None, int | None]:
-        return self.status_by_symbol.get(symbol, ("streaming", None, 1_700_000_000_000))
+    def status(self, symbol: str) -> LiveLineStatus:
+        return self.status_by_symbol.get(symbol, _DEFAULT_LINE)
 
-    def status_5s(self, symbol: str) -> tuple[str, str | None, int | None]:
-        return self.status_5s_by_symbol.get(symbol, ("streaming", None, 1_700_000_000_000))
+    def status_5s(self, symbol: str) -> LiveLineStatus:
+        return self.status_5s_by_symbol.get(symbol, _DEFAULT_LINE)
 
     async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
@@ -967,10 +969,11 @@ async def test_build_snapshot_shows_an_errored_feed_in_rth_as_attention(
     """A dead IBKR line during RTH is on the tile, not hidden behind an open stream."""
     monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
     aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = (
-        "errored",
-        "broker not connected: public broker session not connected",
-        _RTH_MIDDAY_MS - 600_000,
+    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
+        status="errored",
+        last_error="broker not connected: public broker session not connected",
+        last_bar_ms=_RTH_MIDDAY_MS - 600_000,
+        status_changed_at_ms=_RTH_MIDDAY_MS - 60_000,
     )
 
     snapshot = await _five_second_hub(aggregator).build_snapshot()
@@ -989,7 +992,9 @@ async def test_build_update_shows_a_frozen_streaming_feed_as_stalled(
     reads ``streaming``. Every update frame now says the line is stalled."""
     monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
     aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = ("streaming", None, _RTH_MIDDAY_MS - 600_000)
+    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
+        status="streaming", last_bar_ms=_RTH_MIDDAY_MS - 600_000
+    )
     hub = _five_second_hub(aggregator)
 
     first = await hub.build_update(since_bar_ms={}, known_sids=set())
@@ -1007,7 +1012,9 @@ async def test_build_snapshot_shows_a_fresh_streaming_feed_as_live(
 ) -> None:
     monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
     aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = ("streaming", None, _RTH_MIDDAY_MS - 10_000)
+    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
+        status="streaming", last_bar_ms=_RTH_MIDDAY_MS - 10_000
+    )
 
     snapshot = await _five_second_hub(aggregator).build_snapshot()
 
@@ -1023,10 +1030,11 @@ async def test_build_snapshot_does_not_alarm_at_the_open_on_a_pre_open_error(
     a pre-open error: that is a line starting, not a line that failed."""
     monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_OPEN_MS + 10_000)
     aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = (
-        "errored",
-        "broker not connected: overnight gateway restart",
-        _PRIOR_SESSION_BAR_MS,
+    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
+        status="errored",
+        last_error="broker not connected: overnight gateway restart",
+        last_bar_ms=_PRIOR_SESSION_BAR_MS,
+        status_changed_at_ms=_PRIOR_SESSION_BAR_MS + 60_000,
     )
 
     snapshot = await _five_second_hub(aggregator).build_snapshot()
@@ -1047,4 +1055,74 @@ async def test_build_snapshot_says_no_bar_is_expected_when_the_market_is_closed(
     feed = snapshot.bots[0].feed
     assert feed.state == "NOT_EXPECTED"
     assert feed.attention_required is False
-    assert feed.headline == "Market closed"
+    assert feed.headline == "Outside regular hours"
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_bounds_a_line_that_never_delivers_its_first_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line still ``subscribing`` an hour after the open is not starting: its
+    first-bar budget is spent, so the tile says the chart is stalled."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_OPEN_MS + 3_600_000)
+    aggregator = _FakeAggregator()
+    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
+        status="subscribing",
+        last_bar_ms=_PRIOR_SESSION_BAR_MS,
+        status_changed_at_ms=_RTH_OPEN_MS - 60_000,
+    )
+
+    snapshot = await _five_second_hub(aggregator).build_snapshot()
+
+    assert snapshot.bots[0].feed.state == "STALLED"
+    assert snapshot.bots[0].feed.attention_required is True
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_reads_the_real_aggregator_line_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hub consumes the real ``LiveBarAggregator.status_5s`` return shape.
+
+    Only the IBKR edge is faked: the 5-second stream fails, so the real
+    aggregator records ``errored`` with its diagnostic and a status stamp.
+    """
+    from app.services import live_bar_aggregator as agg_mod
+
+    class _ConnectedClient:
+        def is_connected(self) -> bool:
+            return True
+
+    async def failing_stream(_client, _symbol, **_kw):
+        if False:
+            yield  # pragma: no cover
+        raise RuntimeError("IBKR connection lost")
+
+    monkeypatch.setattr(agg_mod, "get_client", lambda: _ConnectedClient())
+    monkeypatch.setattr(agg_mod, "stream_raw_5s_bars", failing_stream)
+    monkeypatch.setattr(agg_mod, "now_ms_utc", lambda: _RTH_MIDDAY_MS - 60_000)
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
+    aggregator = agg_mod.LiveBarAggregator()
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]),
+        aggregator=aggregator,
+        resolution="5s",
+    )
+    try:
+        state = await aggregator.ensure_subscribed_5s("SPY")
+        for _ in range(50):
+            if state.status == "errored":
+                break
+            await asyncio.sleep(0.01)
+        assert isinstance(aggregator.status_5s("SPY"), LiveLineStatus)
+
+        snapshot = await hub.build_snapshot()
+    finally:
+        await aggregator.shutdown()
+
+    feed = snapshot.bots[0].feed
+    assert feed.state == "ERRORED"
+    assert feed.attention_required is True
+    assert feed.last_error is not None and "IBKR connection lost" in feed.last_error

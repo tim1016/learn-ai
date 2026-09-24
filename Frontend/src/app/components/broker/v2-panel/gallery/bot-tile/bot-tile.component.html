@@ -6,8 +6,9 @@
       <span
         class="bot-tile__feed"
         [class.bot-tile__feed--alert]="badge.alert"
-        [attr.title]="badge.title"
+        [attr.title]="badge.description"
       >{{ badge.headline }}</span>
+      <span class="bot-tile__sr-only" [id]="badge.descriptionId">{{ badge.description }}</span>
     }
 
     <div class="bot-tile__action">
@@ -63,6 +64,7 @@
     role="button"
     tabindex="0"
     [attr.aria-label]="chartAriaLabel()"
+    [attr.aria-describedby]="feedBadge()?.descriptionId ?? null"
     (click)="onBodyClick()"
     (keydown.enter)="onBodyClick()"
     (keydown.space)="onBodySpaceKey($event)"

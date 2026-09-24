@@ -544,6 +544,33 @@ describe('BotTileComponent', () => {
     expect(screen.getByRole('button', { name: /Feed interrupted/ })).toBeTruthy();
   });
 
+  it('describes a down line on the focusable chart, not only in a hover title', async () => {
+    await render(BotTileComponent, {
+      inputs: {
+        bot: bot({
+          feed: {
+            state: 'STALLED',
+            headline: 'Feed stalled',
+            detail: 'No IBKR bar has arrived within the expected cadence.',
+            attention_required: true,
+            last_error: 'stall watchdog fired',
+          },
+        }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    const chart = screen.getByRole('button', { name: /Feed stalled/ });
+    const describedBy = chart.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const description = document.getElementById(describedBy ?? '')?.textContent ?? '';
+    expect(description).toContain('No IBKR bar has arrived within the expected cadence.');
+    expect(description).toContain('stall watchdog fired');
+  });
+
   it('shows no feed badge while its line is live', async () => {
     await render(BotTileComponent, {
       inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
