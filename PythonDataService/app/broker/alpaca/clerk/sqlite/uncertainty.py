@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
     PositionDriftCause,
@@ -589,6 +590,7 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     EXIT_NOT_FLAT_REASON_CODE: _exit_not_flat_proof,
     EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE: _no_per_symbol_proof,
 }
 
 

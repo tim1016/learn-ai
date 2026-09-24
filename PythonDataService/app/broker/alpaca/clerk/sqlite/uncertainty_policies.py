@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
@@ -37,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     PositionDriftCause,
     StreamHealthHoldCause,
     UnexplainedOrderCause,
+    UnfoldableBrokerOrderCause,
     broker_snapshot_stale_cause_is_valid,
     reconciliation_incomplete_cause_is_valid,
 )
@@ -141,6 +143,14 @@ def _unexplained_order_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _unfoldable_broker_order_cause_is_valid(value: Any) -> bool:
+    try:
+        UnfoldableBrokerOrderCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _stream_health_hold_cause_is_valid(value: Any) -> bool:
     try:
         StreamHealthHoldCause.from_mapping(value)
@@ -233,6 +243,20 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_unexplained_order_cause_is_valid,
+        age=CauseCleared(),
+    ),
+    # #2363: a broker order the trade-update fold cannot state truthfully.
+    # The episode is the durable record that names it; it gates nothing.
+    # Blocking entries account-wide would have no release path (the order
+    # can never fold), and refusing reductions is exactly the account-wide
+    # exit freeze the containment exists to end. Any position effect the
+    # order had is still caught per symbol by the reconciliation sweep's
+    # POSITION_DRIFT, which is the fence scoped to what it actually taints.
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=False,
+        allows_reduction=True,
+        cause_is_valid=_unfoldable_broker_order_cause_is_valid,
         age=CauseCleared(),
     ),
     STREAM_HEALTH_HOLD_REASON_CODE: ReasonPolicy(

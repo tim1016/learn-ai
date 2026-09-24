@@ -8,13 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from app.broker.alpaca import adapter
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    Capability,
+    ReductionIntent,
+    decide_capability,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
@@ -774,3 +779,151 @@ async def test_null_sink_records_nothing_and_answers_order_event() -> None:
     )
     assert disposition == "order_event"
     assert await sink.reconcile_gap() is None
+
+
+async def test_gap_replay_contains_an_unfoldable_closed_order_and_keeps_folding_the_rest(
+    tmp_path: Path,
+) -> None:
+    """#2363: one closed order the sink cannot fold must not wedge the stream.
+
+    A multi-leg parent arrives with ``side: null``; the external-order fold
+    cannot state it truthfully. Before the fix that raise aborted every
+    reconnect replay before the connection watermark, so the channel never
+    reconnected, the orders after it were never replayed, and the stream-health
+    hold froze exits account-wide. The poisoned order is now contained to
+    itself and surfaced durably; every other order still folds, and a REDUCE
+    elsewhere on the account is still admitted.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    class _ReplayRead:
+        def __init__(self, orders: list[BrokerOrder]) -> None:
+            self._orders = orders
+
+        async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
+            return list(self._orders)
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    poisoned = adapter.from_alpaca_order(
+        {
+            "id": "mleg-parent-1",
+            "client_order_id": "alpaca-console:mleg-1",
+            "symbol": "AAPL",
+            "side": None,
+            "type": "limit",
+            "time_in_force": "day",
+            "qty": "1",
+            "filled_qty": "1",
+            "limit_price": "1.25",
+            "filled_avg_price": "1.20",
+            "status": "filled",
+            "submitted_at": "2023-11-14T22:13:20Z",
+            "created_at": "2023-11-14T22:13:20Z",
+            "updated_at": "2023-11-14T22:13:21Z",
+            "filled_at": "2023-11-14T22:13:21Z",
+        },
+        observed_at_ms=1_700_000_001_000,
+    )
+    owned = _owned_order(order_ref, status="filled")
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        # The poison comes FIRST: before the fix it cut off every later order.
+        read=cast(BrokerReadPort, _ReplayRead([poisoned, owned])),
+        frame_source=_authorization_source,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=2,
+    )
+    try:
+        await consumer.run()
+
+        # Both reconnect cycles replayed the gap and reached the watermark.
+        assert consumer.counters.connects == 3
+        # The order after the poison folded.
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+        # The poisoned order is surfaced, never silently skipped.
+        assert consumer.counters.unfoldable_orders >= 1
+        episode = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="UNFOLDABLE_BROKER_ORDER",
+            strategy_instance_id=None,
+        )
+        assert episode is not None
+        facts = json.loads(episode["facts_json"])
+        assert facts["cause_facts"] == {
+            "orders": [
+                {
+                    "broker_order_id": "mleg-parent-1",
+                    "client_order_id": "alpaca-console:mleg-1",
+                    "reason": "external order side must be buy or sell",
+                }
+            ]
+        }
+        assert "mleg-parent-1" in json.loads(episode["evidence_refs_json"])
+        # A repeated replay of the same poison does not grow the hash chain.
+        appended = repo._conn.execute(
+            "SELECT COUNT(*) FROM custody_transitions WHERE transition_kind IN "
+            "('UNCERTAINTY_RAISED', 'UNCERTAINTY_REFRESHED')"
+        ).fetchone()[0]
+        assert appended == 1
+        # Nothing about the poison is written as an external-order row.
+        assert repo.external_orders() == []
+        # The surfaced fact does not freeze exits: REDUCE elsewhere is admitted.
+        reduce = decide_capability(
+            repo,
+            capability=Capability.REDUCE,
+            strategy_instance_id=STRATEGY_INSTANCE_ID,
+            reduction_intent=ReductionIntent(symbol="SPY", side="sell", quantity=5.0),
+        )
+        assert reduce.allowed is True, reduce
+    finally:
+        repo.close()
+
+
+async def test_second_unfoldable_order_joins_the_episode_without_dropping_the_first(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    sink = _sqlite_sink(repo)
+    try:
+        for broker_order_id, update in (
+            ("mleg-b", {"side": "None"}),
+            ("mleg-a", {"side": "None", "client_order_id": None}),
+        ):
+            order = _owned_order("alpaca-console:x").model_copy(
+                update={"order_id": broker_order_id, **update}
+            )
+            kind = await sink.record_lifecycle_event(
+                client_order_id=order.client_order_id,
+                event=BrokerOrderEvent(
+                    event_type="fill", occurred_at_ms=1, price=None, quantity=None
+                ),
+                event_key=f"{broker_order_id}|fill",
+                order=order,
+                recovery_source=None,
+                recovery_window_limit=None,
+            )
+            assert kind == "unfoldable_order"
+
+        episode = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="UNFOLDABLE_BROKER_ORDER",
+            strategy_instance_id=None,
+        )
+        assert episode is not None
+        orders = json.loads(episode["facts_json"])["cause_facts"]["orders"]
+        assert [(o["broker_order_id"], o["client_order_id"]) for o in orders] == [
+            ("mleg-a", None),
+            ("mleg-b", "alpaca-console:x"),
+        ]
+        # The record gates nothing: entries are not fenced by it either.
+        assert decide_capability(
+            repo, capability=Capability.NEW_EXPOSURE, subject_id="any-subject"
+        ).allowed is True
+    finally:
+        repo.close()

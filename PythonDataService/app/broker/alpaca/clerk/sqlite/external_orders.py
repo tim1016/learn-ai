@@ -24,9 +24,16 @@ from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExternalOrderAcknowledgedFacts,
     ExternalOrderObservedFacts,
+    UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import TransitionProvenance, raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+    UnfoldableBrokerOrder,
+    UnfoldableBrokerOrderCause,
+)
 from app.broker.contract.models import BrokerOrder
 
 
@@ -92,6 +99,79 @@ def observe_external_order(
             clerk_observed_at_ms=repo.clock(),
             summary_code="EXTERNAL_ORDER_OBSERVED",
             facts_json=facts.to_facts_json(),
+        ),
+    )
+
+
+def record_unfoldable_broker_order(
+    repo: ClerkSqliteRepository,
+    *,
+    order: BrokerOrder,
+    reason: str,
+    proof_reference: str | None = None,
+) -> str:
+    """Durably name one foreign order :func:`observe_external_order` refused (#2363).
+
+    A broker order this fold cannot state truthfully (a multi-leg parent with
+    a null ``side``) must neither be written as a guessed external-order row
+    nor be silently dropped. It joins the one account-scoped
+    ``UNFOLDABLE_BROKER_ORDER`` episode, keyed by broker order id, so the
+    operator sees every such order and its reason. A replay of the same order
+    re-states an identical cause and appends nothing. The episode's policy
+    gates nothing (see ``uncertainty_policies``); the caller keeps folding
+    every other order. Returns :func:`raise_uncertainty`'s outcome.
+    """
+    entry = UnfoldableBrokerOrder(
+        broker_order_id=order.order_id.strip() or f"unidentified:{proof_reference}",
+        client_order_id=order.client_order_id or None,
+        reason=reason,
+    )
+    known = {entry.broker_order_id: entry}
+    active = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+        strategy_instance_id=None,
+    )
+    if active is not None:
+        prior = UnfoldableBrokerOrderCause.from_mapping(
+            UncertaintyRaisedFacts.from_facts_json(active["facts_json"]).cause_facts
+        )
+        known = {prior_order.broker_order_id: prior_order for prior_order in prior.orders} | known
+    cause = UnfoldableBrokerOrderCause(
+        orders=tuple(known[broker_order_id] for broker_order_id in sorted(known))
+    )
+    named = "; ".join(f"{unfoldable.broker_order_id}: {unfoldable.reason}" for unfoldable in cause.orders)
+    return raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+        headline="A broker order could not be recorded",
+        explanation=(
+            f"The Clerk could not record {len(cause.orders)} broker order(s) from the "
+            f"trade-update stream ({named}). Each was set aside so every other order "
+            "keeps folding."
+        ),
+        operator_impact=(
+            "Nothing is paused by this record. Any position change these orders made is "
+            "still checked per symbol by reconciliation."
+        ),
+        next_step="Inspect each named order at Alpaca and confirm no bot position depends on it.",
+        evidence_refs=tuple(
+            sorted(
+                {
+                    ref
+                    for unfoldable in cause.orders
+                    for ref in (unfoldable.broker_order_id, unfoldable.client_order_id)
+                    if ref is not None
+                }
+            )
+        ),
+        cause_facts=cause.to_mapping(),
+        severity="error",
+        provenance=TransitionProvenance(
+            broker_order_id=entry.broker_order_id,
+            proof_reference=proof_reference or entry.broker_order_id,
+            source_event_at_ms=order.observed_at_ms,
         ),
     )
 
@@ -333,4 +413,5 @@ __all__ = [
     "SqliteExternalOrderReader",
     "acknowledge_external_order",
     "observe_external_order",
+    "record_unfoldable_broker_order",
 ]

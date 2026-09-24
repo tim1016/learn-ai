@@ -14,7 +14,11 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     WEBSOCKET_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    ExternalOrderObservationError,
+    observe_external_order,
+    record_unfoldable_broker_order,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
@@ -35,7 +39,10 @@ from app.broker.contract.ports import BrokerReadPort
 # The v12 registry spelling; this module used to carry its own copy of the
 # pre-normalisation string (ADR 0048 Decision 2).
 UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
-TradeUpdateDisposition = Literal["order_event", "unexplained_order"]
+# ``unfoldable_order``: a foreign broker order the fold cannot state
+# truthfully (#2363). It is recorded durably by name and contained to itself,
+# so the stream keeps folding every other order instead of reconnecting forever.
+TradeUpdateDisposition = Literal["order_event", "unexplained_order", "unfoldable_order"]
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +156,36 @@ class SqliteTradeUpdateEvidenceSink:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
                 # observation fold raises its own atomic account hold.
-                observe_external_order(
-                    self._repo,
-                    order=order,
-                    proof_reference=event_key,
-                )
+                try:
+                    observe_external_order(
+                        self._repo,
+                        order=order,
+                        proof_reference=event_key,
+                    )
+                except ExternalOrderObservationError as exc:
+                    # Only the fold's refusal to interpret this one record is
+                    # contained (#2363); it is raised before anything is
+                    # appended. Storage and transport errors still propagate.
+                    outcome = record_unfoldable_broker_order(
+                        self._repo,
+                        order=order,
+                        reason=str(exc),
+                        proof_reference=event_key,
+                    )
+                    logger.error(
+                        "alpaca trade update names a broker order the Clerk cannot fold; "
+                        "recorded and set aside",
+                        extra={
+                            "action": "trade_update_order_unfoldable",
+                            "broker_order_id": order.order_id,
+                            "client_order_id": client_order_id,
+                            "symbol": order.symbol,
+                            "reason": str(exc),
+                            "event_key": event_key,
+                            "uncertainty_outcome": outcome,
+                        },
+                    )
+                    return "unfoldable_order"
                 return "unexplained_order"
 
             if local_order is None or order is None:

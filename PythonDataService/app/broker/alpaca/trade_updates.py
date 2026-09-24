@@ -140,6 +140,8 @@ class TradeUpdateCounters:
     - ``skipped_duplicate`` — exact redeliveries of an already-seen key.
     - ``stale_terminal`` — events for an already-terminal order (surfaced).
     - ``unexplained`` — events whose order this Clerk did not own.
+    - ``unfoldable_orders`` — events whose order the Clerk could not fold;
+      recorded durably by name and contained to that order (#2363).
     - ``parse_errors`` — frames that captured but would not parse.
     - ``capture_failures`` — frames refused because verbatim capture failed.
     - ``event_key_collisions`` — changed payloads that reused an event key.
@@ -152,6 +154,7 @@ class TradeUpdateCounters:
     skipped_duplicate: int = 0
     stale_terminal: int = 0
     unexplained: int = 0
+    unfoldable_orders: int = 0
     parse_errors: int = 0
     reconnects: int = 0
     connects: int = 0
@@ -681,6 +684,18 @@ class TradeUpdatesConsumer:
         )
         if kind == "unexplained_order":
             self._counters.unexplained += 1
+        elif kind == "unfoldable_order":
+            self._counters.unfoldable_orders += 1
+            logger.warning(
+                "alpaca trade_updates set aside an order the Clerk could not fold",
+                extra={
+                    "action": "trade_updates_order_unfoldable",
+                    "event": event.event_type,
+                    "event_key": key,
+                    "order_id": order_id,
+                    "client_order_id": client_order_id,
+                },
+            )
         else:
             self._counters.events_applied += 1
         # Mark the order finalized (owned or not) so a later re-observation of
