@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.active_authority import (
@@ -39,13 +39,24 @@ from app.broker.contract.registry import (
 from app.routers import broker_v2_gallery, broker_v2_panel
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
+from app.schemas.broker_v2_panel import (
+    BotPanelLiveSnapshot,
+    ChartLiveResponse,
+    LiveSnapshotUnavailableDetail,
+)
 from app.schemas.run_admission import RunAdmissionDecision
-from app.services import broker_account_snapshot
+from app.services import broker_account_snapshot, surface_hub
 from app.services.bot_runner import get_bot_task_registry, set_bot_task_registry
+from app.services.broker_v2_panel import (
+    live_projection,
+    panel_chart_data_source,
+    panel_data_source,
+)
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
+from app.services.broker_v2_panel.chart_projection_service import chart_feed_view
+from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED
 from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
 
@@ -720,13 +731,25 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
             bars=[],
             fill_markers=[],
             overlay_notices=[],
+            feed=chart_feed_view(CHART_FEED_NOT_EXPECTED),
             as_of_ms=_T0,
         ),
     )
 
     class _Hub:
+        strategy_instance_id = SID
+        stream_epoch = "epoch-new"
+        surface_version = 7
+        is_available = True
+
         async def snapshot(self) -> BotPanelLiveSnapshot:
             return snapshot
+
+        def stall(self) -> None:
+            return None
+
+        def seconds_until_stall(self) -> None:
+            return None
 
         def subscribe(self) -> asyncio.Queue[BotPanelLiveSnapshot | None]:
             queue: asyncio.Queue[BotPanelLiveSnapshot | None] = asyncio.Queue(maxsize=2)
@@ -763,6 +786,96 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
     assert stream.headers["content-type"].startswith("text/event-stream")
     assert "event: reset" in stream.text
     assert "id: epoch-new:7" in stream.text
+
+
+async def test_stalled_live_projection_producer_is_served_stale_never_live(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2353: a hung producer must not keep serving its last snapshot as live.
+
+    Real: the SQLite panel assembly, the live-projection registry, SurfaceHub,
+    the post-action prompt refresh and the router's REST + SSE handlers.
+    Faked: the IBKR chart bars, the server clock, and the stall itself (one
+    assembly awaits an event, as a hung SQLite/executor read would).
+    """
+    live_projection.reset_live_projection_hubs_for_testing()
+    clock = {"now_ms": _T0, "monotonic": 1_000.0}
+    monkeypatch.setattr(surface_hub, "now_ms_utc", lambda: clock["now_ms"])
+    monkeypatch.setattr(surface_hub, "monotonic", lambda: clock["monotonic"])
+
+    async def fake_chart(sid, symbol, fills, *, resolution, now_ms):  # type: ignore[no-untyped-def]
+        return ChartLiveResponse(
+            strategy_instance_id=sid,
+            symbol=symbol,
+            trading_date_open_ms=now_ms - 60_000,
+            trading_date_close_ms=now_ms + 60_000,
+            resolution=resolution,
+            bars=[],
+            fill_markers=[],
+            overlay_notices=[],
+            feed=chart_feed_view(CHART_FEED_NOT_EXPECTED),
+            as_of_ms=now_ms,
+        )
+
+    monkeypatch.setattr(panel_chart_data_source, "_build_live_chart_from_fills", fake_chart)
+    real_parts = panel_data_source.get_live_snapshot_parts
+    hang = {"on": False}
+    producer_hung = asyncio.Event()
+    release = asyncio.Event()
+
+    async def parts(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if hang["on"]:
+            producer_hung.set()
+            await release.wait()
+        return await real_parts(*args, **kwargs)
+
+    monkeypatch.setattr(panel_data_source, "get_live_snapshot_parts", parts)
+    stream = None
+    try:
+        boot = await broker_v2_panel.get_live_snapshot_scoped("alpaca", ACCT, SID, "5s")
+        cursor = f"{boot.stream_epoch}:{boot.surface_version}"
+
+        # The producer hangs inside one assembly (the post-action prompt).
+        hang["on"] = True
+        live_projection.schedule_live_projection_refresh("alpaca", ACCT, SID)
+        await asyncio.wait_for(producer_hung.wait(), timeout=2.0)
+        clock["now_ms"] += 60_000
+        clock["monotonic"] += 60.0
+
+        with pytest.raises(HTTPException) as refused:
+            await broker_v2_panel.get_live_snapshot_scoped("alpaca", ACCT, SID, "5s")
+        assert refused.value.status_code == 503
+        rest_stall = LiveSnapshotUnavailableDetail.model_validate(refused.value.detail)
+        assert rest_stall.reason == "PRODUCER_STALLED"
+        assert rest_stall.last_produced_at_ms == _T0
+        assert rest_stall.observed_at_ms == _T0 + 60_000
+
+        # A (re)connecting stream is told the projection is stale; it is not
+        # re-primed with the frozen snapshot.
+        response = await broker_v2_panel.stream_live_snapshot_scoped(
+            "alpaca", ACCT, SID, "5s", cursor
+        )
+        stream = response.body_iterator
+        first = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        assert first.startswith("event: stale\n"), first
+        stream_stall = LiveSnapshotUnavailableDetail.model_validate_json(
+            first.split("data: ", 1)[1]
+        )
+        assert stream_stall == rest_stall
+
+        # Recovery republishes even when nothing semantic changed.
+        hang["on"] = False
+        release.set()
+        recovered = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        assert "event: snapshot" in recovered, recovered
+        fresh = await broker_v2_panel.get_live_snapshot_scoped("alpaca", ACCT, SID, "5s")
+        assert fresh.stream_epoch == boot.stream_epoch
+    finally:
+        release.set()
+        if stream is not None:
+            await stream.aclose()
+        await live_projection.stop_live_projection_hubs()
 
 
 async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None:
@@ -825,6 +938,7 @@ async def test_live_chart_accepts_five_second_resolution(
             "bars": [],
             "fill_markers": [],
             "overlay_notices": [],
+            "feed": chart_feed_view(CHART_FEED_NOT_EXPECTED).model_dump(),
             "as_of_ms": _T0,
         }
 

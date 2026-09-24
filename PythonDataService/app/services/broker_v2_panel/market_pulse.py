@@ -97,7 +97,7 @@ def build_market_pulse(
     )
     # The Market badge (market_state) renders right beside `headline` in the
     # V2 header (panel-header.component.html) — reporting the raw "CLOSED"
-    # liveness value here while the headline below says "Market data live"
+    # liveness value here while the headline below says "Bot market data live"
     # would show operators a self-contradictory panel during every proven
     # extended-hours session. TRADABLE is what the exemption actually
     # concluded, so the badge must say what the headline says.
@@ -156,8 +156,13 @@ def build_market_pulse(
         next_step = None
         attention_required = False
     elif feed_state == "LIVE":
-        headline = "Market data live"
-        explanation = "The feed is connected and delivering data within its expected cadence."
+        # Scoped to the bot's own line: the LIVE chart runs a separate IBKR
+        # bar line and reports its own state on the chart (#2355).
+        headline = "Bot market data live"
+        explanation = (
+            "The bot's feed is connected and delivering data within its expected "
+            "cadence. The chart reports its own bar line separately."
+        )
         next_step = None
         attention_required = False
     elif feed_state == "IDLE":
@@ -201,3 +206,4 @@ def build_market_pulse(
         attention_required=attention_required,
         observed_at_ms=fact.observed_at_ms,
     )
+

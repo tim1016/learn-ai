@@ -31,6 +31,7 @@ import { rxResource } from '@angular/core/rxjs-interop';
 import { catchError, map, of } from 'rxjs';
 import type {
   ChartBar,
+  ChartFeedView,
   ChartFillMarker,
   ChartHistoryTimeframe,
   ChartLiveResolution,
@@ -40,6 +41,7 @@ import type {
 import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
@@ -230,7 +232,12 @@ export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>
 @Component({
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ChartIndicatorRailComponent, PanelInstrumentQuoteComponent, ReceiptLabelPipe],
+  imports: [
+    ChartIndicatorRailComponent,
+    PanelInstrumentQuoteComponent,
+    ReceiptLabelPipe,
+    TimestampDisplayComponent,
+  ],
   templateUrl: './dual-pane-chart.component.html',
   styleUrl: './dual-pane-chart.component.scss',
   host: { '(keydown.escape)': 'collapseFullscreen()' },
@@ -241,6 +248,9 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly liveBars = input<readonly ChartBar[]>([]);
   readonly liveFillMarkers = input<readonly ChartFillMarker[]>([]);
   readonly liveNotices = input<readonly { code: string; message: string }[]>([]);
+  /** The LIVE pane's own IBKR bar line (#2355). It is a separate line from
+   * the bot's feed, so the pane reports it instead of freezing silently. */
+  readonly liveFeed = input<ChartFeedView | null>(null);
   readonly liveLoading = input(false);
   readonly historyLoading = input(false);
   /** Settled Polygon-history failure (#2202 FR-005): renders the delayed
@@ -320,6 +330,13 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly historyUnavailable = computed(
     () => this.historyFailed() || this.historyUnavailableNotice() !== null,
   );
+
+  /** The chart line's notice, when the backend says it has one to show. */
+  protected readonly liveFeedNotice = computed<ChartFeedView | null>(() => {
+    const feed = this.liveFeed();
+    return feed?.show_notice ? feed : null;
+  });
+  protected readonly liveFeedDown = computed(() => this.liveFeed()?.attention_required === true);
 
   protected readonly liveSource = computed<ChartSource | null>(() => {
     const bars = this.liveBars();

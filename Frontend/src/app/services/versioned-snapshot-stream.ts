@@ -18,6 +18,8 @@ export interface SnapshotStreamCallbacks<T extends VersionedSnapshot> {
   readonly onMalformedSnapshot: (message: string) => void;
   readonly onStatus: (status: AuthenticatedSseStatus) => void;
   readonly onReset?: (message: string) => void;
+  /** The producer stalled; the payload is the server's typed stale notice. */
+  readonly onStale?: (message: string) => void;
 }
 
 /** ADR-0028 latest-wins adoption: new epochs replace, same-epoch versions advance. */
@@ -48,6 +50,9 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
           callbacks.onMalformedSnapshot(`${label} returned an invalid snapshot.`);
           return;
         }
+        // A producer recovering from a stall republishes its snapshot even when
+        // nothing changed, so a repeated epoch:version id is expected here: it
+        // is the signal that ends a `stale` notice, not a duplicate to drop.
         callbacks.onSnapshot(parsed);
       } catch (error) {
         callbacks.onMalformedSnapshot(
@@ -57,10 +62,11 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
     },
     onControlEvent: (name, message) => {
       if (name === 'reset') callbacks.onReset?.(message.data);
+      if (name === 'stale') callbacks.onStale?.(message.data);
       if (name === 'end') {
         connection?.close();
       }
     },
-  }, ['reset', 'end']);
+  }, ['reset', 'stale', 'end']);
   return { close: () => connection?.close() };
 }

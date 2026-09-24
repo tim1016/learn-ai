@@ -182,9 +182,13 @@ export type ChartFillMarker = components['schemas']['ChartFillMarker'];
 
 export type ChartOverlayNoticeView = components['schemas']['ChartOverlayNoticeView'];
 export type ChartLiveResponse = components['schemas']['ChartLiveResponse'];
+/** The LIVE chart's own IBKR bar line, separate from the bot's feed (#2355). */
+export type ChartFeedView = components['schemas']['ChartFeedView'];
 export type ChartHistoryResponse = components['schemas']['ChartHistoryResponse'];
 
 export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot'];
+/** Why the live snapshot is withheld; `PRODUCER_STALLED` is the typed stale state (#2353). */
+export type LiveSnapshotUnavailableDetail = components['schemas']['LiveSnapshotUnavailableDetail'];
 
 // ── §14 Operator-gated evidence ──────────────────────────────────────────────
 

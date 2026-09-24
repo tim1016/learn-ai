@@ -7196,6 +7196,87 @@
         "title": "ChartDataResponse",
         "type": "object"
       },
+      "ChartFeedView": {
+        "additionalProperties": false,
+        "description": "The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).\n\nThe chart runs its own ``reqRealTimeBars`` line, separate from the bot's\nfeed that ``MarketPulseView`` describes, so a chart that stopped drawing\nsays so here instead of freezing silently under a live headline.\n``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;\n``STARTING`` is the line waiting for its first bar of the session;\n``STALLED``, ``ERRORED`` and ``RECOVERING`` are a line that is not\ndelivering. ``show_notice`` says whether the chart shows this state at all\nand ``attention_required`` whether it is an alarm; the client keeps no\nstate list of its own. ``last_error`` is the aggregator's diagnostic,\nshown verbatim.",
+        "properties": {
+          "attention_required": {
+            "title": "Attention Required",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "last_bar_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar At Ms"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "show_notice": {
+            "title": "Show Notice",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "LIVE",
+              "STARTING",
+              "STALLED",
+              "ERRORED",
+              "RECOVERING",
+              "NOT_EXPECTED"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "headline",
+          "explanation",
+          "next_step",
+          "show_notice",
+          "attention_required",
+          "last_bar_at_ms",
+          "last_error"
+        ],
+        "title": "ChartFeedView",
+        "type": "object"
+      },
       "ChartFillMarker": {
         "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
         "properties": {
@@ -7598,7 +7679,7 @@
         "type": "object"
       },
       "ChartLiveResponse": {
-        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.",
+        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.\n``feed`` is the chart line's own health (#2355).",
         "properties": {
           "as_of_ms": {
             "title": "As Of Ms",
@@ -7610,6 +7691,9 @@
             },
             "title": "Bars",
             "type": "array"
+          },
+          "feed": {
+            "$ref": "#/components/schemas/ChartFeedView"
           },
           "fill_markers": {
             "items": {
@@ -7659,6 +7743,7 @@
           "bars",
           "fill_markers",
           "overlay_notices",
+          "feed",
           "as_of_ms"
         ],
         "title": "ChartLiveResponse",
@@ -23220,8 +23305,21 @@
       },
       "LiveSnapshotUnavailableDetail": {
         "additionalProperties": false,
-        "description": "Retry guidance when a producer has not published its first snapshot.",
+        "description": "Why the live panel snapshot is withheld, with retry guidance.\n\n``SNAPSHOT_UNAVAILABLE``: the producer has not published a complete\nsnapshot yet, or its latest refresh failed. ``PRODUCER_STALLED`` (#2353):\nthe producer has not completed an assembly within its liveness budget, so\nits last snapshot is frozen and is withheld rather than served as live.\nThe stall instants come from the data plane's own clock; this model is\nalso the payload of the live stream's ``stale`` event.",
         "properties": {
+          "last_produced_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Produced At Ms"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -23230,15 +23328,39 @@
             "title": "Next Action",
             "type": "string"
           },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "reason": {
+            "enum": [
+              "SNAPSHOT_UNAVAILABLE",
+              "PRODUCER_STALLED"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
           "why": {
             "title": "Why",
             "type": "string"
           }
         },
         "required": [
+          "reason",
           "message",
           "why",
-          "next_action"
+          "next_action",
+          "last_produced_at_ms",
+          "observed_at_ms"
         ],
         "title": "LiveSnapshotUnavailableDetail",
         "type": "object"
@@ -51300,7 +51422,7 @@
                 }
               }
             },
-            "description": "The producer has not published its first complete snapshot."
+            "description": "The producer has not published a complete snapshot, its last refresh failed, or it stalled (reason PRODUCER_STALLED)."
           }
         },
         "summary": "Versioned REST bootstrap for the live bot panel",
@@ -51415,7 +51537,7 @@
                 }
               }
             },
-            "description": "The producer has not published its first complete snapshot."
+            "description": "The producer has not published a complete snapshot, or its last refresh failed. A stalled producer still opens the stream, which reports the stall as a typed `stale` event."
           }
         },
         "summary": "Latest-wins SSE stream of complete bot-panel snapshots",

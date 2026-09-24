@@ -7,12 +7,15 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 
+from app.services import surface_hub
 from app.services.broker_v2_panel import live_projection
 from app.services.surface_hub import (
+    SnapshotStalledError,
     SnapshotUnavailableError,
     SurfaceHub,
     SurfaceHubRefreshFailure,
     SurfaceHubRegistry,
+    SurfaceHubStall,
 )
 
 
@@ -282,6 +285,95 @@ async def test_refresh_failure_notifies_watchers_and_invalidates_snapshot() -> N
     assert failure == SurfaceHubRefreshFailure()
     assert "private source detail" not in failure.message
     with pytest.raises(SnapshotUnavailableError):
+        await hub.snapshot()
+
+
+@pytest.mark.asyncio
+async def test_hung_assembly_stalls_the_snapshot_by_the_producer_stamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2353: an assembly that never completes must not leave the last
+    snapshot served as current. Liveness is the producer's own completion
+    stamp on the server's monotonic clock; recovery republishes even when
+    nothing semantic changed, so a client told "stale" hears the producer is
+    back."""
+    clock = {"now_ms": 1_700_000_000_000, "monotonic": 1_000.0}
+    monkeypatch.setattr(surface_hub, "now_ms_utc", lambda: clock["now_ms"])
+    monkeypatch.setattr(surface_hub, "monotonic", lambda: clock["monotonic"])
+    release = asyncio.Event()
+    calls = {"n": 0}
+
+    async def assemble() -> _Snapshot:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            await release.wait()
+        return _snapshot(generated_at_ms=1_700_000_000_100)
+
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=assemble,
+        refresh_interval_seconds=5.0,
+    )
+    first = await hub.refresh()
+    queue = hub.subscribe()
+    assert await queue.get() == first
+    hung = asyncio.create_task(hub.refresh())
+    await asyncio.sleep(0)
+
+    clock["now_ms"] += 20_000
+    clock["monotonic"] += 20.0
+    assert hub.stall() is None
+    assert await hub.snapshot() == first
+    assert hub.seconds_until_stall() == pytest.approx(0.001)
+
+    clock["now_ms"] += 1
+    clock["monotonic"] += 0.001
+    stall = SurfaceHubStall(
+        last_produced_at_ms=1_700_000_000_000,
+        observed_at_ms=1_700_000_020_001,
+        stall_after_ms=20_000,
+    )
+    assert hub.stall() == stall
+    with pytest.raises(SnapshotStalledError) as refused:
+        await hub.snapshot()
+    assert refused.value.stall == stall
+    assert hub.latest == first
+
+    release.set()
+    recovered = await hung
+    assert recovered.surface_version == first.surface_version
+    assert await asyncio.wait_for(queue.get(), timeout=1.0) == recovered
+    assert hub.stall() is None
+    assert await hub.snapshot() == recovered
+
+
+@pytest.mark.asyncio
+async def test_wall_clock_steps_neither_fake_nor_hide_a_stall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stall is judged on the monotonic clock; the wall clock only labels it."""
+    clock = {"now_ms": 1_700_000_000_000, "monotonic": 1_000.0}
+    monkeypatch.setattr(surface_hub, "now_ms_utc", lambda: clock["now_ms"])
+    monkeypatch.setattr(surface_hub, "monotonic", lambda: clock["monotonic"])
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=lambda: asyncio.sleep(0, result=_snapshot(generated_at_ms=1)),
+        refresh_interval_seconds=5.0,
+    )
+    await hub.refresh()
+
+    # An NTP step forward by an hour while only one second really passed.
+    clock["now_ms"] += 3_600_000
+    clock["monotonic"] += 1.0
+    assert hub.stall() is None
+
+    # A step backward by an hour while the producer really is 30 s silent.
+    clock["now_ms"] -= 2 * 3_600_000
+    clock["monotonic"] += 29.0
+    stall = hub.stall()
+    assert stall is not None
+    assert stall.last_produced_at_ms == 1_700_000_000_000
+    with pytest.raises(SnapshotStalledError):
         await hub.snapshot()
 
 

@@ -964,11 +964,39 @@ class ChartOverlayNoticeView(BaseModel):
     source: Literal["polygon"]
 
 
+class ChartFeedView(BaseModel):
+    """The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).
+
+    The chart runs its own ``reqRealTimeBars`` line, separate from the bot's
+    feed that ``MarketPulseView`` describes, so a chart that stopped drawing
+    says so here instead of freezing silently under a live headline.
+    ``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;
+    ``STARTING`` is the line waiting for its first bar of the session;
+    ``STALLED``, ``ERRORED`` and ``RECOVERING`` are a line that is not
+    delivering. ``show_notice`` says whether the chart shows this state at all
+    and ``attention_required`` whether it is an alarm; the client keeps no
+    state list of its own. ``last_error`` is the aggregator's diagnostic,
+    shown verbatim.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["LIVE", "STARTING", "STALLED", "ERRORED", "RECOVERING", "NOT_EXPECTED"]
+    headline: str
+    explanation: str
+    next_step: str | None
+    show_notice: bool
+    attention_required: bool
+    last_bar_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    last_error: str | None
+
+
 class ChartLiveResponse(BaseModel):
     """Today's merged, source-tagged LIVE-pane bars + today's fill markers (§8).
 
     ``as_of_ms`` and the two session boundaries derive from the canonical NY
     calendar — "today" is the NY trading date, never browser-local midnight.
+    ``feed`` is the chart line's own health (#2355).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -981,6 +1009,7 @@ class ChartLiveResponse(BaseModel):
     bars: list[ChartBar]
     fill_markers: list[ChartFillMarker]
     overlay_notices: list[ChartOverlayNoticeView]
+    feed: ChartFeedView
     as_of_ms: int
 
 
@@ -996,13 +1025,24 @@ class BotPanelLiveSnapshot(BaseModel):
 
 
 class LiveSnapshotUnavailableDetail(BaseModel):
-    """Retry guidance when a producer has not published its first snapshot."""
+    """Why the live panel snapshot is withheld, with retry guidance.
+
+    ``SNAPSHOT_UNAVAILABLE``: the producer has not published a complete
+    snapshot yet, or its latest refresh failed. ``PRODUCER_STALLED`` (#2353):
+    the producer has not completed an assembly within its liveness budget, so
+    its last snapshot is frozen and is withheld rather than served as live.
+    The stall instants come from the data plane's own clock; this model is
+    also the payload of the live stream's ``stale`` event.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    reason: Literal["SNAPSHOT_UNAVAILABLE", "PRODUCER_STALLED"]
     message: str
     why: str
     next_action: str
+    last_produced_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    observed_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class LiveSnapshotUnavailableResponse(BaseModel):

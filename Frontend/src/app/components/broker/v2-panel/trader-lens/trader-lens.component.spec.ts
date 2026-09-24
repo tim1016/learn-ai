@@ -6,6 +6,7 @@ import { TraderLensComponent } from './trader-lens.component';
 import type { BotPanelView, PanelProfile, ChartLiveResponse } from '../lib/broker-v2-panel.types';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { MarketDataService } from '../../../../services/market-data.service';
+import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 
 const chartMocks = vi.hoisted(() => {
   const timeScale = { fitContent: vi.fn() };
@@ -361,6 +362,7 @@ describe('TraderLensComponent — live fallback chip', () => {
           source: 'polygon',
         },
       ],
+      feed: fakeChartFeed(),
       as_of_ms: 1_753_800_000_000,
     };
 

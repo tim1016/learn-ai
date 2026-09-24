@@ -49,6 +49,7 @@ from app.services.bar_persistence import (
     BarPersistence,
     BarPersistenceRegressionError,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,26 @@ class _SymbolState:
     status: SubscriptionStatus = "idle"
     last_error: str | None = None
     last_bar_ms: int | None = None
+    # When ``status`` was last written (int64 ms UTC). A reader uses it to
+    # tell a failure that is happening now from one left over from before
+    # the session opened (#2355): an overnight ``errored`` or
+    # ``resubscribing`` is not a current fault at the open.
+    status_changed_at_ms: int | None = None
+
+    def set_status(self, status: SubscriptionStatus) -> None:
+        """Record ``status`` and stamp when it was written."""
+        self.status = status
+        self.status_changed_at_ms = now_ms_utc()
+
+
+@dataclass(frozen=True)
+class LiveLineStatus:
+    """One stream's subscription health, read in one piece (#2355)."""
+
+    status: SubscriptionStatus
+    last_error: str | None = None
+    last_bar_ms: int | None = None
+    status_changed_at_ms: int | None = None
 
 
 def _today_utc():
@@ -211,7 +232,7 @@ class LiveBarAggregator:
                 # no prior failure to remember. The pump clears ``last_error``
                 # on its first successful bar (see ``_pump``).
                 if state.last_error is None:
-                    state.status = "subscribing"
+                    state.set_status("subscribing")
             return state
 
     async def ensure_subscribed_5s(self, symbol: str) -> _SymbolState:
@@ -235,7 +256,7 @@ class LiveBarAggregator:
                     name=f"live-bar-stream-5s:{key}",
                 )
                 if state.last_error is None:
-                    state.status = "subscribing"
+                    state.set_status("subscribing")
             return state
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[IbkrMinuteBar]:
@@ -261,21 +282,24 @@ class LiveBarAggregator:
             return list(state.bars)
         return [b for b in state.bars if b.start_ms > since_ms]
 
-    def status(self, symbol: str) -> tuple[SubscriptionStatus, str | None, int | None]:
-        """Return (status, last_error, last_bar_ms) for the 1-min stream."""
-        state = self._states.get(self._key(symbol))
-        if state is None:
-            return "idle", None, None
-        return state.status, state.last_error, state.last_bar_ms
+    def status(self, symbol: str) -> LiveLineStatus:
+        """Return the 1-min stream's subscription health."""
+        return self._line_status(self._states.get(self._key(symbol)))
 
-    def status_5s(
-        self, symbol: str
-    ) -> tuple[SubscriptionStatus, str | None, int | None]:
-        """Return (status, last_error, last_bar_ms) for the 5-sec stream."""
-        state = self._states_5s.get(self._key(symbol))
+    def status_5s(self, symbol: str) -> LiveLineStatus:
+        """Return the 5-sec stream's subscription health."""
+        return self._line_status(self._states_5s.get(self._key(symbol)))
+
+    @staticmethod
+    def _line_status(state: _SymbolState | None) -> LiveLineStatus:
         if state is None:
-            return "idle", None, None
-        return state.status, state.last_error, state.last_bar_ms
+            return LiveLineStatus(status="idle")
+        return LiveLineStatus(
+            status=state.status,
+            last_error=state.last_error,
+            last_bar_ms=state.last_bar_ms,
+            status_changed_at_ms=state.status_changed_at_ms,
+        )
 
     async def shutdown(self) -> None:
         """Cancel all running tasks. Safe to call multiple times."""
@@ -307,14 +331,17 @@ class LiveBarAggregator:
                 if state.task is not None and not state.task.done():
                     state.task.cancel()
                     tasks.append(state.task)
-                state.status = "resubscribing"
-                state.last_error = None
         for task in tasks:
             try:
                 await task
             except (asyncio.CancelledError, Exception) as exc:
                 logger.debug("Aggregator task ended during resubscribe: %s", exc)
         async with self._lock:
+            # Marked only now: a cancelled pump records ``idle`` as it ends,
+            # which would otherwise overwrite ``resubscribing`` (#2355).
+            for _, state in (*restart_1m, *restart_5s):
+                state.set_status("resubscribing")
+                state.last_error = None
             for symbol, state in restart_1m:
                 state.task = asyncio.create_task(
                     self._run_stream(symbol, state),
@@ -439,12 +466,13 @@ class LiveBarAggregator:
                                 "action": "partial_first_bar_dropped",
                             },
                         )
-                        # The pump still considers the stream live even though
-                        # we didn't surface this bar — flip status anyway so
-                        # the operator sees the green badge.
-                        if state.status != "streaming":
-                            state.status = "streaming"
-                            state.last_error = None
+                        # The line answered, but nothing was drawn: it stays
+                        # ``subscribing`` (a prior failure is cleared) until a
+                        # full bar lands. ``streaming`` without a bar would read
+                        # as a stalled line to the chart (#2355).
+                        if state.status != "subscribing":
+                            state.set_status("subscribing")
+                        state.last_error = None
                         continue
 
                 self._persist_bar(symbol, label, bar)
@@ -452,17 +480,17 @@ class LiveBarAggregator:
                 state.bars.append(bar)
                 state.last_bar_ms = bar.start_ms
                 if state.status != "streaming":
-                    state.status = "streaming"
+                    state.set_status("streaming")
                     state.last_error = None
         except NotConnectedError as exc:
-            state.status = "errored"
+            state.set_status("errored")
             state.last_error = f"broker not connected: {exc}"
             logger.warning("Live bar stream %s for %s: %s", label, symbol, exc)
         except asyncio.CancelledError:
-            state.status = "idle"
+            state.set_status("idle")
             raise
         except Exception as exc:
-            state.status = "errored"
+            state.set_status("errored")
             state.last_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "Live bar stream %s for %s ended with %s", label, symbol, exc
