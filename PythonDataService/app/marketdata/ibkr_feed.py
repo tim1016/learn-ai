@@ -48,6 +48,7 @@ from app.broker.ibkr.bars import (
     stream_minute_bars,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
+from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE, falls_short_of_calendar
 from app.marketdata.feed import (
     BarProvenanceTag,
     ContinuityPolicy,
@@ -61,6 +62,10 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 _STALE_THRESHOLD_MS: int = 30_000
+
+MINUTE_INCOMPLETE_REASON_CODE = "MINUTE_INCOMPLETE"
+"""Why the policy-less path ended a stream: a regular-session minute held fewer
+5-second prints than the calendar says it owes (#2364)."""
 
 
 @dataclass
@@ -200,10 +205,19 @@ class IbkrMarketDataFeed:
         *,
         use_rth: bool,
     ) -> AsyncGenerator[MarketDataBar, None]:
-        """Pre-#1921 delivery: replace a stalled line, fail fast on everything else."""
+        """Pre-#1921 delivery: replace a stalled line, fail fast on everything else.
+
+        A short minute is never delivered as a complete one (#2364). The minute
+        each attempt joined partway through -- including the first minute after
+        a stall replacement -- is omitted as an ordinary gap; any other
+        regular-session minute short of the calendar's count fails fast.
+        """
         try:
             replacements = 0
             while True:
+                # Per attempt: this path does not carry a minute across a
+                # replaced subscription, and never did.
+                assembler = MinuteAssembler()
                 try:
                     async with aclosing(
                         stream_minute_bars(
@@ -214,12 +228,12 @@ class IbkrMarketDataFeed:
                                 symbol,
                                 source_ms,
                             ),
-                            # Per attempt: this path does not carry a minute across a
-                            # replaced subscription, and never did.
-                            assembler=MinuteAssembler(),
+                            assembler=assembler,
                         )
                     ) as minute_bars:
                         async for ibkr_bar in minute_bars:
+                            if not self._legacy_minute_is_deliverable(ibkr_bar, assembler):
+                                continue
                             bar = self._translate(ibkr_bar)
                             liveness.last_bar_ms = bar.start_ms
                             liveness.last_bar_wall_ms = now_ms_utc()
@@ -242,6 +256,29 @@ class IbkrMarketDataFeed:
                     )
         except (IBKRBarStreamError, NotConnectedError) as exc:
             raise MarketDataFeedError(str(exc)) from exc
+
+    def _legacy_minute_is_deliverable(self, ibkr_bar: IbkrMinuteBar, assembler: MinuteAssembler) -> bool:
+        """Omit a short join minute; fail fast on any other minute short of the calendar."""
+        if assembler.is_short_join_minute(ibkr_bar):
+            logger.warning(
+                "Omitted the minute the IBKR stream joined partway through",
+                extra={
+                    "action": "marketdata_join_minute_omitted",
+                    "feed_id": self.feed_id,
+                    "symbol": ibkr_bar.symbol,
+                    "window_start_ms": ibkr_bar.start_ms,
+                    "contribution_count": ibkr_bar.contribution_count,
+                },
+            )
+            return False
+        if falls_short_of_calendar(ibkr_bar):
+            raise MarketDataFeedError(
+                f"minute {ibkr_bar.start_ms}..{ibkr_bar.end_ms} for {ibkr_bar.symbol} holds "
+                f"{ibkr_bar.contribution_count} of the {RTH_CONTRIBUTIONS_PER_MINUTE} 5-second "
+                "prints a regular-session minute owes",
+                reason=MINUTE_INCOMPLETE_REASON_CODE,
+            )
+        return True
 
     async def _stream_bars_with_continuity(
         self,

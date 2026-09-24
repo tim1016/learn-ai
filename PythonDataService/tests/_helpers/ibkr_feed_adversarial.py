@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     import pytest
 
 _RTH_START = datetime(2026, 5, 4, 14, 30, tzinfo=UTC)
+#: 10:30 ET on Monday 2026-05-04: a calendar regular-session minute.
+RTH_MINUTE = _RTH_START
 
 
 class AcceleratedFeedClock:
@@ -162,6 +164,20 @@ class OnePrintThenSilenceFeedFixture(_AdversarialFeedFixture):
         )
 
 
+class ScriptedLinesFeedFixture(_AdversarialFeedFixture):
+    """One scripted list of raw 5-second bars per ``reqRealTimeBars`` request.
+
+    The line stays connected throughout: a plan that simply omits some
+    5-second bars is a connected line that went quiet (a data-farm blip with
+    no 1100), and a plan that runs out mid-minute is a line the stall timer
+    will replace with the next plan (#2364).
+    """
+
+    def __init__(self, *plans: tuple[SimpleNamespace, ...]) -> None:
+        super().__init__(plans)
+        self.client.settings = SimpleNamespace(feed_continuity_enabled=True)
+
+
 class NeverFirstBarFeedFixture(_AdversarialFeedFixture):
     """An active subscription that never receives its first source print."""
 
@@ -180,6 +196,11 @@ def _closed_minute_with_one_tail_print(
     return (*bars, _raw_bar(minute_start + timedelta(minutes=1)))
 
 
+def raw_minute(minute_start: datetime, seconds: range | tuple[int, ...]) -> tuple[SimpleNamespace, ...]:
+    """The raw 5-second bars IBKR printed at ``seconds`` past ``minute_start``."""
+    return tuple(_raw_bar(minute_start + timedelta(seconds=second)) for second in seconds)
+
+
 def _raw_bar(timestamp: datetime) -> SimpleNamespace:
     return SimpleNamespace(
         time=timestamp,
@@ -192,7 +213,10 @@ def _raw_bar(timestamp: datetime) -> SimpleNamespace:
 
 
 __all__ = (
+    "RTH_MINUTE",
     "AcceleratedFeedClock",
     "NeverFirstBarFeedFixture",
     "OnePrintThenSilenceFeedFixture",
+    "ScriptedLinesFeedFixture",
+    "raw_minute",
 )

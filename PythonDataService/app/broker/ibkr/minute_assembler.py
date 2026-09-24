@@ -57,6 +57,28 @@ RTH_CONTRIBUTIONS_PER_MINUTE: int = 60_000 // 5_000
 """IBKR pushes one 5-second TRADES bar every 5 s in RTH (measured 12/12 on 2026-09-02)."""
 
 
+def is_complete_by_count(bar: IbkrMinuteBar) -> bool:
+    """Whether ``bar`` holds every 5-second print a minute can hold.
+
+    Twelve contributions is the whole minute wherever it falls, so this is the
+    one proof of completeness a minute *known* to have been cut -- by an
+    interruption, or by the stream joining partway through it -- can offer.
+    """
+    return bar.contribution_count is not None and bar.contribution_count >= RTH_CONTRIBUTIONS_PER_MINUTE
+
+
+def falls_short_of_calendar(bar: IbkrMinuteBar) -> bool:
+    """Whether ``bar`` holds fewer prints than the calendar says its minute owes (#2364).
+
+    A regular-session minute owes twelve: IBKR delivers a 5-second bar every
+    5 s in RTH. Outside it (PRE/POST/OVERNIGHT) sparse bars are normal and no
+    count is owed, so no minute there falls short. The phase is the one the
+    assembler stamped from the canonical session authority, so a half-day's
+    early close ends the floor exactly where the session ends.
+    """
+    return bar.session_phase == "RTH" and not is_complete_by_count(bar)
+
+
 class IBKRBarStreamError(Exception):
     """Raised when IBKR real-time bars violate timestamp invariants."""
 
@@ -384,11 +406,20 @@ class MinuteAssembler:
     current: _MinuteAccumulator | None = None
     last_source_ms: int | None = None
     counters: LiveBarCounters = field(default_factory=LiveBarCounters)
+    #: The minute holding the first contribution this assembler ever accepted:
+    #: the minute its stream joined, almost always partway through. Every print
+    #: of it before the join was never seen, and nothing on the emitted bar
+    #: says so -- only its count can prove it whole (#2364).
+    join_minute_start_ms: int | None = field(default=None, init=False)
     _flushed: _MinuteAccumulator | None = field(default=None, init=False, repr=False)
 
     @property
     def open_minute_start_ms(self) -> int | None:
         return None if self.current is None else self.current.start_ms
+
+    def is_short_join_minute(self, bar: IbkrMinuteBar) -> bool:
+        """Whether ``bar`` is the minute this stream joined, and it cannot prove itself whole."""
+        return bar.start_ms == self.join_minute_start_ms and not is_complete_by_count(bar)
 
     def _absorb_after_flush(self, raw_bar: object, *, symbol: str) -> bool:
         """Resolve a 5-second bar arriving after its minute was flushed early.
@@ -452,6 +483,8 @@ class MinuteAssembler:
             provenance="ibkr_realtime",
             generation=generation,
         )
+        if self.join_minute_start_ms is None:
+            self.join_minute_start_ms = self.current.start_ms
         # A minute proven complete by count is closed: emit it now rather than
         # hold it for the next minute's first print. That print can be a night
         # away -- an extended run's 19:59 ET minute otherwise waited for 04:00

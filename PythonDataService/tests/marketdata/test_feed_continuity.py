@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import aclosing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock
@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, PropertyMock
 import pytest
 
 from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.broker.ibkr import bars as bars_module
 from app.broker.ibkr.bars import (
     IBKRBarInterrupted,
     IBKRBarStreamError,
@@ -28,6 +29,8 @@ from app.marketdata.feed import (
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.services.decision_session import RunDecisionSession
+from app.services.session_authority import session_state_at_ms
+from tests._helpers.ibkr_feed_adversarial import RTH_MINUTE, ScriptedLinesFeedFixture, raw_minute
 
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 _MINUTE0 = 1_788_375_600_000  # 2026-09-02 15:00:00 ET
@@ -1085,3 +1088,96 @@ async def test_kill_switch_restores_todays_fail_fast(monkeypatch: pytest.MonkeyP
         await _collect(feed, _policy(sink), 2)
     assert excinfo.value.reason is None
     assert sink.events == []
+
+
+# -- #2364: a minute no interruption touched still owes the calendar its prints --
+
+
+def _ms(instant: datetime) -> int:
+    return int(instant.timestamp() * 1000)
+
+
+async def _drain_real_chain(
+    feed: IbkrMarketDataFeed, policy: ContinuityPolicy, n: int
+) -> tuple[list, MarketDataFeedError | None]:
+    """Collect up to ``n`` bars through the real stream, or the error that ended it."""
+    out: list = []
+    try:
+        async with aclosing(feed.stream_bars("SPY", continuity=policy)) as bars:
+            async for bar in bars:
+                out.append(bar)
+                if len(out) == n:
+                    break
+    except MarketDataFeedError as exc:
+        return out, exc
+    return out, None
+
+
+@pytest.fixture
+def _real_rth_chain(monkeypatch: pytest.MonkeyPatch):
+    """The real feed -> stream_minute_bars -> MinuteAssembler chain on a scripted IBKR line.
+
+    Only the IBKR transport and the clocks are doubles. The decision session
+    reads the real calendar, because ``RTH_MINUTE`` is a genuine regular-session
+    minute (10:30 ET on 2026-05-04), not this module's synthetic one.
+    """
+    monkeypatch.setattr("app.services.decision_session.session_state_at_ms", session_state_at_ms)
+    monkeypatch.setattr(bars_module, "_REALTIME_BAR_SUBSCRIPTIONS", bars_module._RealtimeBarSubscriptionRegistry())
+
+    def _build(*plans: tuple) -> IbkrMarketDataFeed:
+        fixture = ScriptedLinesFeedFixture(*plans)
+        fixture.install(monkeypatch)
+        return IbkrMarketDataFeed(fixture.client)
+
+    return _build
+
+
+async def test_a_short_rth_minute_on_a_connected_line_is_refused_not_delivered(_real_rth_chain) -> None:
+    """#2364: a 35 s silence with no 1100 left 10:31 holding 6 of 12 prints.
+
+    No interruption touched it, so it used to reach the strategy as a plain
+    ``realtime`` bar, field-for-field identical to a complete minute. The
+    calendar says a regular-session minute owes twelve prints; one holding six
+    is refused inside the decision session, with its count on the evidence.
+    """
+    feed = _real_rth_chain(
+        raw_minute(RTH_MINUTE, range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=1), (0, 5, 10, 15, 50, 55))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=2), range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=3), (0,))
+    )
+    sink = _RecordingSink()
+
+    delivered, error = await _drain_real_chain(feed, _policy(sink), 3)
+
+    short_start_ms = _ms(RTH_MINUTE + timedelta(minutes=1))
+    assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
+    assert error is not None and error.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert [(e.kind, e.window_start_ms, e.contribution_count) for e in sink.events] == [
+        ("refused", short_start_ms, 6)
+    ]
+
+
+async def test_a_short_join_minute_is_omitted_as_a_recorded_gap(_real_rth_chain) -> None:
+    """#2364: a stream that joins at 10:30:30 holds 6 of 10:30's 12 prints.
+
+    Nothing was delivered before it, so there is no continuity to break and the
+    run need not die -- but the minute is short and must not be decided on. It
+    is omitted as a ``gap`` carrying its count, and the first delivered bar is
+    the first whole minute.
+    """
+    feed = _real_rth_chain(
+        raw_minute(RTH_MINUTE, range(30, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=1), range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=2), (0,))
+    )
+    sink = _RecordingSink()
+
+    delivered, error = await _drain_real_chain(feed, _policy(sink), 1)
+
+    join_start_ms = _ms(RTH_MINUTE)
+    assert error is None
+    assert [(bar.start_ms, bar.volume) for bar in delivered] == [(join_start_ms + 60_000, 120)]
+    assert [(e.kind, e.window_start_ms, e.window_end_ms, e.contribution_count) for e in sink.events] == [
+        ("gap", join_start_ms, join_start_ms + 60_000, 6)
+    ]

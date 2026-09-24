@@ -21,7 +21,11 @@ from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import IBKRBarStreamError, IBKRBarSubscriptionStalled
 from app.broker.ibkr.client import IbkrClient
-from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE, MinuteAssembler
+from app.broker.ibkr.minute_assembler import (
+    MinuteAssembler,
+    falls_short_of_calendar,
+    is_complete_by_count,
+)
 from app.marketdata.feed import (
     ContinuityEventKind,
     ContinuityEventRef,
@@ -106,26 +110,30 @@ def _interruption_cause(exc: IBKRBarStreamError) -> InterruptionCause:
 
 
 def _is_unresolvable(bar: IbkrMinuteBar, *, interruption_touched: bool) -> bool:
-    """Whether an emitted minute an interruption touched cannot be proven complete.
+    """Whether an emitted minute cannot be proven complete.
 
     A minute is *touched* when its contributions span connection generations
     (``spans_interruption``) or when the loop saw it open as delivery stopped
     or land after the recovery (``interruption_touched``, ruling P9 and spec
-    §4.2 rule 4). Untouched minutes -- including the first minute of
-    generation 1, which a mid-minute deploy leaves short (ruling R2) -- keep
-    today's behaviour.
-
-    The proof is the count alone, in every session phase: twelve 5-second
-    contributions is every print a minute can hold, so a minute holding them
-    is complete wherever it falls -- which is also why the assembler emits one
-    on its twelfth print without waiting for the next minute. Fewer is unprovable everywhere -- short in RTH, where
+    §4.2 rule 4). For a touched minute the proof is the count alone, in every
+    session phase: twelve 5-second contributions is every print a minute can
+    hold, so a minute holding them is complete wherever it falls -- which is
+    also why the assembler emits one on its twelfth print without waiting for
+    the next minute. Fewer is unprovable everywhere -- short in RTH, where
     IBKR delivers 12/12, and undecidable outside it, where sparse bars are
-    normal. Whether an unprovable minute is a gap or a refusal is the
-    decision session's call, made in ``_resolve_unresolvable_window``.
+    normal.
+
+    An untouched minute still owes the calendar its prints (#2364): a
+    regular-session minute holding fewer than twelve -- a sub-60 s silence on a
+    connected line, with no 1100 to mark it -- is as short as one an
+    interruption cut, and used to reach the strategy as a plain ``realtime``
+    bar. Outside RTH an untouched sparse minute is normal and is delivered.
+    Whether an unprovable minute is a gap or a refusal is the decision
+    session's call, made in ``_resolve_unresolvable_window``.
     """
-    if not (bar.spans_interruption or interruption_touched):
-        return False
-    return bar.contribution_count is None or bar.contribution_count < RTH_CONTRIBUTIONS_PER_MINUTE
+    if bar.spans_interruption or interruption_touched:
+        return not is_complete_by_count(bar)
+    return falls_short_of_calendar(bar)
 
 
 @dataclass
@@ -171,6 +179,14 @@ class ContinuityLoop:
         if interruption is not None and interruption.recovered_ref is not None:
             await self._resolve_missed_windows(ibkr_bar.start_ms)
         touched = interruption is not None and interruption.touches(ibkr_bar.start_ms)
+        if not (touched or ibkr_bar.spans_interruption) and self.assembler.is_short_join_minute(ibkr_bar):
+            # The stream joined this minute partway through (ruling R2): its
+            # earlier prints were never seen, so it is short, but nothing was
+            # promised before it -- a gap, never a decision input (#2364).
+            await self._record_gap(
+                ibkr_bar.start_ms, ibkr_bar.end_ms, contribution_count=ibkr_bar.contribution_count
+            )
+            return None
         if _is_unresolvable(ibkr_bar, interruption_touched=touched):
             await self._resolve_unresolvable_episode(ibkr_bar)
             # The interruption stays open: this bar was omitted, not delivered,
@@ -441,6 +457,30 @@ class ContinuityLoop:
         ):
             await self._resolve_unresolvable_window(window_start_ms, window_end_ms)
 
+    async def _record_gap(
+        self, window_start_ms: int, window_end_ms: int, *, contribution_count: int | None
+    ) -> None:
+        """Omit a window nothing can prove complete, as a recorded ``gap``, and move past it."""
+        await self._record(
+            self._event(
+                "gap",
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+                last_delivered_end_ms=self.last_delivered_end_ms,
+                contribution_count=contribution_count,
+            )
+        )
+        logger.warning(
+            "Feed continuity omitted a minute it cannot prove complete",
+            extra={
+                "action": "marketdata_gap_omitted",
+                "symbol": self.symbol,
+                "window_start_ms": window_start_ms,
+                "contribution_count": contribution_count,
+            },
+        )
+        self.last_delivered_end_ms = window_end_ms
+
     async def _resolve_unresolvable_window(
         self,
         window_start_ms: int,
@@ -456,24 +496,7 @@ class ContinuityLoop:
         fact from zero, and a coalesced multi-minute window has no single count.
         """
         if not self._inside_decision_session(window_start_ms):
-            await self._record(
-                self._event(
-                    "gap",
-                    window_start_ms=window_start_ms,
-                    window_end_ms=window_end_ms,
-                    last_delivered_end_ms=self.last_delivered_end_ms,
-                    contribution_count=contribution_count,
-                )
-            )
-            logger.warning(
-                "Feed continuity omitted an unresolvable minute outside the decision session",
-                extra={
-                    "action": "marketdata_gap_omitted",
-                    "symbol": self.symbol,
-                    "window_start_ms": window_start_ms,
-                },
-            )
-            self.last_delivered_end_ms = window_end_ms
+            await self._record_gap(window_start_ms, window_end_ms, contribution_count=contribution_count)
             return
         verdict = self.policy.substitution_grant(window_start_ms, window_end_ms)
         reason = verdict.reason if isinstance(verdict, SubstitutionRefusal) else "SUBSTITUTION_PATH_UNAVAILABLE"
