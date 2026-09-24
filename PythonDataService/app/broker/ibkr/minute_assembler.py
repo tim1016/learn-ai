@@ -56,6 +56,21 @@ _NY_TZ = ZoneInfo("America/New_York")
 RTH_CONTRIBUTIONS_PER_MINUTE: int = 60_000 // 5_000
 """IBKR pushes one 5-second TRADES bar every 5 s in RTH (measured 12/12 on 2026-09-02)."""
 
+SPARSE_MINUTE_EMIT_GRACE_MS: int = 8_000
+"""How long past its close an extended-hours minute short of twelve prints is held (#2376).
+
+A sparse PRE/POST minute has no twelfth print to close it, and waiting for the
+next print can take longer than the decision allowance
+(``marketdata.feed.DELIVERY_ALLOWANCE_MS``, 20 s), so the minute is refused as
+``DECISION_LATE``. IBKR delivers each 5-second bar about 5 s after it starts,
+so the minute's last print is due at its close; 8 s covers that delivery with
+margin and leaves 12 s of the allowance for the decision. A print that lands
+after the emit is ignored and counted
+(``LiveBarCounters.ignored_late_print_after_emit``), never folded into the
+minute downstream already decided on. Not a ported constant: an owner-approved
+latency trade-off, tunable here.
+"""
+
 
 def _is_complete_by_count(bar: IbkrMinuteBar) -> bool:
     """Whether ``bar`` holds every 5-second print a minute can hold.
@@ -97,6 +112,8 @@ class LiveBarCounters:
     skipped_duplicate: int = 0
     applied_correction: int = 0
     ignored_post_emit_correction: int = 0
+    #: A new print for a minute already emitted by the sparse-minute timer (#2376).
+    ignored_late_print_after_emit: int = 0
 
 
 def _to_utc_ms(value: datetime | int | float | str) -> int:
@@ -401,10 +418,12 @@ class MinuteAssembler:
     ``live_idempotent`` policy.
 
     A minute is emitted as soon as it holds every contribution (by count), or
-    otherwise when the first print of a later minute arrives.
+    otherwise when the first print of a later minute arrives -- or, for a
+    sparse extended-hours minute, when the wall clock passes its close by
+    ``SPARSE_MINUTE_EMIT_GRACE_MS`` (``emit_if_elapsed``, #2376).
 
-    ``_flushed`` remembers the minute emitted early by count, until a later
-    minute arrives. Without it, the resubscribed socket's first
+    ``_flushed`` remembers the minute emitted early (by count, or by the
+    sparse-minute timer), until a later minute arrives. Without it, the resubscribed socket's first
     5-second bars — which may still belong to that minute — would either crash
     the run ("not found in open minute", because ``current`` is now ``None``)
     or rebuild an accumulator for a minute the consumer has already decided on.
@@ -419,6 +438,9 @@ class MinuteAssembler:
     #: says so -- only its count can prove it whole (#2364).
     join_minute_start_ms: int | None = field(default=None, init=False)
     _flushed: _MinuteAccumulator | None = field(default=None, init=False, repr=False)
+    #: How ``_flushed`` was closed: by its twelfth print, or short by the
+    #: sparse-minute timer (#2376). Meaningful only while ``_flushed`` is set.
+    _flushed_by: Literal["count", "timer"] = field(default="count", init=False, repr=False)
 
     @property
     def open_minute_start_ms(self) -> int | None:
@@ -492,6 +514,30 @@ class MinuteAssembler:
                 extra={"symbol": symbol, "source_ms": source_ms, "action": "post_emit_correction_ignored"},
             )
             return True
+        if (
+            self._flushed_by == "timer"
+            and self.last_source_ms is not None
+            and source_ms > self.last_source_ms
+        ):
+            # A minute the sparse-minute timer emitted short still has later
+            # slots open. The decision on it is made, so a print that lands in
+            # one is dropped and counted, never folded in (#2376). A minute
+            # emitted by count holds all twelve, so there a later timestamp
+            # stays the anomaly it always was.
+            self.counters.ignored_late_print_after_emit += 1
+            logger.warning(
+                "Ignored a 5-second print that arrived after its sparse minute was emitted",
+                extra={
+                    "symbol": symbol,
+                    "source_ms": source_ms,
+                    "minute_start_ms": flushed.start_ms,
+                    # How far past the print's own time it arrived, so the
+                    # grace can be tuned from real deliveries.
+                    "delivery_lag_ms": now_ms_utc() - source_ms,
+                    "action": "late_print_after_emit_ignored",
+                },
+            )
+            return True
         raise IBKRBarStreamError(
             f"IBKR 5-second bar {source_ms} belongs to minute {flushed.start_ms}, "
             "which was already emitted; refusing to rebuild an emitted minute."
@@ -522,11 +568,45 @@ class MinuteAssembler:
         # the next trading day and was decided eight hours late (#2345).
         return emitted if emitted is not None else self._emit_if_complete()
 
+    def awaits_clock_emit(self) -> bool:
+        """Whether an open extended-hours minute is still owed its clock-driven emit.
+
+        The line's stall verdict is held while this is true: the liveness gate
+        runs before each idle tick, so without the hold a minute whose lone
+        print came at ``:00`` is declared stalled at ``:60``, before the tick
+        that would emit it at ``:68`` (#2376 review). The hold ends with the
+        emit, at most ``SPARSE_MINUTE_EMIT_GRACE_MS`` after the minute's close.
+        """
+        current = self.current
+        return current is not None and _session_phase_for_ms(current.start_ms) != "RTH"
+
+    def emit_if_elapsed(self, now_ms: int) -> IbkrMinuteBar | None:
+        """Emit a sparse extended-hours minute once its close is past by the grace (#2376).
+
+        Driven by the healthy line's idle poll, so a PRE/POST minute short of
+        twelve prints is decided on time instead of waiting for the next
+        print. An RTH minute is never emitted this way: IBKR prints every 5 s
+        there, so a short one is already unprovable, and holding it for its
+        late twelfth print is what lets it be proven complete.
+        """
+        current = self.current
+        if current is None or now_ms < current.start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS:
+            return None
+        if _session_phase_for_ms(current.start_ms) == "RTH":
+            return None
+        return self._flush_current(by="timer")
+
     def _emit_if_complete(self) -> IbkrMinuteBar | None:
         """Emit the open minute now iff it already holds every RTH contribution."""
         if self.current is None or len(self.current.contributions) < RTH_CONTRIBUTIONS_PER_MINUTE:
             return None
+        return self._flush_current(by="count")
+
+    def _flush_current(self, *, by: Literal["count", "timer"]) -> IbkrMinuteBar:
+        """Close the open minute early and remember it for post-emit arrivals."""
+        assert self.current is not None
         emitted = self.current.to_model()
         self._flushed = self.current
+        self._flushed_by = by
         self.current = None
         return emitted

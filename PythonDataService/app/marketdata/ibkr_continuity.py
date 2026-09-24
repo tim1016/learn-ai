@@ -436,9 +436,12 @@ class ContinuityLoop:
     async def _resolve_unresolvable_episode(self, ibkr_bar: IbkrMinuteBar) -> None:
         """Resolve a short emitted minute together with every minute missed behind it.
 
-        The assembler emits the minute an interruption cut short only when the
+        The assembler emits the minute an interruption cut short when the
         first post-recovery print lands in a later minute -- possibly several
-        minutes on. The wholly-missed minutes in between are the same episode
+        minutes on -- or, outside RTH, when the sparse-minute timer emits it
+        with no later minute open yet (#2376; the minutes missed after it are
+        then a later window of the same interruption). The wholly-missed
+        minutes in between are the same episode
         as the short one, and the coalescing rule (P11) wants one fact per
         episode, so the window runs from this bar's start to the minute the
         assembler now holds open, split only at the decision-session boundary.

@@ -10,6 +10,7 @@ import pytest
 
 from app.broker.ibkr.minute_assembler import (
     RTH_CONTRIBUTIONS_PER_MINUTE,
+    SPARSE_MINUTE_EMIT_GRACE_MS,
     IBKRBarStreamError,
     MinuteAssembler,
 )
@@ -199,3 +200,104 @@ def test_correction_under_a_new_generation_flags_the_minute() -> None:
     assert emitted is not None
     assert emitted.spans_interruption is True
     assert emitted.close == Decimal("101")
+
+
+# ── #2376: a sparse extended-hours minute is emitted on the wall clock ──────
+
+_PRE_MINUTE = datetime(2026, 9, 2, 12, 0, 0, tzinfo=UTC)  # 08:00 ET, PRE
+_PRE_MINUTE_MS = int(_PRE_MINUTE.timestamp() * 1000)
+_PRE_CLOSE_MS = _PRE_MINUTE_MS + 60_000
+
+
+def _pre_raw(second: int, *, minute: int = 0, close: str = "100") -> SimpleNamespace:
+    return SimpleNamespace(
+        time=_PRE_MINUTE.replace(minute=minute, second=second),
+        open=Decimal(close),
+        high=Decimal(close),
+        low=Decimal(close),
+        close=Decimal(close),
+        volume=1,
+    )
+
+
+def _sparse_pre_minute(assembler: MinuteAssembler, *, minute: int = 0) -> None:
+    """Five prints of twelve -- normal outside RTH."""
+    for second in (0, 10, 25, 30, 45):
+        assert (
+            assembler.feed(_pre_raw(second, minute=minute), symbol="SPY", generation=1, venue=None, use_rth=False)
+            is None
+        )
+
+
+def test_a_sparse_pre_minute_is_emitted_once_its_close_passes_the_grace() -> None:
+    assembler = MinuteAssembler()
+    _sparse_pre_minute(assembler)
+
+    assert assembler.emit_if_elapsed(_PRE_CLOSE_MS + SPARSE_MINUTE_EMIT_GRACE_MS - 1) is None
+    emitted = assembler.emit_if_elapsed(_PRE_CLOSE_MS + SPARSE_MINUTE_EMIT_GRACE_MS)
+
+    assert emitted is not None
+    assert emitted.start_ms == _PRE_MINUTE_MS
+    assert emitted.contribution_count == 5
+    assert emitted.session_phase == "PRE"
+    assert assembler.open_minute_start_ms is None
+    assert assembler.emit_if_elapsed(_PRE_CLOSE_MS + 30_000) is None  # nothing left open
+
+
+def test_the_grace_leaves_the_decision_allowance_room() -> None:
+    """The emit must land well inside the 20 s allowance DECISION_LATE enforces."""
+    from app.marketdata.feed import DELIVERY_ALLOWANCE_MS
+
+    assert SPARSE_MINUTE_EMIT_GRACE_MS < DELIVERY_ALLOWANCE_MS / 2
+
+
+def test_a_timer_emitted_non_join_pre_minute_is_decidable() -> None:
+    """Sparse outside RTH is normal: the classifier calls it complete, not unprovable."""
+    assembler = MinuteAssembler()
+    _sparse_pre_minute(assembler, minute=0)  # the join minute
+    joined = assembler.feed(_pre_raw(0, minute=1), symbol="SPY", generation=1, venue=None, use_rth=False)
+    assert joined is not None  # closed by the next minute's first print
+    for second in (20, 40):
+        assembler.feed(_pre_raw(second, minute=1), symbol="SPY", generation=1, venue=None, use_rth=False)
+
+    emitted = assembler.emit_if_elapsed(_PRE_CLOSE_MS + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS)
+
+    assert emitted is not None and emitted.contribution_count == 3
+    assert assembler.completeness(emitted, touched=False) == "complete"
+
+
+def test_an_rth_minute_is_never_emitted_by_the_timer() -> None:
+    """In RTH a short minute is already unprovable; the twelfth print is what proves it."""
+    assembler = MinuteAssembler()
+    for second in range(0, 55, 5):  # 11 of 12
+        assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True)
+
+    rth_close_ms = int(_MINUTE.timestamp() * 1000) + 60_000
+    assert assembler.emit_if_elapsed(rth_close_ms + 60_000) is None
+    assert assembler.open_minute_start_ms is not None
+
+
+def test_a_print_arriving_after_a_timer_emit_is_ignored_and_counted() -> None:
+    """The run survives a late print: the emitted minute is never rebuilt."""
+    assembler = MinuteAssembler()
+    _sparse_pre_minute(assembler)
+    assert assembler.emit_if_elapsed(_PRE_CLOSE_MS + SPARSE_MINUTE_EMIT_GRACE_MS) is not None
+
+    late = assembler.feed(_pre_raw(55, close="101"), symbol="SPY", generation=1, venue=None, use_rth=False)
+
+    assert late is None
+    assert assembler.counters.ignored_late_print_after_emit == 1
+    assert assembler.open_minute_start_ms is None
+    # The next minute opens normally.
+    assembler.feed(_pre_raw(5, minute=1), symbol="SPY", generation=1, venue=None, use_rth=False)
+    assert assembler.open_minute_start_ms == _PRE_CLOSE_MS
+
+
+def test_an_older_print_after_a_timer_emit_is_still_fatal() -> None:
+    """Only a *later* slot of a sparse minute may still arrive; an earlier one is non-monotonic."""
+    assembler = MinuteAssembler()
+    _sparse_pre_minute(assembler)
+    assert assembler.emit_if_elapsed(_PRE_CLOSE_MS + SPARSE_MINUTE_EMIT_GRACE_MS) is not None
+
+    with pytest.raises(IBKRBarStreamError, match="already emitted"):
+        assembler.feed(_pre_raw(20), symbol="SPY", generation=1, venue=None, use_rth=False)
