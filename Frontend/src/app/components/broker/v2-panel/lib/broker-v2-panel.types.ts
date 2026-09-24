@@ -159,6 +159,9 @@ export const EMPTY_RUN_HISTORY_STATE: RunHistoryState = Object.freeze({
 
 export type PanelActionRequest = components['schemas']['PanelActionRequest'];
 export type PanelActionResult = components['schemas']['PanelActionResult'];
+/** The actions that only stop a bot or reduce its exposure (#2351). The
+ * backend closes this set at `PanelQuiesceActionRequest.action_id`. */
+export type PanelQuiesceActionId = components['schemas']['PanelQuiesceActionRequest']['action_id'];
 
 // ── §8 Chart types ───────────────────────────────────────────────────────────
 

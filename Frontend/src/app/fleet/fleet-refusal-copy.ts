@@ -104,6 +104,11 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     message: "No lane-quiet confirmation answers this lane's retirement gate.",
     nextStep: 'Run force-retire, the named exit, or wait for the lane-quiet provider.',
   },
+  clerk_lane_retired: {
+    outcome: 'failure',
+    message: "This lane's clerk is retired; the lane stops its bots and never re-enrols.",
+    nextStep: 'Provision a new clerk; a retired lane is never reinstated.',
+  },
   clerk_not_found: {
     outcome: 'failure',
     message: 'No clerk carries this identity.',
@@ -203,6 +208,11 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     outcome: 'conflict',
     message: 'The coordinator refused this presence call because the lane itself is drained.',
     nextStep: 'Finish the drain ceremony; this lane marks its own evidence and stays down.',
+  },
+  fleet_lane_retired: {
+    outcome: 'failure',
+    message: "The coordinator refused this presence call because the lane's clerk is retired.",
+    nextStep: 'Provision a new clerk; this lane stops its bots and decommissions.',
   },
   fleet_lane_capacity_exhausted: {
     outcome: 'failure',

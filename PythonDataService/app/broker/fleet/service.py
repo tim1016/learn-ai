@@ -64,6 +64,7 @@ from app.broker.fleet.errors import (
     ClerkIdentityMismatch,
     ClerkLaneDraining,
     ClerkLaneQuietUnproven,
+    ClerkLaneRetired,
     ClerkNotFound,
     ClerkReassignmentBlocked,
     ClerkRoutingAttemptConflict,
@@ -1335,10 +1336,10 @@ class FleetControlService:
         """
         clerk = self._require_clerk(clerk_id)
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
-            raise ClerkNotFound(
+            raise ClerkLaneRetired(
                 f"Clerk {clerk_id} is retired.",
-                next_step="Stop sending heartbeats for a retired clerk; its "
-                "identity is never reinstated.",
+                next_step="Stop this lane's bots and its heartbeat; a retired "
+                "clerk's identity is never reinstated.",
             )
         summary_json = None
         if reported_summary is not None:
@@ -1361,10 +1362,10 @@ class FleetControlService:
             # concurrent ceremony already superseded.
             live = self._clerk_on_or_unknown(conn, clerk_id)
             if live.lifecycle_state == StoredLifecycleState.RETIRED:
-                raise ClerkNotFound(
+                raise ClerkLaneRetired(
                     f"Clerk {clerk_id} is retired.",
-                    next_step="Stop sending heartbeats for a retired clerk; its "
-                    "identity is never reinstated.",
+                    next_step="Stop this lane's bots and its heartbeat; a retired "
+                    "clerk's identity is never reinstated.",
                 )
             touched = self._store.touch_session(
                 conn,
@@ -2118,14 +2119,22 @@ class FleetControlService:
         expected_binding_generation: int | None = None,
         expected_account_id: str | None = None,
         readiness: OperationReadiness = OperationReadiness.EXECUTION,
+        routable_while_draining: bool = False,
     ) -> tuple[ClerkRecord, ClerkSessionRecord, AccountAssignmentRecord | None]:
         """Resolve a routed operation's clerk, verifying path identities.
 
         ``clerk_id`` is resolved first, then the path broker must equal the
-        clerk's immutable broker (PRD FR-071). A retired or draining clerk and
-        a clerk with no live session are not routable. When the caller pins an
-        epoch or a binding generation, a mismatch refuses rather than silently
+        clerk's immutable broker (PRD FR-071). A retired clerk and a clerk
+        with no live session are not routable. When the caller pins an epoch
+        or a binding generation, a mismatch refuses rather than silently
         retargeting (FR-073/078).
+
+        A draining clerk routes only what ``routable_while_draining`` admits
+        — the operation's own ``ProviderOperation.routable_while_draining``,
+        the one allow-list (#2351): its reads and the quiesce actions ADR
+        0063 §2 has the operator make it quiet with. Everything that could
+        open exposure refuses, so the drain still closes the door on new
+        work; the default refuses, so a caller that names nothing is closed.
 
         Readiness closes the admission gap (audit 2026-09-13, finding 1):
         ``execution`` operations route only against the *confirmed* effective
@@ -2154,11 +2163,15 @@ class FleetControlService:
                 next_step="Provision a new clerk; a retired clerk's routes are "
                 "gone for good.",
             )
-        if clerk.lifecycle_state == StoredLifecycleState.DRAINING:
+        if (
+            clerk.lifecycle_state == StoredLifecycleState.DRAINING
+            and not routable_while_draining
+        ):
             raise ClerkUnreachable(
-                f"Clerk {clerk_id} is draining and accepts no routed operations.",
-                next_step="Wait for the clerk to finish draining, or route to "
-                "its successor if one is assigned.",
+                f"Clerk {clerk_id} is draining; it routes only reads and the "
+                "actions that stop its bots or reduce exposure.",
+                next_step="Stop the lane's bots, cancel its working orders and "
+                "flatten; nothing new starts on a draining lane.",
             )
         session = self._store.read_session(clerk_id)
         if session is None:
@@ -2830,7 +2843,7 @@ class FleetControlService:
         drift apart.
         """
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
-            raise ClerkNotFound(
+            raise ClerkLaneRetired(
                 f"Clerk {clerk.clerk_id} is retired; a retired lane never "
                 "returns to service.",
                 next_step="Provision a new clerk; a retired lane's identity is "
@@ -2857,7 +2870,7 @@ class FleetControlService:
         the one that cannot be raced by a mid-flight drain.
         """
         if clerk.lifecycle_state == StoredLifecycleState.RETIRED:
-            raise ClerkNotFound(
+            raise ClerkLaneRetired(
                 f"Clerk {clerk.clerk_id} is retired; a retired lane confirms "
                 "nothing.",
                 next_step="Provision a new clerk; a retired lane's identity is "

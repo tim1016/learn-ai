@@ -87,6 +87,11 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/actions",
       "requires_account": true
     },
+    "bot_panel_quiesce_action": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/{sid}/actions/quiesce",
+      "requires_account": true
+    },
     "bot_panel_read": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/{sid}/panel",

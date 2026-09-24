@@ -22,6 +22,7 @@ from app.broker.fleet.internal_http import (
 )
 from app.broker.fleet.provider import (
     Capability,
+    OperationDrainAdmission,
     OperationIdempotency,
     OperationReadiness,
     OperationStream,
@@ -44,6 +45,7 @@ def _op(
     stream: OperationStream = OperationStream.NONE,
     agent_path: str | None = None,
     read_timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S,
+    drain_admission: OperationDrainAdmission = OperationDrainAdmission.REFUSED,
 ) -> ProviderOperation:
     """Declare one operation; agent paths default to the Alpaca prefix.
 
@@ -69,6 +71,7 @@ def _op(
         idempotency=idempotency,
         stream=stream,
         read_timeout_s=read_timeout_s,
+        drain_admission=drain_admission,
     )
 
 
@@ -77,6 +80,10 @@ _EXECUTE = OperationReadiness.EXECUTION
 _READ = OperationIdempotency.READ
 _DURABLE = OperationIdempotency.DURABLE_KEY
 _ONE_SHOT = OperationIdempotency.ONE_SHOT
+#: A mutation that only stops a bot or reduces exposure, so a draining lane
+#: still routes it (#2351, ADR 0063 §2): the operator's way to make the lane
+#: quiet. Declared on exactly the stop, cancel and flatten operations below.
+_QUIESCE = OperationDrainAdmission.QUIESCE
 
 #: The complete Alpaca operation catalog (delivery B, PRD §10.2). The catalog
 #: is the single routing contract (ADR 0062 addendum, item 4): the
@@ -172,6 +179,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
             read_timeout_s=LANE_STOP_ALL_READ_TIMEOUT_S,
+            drain_admission=_QUIESCE,
         ),
         _op(
             "lane_account_quiet_read",
@@ -410,6 +418,9 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_ACTION,
             idempotency=_DURABLE,
             account=True,
+            # Every leg is flatten_stop or execute_safe_flatten
+            # (CohortFlattenActionId): reductions only.
+            drain_admission=_QUIESCE,
         ),
         _op(
             "bots_deploy_read",
@@ -432,6 +443,24 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_ACTION,
             idempotency=_DURABLE,
             account=True,
+        ),
+        # The panel's quiesce actions (vocabulary.QUIESCE_ACTION_IDS: stop,
+        # flatten-and-stop and the SQLite recovery stop/cancel/flatten/
+        # reconcile), split from bot_panel_action because that one operation
+        # also resumes and continues bots: a route layer that cannot read the
+        # body cannot tell them apart, so the quiesce half gets its own
+        # operation and a draining lane routes it (#2351). Its request schema
+        # admits only those ids. The custody recovery-execute operations stay
+        # refused while draining: they accept every recovery id, including
+        # resolve_execution_coverage, which can lift a hold.
+        _op(
+            "bot_panel_quiesce_action",
+            "POST",
+            "/accounts/{account_id}/bots/{sid}/actions/quiesce",
+            capability=Capability.BOT_ACTION,
+            idempotency=_DURABLE,
+            account=True,
+            drain_admission=_QUIESCE,
         ),
         _op(
             "bot_authority_facts",
@@ -626,6 +655,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path=(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/runs/stop"
             ),
+            drain_admission=_QUIESCE,
         ),
         _op(
             "custody_reconcile",
