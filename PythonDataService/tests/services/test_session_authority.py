@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.lean_sidecar.trading_calendar import is_trading_day, session_window_for_date
 from app.lean_sidecar.trading_calendar import session_state_at_ms as calendar_session_state_at_ms
-from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.services.session_authority import (
     CAPABILITY_MAX_AGE_MS,
@@ -361,3 +361,45 @@ def test_scheduled_exchange_phase_grants_no_strategy_permission() -> None:
 
     assert scheduled_exchange_phase_at_ms(pre) == "PRE"
     assert session_state_at_ms(now_ms=pre).phase == "CLOSED"
+
+
+@pytest.mark.parametrize(
+    "day",
+    [
+        pytest.param(date(2026, 9, 22), id="regular-day"),
+        # The 2026 DST switches fall on Sundays (03-08, 11-01); the first
+        # sessions under the new offset are the Mondays after them.
+        pytest.param(date(2026, 3, 9), id="first-session-after-spring-forward"),
+        pytest.param(date(2026, 11, 2), id="first-session-after-fall-back"),
+        pytest.param(date(2026, 11, 27), id="half-day-black-friday"),
+        pytest.param(date(2026, 12, 24), id="half-day-christmas-eve"),
+    ],
+)
+def test_scheduled_extended_session_bounds_regular_session_parity_with_trading_calendar(day: date) -> None:
+    """Parity with the canonical ``app/lean_sidecar/trading_calendar.py`` (#2391).
+
+    ``scheduled_extended_session_bounds`` is a thin adapter kept outside the
+    sealed canonical module until the next re-seal; its regular open and close
+    must be exactly ``session_window_for_date``'s, and its extended bounds
+    must enclose them.
+    """
+    canonical = session_window_for_date(day)
+    bounds = scheduled_extended_session_bounds(day)
+
+    assert bounds is not None
+    assert (bounds.rth_open_ms, bounds.rth_close_ms) == (canonical.open_ms_utc, canonical.close_ms_utc)
+    assert bounds.open_ms < bounds.rth_open_ms < bounds.rth_close_ms < bounds.close_ms
+
+
+@pytest.mark.parametrize(
+    "day",
+    [
+        pytest.param(date(2026, 3, 8), id="spring-forward-sunday"),
+        pytest.param(date(2026, 11, 1), id="fall-back-sunday"),
+        pytest.param(date(2026, 11, 26), id="holiday-thanksgiving"),
+    ],
+)
+def test_scheduled_extended_session_bounds_off_session_parity_with_trading_calendar(day: date) -> None:
+    """No bounds exactly where ``app/lean_sidecar/trading_calendar.py`` has no session."""
+    assert is_trading_day(day) is False
+    assert scheduled_extended_session_bounds(day) is None

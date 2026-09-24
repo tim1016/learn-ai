@@ -164,3 +164,50 @@ async def test_extended_run_line_silent_outside_rth_opens_a_stall_interruption(
     assert sink.events[0].last_delivered_end_ms == minute_start_ms + 60_000
     # The same root cause stamped every extended minute ``CLOSED`` (#2299, P3).
     assert first.session_phase in {"PRE", "POST"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session",
+    [
+        pytest.param(RunDecisionSession(kind="rth", window=None), id="rth-only-run"),
+        pytest.param(RunDecisionSession(kind="extended", window=_WINDOW), id="extended-run"),
+    ],
+)
+async def test_line_ibkr_never_started_in_pre_does_not_churn(
+    monkeypatch: pytest.MonkeyPatch, session: RunDecisionSession
+) -> None:
+    """#2299 review: a line silent since 04:00 is not a stall, so it is not re-requested.
+
+    Every trade run streams ``use_rth=False``, RTH-only runs included. Were the
+    PRE timer armed before the line's first print, each such run would open a
+    stall interruption and issue a fresh ``reqRealTimeBars`` every 60 s from
+    04:00 -- burning the shared 60-per-600 s pacing budget and, for an
+    extended run, dying at about 04:01 on a line IBKR had simply not started.
+    """
+    clock = AcceleratedFeedClock(wall_ms=_et_ms(4, 0) + 30_000)
+    _install(clock, monkeypatch)
+    transport = _Transport([])
+    sink = _RecordingSink()
+    feed = IbkrMarketDataFeed(_Client(transport))  # type: ignore[arg-type]
+    policy = ContinuityPolicy(
+        session=session,
+        next_trigger_ms=_next_trigger,
+        substitution_grant=lambda s, e: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=sink,
+    )
+
+    async with aclosing(feed.stream_bars("SPY", use_rth=False, continuity=policy)) as bars:
+        pending = asyncio.ensure_future(anext(bars))
+        try:
+            for _ in range(5):  # five stall timeouts of silence
+                await asyncio.sleep(0.25)
+                clock.advance_ms(61_000)
+            await asyncio.sleep(0.25)
+            assert not pending.done()
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+
+    assert sink.events == []
+    assert len(transport.lines) == 1

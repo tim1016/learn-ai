@@ -18,6 +18,11 @@ from app.utils.timestamps import to_ms_utc
 # ``app.marketdata.feed``, aliased so session code reads in session vocabulary
 # rather than bar vocabulary. ``TradingSessionPhase is BarSessionPhase``.
 TradingSessionPhase = BarSessionPhase
+#: What the calendar *schedules* for an instant (``scheduled_exchange_phase_at_ms``).
+#: Deliberately a narrower, distinct alias: it labels bars and arms the IBKR
+#: line watchdog, and proves no session the way ``TradingSessionPhase`` from
+#: ``session_state_at_ms`` does. Every member is a ``BarSessionPhase``.
+ScheduledExchangePhase = Literal["PRE", "RTH", "POST", "CLOSED"]
 SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar", "broker_declared_window"]
 
 _NY = ZoneInfo("America/New_York")
@@ -164,14 +169,16 @@ def session_state_at_ms(
     )
 
 
-def scheduled_exchange_phase_at_ms(ts_ms: int) -> TradingSessionPhase:
+def scheduled_exchange_phase_at_ms(ts_ms: int) -> ScheduledExchangePhase:
     """The phase the canonical calendar schedules for ``ts_ms``: PRE, RTH, POST or CLOSED.
 
     This answers *when the exchange's extended session is scheduled*, which is
     what labels an IBKR bar and what arms the liveness watchdog of a
     ``useRTH=0`` line (#2299, #2313). It grants no strategy permission: that is
     :func:`session_state_at_ms`, which still needs a declared window or a
-    capability snapshot before it will call an instant PRE or POST.
+    capability snapshot before it will call an instant PRE or POST. The return
+    type is :data:`ScheduledExchangePhase`, not ``TradingSessionPhase``, so the
+    two answers cannot be mistaken for one another.
 
     Every bound comes from the calendar's schedule, so a half-day's early close
     moves the after-hours close with it. OVERNIGHT is never answered here: only
@@ -193,13 +200,18 @@ def scheduled_exchange_phase_at_ms(ts_ms: int) -> TradingSessionPhase:
 def scheduled_extended_session_bounds(session_date: date) -> ExtendedSessionBounds | None:
     """``session_date``'s pre-market open, regular session and after-hours close, or ``None``.
 
-    Read from the canonical calendar's own ``pre``/``post`` market times on the
-    one calendar object that module constructs; no second calendar is built.
+    A thin adapter, not a second calendar. The regular open and close come from
+    the canonical :func:`~app.lean_sidecar.trading_calendar.session_window_for_date`;
+    only the ``pre``/``post`` columns, which that module has no public accessor
+    for, are read from its one calendar object (no second calendar is built).
     ``trading_calendar.py`` is a sealed program artifact (every signal
-    program's ``artifact_paths``), so a new accessor there would invalidate
-    every golden-qualification receipt; this lives here until the next planned
-    re-seal moves it. Memoised: a session day's schedule never changes, and the
-    bar-liveness gate asks about the same day every 100 ms.
+    program's ``artifact_paths``), so adding that accessor there would
+    invalidate every golden-qualification receipt; #2391 moves this into the
+    canonical calendar at the next planned re-seal. The regular-session parity
+    with ``app/lean_sidecar/trading_calendar.py`` is pinned by
+    ``tests/services/test_session_authority.py``. Memoised: a session day's
+    schedule never changes, and the bar-liveness gate asks about the same day
+    every 100 ms.
     """
     schedule = trading_calendar._CALENDAR.schedule(
         start_date=session_date, end_date=session_date, start="pre", end="post"
@@ -207,11 +219,12 @@ def scheduled_extended_session_bounds(session_date: date) -> ExtendedSessionBoun
     if schedule.empty:
         return None
     row = schedule.iloc[0]
+    regular = session_window_for_date(session_date)
     return ExtendedSessionBounds(
-        open_ms=int(row["pre"].value // 1_000_000),
-        rth_open_ms=int(row["market_open"].value // 1_000_000),
-        rth_close_ms=int(row["market_close"].value // 1_000_000),
-        close_ms=int(row["post"].value // 1_000_000),
+        open_ms=to_ms_utc(row["pre"]),
+        rth_open_ms=regular.open_ms_utc,
+        rth_close_ms=regular.close_ms_utc,
+        close_ms=to_ms_utc(row["post"]),
     )
 
 
