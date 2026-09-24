@@ -351,7 +351,12 @@ class SourceBarLedger:
         return self._append(bar, delivery="backfill", run_id=run_id)
 
     def record_warmup_join(self, join: RetainedWarmupJoin) -> None:
-        """Record, once per run, how its retained bars were joined to the present."""
+        """Record, once per run, how its retained bars were joined to the present.
+
+        Keep-first, like ``record_decision_session``: a re-entered run (a
+        second runner pass) joins again against a tail its first pass already
+        extended, and that later, smaller join is not the run's evidence.
+        """
         with self._lock:
             self._conn.execute(
                 """
@@ -374,13 +379,41 @@ class SourceBarLedger:
                 ),
             )
 
+    def warm_floor_ms(self, *, run_id: str) -> int | None:
+        """The earliest bar open ``run_id`` may warm on, or ``None`` for no floor.
+
+        A resume whose hole outran the sealed lookback warmed from history
+        alone, from its ``warm_from_ms``. Every later run of the instance
+        inherits that floor: the retained rows before it end at a hole no run
+        filled, so warming on them again would reopen #2314. The floor is the
+        newest ``warm_from_ms`` recorded at or before this run's own join, so
+        an earlier run's replay is never cut by a later run's floor.
+        """
+        with self._lock:
+            if not self._has_warmup_join_table():
+                return None
+            row = self._conn.execute(
+                """
+                SELECT MAX(warm_from_ms) AS floor FROM source_run_warmup_join
+                WHERE rowid <= (SELECT rowid FROM source_run_warmup_join WHERE run_id = ?)
+                """,
+                (run_id,),
+            ).fetchone()
+        return None if row is None or row["floor"] is None else int(row["floor"])
+
+    def _has_warmup_join_table(self) -> bool:
+        """A pre-#2314 file opened read-only has no join table, and so no joins."""
+        return (
+            self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_run_warmup_join'"
+            ).fetchone()
+            is not None
+        )
+
     def warmup_join(self, *, run_id: str) -> RetainedWarmupJoin | None:
         """The run's recorded join, or ``None`` for a fresh run or a pre-#2314 file."""
         with self._lock:
-            has_table = self._conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_run_warmup_join'"
-            ).fetchone()
-            if has_table is None:
+            if not self._has_warmup_join_table():
                 return None
             row = self._conn.execute(
                 "SELECT * FROM source_run_warmup_join WHERE run_id = ?", (run_id,)

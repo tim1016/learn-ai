@@ -343,9 +343,10 @@ class _RetainedSourceBarFeed:
         """Retain the history that fills the hole after ``retained``, record the join, and
         return the rows this run warms on.
 
-        Those are every retained row plus the backfill, unless the hole
-        outran the lookback: then only rows opening at or after the join's
-        ``warm_from_ms``, as a fresh deploy would.
+        Those are every retained row plus the backfill that opens at or after
+        the instance's warm floor: a hole that outran the lookback (this
+        run's, or an earlier run's) warmed from history alone, as a fresh
+        deploy would, and nothing before that point is replayed again.
         """
         retained_end_ms = retained[-1].end_ms
         joined_at_ms = now_ms_utc()
@@ -383,12 +384,8 @@ class _RetainedSourceBarFeed:
                 warm_from_ms=join.warm_from_ms,
             )
         )
-        warm_from_ms = join.warm_from_ms
-        return [
-            row
-            for row in (*retained, *filled)
-            if warm_from_ms is None or row.start_ms >= warm_from_ms
-        ]
+        floor_ms = self._ledger.warm_floor_ms(run_id=self._run_id)
+        return [row for row in (*retained, *filled) if floor_ms is None or row.start_ms >= floor_ms]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)

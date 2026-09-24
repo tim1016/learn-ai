@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -212,7 +213,7 @@ async def test_a_resumed_run_warms_on_a_series_with_no_hole(
         warmup = await feed.recent_closed_bars("SPY", use_rth=True)
 
         ends = [bar.end_ms for bar in warmup]
-        assert all(later - earlier == _MIN for earlier, later in zip(ends, ends[1:], strict=False))
+        assert all(later - earlier == _MIN for earlier, later in pairwise(ends))
         assert ends[-1] == _et(_THU, 13, 0)
         backfilled = [row for row in ledger.bars(provider="ibkr", symbol="SPY") if row.run_id == "run-2"]
         assert len(backfilled) == 173
@@ -309,3 +310,87 @@ def test_a_fresh_run_records_no_warmup_join(tmp_path: Path) -> None:
         assert ledger.warmup_join(run_id="run-1") is None
     finally:
         ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_a_later_resume_inherits_the_warm_floor_of_an_outrun_hole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M3: run 3 resumes contiguously after run 2 warmed from history only.
+    It must not warm on run 1's stale tail again -- that reopens the hole."""
+    stale_day = date(2026, 9, 16)
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:resume")
+    for bar in _regular_bars(stale_day, until_end_ms=_et(stale_day, 10, 7)):
+        ledger.append(bar.model_copy(update={"provenance": "realtime"}), run_id="run-1")
+    now_ms = _et(_THU, 13, 0) + 30_000
+    history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+    try:
+        monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+        await _RetainedSourceBarFeed(
+            _HistoryFeed(history), ledger, run_id="run-2", session=_RTH
+        ).recent_closed_bars("SPY", use_rth=True, lookback_days=2)
+
+        monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms + 10_000)
+        warmup = await _RetainedSourceBarFeed(
+            _HistoryFeed([]), ledger, run_id="run-3", session=_RTH
+        ).recent_closed_bars("SPY", use_rth=True, lookback_days=2)
+
+        assert warmup[0].start_ms == history[0].start_ms
+        assert ledger.warm_floor_ms(run_id="run-3") == history[0].start_ms
+        # An earlier run's replay is never cut by a later run's floor.
+        assert ledger.warm_floor_ms(run_id="run-1") is None
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
+    """A filled bucket was never decided, so staging an intent there is catch-up,
+    not a candidate a crash left uncaptured (FR-016)."""
+    from types import SimpleNamespace
+
+    from app.engine.execution.portfolio import Portfolio
+    from app.engine.strategy.base import StrategyContext
+    from app.services.bot_trade_strategy_warmup import replay_warmup_bars
+    from tests.services.test_bot_trade_strategy_warmup import _binding
+
+    class _StagingRuntime:
+        def __init__(self) -> None:
+            self.strategy = SimpleNamespace(on_force_flat=lambda: None)
+            self._stage: SimpleNamespace | None = None
+
+        def replay_closed_bar(self, context: object, bar: MarketDataBar, *, mode: object) -> None:
+            del context, mode
+            self._stage = SimpleNamespace(
+                trace=SimpleNamespace(evaluation_id=f"ev-{bar.start_ms}"),
+                decision=SimpleNamespace(intent="ENTER"),
+            )
+
+        def active_stage(self) -> SimpleNamespace | None:
+            return self._stage
+
+        def settle(self, settlement: object) -> None:
+            del settlement
+            self._stage = None
+
+    filled = _minute_bar(_et(_THU, 10, 7))
+    live = _minute_bar(_et(_THU, 10, 8)).model_copy(update={"provenance": "realtime"})
+
+    class _Feed:
+        feed_id = "ibkr"
+
+        async def recent_closed_bars(self, symbol: str, *, use_rth: bool, lookback_days: int) -> list[MarketDataBar]:
+            del symbol, use_rth, lookback_days
+            return [filled, live]
+
+    uncaptured = await replay_warmup_bars(
+        _StagingRuntime(),  # type: ignore[arg-type]
+        StrategyContext(portfolio=Portfolio(initial_cash=Decimal(0))),
+        _Feed(),  # type: ignore[arg-type]
+        _binding(strategy_key="sma_crossover"),
+        captured_decisions={"ev-earlier": "EXECUTED"},
+    )
+
+    assert uncaptured is not None
+    assert uncaptured[0].start_ms == live.start_ms
+
