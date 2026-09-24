@@ -332,6 +332,60 @@ def prove_execution_coverage_set(
     )
 
 
+#: Broker order states whose reported cumulative filled quantity is final: no
+#: later execution can join the order, so the broker's total bounds every
+#: exact slice it will ever report (#2346).
+FINAL_CUMULATIVE_BROKER_STATES = frozenset({"filled", "canceled", "expired"})
+
+
+@dataclass(frozen=True)
+class OrderTotalCoverageEvidence:
+    """Recorded broker and Clerk totals for one conflicted order, in shares."""
+
+    broker_state: str | None
+    reported_filled_quantity: float | None
+    effective_quantity: float
+    cumulative_recovery_quantity: float
+    quarantined_exact_quantities: tuple[float, ...]
+
+
+def order_total_proves_coverage(evidence: OrderTotalCoverageEvidence) -> bool:
+    """Whether the broker's final order total already accounts for every quarantined exact.
+
+    The set proof above needs every exact slice of a cumulative row. A slice
+    Alpaca never re-sends (a websocket outage, a dropped frame) leaves that
+    set incomplete for ever, so this is the order-level proof: once the
+    broker's cumulative is final and the effective fills equal it, every
+    execution of the order is already in the position, and the quarantined
+    exacts (distinct broker identities) are the part the cumulative-recovery
+    rows stand for. Resolving the episode changes no fill. A broker total
+    that disagrees with the recorded fills, or quarantined exacts that exceed
+    the cumulative recovery, keep the episode open.
+
+    Formula: state ∈ FINAL_CUMULATIVE_BROKER_STATES
+      ∧ |Q_effective − Q_broker| < QTY_ATOL
+      ∧ fsum(q_quarantined) − Q_cumulative_recovery < QTY_ATOL (shares).
+    Reference: Project-authored order-level coverage proof for issue #2346,
+      extending the PRD #1543 execution-coverage contract.
+    Canonical implementation: this function.
+    Validated against: tests/broker/alpaca/clerk/sqlite/
+      test_execution_coverage_order_total_proof.py.
+    """
+    if (evidence.broker_state or "").lower() not in FINAL_CUMULATIVE_BROKER_STATES:
+        return False
+    reported = evidence.reported_filled_quantity
+    quarantined = evidence.quarantined_exact_quantities
+    if reported is None or not quarantined:
+        return False
+    values = (reported, evidence.effective_quantity, evidence.cumulative_recovery_quantity, *quarantined)
+    if not all(_is_finite(value) for value in values) or any(quantity <= 0 for quantity in quarantined):
+        return False
+    return (
+        abs(evidence.effective_quantity - reported) < QTY_ATOL
+        and math.fsum(quarantined) - evidence.cumulative_recovery_quantity < QTY_ATOL
+    )
+
+
 def _validate_set_economics(
     observations: tuple[CumulativeCoverageObservation | ExactCoverageObservation, ...],
 ) -> ExecutionCoverageSetProofRefusal | None:

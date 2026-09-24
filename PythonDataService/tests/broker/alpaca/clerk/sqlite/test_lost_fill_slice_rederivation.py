@@ -34,6 +34,11 @@ from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    Capability,
+    ReductionIntent,
+    decide_capability,
+)
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
@@ -566,17 +571,19 @@ async def test_unknown_exit_after_a_filled_submit_response_refreshes_with_bounde
     assert counts[1:] == [counts[0]] * 19
 
 
-async def test_two_lost_slices_then_one_late_raises_the_known_2346_conflict(
+async def test_two_lost_slices_then_one_late_clears_on_the_next_sweep(
     clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
 ) -> None:
-    """Pins today's behaviour for a double fault; #2346 is the known follow-up.
+    """#2346: a late exact after the order's final REST fold must not fence the bot for ever.
 
     exec-A (1) and exec-B (1) are both lost, the terminal exec-C (3) arrives
     with the order filled 5, and the sweep folds the missing cumulative 2, so
     the position is right. Then exec-A alone arrives late: ``{A=1}`` cannot
-    prove ``{cumulative 2}``, so an ``EXECUTION_COVERAGE_CONFLICT`` opens. It
-    clears only if exec-B also arrives; the order-level coverage proof that
-    would clear it without B is #2346.
+    prove ``{cumulative 2}``, so an ``EXECUTION_COVERAGE_CONFLICT`` opens while
+    exec-B may still complete the set. exec-B never comes, and the order is
+    terminal with complete fills, so no REST fold will revisit it: the next
+    sweep's order-total proof (final broker cumulative 5 == effective fills,
+    ``{A=1}`` inside cumulative 2) closes the episode without moving a fill.
     """
     repo, clock = clocked_repo
     trade = _Trade()
@@ -614,13 +621,29 @@ async def test_two_lost_slices_then_one_late_raises_the_known_2346_conflict(
         recovery_window_limit=None,
     )
 
-    conflicts = [
-        u
-        for u in repo.active_uncertainties_for_admission(strategy_instance_id=WATCHDOG_SID)
-        if u["reason_code"] == "EXECUTION_COVERAGE_CONFLICT"
-    ]
-    assert len(conflicts) == 1
+    def conflicts() -> list[dict]:
+        return [
+            u
+            for u in repo.active_uncertainties_for_admission(strategy_instance_id=WATCHDOG_SID)
+            if u["reason_code"] == "EXECUTION_COVERAGE_CONFLICT"
+        ]
+
+    assert len(conflicts()) == 1
+    fills_before = repo.fills_for_order(ref)
+
+    verdicts = await _sweep_until_settled(repo, clock, trade, broker_qty=5.0, passes=1)
+
+    assert verdicts == ["clean"]
+    assert conflicts() == []
+    assert repo.fills_for_order(ref) == fills_before
     assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(5.0, abs=QTY_ATOL, rel=0)
+    reduce = decide_capability(
+        repo,
+        capability=Capability.REDUCE,
+        strategy_instance_id=WATCHDOG_SID,
+        reduction_intent=ReductionIntent(symbol="SPY", side="SELL", quantity=5.0),
+    )
+    assert reduce.allowed
 
 
 _FILL_INDEXES = frozenset({"ix_fills_order_ref", "ix_fills_superseded_execution_ref"})

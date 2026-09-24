@@ -952,6 +952,9 @@ def _finalize_reconciliation_verdict(
     if repo.control_meta_snapshot().control_revision != expected_control_revision:
         return None
     _fold_snapshot_evidence(repo, broker_orders, simulated_authority=simulated_authority)
+    # An exact slice that arrived after its order's final REST fold is proven
+    # here, on recorded evidence, or its episode would never close (#2346).
+    repo.resolve_order_total_covered_coverage_conflicts()
     instances = repo.strategy_instances()
     plan = plan_account_reconciliation(
         namespaces=frozenset(

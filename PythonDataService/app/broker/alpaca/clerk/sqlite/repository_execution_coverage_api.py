@@ -23,18 +23,21 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     exact_replaces_cumulative,
     execution_coverage_proof,
     execution_is_quarantined,
+    order_total_proves_coverage,
     prove_execution_coverage_set,
     validate_execution_coverage_superseded_facts,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
     effective_exact_execution_ids_for_order,
     execution_coverage_candidate,
+    order_total_coverage_evidence,
     quarantined_exact_provenance_for_conflict,
     unreadable_quarantine_source_ids_for_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
+    UncertaintyResolvedFacts,
     validate_execution_coverage_resolved_facts,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
@@ -274,6 +277,56 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
             summary_code="EXECUTION_COVERAGE_SUPERSEDED",
             facts_json=superseded_facts.to_facts_json(),
         )
+
+    def resolve_order_total_covered_coverage_conflicts(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str | None = None,
+    ) -> int:
+        """Close each coverage episode the broker's final order total proves (#2346).
+
+        Runs on recorded evidence only, so a REST order fold and the
+        reconciliation pass can both call it without broker I/O. An order
+        with more than one active episode stays fail-closed, as it does for
+        the accumulated set proof. The quarantined exacts stay immutable
+        custody evidence; no fill changes, so the position is untouched.
+        Returns the number of episodes resolved.
+        """
+        with self._write_lock:
+            active = active_execution_coverage_conflicts(self._conn, order_ref=order_ref)
+            episodes_per_order: dict[str, int] = {}
+            for conflict in active:
+                episodes_per_order[conflict.order_ref] = episodes_per_order.get(conflict.order_ref, 0) + 1
+            resolved = 0
+            for conflict in active:
+                if episodes_per_order[conflict.order_ref] != 1:
+                    continue
+                evidence = order_total_coverage_evidence(self._conn, conflict=conflict)
+                if evidence is None or not order_total_proves_coverage(evidence):
+                    continue
+                self.append_transition(
+                    TransitionInput(
+                        strategy_instance_id=conflict.strategy_instance_id,
+                        transition_kind="UNCERTAINTY_RESOLVED",
+                        custody_owner="ACCOUNT_CLERK",
+                        execution_authority="ACCOUNT_CLERK",
+                        operation_state="succeeded",
+                        clerk_observed_at_ms=self._clock(),
+                        summary_code="EXECUTION_COVERAGE_ORDER_TOTAL_PROVEN",
+                        facts_json=UncertaintyResolvedFacts(
+                            uncertainty_id=conflict.uncertainty_id,
+                            resolution_kind="ORDER_TOTAL_PROVEN",
+                            evidence_refs=sorted(
+                                {
+                                    f"order:{conflict.order_ref}",
+                                    f"execution:{conflict.conflict_execution_id}",
+                                }
+                            ),
+                        ).to_facts_json(),
+                    )
+                )
+                resolved += 1
+            return resolved
 
     def historical_execution_recovery_target(
         self: ClerkSqliteRepository,

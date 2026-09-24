@@ -211,6 +211,10 @@ def fold_order_evidence(
     _fold_enter_unfilled_if_proven(
         repo, effect=effect, order=order, order_ref=order_ref
     )
+    # A fresh broker total may now account for exact slices a coverage
+    # episode quarantined; without this a slice Alpaca never re-sends would
+    # block the order's reduction for ever (#2346).
+    repo.resolve_order_total_covered_coverage_conflicts(order_ref=order_ref)
 
 
 #: The execution-id namespaces the deterministic no-submit worlds mint
