@@ -10,7 +10,13 @@ and only this layer can read them:
   it, so it must block rather than be filtered out;
 - **the account is flat** — the broker's own position list is empty, for the
   same reason. A hand-opened position blocks and the operator closes it at the
-  broker; nothing here closes anything;
+  broker; nothing here closes anything. Flat is also the lane's *own* custody
+  (#2344): the ledger attributes no exposure, and no uncertainty episode is
+  open — every such episode (``EXIT_NOT_FLAT``, ``EXIT_STUCK``,
+  ``POSITION_DRIFT`` and the rest) says the Clerk does not know what it holds.
+  A lane whose custody still believes it holds a position would act on the
+  account again after handing it over, so a flat broker alone does not answer
+  flat. Account holds are not custody doubts and do not block;
 - **no order intent is in flight** — ``reconcilable_effect_operations`` is
   empty account-wide. Not ``InstanceCustodyProof.unresolved_intent_refs``,
   which covers only effects in state ``unknown`` and would miss an
@@ -36,9 +42,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.reconcile import read_account_open_work
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import HOLD_REASON_CODES
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.ports import BrokerReadPort
 
@@ -60,12 +68,44 @@ class AccountQuietObservation:
     intents_resolved: bool
 
 
+def _custody_flat(repo: ClerkSqliteRepository) -> bool:
+    """Whether the lane's own ledger holds nothing and doubts nothing (#2344).
+
+    Logs which half blocks, by count and reason code only: the coordinator
+    hears "the account is not flat", never a symbol or a quantity.
+    """
+    exposed_symbols = sum(
+        position_quantity_is_nonzero(quantity)
+        for quantity in repo.attributed_positions_by_symbol().values()
+    )
+    open_episodes = sorted(
+        {
+            episode["reason_code"]
+            for episode in repo.active_uncertainties()
+            if episode["reason_code"] not in HOLD_REASON_CODES
+        }
+    )
+    if exposed_symbols or open_episodes:
+        logger.info(
+            "lane-quiet: the lane's custody is not flat",
+            extra={
+                "action": "lane_quiet_custody_not_flat",
+                "account_id": repo.account_id,
+                "attributed_symbol_count": exposed_symbols,
+                "open_episode_reason_codes": open_episodes,
+            },
+        )
+        return False
+    return True
+
+
 async def _read_once(
     repo: ClerkSqliteRepository, read: BrokerReadPort
 ) -> tuple[bool, bool, bool]:
     orders, positions = await read_account_open_work(read)
     in_flight = await to_thread(repo.reconcilable_effect_operations)
-    return not orders, not positions, not in_flight
+    custody_flat = await to_thread(lambda: _custody_flat(repo))
+    return not orders, not positions and custody_flat, not in_flight
 
 
 async def observe_account_quiet(

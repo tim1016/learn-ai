@@ -3,10 +3,12 @@
 ADR 0063 Decision 2, as amended 2026-09-19: three of lane quiet's five
 conditions are facts about the account — every working order on it has
 ended at the broker, it is flat, and no order intent is in flight — read from
-the broker's own lists and the ledger's own effects, never from bot-attributed
-custody. These tests pin each condition, the scope (the whole account, so a
-hand-placed order or position blocks), and the re-read rule that stands in for
-the missing consistency fence between the order and position reads.
+the broker's own lists and the ledger's own effects. Flat is also the lane's
+own custody (#2344): a lane whose ledger still attributes exposure, or holds an
+open episode saying it does not know whether it is flat, is not flat whatever
+the broker says. These tests pin each condition, the scope (the whole account,
+so a hand-placed order or position blocks), and the re-read rule that stands in
+for the missing consistency fence between the order and position reads.
 """
 
 from __future__ import annotations
@@ -17,11 +19,18 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.lane_quiet import (
     AccountQuietObservation,
     observe_account_quiet,
 )
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    raise_uncertainty,
+)
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -30,7 +39,14 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _clock_at,
     _TestClock,
 )
-from tests.broker.alpaca.clerk.sqlite.test_exit import ACCOUNT_ID, RUN_ID, SID, _make_entry
+from tests.broker.alpaca.clerk.sqlite.test_exit import (
+    ACCOUNT_ID,
+    RUN_ID,
+    SID,
+    _broker_order,
+    _FakeTrade,
+    _make_entry,
+)
 
 T0 = 1_700_000_000_000
 
@@ -172,6 +188,95 @@ async def test_an_accepted_intent_blocks_quiet_even_with_the_broker_empty(
     assert observation is not None
     assert not observation.intents_resolved
     assert observation.broker_work_ended and observation.account_flat
+
+
+async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2344: the broker is flat, but the lane's custody still holds exposure.
+
+    A reducing order that fills 4 of 10 fails its EXIT through
+    ``EXIT_NOT_FLAT`` with 6 still attributed. Every effect is terminal and
+    the broker's lists are empty, so the three account reads alone answer
+    quiet — and a lane that still believes it holds custody would hand its
+    account over.
+    """
+    entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    partial = _broker_order(
+        "placeholder", side="sell", status="canceled", filled_quantity=4.0, filled_avg_price=101.0
+    )
+    result = await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(submit_result=partial)
+    )
+    assert result.reducing_order_ref is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=partial.model_copy(update={"client_order_id": result.reducing_order_ref}),
+    )
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade())
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=SID
+    )
+    assert episode is not None
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
+    assert observation.broker_work_ended and observation.intents_resolved
+    assert not observation.account_flat
+    assert not _quiet(observation)
+
+
+async def test_attributed_exposure_blocks_quiet_even_with_the_broker_flat(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2344: attributed exposure alone, before any episode names the drift."""
+    await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
+    assert repo.attributed_positions_by_symbol() == {"SPY": 10.0}
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
+    assert observation.broker_work_ended and observation.intents_resolved
+    assert not observation.account_flat
+
+
+async def test_an_open_uncertainty_episode_blocks_quiet_with_custody_flat(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2344: an open episode says the Clerk does not know it is flat.
+
+    Nothing is attributed and the broker is empty, but reconciliation has not
+    verified custody against a fresh snapshot, so flat is not established.
+    """
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
+        headline="stale",
+        explanation="broker snapshot is stale",
+        operator_impact="reductions are paused",
+        next_step="reconcile",
+    )
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
+    assert observation.broker_work_ended and observation.intents_resolved
+    assert not observation.account_flat
 
 
 async def test_an_unreadable_broker_is_no_answer_not_a_not_quiet_one(
