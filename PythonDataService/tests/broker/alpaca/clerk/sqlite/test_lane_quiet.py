@@ -20,22 +20,28 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+from app.broker.alpaca.clerk.sqlite.external_orders import record_unfoldable_broker_order
 from app.broker.alpaca.clerk.sqlite.lane_quiet import (
     AccountQuietObservation,
     observe_account_quiet,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     raise_account_hold,
+    raise_failed_enter_filled_uncertainty,
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -51,6 +57,15 @@ from tests.broker.alpaca.clerk.sqlite.test_exit import (
     _broker_order,
     _FakeTrade,
     _make_entry,
+)
+from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
+    _broker_order as _flatten_broker_order,
+)
+from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
+    _FakeRead as _ReconcileRead,
+)
+from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
+    _FakeTrade as _ReconcileTrade,
 )
 
 T0 = 1_700_000_000_000
@@ -350,6 +365,88 @@ async def test_an_episode_with_no_registered_policy_blocks_quiet(
 
     assert observation is not None
     assert not observation.account_flat
+
+
+async def test_an_open_failed_enter_filled_fence_blocks_quiet_until_a_clean_sweep_clears_it(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2348 x #2344: the fence says belief and custody disagree, so it blocks.
+
+    It must not wedge a flat draining lane: its one exit is the reconciliation
+    sweep's attributed-flat proof on a clean verdict, which a draining lane
+    still runs. A flat broker with nothing attributed yields that verdict, and
+    the next observation answers quiet.
+    """
+    raise_failed_enter_filled_uncertainty(
+        repo, strategy_instance_id=SID, order_ref="enter-ref-1", symbol="SPY", filled_qty=10.0
+    )
+    assert repo.attributed_positions_by_symbol() == {}
+
+    blocked = await observe_account_quiet(repo, _ScriptedRead([EMPTY, EMPTY]))
+
+    assert blocked is not None
+    assert blocked.broker_work_ended and blocked.intents_resolved
+    assert not blocked.account_flat
+
+    swept = await reconcile_account(repo, read=_ReconcileRead(), trade=_ReconcileTrade())
+
+    assert swept.verdict == "clean"
+    assert (
+        repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT",
+            reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+            strategy_instance_id=SID,
+        )
+        is None
+    )
+    cleared = await observe_account_quiet(repo, _ScriptedRead([EMPTY, EMPTY]))
+    assert cleared is not None
+    assert _quiet(cleared)
+
+
+async def test_an_open_unfoldable_broker_order_hold_alone_does_not_block_quiet(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2363 x #2344: its only exit, the operator acknowledgement, is refused
+    while draining, so blocking would wedge a flat lane forever. An order that
+    is still working is caught by the broker open-order read instead."""
+    ended_mleg = _flatten_broker_order(
+        "alpaca-console:mleg-1", order_id="mleg-1", symbol="MSFT", status="canceled"
+    ).model_copy(update={"side": "None"})
+    record_unfoldable_broker_order(repo, order=ended_mleg, reason="multi-leg parent")
+    assert repo.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+        strategy_instance_id=None,
+    )
+
+    observation = await observe_account_quiet(repo, _ScriptedRead([EMPTY, EMPTY]))
+
+    assert observation is not None
+    assert _quiet(observation)
+
+
+def test_every_registered_reason_declares_its_lane_quiet_answer() -> None:
+    """The whole registry, pinned: a row added or flipped must be decided here.
+
+    ``True`` only where the episode doubts what the lane holds *and* clears
+    while draining; ``False`` where the only resolver is refused while
+    draining (account holds, the coverage conflict).
+    """
+    assert {code: policy.blocks_lane_quiet for code, policy in _REASON_POLICIES.items()} == {
+        "POSITION_DRIFT": True,
+        "BROKER_SNAPSHOT_STALE": True,
+        "RECONCILIATION_INCOMPLETE": True,
+        "ORDER_OUTCOME_UNKNOWN": True,
+        "EXIT_NOT_FLAT": True,
+        "EXIT_STUCK": True,
+        FAILED_ENTER_FILLED_REASON_CODE: True,
+        EXECUTION_COVERAGE_CONFLICT_REASON_CODE: False,
+        "UNEXPLAINED_ORDER_HOLD": False,
+        UNFOLDABLE_BROKER_ORDER_REASON_CODE: False,
+        "STREAM_HEALTH_HOLD": False,
+        LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: False,
+    }
 
 
 async def test_an_unreadable_broker_is_no_answer_not_a_not_quiet_one(

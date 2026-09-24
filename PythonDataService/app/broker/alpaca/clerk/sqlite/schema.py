@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_un
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -698,6 +698,18 @@ SCHEMA_V15_STATEMENTS: tuple[str, ...] = (
     "ON fills(superseded_execution_ref)",
 )
 SCHEMA_V15_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V15_STATEMENTS)
+# v16 is index-only too (#2363): the unfoldable-broker-order fence reads its
+# operator reviews on every observation of a resting order (every 15 s sweep)
+# while holding the write coordinator, and the day-P&L fact reads every
+# episode of that cause. Without these both scanned the append-only journal
+# / the whole ``uncertainties`` table. Same statements as
+# ``SCHEMA_MIGRATIONS[15]``.
+SCHEMA_V16_STATEMENTS: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS ix_custody_transitions_resolution_summary "
+    "ON custody_transitions(summary_code) WHERE transition_kind = 'UNCERTAINTY_RESOLVED'",
+    "CREATE INDEX IF NOT EXISTS ix_uncertainties_reason_code ON uncertainties(reason_code)",
+)
+SCHEMA_V16_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V16_STATEMENTS)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -712,6 +724,8 @@ SCHEMA_DDL = (
     + SCHEMA_V14_DDL
     + "\n\n"
     + SCHEMA_V15_DDL
+    + "\n\n"
+    + SCHEMA_V16_DDL
 ).rstrip("\n")
 
 
@@ -934,6 +948,8 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     13: SCHEMA_V14_STATEMENTS,
     # v14 -> v15: index-only; same statements as the fresh v15 block above.
     14: SCHEMA_V15_STATEMENTS,
+    # v15 -> v16: index-only; same statements as the fresh v16 block above.
+    15: SCHEMA_V16_STATEMENTS,
 }
 
 

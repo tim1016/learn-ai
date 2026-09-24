@@ -64,7 +64,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_includes_the_durable_cash_reservations() -> None:
-    assert schema.SCHEMA_VERSION == 15
+    assert schema.SCHEMA_VERSION == 16
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:

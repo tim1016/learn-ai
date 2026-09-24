@@ -45,6 +45,13 @@
             }
             <span>{{ uncertainty.explanation }}</span>
             <span>{{ uncertainty.operator_impact }} {{ uncertainty.next_step }}</span>
+            @if (uncertainty.reason_code === unfoldableReasonCode) {
+              <app-unfoldable-order-review
+                [brokerOrderIds]="uncertainty.evidence_refs"
+                [busyOrderId]="acknowledgingOrderId()"
+                (acknowledge)="acknowledgeUnfoldableOrder($event)"
+              />
+            }
           </li>
         }
       </ul>
