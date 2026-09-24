@@ -8,13 +8,31 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
+from app.broker.alpaca import adapter
+from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    UNIDENTIFIED_BROKER_ORDER_ID,
+    acknowledge_unfoldable_broker_order,
+    record_unfoldable_broker_order,
+    unfoldable_broker_orders_active_since,
+)
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
+    ExternalOrderNotFoundError,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    Capability,
+    ReductionIntent,
+    decide_capability,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
@@ -24,6 +42,7 @@ from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
+from app.services.sqlite_clerk_compat import sqlite_clerk_status
 
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
@@ -774,3 +793,370 @@ async def test_null_sink_records_nothing_and_answers_order_event() -> None:
     )
     assert disposition == "order_event"
     assert await sink.reconcile_gap() is None
+
+
+async def test_gap_replay_contains_an_unfoldable_closed_order_and_keeps_folding_the_rest(
+    tmp_path: Path,
+) -> None:
+    """#2363: one closed order the sink cannot fold must not wedge the stream.
+
+    A multi-leg parent arrives with ``side: null``; the external-order fold
+    cannot state it truthfully. Before the fix that raise aborted every
+    reconnect replay before the connection watermark, so the channel never
+    reconnected, the orders after it were never replayed, and the stream-health
+    hold froze exits account-wide. The poisoned order is now contained to
+    itself and surfaced durably; every other order still folds, and a REDUCE
+    elsewhere on the account is still admitted.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    class _ReplayRead:
+        def __init__(self, orders: list[BrokerOrder]) -> None:
+            self._orders = orders
+
+        async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
+            return list(self._orders)
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    poisoned = adapter.from_alpaca_order(
+        {
+            "id": "mleg-parent-1",
+            "client_order_id": "alpaca-console:mleg-1",
+            "symbol": "AAPL",
+            "side": None,
+            "type": "limit",
+            "time_in_force": "day",
+            "qty": "1",
+            "filled_qty": "1",
+            "limit_price": "1.25",
+            "filled_avg_price": "1.20",
+            "status": "filled",
+            "submitted_at": "2023-11-14T22:13:20Z",
+            "created_at": "2023-11-14T22:13:20Z",
+            "updated_at": "2023-11-14T22:13:21Z",
+            "filled_at": "2023-11-14T22:13:21Z",
+        },
+        observed_at_ms=1_700_000_001_000,
+    )
+    owned = _owned_order(order_ref, status="filled")
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        # The poison comes FIRST: before the fix it cut off every later order.
+        read=cast(BrokerReadPort, _ReplayRead([poisoned, owned])),
+        frame_source=_authorization_source,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=2,
+    )
+    try:
+        await consumer.run()
+
+        # Both reconnect cycles replayed the gap and reached the watermark.
+        assert consumer.counters.connects == 3
+        # The order after the poison folded.
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+        # The poisoned order is surfaced, never silently skipped.
+        assert consumer.counters.unfoldable_orders >= 1
+        episode = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="UNFOLDABLE_BROKER_ORDER",
+            strategy_instance_id=None,
+        )
+        assert episode is not None
+        (recorded,) = json.loads(episode["facts_json"])["cause_facts"]["orders"]
+        # The replay re-maps the REST snapshot, so its observation instant is
+        # the consumer's clock; only its presence is pinned here.
+        observed_at_ms = recorded.pop("observed_at_ms")
+        assert isinstance(observed_at_ms, int)
+        assert recorded.pop("last_activity_at_ms") == observed_at_ms
+        assert recorded == {
+            "broker_order_id": "mleg-parent-1",
+            "client_order_id": "alpaca-console:mleg-1",
+            "reason": "external order side must be buy or sell",
+            "broker_state": "filled filled=1.0",
+        }
+        assert json.loads(episode["evidence_refs_json"]) == ["mleg-parent-1"]
+        # A repeated replay of the same poison does not grow the hash chain.
+        appended = repo._conn.execute(
+            "SELECT COUNT(*) FROM custody_transitions WHERE transition_kind IN "
+            "('UNCERTAINTY_RAISED', 'UNCERTAINTY_REFRESHED')"
+        ).fetchone()[0]
+        assert appended == 1
+        # Nothing about the poison is written as an external-order row.
+        assert repo.external_orders() == []
+        # The surfaced fact does not freeze exits: REDUCE elsewhere is admitted.
+        reduce = decide_capability(
+            repo,
+            capability=Capability.REDUCE,
+            strategy_instance_id=STRATEGY_INSTANCE_ID,
+            reduction_intent=ReductionIntent(symbol="SPY", side="sell", quantity=5.0),
+        )
+        assert reduce.allowed is True, reduce
+    finally:
+        repo.close()
+
+
+async def test_second_unfoldable_order_joins_the_episode_without_dropping_the_first(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    sink = _sqlite_sink(repo)
+    try:
+        for broker_order_id, update in (
+            ("mleg-b", {"side": "None"}),
+            ("mleg-a", {"side": "None", "client_order_id": None}),
+        ):
+            order = _owned_order("alpaca-console:x").model_copy(
+                update={"order_id": broker_order_id, **update}
+            )
+            kind = await sink.record_lifecycle_event(
+                client_order_id=order.client_order_id,
+                event=BrokerOrderEvent(
+                    event_type="fill", occurred_at_ms=1, price=None, quantity=None
+                ),
+                event_key=f"{broker_order_id}|fill",
+                order=order,
+                recovery_source=None,
+                recovery_window_limit=None,
+            )
+            assert kind == "unfoldable_order"
+
+        episode = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="UNFOLDABLE_BROKER_ORDER",
+            strategy_instance_id=None,
+        )
+        assert episode is not None
+        orders = json.loads(episode["facts_json"])["cause_facts"]["orders"]
+        assert [(o["broker_order_id"], o["client_order_id"]) for o in orders] == [
+            ("mleg-a", None),
+            ("mleg-b", "alpaca-console:x"),
+        ]
+        # Entries are fenced until each order is acknowledged, one at a time.
+        entry = decide_capability(repo, capability=Capability.NEW_EXPOSURE, subject_id="s")
+        assert entry.allowed is False and entry.reason_code == "UNFOLDABLE_BROKER_ORDER"
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-a", operator="op-1")
+        still = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="UNFOLDABLE_BROKER_ORDER",
+            strategy_instance_id=None,
+        )
+        assert still is not None and json.loads(still["evidence_refs_json"]) == ["mleg-b"]
+        assert decide_capability(
+            repo, capability=Capability.NEW_EXPOSURE, subject_id="s"
+        ).allowed is False
+        acknowledged = acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="mleg-b", operator="op-2"
+        )
+        assert acknowledged.ack_operator == "op-2"
+        assert repo.active_uncertainties() == []
+        assert decide_capability(
+            repo, capability=Capability.NEW_EXPOSURE, subject_id="s"
+        ).allowed is True
+        # A later replay of a reviewed order never re-fences it, and a repeat
+        # acknowledgement returns the first review.
+        replay = await sink.record_lifecycle_event(
+            client_order_id="alpaca-console:x",
+            event=BrokerOrderEvent(event_type="fill", occurred_at_ms=1, price=None, quantity=None),
+            event_key="mleg-b|fill",
+            order=_owned_order("alpaca-console:x").model_copy(
+                update={"order_id": "mleg-b", "side": "None"}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        assert replay == "unfoldable_order"
+        assert repo.active_uncertainties() == []
+        assert acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="mleg-b", operator="someone-else"
+        ) == acknowledged
+        with pytest.raises(ExternalOrderNotFoundError):
+            acknowledge_unfoldable_broker_order(repo, broker_order_id="never-seen", operator="op")
+    finally:
+        repo.close()
+
+
+async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
+    tmp_path: Path,
+) -> None:
+    """The panel/verdict/posture derivations all read active uncertainties;
+    once the operator reviews the order they must stop reporting it."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+
+    def posture_condition() -> str | None:
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            projection = reader.account_snapshot()
+        finally:
+            reader.close()
+        assert projection is not None
+        posture = sqlite_clerk_status(projection).operator_posture
+        return None if posture is None else posture.condition.id
+
+    try:
+        baseline = posture_condition()
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id="alpaca-console:mleg-1",
+            event=BrokerOrderEvent(event_type="new", occurred_at_ms=1, price=None, quantity=None),
+            event_key="mleg-1|new",
+            order=_owned_order("alpaca-console:mleg-1").model_copy(
+                update={"order_id": "mleg-1", "side": "None"}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        fenced = posture_condition()
+        assert fenced != baseline and fenced is not None and fenced.startswith("alpaca_clerk")
+
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-1", operator="op-1")
+
+        assert posture_condition() == baseline
+    finally:
+        repo.close()
+
+
+def _unfoldable(order_id: str, **update: Any) -> BrokerOrder:
+    return _owned_order("alpaca-console:x").model_copy(
+        update={"order_id": order_id, "side": "None", **update}
+    )
+
+
+def _unfoldable_evidence_refs(repo: ClerkSqliteRepository) -> list[str] | None:
+    episode = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
+    )
+    return None if episode is None else json.loads(episode["evidence_refs_json"])
+
+
+def test_an_acknowledged_unidentified_order_never_whitelists_the_next_one(
+    tmp_path: Path,
+) -> None:
+    """#2363 review: every id-less order collapses to one sentinel identity.
+
+    Before the fix, reviewing the first anonymous order recorded the sentinel
+    as reviewed, so every later id-less order -- a different order the
+    operator never saw -- appended nothing, left entries open, and dropped
+    out of the day-P&L unknown count.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        record_unfoldable_broker_order(
+            repo,
+            order=_unfoldable("", client_order_id="anon-1", observed_at_ms=1_000),
+            reason="broker order id must be non-empty",
+        )
+        assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
+        acknowledge_unfoldable_broker_order(
+            repo, broker_order_id=UNIDENTIFIED_BROKER_ORDER_ID, operator="op-1"
+        )
+        assert repo.active_uncertainties() == []
+
+        outcome = record_unfoldable_broker_order(
+            repo,
+            order=_unfoldable("", client_order_id="anon-2", observed_at_ms=2_000),
+            reason="broker order id must be non-empty",
+        )
+
+        assert outcome == "raised"
+        assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
+        entry = decide_capability(repo, capability=Capability.NEW_EXPOSURE, subject_id="s")
+        assert entry.allowed is False and entry.reason_code == "UNFOLDABLE_BROKER_ORDER"
+        assert unfoldable_broker_orders_active_since(repo, since_ms=2_000) == 1
+    finally:
+        repo.close()
+
+
+def test_new_activity_on_a_reviewed_order_fences_entries_again(tmp_path: Path) -> None:
+    """A review covers the order's state the operator saw; a later fill is new evidence.
+
+    An unchanged re-observation (a replay, a sweep of a resting order) stays
+    reviewed and appends nothing -- mirroring an acknowledged external row.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        resting = _unfoldable("mleg-1", status="new", filled_quantity=0.0, observed_at_ms=1_000)
+        record_unfoldable_broker_order(repo, order=resting, reason="side must be buy or sell")
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-1", operator="op-1")
+        before = len(repo.custody_transitions())
+
+        again = record_unfoldable_broker_order(
+            repo, order=resting.model_copy(update={"observed_at_ms": 2_000}), reason="side"
+        )
+        assert again == "acknowledged" and len(repo.custody_transitions()) == before
+
+        filled = record_unfoldable_broker_order(
+            repo,
+            order=resting.model_copy(
+                update={"status": "filled", "filled_quantity": 1.0, "observed_at_ms": 3_000}
+            ),
+            reason="side must be buy or sell",
+        )
+
+        assert filled == "raised" and _unfoldable_evidence_refs(repo) == ["mleg-1"]
+        # A second review of the new state releases it again.
+        review = acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="mleg-1", operator="op-2"
+        )
+        assert review.ack_operator == "op-2" and repo.active_uncertainties() == []
+    finally:
+        repo.close()
+
+
+_UNFOLDABLE_INDEXES = frozenset(
+    {"ix_custody_transitions_resolution_summary", "ix_uncertainties_reason_code"}
+)
+
+
+def test_v16_migration_adds_the_unfoldable_order_indexes(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    conn = repo._conn
+    try:
+        for index in sorted(_UNFOLDABLE_INDEXES):
+            conn.execute(f"DROP INDEX {index}")
+        conn.execute("UPDATE control_meta SET schema_version = 15 WHERE id = 1")
+        conn.commit()
+
+        schema.migrate_schema(conn, from_version=15)
+
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 16
+        names = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+        assert names >= _UNFOLDABLE_INDEXES
+    finally:
+        repo.close()
+
+
+def test_unfoldable_order_reads_probe_their_indexes_never_scan(tmp_path: Path) -> None:
+    """#2363 review perf guard: a resting unfoldable order is re-seen every sweep
+    under the write coordinator, so its review read must not scan the journal."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    conn = repo._conn
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        reads.unfoldable_broker_order_acknowledgements(conn)
+        reads.unfoldable_broker_orders_active_since(
+            conn, reason_code="UNFOLDABLE_BROKER_ORDER", since_ms=0
+        )
+    finally:
+        conn.set_trace_callback(None)
+    try:
+        (review_read,) = [sql for sql in statements if "FROM custody_transitions t" in sql]
+        (activity_read,) = [sql for sql in statements if "FROM uncertainties WHERE" in sql]
+        for statement, index in (
+            (review_read, "ix_custody_transitions_resolution_summary"),
+            (activity_read, "ix_uncertainties_reason_code"),
+        ):
+            plan = " | ".join(
+                row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + statement)
+            )
+            assert index in plan, plan
+            assert "SCAN t" not in plan and "SCAN uncertainties" not in plan, plan
+    finally:
+        repo.close()

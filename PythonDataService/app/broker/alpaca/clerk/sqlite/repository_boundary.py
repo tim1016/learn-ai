@@ -46,9 +46,12 @@ REPOSITORY_MUTATION_METHODS = frozenset(
 REPOSITORY_MUTATION_HELPERS = frozenset(
     {
         "acknowledge_external_order",
+        "acknowledge_unfoldable_broker_order",
         "fold_order_acknowledgement",
         "fold_order_evidence",
         "observe_external_order",
+        "observe_or_record_unfoldable",
+        "record_unfoldable_broker_order",
         "submit_start_run",
         "submit_stop_run",
     }
@@ -78,9 +81,12 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
     ExternalRepositoryWriter(
         path="app/broker/alpaca/clerk/trade_evidence.py",
         owner="SqliteTradeUpdateEvidenceSink.record_lifecycle_event",
-        call="observe_external_order",
+        call="observe_or_record_unfoldable",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="Foreign-order observation is a local evidence fold under the shared intake boundary.",
+        rationale=(
+            "Foreign-order observation (or its unfoldable-order containment, #2363) is a "
+            "local evidence fold under the shared intake boundary."
+        ),
     ),
     ExternalRepositoryWriter(
         path="app/broker/alpaca/clerk/trade_evidence.py",
@@ -137,6 +143,16 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         call="acknowledge_external_order",
         classification=RepositoryWriterClassification.ATOMIC,
         rationale="The external-order helper performs its read-check-append under one repository write coordinator.",
+    ),
+    ExternalRepositoryWriter(
+        path="app/services/sqlite_clerk_transaction_projection.py",
+        owner="sqlite_acknowledge_external_order",
+        call="acknowledge_unfoldable_broker_order",
+        classification=RepositoryWriterClassification.ATOMIC,
+        rationale=(
+            "The unfoldable-order helper reads, resolves and re-states its episode inside "
+            "one held repository write coordinator (#2363)."
+        ),
     ),
 )
 

@@ -313,7 +313,11 @@ async def lifespan(app: FastAPI):
     # opens on the clerk volume — before the installation lock file, before
     # the profiles database, before the broker client.
     fleet_lane = await _open_verified_fleet_lane()
-    if fleet_lane is not None and fleet_lane.online:
+    if fleet_lane is not None:
+        # An offline boot (FR-066) beats too: its beat is how it rejoins and
+        # hears its drain or retirement once the coordinator answers (#2321);
+        # its identity echo reads no session until then.
+        #
         # Presence belongs to the lane, not to its binding. The installation
         # below installs no binding on four reachable paths — the lock refused
         # this process, the profiles database is unavailable, a profile was
@@ -634,7 +638,9 @@ async def _service_lifespan(
             alpaca_clerk_runtime = await acknowledge_runtime_binding(
                 bound=alpaca_binding, runtime=alpaca_clerk_runtime,
             )
-            if fleet_lane is not None and fleet_lane.online:
+            if fleet_lane is not None:
+                # Offline, this holds the evidence-vouched grant for the
+                # beat to re-present once the lane rejoins (#2321).
                 from app.broker.alpaca.clerk.fleet_boot import confirm_and_report
                 from app.broker_configuration.runtime import (
                     get_broker_configuration_service,
@@ -808,7 +814,7 @@ async def _service_lifespan(
     from app.marketdata.ibkr_feed import get_market_data_feed
     from app.services.bot_runner import (
         BotTaskRegistry,
-        drained_lane_start_gate,
+        fleet_lane_start_gate,
         go_live_start_gate,
         set_bot_task_registry,
     )
@@ -824,10 +830,14 @@ async def _service_lifespan(
             supported_broker_ids=frozenset({"alpaca"}),
             validation_fact=current_deployment_strategy_validation_fact,
             lane_start_gates=(
-                # #2155: once this lane's heartbeat learns it is drained, every
-                # new bot start refuses; existing bots settle undisturbed. Probed
-                # per request, so the drain lands on the next operator action.
-                drained_lane_start_gate(lambda: fleet_lane is not None and fleet_lane.draining),
+                # #2155/#2351/#2320: once this lane learns it is drained or
+                # retired, or the coordinator refuses its registration, every
+                # new bot start refuses; existing bots settle undisturbed.
+                # Probed per request, so the answer lands on the next operator
+                # action, and a readmitted lane starts bots again.
+                fleet_lane_start_gate(
+                    lambda: None if fleet_lane is None else fleet_lane.start_refusal
+                ),
                 # #2269: a lane restored by installation migration starts no bot
                 # until `migrate_installation go-live` removes the hold marker
                 # import wrote at its clerk volume root — read there, not at the

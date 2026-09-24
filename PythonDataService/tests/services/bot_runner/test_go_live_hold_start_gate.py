@@ -18,7 +18,7 @@ from app.services.bot_runner import (
     BotTaskRegistry,
     MarketDataFeedUnavailableError,
     RunAdmissionRefusedError,
-    drained_lane_start_gate,
+    fleet_lane_start_gate,
     go_live_start_gate,
 )
 from app.services.bot_runner_errors import (
@@ -143,7 +143,7 @@ async def test_the_drain_answers_before_the_go_live_hold(tmp_path: Path) -> None
         feed_resolver=lambda: None,
         boot_recovery_required=False,
         lane_start_gates=(
-            drained_lane_start_gate(lambda: True),
+            fleet_lane_start_gate(lambda: "clerk_lane_draining"),
             go_live_start_gate(lambda: read_go_live_hold(tmp_path)),
         ),
     )

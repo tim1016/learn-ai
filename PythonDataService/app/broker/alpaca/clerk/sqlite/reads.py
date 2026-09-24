@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import NamedTuple
 
-from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    FILL_QTY_EPSILON,
+    FINAL_CUMULATIVE_BROKER_STATES,
+)
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -381,6 +385,96 @@ def external_orders_observed_since(conn: sqlite3.Connection, *, since_ms: int) -
     )
 
 
+UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE = "UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED"
+# Evidence-ref prefixes on the acknowledgement's resolution transition. The
+# prefixes keep the order id and the operator unambiguous in one ref list.
+UNFOLDABLE_ACK_ORDER_REF_PREFIX = "broker_order:"
+UNFOLDABLE_ACK_OPERATOR_REF_PREFIX = "operator:"
+
+
+class UnfoldableBrokerOrderReview(NamedTuple):
+    """One operator review of an unfoldable broker order, and what it covered.
+
+    ``broker_state`` is the order's state inside the episode the review
+    resolved: a later observation in a *different* state is new broker
+    evidence the review never saw, so it is fenced again (#2363 review).
+    """
+
+    operator: str
+    acknowledged_at_ms: int
+    broker_state: str
+
+
+def unfoldable_broker_order_acknowledgements(
+    conn: sqlite3.Connection,
+) -> dict[str, UnfoldableBrokerOrderReview]:
+    """The latest operator review of each unfoldable broker order (#2363).
+
+    The hash-chained resolution transition is the durable record: an
+    unfoldable order has no ``external_orders`` row to carry the review. The
+    read probes ``custody_transitions`` through the v16 partial
+    ``summary_code`` index and joins each resolution to the episode it closed
+    by primary key, so a resting order re-seen by every sweep never scans the
+    append-only journal.
+    """
+    reviewed: dict[str, UnfoldableBrokerOrderReview] = {}
+    for row in conn.execute(
+        "SELECT t.facts_json AS resolution_json, t.recorded_at_ms, u.facts_json AS episode_json "
+        "FROM custody_transitions t JOIN uncertainties u "
+        "ON u.uncertainty_id = json_extract(t.facts_json, '$.uncertainty_id') "
+        "WHERE t.transition_kind = 'UNCERTAINTY_RESOLVED' AND t.summary_code = ? "
+        "ORDER BY t.sequence",
+        (UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE,),
+    ):
+        refs = json.loads(row["resolution_json"])["evidence_refs"]
+        operator = next(
+            ref.removeprefix(UNFOLDABLE_ACK_OPERATOR_REF_PREFIX)
+            for ref in refs
+            if ref.startswith(UNFOLDABLE_ACK_OPERATOR_REF_PREFIX)
+        )
+        states = {
+            order["broker_order_id"]: order["broker_state"]
+            for order in json.loads(row["episode_json"])["cause_facts"]["orders"]
+        }
+        for ref in refs:
+            if ref.startswith(UNFOLDABLE_ACK_ORDER_REF_PREFIX):
+                broker_order_id = ref.removeprefix(UNFOLDABLE_ACK_ORDER_REF_PREFIX)
+                reviewed[broker_order_id] = UnfoldableBrokerOrderReview(
+                    operator=operator,
+                    acknowledged_at_ms=row["recorded_at_ms"],
+                    broker_state=states[broker_order_id],
+                )
+    return reviewed
+
+
+def unfoldable_broker_orders_active_since(
+    conn: sqlite3.Connection, *, reason_code: str, since_ms: int
+) -> int:
+    """How many distinct unfoldable broker orders showed activity at or after ``since_ms``.
+
+    The day-P&L fact's companion to :func:`external_orders_observed_since`:
+    an order the Clerk could not record has no journaled fills either.
+    Activity is the first observation or any later change of the order's
+    broker state, so an order first seen yesterday that fills today counts
+    today. Every episode row is read, resolved or not, so an acknowledged
+    (released) order still counts for the day it was active; each row holds
+    its episode's final cause, and the latest activity only ever grows. The
+    v16 ``reason_code`` index keeps this off a full ``uncertainties`` scan.
+    """
+    latest_activity: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT facts_json FROM uncertainties WHERE reason_code = ?",
+        (reason_code,),
+    ):
+        for order in json.loads(row["facts_json"])["cause_facts"]["orders"]:
+            broker_order_id = order["broker_order_id"]
+            latest_activity[broker_order_id] = max(
+                order["last_activity_at_ms"],
+                latest_activity.get(broker_order_id, order["last_activity_at_ms"]),
+            )
+    return sum(1 for active_at_ms in latest_activity.values() if active_at_ms >= since_ms)
+
+
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:
     row = conn.execute(
         f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE command_id = ?",
@@ -536,6 +630,86 @@ def orders_for_effect_operation(conn: sqlite3.Connection, effect_operation_id: s
         (effect_operation_id,),
     ).fetchall()
     return [OrderResource(**dict(row)) for row in rows]
+
+
+def terminal_entry_orders_with_fills(
+    conn: sqlite3.Connection, *, order_ref: str | None = None
+) -> list[tuple[str, str]]:
+    """``(order_ref, strategy_instance_id)`` of every ENTRY order carrying a fill
+    row while its ENTER is ``failed``/``rejected`` (#2348).
+
+    No fold terminalizes an ENTER that has an effective fill, so each row is a
+    candidate contradiction; the caller nets superseded fills. ``order_ref``
+    narrows the scan to one order (the trade_updates sink's early check).
+    """
+    rows = conn.execute(
+        "SELECT o.order_ref, e.strategy_instance_id FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "AND (? IS NULL OR o.order_ref = ?) "
+        "AND EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref) "
+        "ORDER BY o.order_ref ASC",
+        (order_ref, order_ref),
+    ).fetchall()
+    return [(row["order_ref"], row["strategy_instance_id"]) for row in rows]
+
+
+def terminal_entry_orders_unproven_at_broker(
+    conn: sqlite3.Connection,
+    *,
+    symbols: frozenset[str],
+    exclude_client_order_ids: frozenset[str],
+    rested_since_ms: int,
+    limit: int,
+) -> list[str]:
+    """ENTRY orders folded ``failed``/``rejected`` that no broker state ended (#2348).
+
+    The sweep's exact-lookup worklist for a late fill the open-order snapshot
+    cannot show: an ENTER voided on absence (#2342) or refused on a
+    duplicate-id reply (#2304) never recorded a broker-terminal state, so the
+    order may be live -- or already ``filled`` and closed -- at the broker.
+    One the broker itself ended is proven and excluded. Narrowed to
+    ``symbols`` (matched on the immutable ``ENTER_ACCEPTED`` leg).
+
+    A lookup that finds nothing leaves ``broker_state`` NULL, so without a
+    rotation the same never-landed voids would take every slot on every pass
+    and starve an older void that did land. So each order's latest per-order
+    reconciliation attempt (a Clerk-clock ``reconciliations`` row, recorded by
+    every exact lookup) orders the list, never-looked-up first; an order
+    last looked up after ``rested_since_ms`` is excluded until it has rested.
+    Orders already in the open-order snapshot are dropped before ``limit``,
+    so they cannot spend a slot either.
+    """
+    if not symbols:
+        return []
+    symbol_marks = ", ".join("?" for _ in symbols)
+    excluded = sorted(exclude_client_order_ids)
+    exclude_clause = (
+        f"AND o.client_order_id NOT IN ({', '.join('?' for _ in excluded)}) " if excluded else ""
+    )
+    rows = conn.execute(
+        "SELECT order_ref FROM ("
+        "SELECT o.order_ref, e.updated_at_ms, "
+        "(SELECT MAX(r.attempted_at_ms) FROM reconciliations r "
+        "WHERE r.effect_operation_id = o.effect_operation_id "
+        "AND r.order_ref = o.order_ref) AS last_lookup_ms "
+        "FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN custody_transitions t ON t.order_ref = o.order_ref "
+        "AND t.transition_kind = 'ENTER_ACCEPTED' "
+        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
+        "('filled','canceled','expired','rejected','replaced')) "
+        f"AND UPPER(json_extract(t.facts_json, '$.leg.symbol')) IN ({symbol_marks}) "
+        f"{exclude_clause}"
+        ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
+        "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
+        "updated_at_ms DESC, order_ref DESC LIMIT ?",
+        (*sorted(symbols), *excluded, rested_since_ms, limit),
+    ).fetchall()
+    return [row["order_ref"] for row in rows]
 
 
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
@@ -797,33 +971,68 @@ def _effective_fill_totals_for_order(
     return float(row["qty"]), float(row["cost"])
 
 
-def _latest_reported_filled_quantity_sql(order_ref_sql: str) -> str:
-    """SQL scalar: the cumulative filled quantity the order's LATEST acknowledgement reported.
+_REPORTED_FILLED_QUANTITY_SQL = "CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL)"
 
-    The one reading of ``ORDER_SUBMIT_ACKED.facts_json.reported_filled_quantity``
-    (#2305). It is the latest acknowledgement by sequence, not the largest:
-    a later exact REST lookup that reports less than an earlier websocket
-    frame is the broker's current word, and it must be able to close the
-    gap -- a maximum would keep the order short for ever. ``NULL`` when the
-    latest acknowledgement reported no fill (and for every pre-#2305 row).
+
+def _latest_ack_reported_filled_quantity_sql(order_ref_sql: str) -> str:
+    """SQL scalar: the cumulative the order's literal LATEST acknowledgement reported.
+
+    Only for the acknowledgement fold's change check (#2305); the shortfall
+    reads the governing acknowledgement (#2385). ``NULL`` when that row
+    reported no fill.
     """
     return (
-        "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
+        "(SELECT " + _REPORTED_FILLED_QUANTITY_SQL + " "
         "FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
         "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' ORDER BY t.sequence DESC LIMIT 1)"
     )
 
 
-def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
-    """SQL predicate: the latest broker-reported cumulative exceeds the effective fills.
+#: SQL ``IN`` list of :data:`FINAL_CUMULATIVE_BROKER_STATES` (code-owned literals).
+_FINAL_BROKER_STATES_SQL = ", ".join(f"'{state}'" for state in sorted(FINAL_CUMULATIVE_BROKER_STATES))
 
-    ``NULL`` (never short) when the latest acknowledgement reported no fill.
-    ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON` last. The
-    fill sum is covered by ``ix_fills_order_ref`` and the effective-fill
-    predicate by ``ix_fills_superseded_execution_ref`` (schema v15).
+
+def _governing_acknowledgement_sql(order_ref_sql: str, columns: str) -> str:
+    """SQL query: ``columns`` of the order's governing acknowledgement (#2346, #2385).
+
+    The one definition of which acknowledgement carries the broker's word on
+    an order's total, read by the shortfall (#2305) and the order-total
+    coverage proof (#2346). An acknowledgement whose OWN state is final
+    (:data:`FINAL_CUMULATIVE_BROKER_STATES`) always outranks a working-state
+    one: a REST fold records its acknowledgement even when stale
+    (``append_stale_ack``), so a pre-cancel answer can land after the
+    ``canceled`` frame, and its pre-terminal cumulative would read a short
+    order complete (#2385). Only while no acknowledgement is final does the
+    latest one by sequence govern.
+
+    Among final acknowledgements the latest by sequence wins -- never the
+    largest total, and not the newest broker source time: a lower final
+    total from the exact lookup (an execution correction) must close the
+    gap, or the order stays short and the EXIT re-appends rows on every
+    sweep (#2305 review Major A). Ordering by source time reopens that
+    whenever the lookup's ``updated_at`` sorts before the frame's. The cost
+    is that a stale final answer folded last governs (#2385 review; pinned
+    as a strict xfail). ``columns`` read the row as ``t``.
     """
     return (
-        "(" + _latest_reported_filled_quantity_sql(order_ref_sql) + " - "
+        "SELECT " + columns + " FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
+        "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' "
+        "ORDER BY (lower(t.broker_state) IN (" + _FINAL_BROKER_STATES_SQL + ")) DESC, "
+        "t.sequence DESC LIMIT 1"
+    )
+
+
+def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
+    """SQL predicate: the governing acknowledgement's cumulative exceeds the effective fills.
+
+    ``NULL`` (never short) when the governing acknowledgement reported no
+    fill. ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON`
+    last. The fill sum is covered by ``ix_fills_order_ref`` and the
+    effective-fill predicate by ``ix_fills_superseded_execution_ref``
+    (schema v15).
+    """
+    return (
+        "((" + _governing_acknowledgement_sql(order_ref_sql, _REPORTED_FILLED_QUANTITY_SQL) + ") - "
         "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
         "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
     )
@@ -832,13 +1041,34 @@ def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
 def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float | None:
     """The cumulative filled quantity the order's latest acknowledgement reported, if any."""
     row = conn.execute(
-        "SELECT " + _latest_reported_filled_quantity_sql("?") + " AS reported", (order_ref,)
+        "SELECT " + _latest_ack_reported_filled_quantity_sql("?") + " AS reported", (order_ref,)
     ).fetchone()
     return float(row["reported"]) if row["reported"] is not None else None
 
 
+def governing_acknowledgement(
+    conn: sqlite3.Connection, order_ref: str
+) -> tuple[str | None, float | None] | None:
+    """The state and reported cumulative of the order's governing acknowledgement.
+
+    Both come from the SAME row (:func:`_governing_acknowledgement_sql`): the
+    ``orders`` fold keeps a terminal state once seen, so pairing it with
+    another acknowledgement's total could claim a final total the broker
+    never reported (#2346). ``None`` when the order has no acknowledgement.
+    """
+    row = conn.execute(
+        _governing_acknowledgement_sql(
+            "?", "t.broker_state AS broker_state, " + _REPORTED_FILLED_QUANTITY_SQL + " AS reported"
+        ),
+        (order_ref,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row["broker_state"], (float(row["reported"]) if row["reported"] is not None else None)
+
+
 def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
-    """Whether the order's effective fills fall short of the broker's latest cumulative (#2305).
+    """Whether the order's effective fills fall short of the broker's governing cumulative (#2305).
 
     The one definition shared by the reconciliation worklist
     (:func:`reconcilable_effect_operations`) and the EXIT machine's
@@ -903,6 +1133,17 @@ def attributed_positions_by_symbol(conn: sqlite3.Connection) -> dict[str, float]
         "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty FROM positions GROUP BY UPPER(symbol)"
     ).fetchall()
     return {row["symbol"]: row["qty"] for row in rows}
+
+
+def attributed_positions_by_subject(conn: sqlite3.Connection) -> dict[tuple[str, str], float]:
+    """Every custody subject's attributed quantity per symbol, un-netted (#2344).
+
+    Keyed ``(subject_id, symbol)``, the ``positions`` primary key, so a
+    subject long 10 and another short 10 stay two rows of exposure. Use this,
+    not ``attributed_positions_by_symbol``, to ask whether custody holds nothing.
+    """
+    rows = conn.execute("SELECT subject_id, symbol, attributed_qty FROM positions").fetchall()
+    return {(row["subject_id"], row["symbol"]): row["attributed_qty"] for row in rows}
 
 
 def attributed_positions_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> dict[str, float]:
@@ -1044,6 +1285,26 @@ def active_uncertainty(
         (scope, reason_code, strategy_instance_id),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def uncertainty_history(
+    conn: sqlite3.Connection, *, scope: str, reason_code: str, strategy_instance_id: str | None
+) -> list[dict]:
+    """Every episode, active or resolved, for one ``(scope, reason_code, instance)``.
+
+    Newest episode first. For a detector that must not re-raise a cause the
+    latest episode already answered (#2348); the active-only read cannot see
+    an episode a legitimate flatten resolved. Episodes of one identity never
+    overlap, so the raising transition's sequence (``uncertainty:<seq>``)
+    orders them exactly; a clock tie or a lexical id sort would not.
+    """
+    rows = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE scope = ? AND reason_code = ? AND strategy_instance_id IS ? "
+        "ORDER BY CAST(SUBSTR(uncertainty_id, INSTR(uncertainty_id, ':') + 1) AS INTEGER) DESC",
+        (scope, reason_code, strategy_instance_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def active_uncertainties(conn: sqlite3.Connection) -> list[dict]:

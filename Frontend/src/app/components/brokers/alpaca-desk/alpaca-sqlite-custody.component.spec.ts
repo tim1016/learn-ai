@@ -237,6 +237,80 @@ describe('AlpacaSqliteCustodyComponent', () => {
       .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
   });
 
+  function unfoldableProjection(): SqliteClerkProjection {
+    return {
+      ...projection([]),
+      uncertainties: [{
+        uncertainty_id: 'uncertainty:unfoldable',
+        scope: 'ACCOUNT_CLERK',
+        severity: 'error',
+        blocks_new_exposure: true,
+        allows_reduction: true,
+        custody_owner: 'ACCOUNT_CLERK',
+        strategy_instance_id: null,
+        reason_code: 'UNFOLDABLE_BROKER_ORDER',
+        headline: 'A broker order could not be recorded',
+        explanation: 'The Clerk could not record 2 broker order(s).',
+        operator_impact: 'New entries are paused account-wide.',
+        next_step: 'Inspect each named order at Alpaca, then acknowledge it.',
+        observed_at_ms: NOW,
+        evidence_age_ms: 0,
+        evidence_refs: ['mleg-parent-1', 'mleg-parent-2'],
+      }],
+    };
+  }
+
+  it('acknowledges an order the Clerk could not record on the external-order route', async () => {
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue(unfoldableProjection());
+    const acknowledgeExternalOrder = vi.fn().mockResolvedValue({
+      external_order_id: 'mleg-parent-1',
+      acknowledged_at_ms: NOW,
+      ack_operator: 'operator-1',
+    });
+    await renderCustody({ getSqliteClerkProjection, acknowledgeExternalOrder });
+
+    const acknowledge = await screen.findByRole('button', {
+      name: 'Acknowledge broker order mleg-parent-1',
+    });
+    expect((acknowledge as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(screen.getByLabelText('Reviewed by'), { target: { value: ' operator-1 ' } });
+    fireEvent.click(acknowledge);
+
+    await waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledOnce());
+    const [target, brokerOrderId, operator] = acknowledgeExternalOrder.mock.calls[0];
+    expect(brokerOrderId).toBe('mleg-parent-1');
+    expect(operator).toBe('operator-1');
+    expect(target).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA1', bindingGeneration: 4 });
+    // Only this order's review is claimed; mleg-parent-2 may still hold the pause.
+    expect(await screen.findByText('Broker order mleg-parent-1 was reviewed.')).toBeTruthy();
+    expect(screen.queryByText(/released from the entry pause/)).toBeNull();
+    await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps an acknowledgement result on the lane that started it', async () => {
+    const pending = deferred<unknown>();
+    const acknowledgeExternalOrder = vi.fn().mockReturnValue(pending.promise);
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue(unfoldableProjection());
+    const view = await renderCustody({ getSqliteClerkProjection, acknowledgeExternalOrder });
+
+    fireEvent.input(await screen.findByLabelText('Reviewed by'), {
+      target: { value: 'operator-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge broker order mleg-parent-1' }));
+    await waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledOnce());
+    view.fixture.componentRef.setInput('target', resourceTarget('alpaca', 'clrk_other', {
+      accountId: 'PA1', bindingGeneration: 5, routingEpoch: 2,
+    }));
+    view.fixture.detectChanges();
+    await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(2));
+    pending.reject(new Error('stale lane refused'));
+
+    // The settled request's refresh is the last thing it does.
+    await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(3));
+    expect(screen.queryByText('The Account Clerk could not acknowledge this order.')).toBeNull();
+    expect(screen.queryByText('stale lane refused')).toBeNull();
+  });
+
   it('paginates the custody timeline instead of silently truncating past the first page', async () => {
     const getSqliteClerkTimeline = vi.fn()
       .mockResolvedValueOnce(timeline({

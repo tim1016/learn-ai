@@ -169,3 +169,58 @@ def test_lane_presence_beats_once_open_and_stops_at_both_teardown_sites(
     assert outcome["start_calls"] == 1
     assert outcome["stop_calls"] == 2
     assert outcome["heartbeat_is_none_after_exit"] is True
+
+
+def test_an_offline_booted_lane_beats_too_so_it_can_rejoin(tmp_path: Path) -> None:
+    """#2321: the beat is how an FR-066 offline boot rejoins and hears its
+    drain or retirement, so ``lifespan`` installs it for an offline lane as
+    well — reddening if the install is ever re-gated on being online.
+
+    The coordinator is a dead private port; the volume carries evidence that
+    vouches for a prior grant, so the lane opens offline.
+    """
+    from app.broker.fleet.confirmation import ConfirmationEvidence, write_confirmation_evidence
+
+    environment, service_root = _boot_online_unbound_lane(tmp_path)
+    volume_root = Path(environment["ALPACA_CLERK_DIR"])
+    store = FleetRegistryStore.open(control_dir=Path(environment.pop("FLEET_CONTROL_DIR")))
+    try:
+        clerk = store.read_clerk(environment["FLEET_CLERK_ID"])
+    finally:
+        store.close()
+    assert clerk is not None
+    write_confirmation_evidence(
+        volume_root,
+        ConfirmationEvidence(
+            clerk_id=clerk.clerk_id,
+            volume_id=clerk.volume_id,
+            registry_id="fltr_offline0000000000000000",
+            assignment_generation=1,
+            canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+            binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            confirmed_at_ms=1,
+            agent_instance_id="agnt_0000000000000000000000aa",
+            routing_epoch=1,
+        ),
+    )
+    environment["FLEET_COORDINATOR_URL"] = "http://127.0.0.1:9"
+    environment["FLEET_AGENT_SERVICE_TOKEN"] = "svct_" + "4" * 32
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _PROBE],
+        capture_output=True,
+        text=True,
+        env=environment,
+        cwd=service_root,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr[-4000:]
+    outcome = json.loads(completed.stdout.strip().splitlines()[-1])
+
+    assert outcome["error"] is None, outcome["error"]
+    assert outcome["boot_was_online"] is False
+    assert outcome["start_calls"] == 1
+    assert outcome["alive_immediately_after_start"] is True
+    assert outcome["heartbeat_is_none_after_exit"] is True

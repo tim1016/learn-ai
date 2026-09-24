@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolView,
     redrive_or_escalate_stale_exits,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
 )
@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fence_fills_on_terminal_enters,
     fold_order_evidence,
     resolve_order_submission,
     trade_port_folds_simulated_evidence,
@@ -50,6 +51,10 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,
     ClerkSqliteRepository,
     OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.run_ownership import (
+    RunOwnership,
+    retire_runs_whose_runner_is_gone,
 )
 from app.broker.alpaca.clerk.sqlite.stopped_run_entries import (
     cancel_entries_of_inactive_runs,
@@ -64,6 +69,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_account_hold,
     resolve_exit_not_flat_uncertainty,
     resolve_exit_stuck_uncertainty,
+    resolve_failed_enter_filled_uncertainty_if_flat,
     resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
@@ -83,6 +89,12 @@ from app.engine.live.order_identity import (
 logger = logging.getLogger(__name__)
 
 MAX_OPEN_ORDER_SNAPSHOT = 500
+#: Exact lookups one pass spends on failed ENTERs in drifted symbols (#2348).
+MAX_TERMINAL_ENTER_LOOKUPS = 5
+#: Clerk-clock wait before a failed ENTER the broker answered is looked up
+#: again. Not "never": an absence answer does not prove the abandoned POST
+#: (#2342) cannot still land, so the order rotates back onto the worklist.
+TERMINAL_ENTER_LOOKUP_RECHECK_MS = 30_000
 
 _RECONCILIATION_LOCKS: WeakKeyDictionary[ClerkSqliteRepository, asyncio.Lock] = WeakKeyDictionary()
 _DIRECT_RECONCILIATION_INTAKES: WeakKeyDictionary[ClerkSqliteRepository, ReentrantAsyncLock] = (
@@ -99,6 +111,10 @@ AccountVerdict = Literal["clean", "unexplained_order", "position_drift", "stale"
 class ReconcilePlan:
     verdict: AccountVerdict
     foreign_orders: tuple[BrokerOrder, ...] = field(default_factory=tuple)
+    # The foreign orders the verdict and the unexplained-order hold judge:
+    # every foreign order until ``_contain_unfoldable_orders`` removes the
+    # ones contained under their own fence (#2363).
+    unexplained_orders: tuple[BrokerOrder, ...] = field(default_factory=tuple)
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
     indeterminate_symbols: tuple[str, ...] = field(default_factory=tuple)
 
@@ -199,6 +215,21 @@ def _in_flight_symbols(broker_orders: list[BrokerOrder]) -> frozenset[str]:
     )
 
 
+def _mismatched_symbols(
+    broker_positions: list[BrokerPosition], attributed_positions: dict[str, float]
+) -> frozenset[str]:
+    """Upper-cased symbols whose broker position differs from the attributed one."""
+    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
+    return frozenset(
+        symbol
+        for symbol in set(broker_by_symbol) | set(attributed_by_symbol)
+        if position_quantity_is_nonzero(
+            broker_by_symbol.get(symbol, 0.0) - attributed_by_symbol.get(symbol, 0.0)
+        )
+    )
+
+
 def plan_account_reconciliation(
     *,
     namespaces: frozenset[str],
@@ -221,39 +252,71 @@ def plan_account_reconciliation(
         )
     )
     in_flight_symbols = _in_flight_symbols(broker_orders)
-    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
-    attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
-    symbols = set(broker_by_symbol) | set(attributed_by_symbol)
-    mismatched_symbols = {
-        symbol
-        for symbol in symbols
-        if position_quantity_is_nonzero(
-            broker_by_symbol.get(symbol, 0.0)
-            - attributed_by_symbol.get(symbol, 0.0)
-        )
-    }
+    mismatched_symbols = _mismatched_symbols(broker_positions, attributed_positions)
     drifted = tuple(
         sorted(symbol for symbol in mismatched_symbols if symbol not in in_flight_symbols)
     )
     indeterminate = tuple(
         sorted(symbol for symbol in mismatched_symbols if symbol in in_flight_symbols)
     )
-    verdict: AccountVerdict
-    if foreign:
-        verdict = "unexplained_order"
-    elif drifted or indeterminate:
+    return ReconcilePlan(
+        verdict=_account_verdict(
+            unexplained_orders=foreign, drifted=drifted, indeterminate=indeterminate
+        ),
+        foreign_orders=foreign,
+        unexplained_orders=foreign,
+        drifted_symbols=drifted,
+        indeterminate_symbols=indeterminate,
+    )
+
+
+def _account_verdict(
+    *,
+    unexplained_orders: tuple[BrokerOrder, ...],
+    drifted: tuple[str, ...],
+    indeterminate: tuple[str, ...],
+) -> AccountVerdict:
+    if unexplained_orders:
+        return "unexplained_order"
+    if drifted or indeterminate:
         # #1655: a symbol whose broker/attributed mismatch is only explained
         # by a still-working captured order is not proven equal — it is
         # unproven, not clean. Treat it the same as a confirmed drift for
         # admission purposes until a later pass proves exact equality.
-        verdict = "position_drift"
-    else:
-        verdict = "clean"
-    return ReconcilePlan(
-        verdict=verdict,
-        foreign_orders=foreign,
-        drifted_symbols=drifted,
-        indeterminate_symbols=indeterminate,
+        return "position_drift"
+    return "clean"
+
+
+def _contain_unfoldable_orders(repo: ClerkSqliteRepository, plan: ReconcilePlan) -> ReconcilePlan:
+    """Take custody of every foreign order and re-judge the verdict without the contained ones.
+
+    An order no external row can state is contained under its own entry
+    fence (#2363) and so is not *unexplained*: it is named, durable, and
+    reviewed on its own route. Leaving it in the verdict would record every
+    operator reconciliation as ``STILL_UNKNOWN`` while it rests, refusing the
+    safe flatten and the flat-exit proofs the containment exists to keep
+    open. Position drift is judged exactly as before: the contained order's
+    symbol still counts as in flight, so any position it moved is fenced
+    per symbol.
+    """
+    contained = {
+        foreign_order.order_id
+        for foreign_order in plan.foreign_orders
+        if observe_or_record_unfoldable(repo, order=foreign_order) == "unfoldable"
+    }
+    unexplained = tuple(
+        foreign_order
+        for foreign_order in plan.foreign_orders
+        if foreign_order.order_id not in contained
+    )
+    return replace(
+        plan,
+        verdict=_account_verdict(
+            unexplained_orders=unexplained,
+            drifted=plan.drifted_symbols,
+            indeterminate=plan.indeterminate_symbols,
+        ),
+        unexplained_orders=unexplained,
     )
 
 
@@ -562,6 +625,117 @@ def _resolve_flat_exit_fences(
         )
 
 
+def _resolve_flat_failed_enter_filled_fences(
+    repo: ClerkSqliteRepository, instances: list[dict]
+) -> None:
+    """Close each #2348 fence whose contradicted symbols are attributed-flat.
+
+    Called only from a pass whose broker snapshot matched attribution: the
+    attributed-flat half alone is the Clerk's own belief.
+    """
+    for instance in instances:
+        resolve_failed_enter_filled_uncertainty_if_flat(
+            repo,
+            strategy_instance_id=instance["strategy_instance_id"],
+            evidence_refs=("fresh_account_snapshot", "attributed_flat"),
+        )
+
+
+async def _recover_fills_on_terminal_enters(
+    repo: ClerkSqliteRepository,
+    *,
+    broker_orders: list[BrokerOrder],
+    broker_positions: list[BrokerPosition],
+    trade: BrokerTradePort,
+    intake: ReentrantAsyncLock,
+    trigger: Trigger,
+    simulated_authority: bool,
+) -> None:
+    """Exact-look-up failed ENTERs that may have filled where the snapshot cannot see (#2348).
+
+    The open-order snapshot omits a closed order, so a voided or
+    duplicate-id-refused ENTER that landed and fully filled while
+    ``trade_updates`` was down is invisible to it: its fill is never folded,
+    the symbol reads as drift, and :func:`fence_fills_on_terminal_enters` has
+    nothing to find. Only a drifted symbol can hide such a fill, so only the
+    ENTERs in one are asked about, at most :data:`MAX_TERMINAL_ENTER_LOOKUPS`
+    per pass; each answer is folded like a snapshot row, and the verdict's
+    detector then fences the fill. A lookup failure leaves the drift standing
+    for the next pass.
+
+    Every answered lookup -- including "no such order", which leaves the
+    order's broker state unknown -- records a per-order reconciliation
+    attempt on the Clerk clock. The worklist rotates on it (least recently
+    looked up first, each answered order rested for
+    :data:`TERMINAL_ENTER_LOOKUP_RECHECK_MS`), so voids that never reached
+    the broker cannot hold every slot and starve an older one that filled.
+    """
+    attributed = await to_thread(repo.attributed_positions_by_symbol)
+    drifted = _mismatched_symbols(broker_positions, attributed)
+    if not drifted:
+        return
+    in_snapshot = frozenset(
+        order.client_order_id for order in broker_orders if order.client_order_id is not None
+    )
+    rested_since_ms = repo.clock() - TERMINAL_ENTER_LOOKUP_RECHECK_MS
+    candidates = await to_thread(
+        lambda: repo.terminal_entry_orders_unproven_at_broker(
+            symbols=drifted,
+            exclude_client_order_ids=in_snapshot,
+            rested_since_ms=rested_since_ms,
+            limit=MAX_TERMINAL_ENTER_LOOKUPS,
+        )
+    )
+    for order_ref in candidates:
+        try:
+            observed = await trade.get_order_by_client_order_id(order_ref)
+        except BrokerError as exc:
+            logger.warning(
+                "could not look up a failed ENTER in a drifted symbol",
+                extra={
+                    "action": "terminal_enter_lookup_failed",
+                    "account_id": repo.account_id,
+                    "order_ref": order_ref,
+                    "error": str(exc),
+                },
+            )
+            continue
+        if observed is not None and observed.client_order_id == order_ref:
+            await _fold_snapshot_evidence_under_intake(
+                repo,
+                broker_orders=[observed],
+                intake=intake,
+                simulated_authority=simulated_authority,
+            )
+        await _under_intake(
+            intake, _record_terminal_enter_lookup, repo, order_ref=order_ref, trigger=trigger
+        )
+
+
+def _record_terminal_enter_lookup(
+    repo: ClerkSqliteRepository, *, order_ref: str, trigger: Trigger
+) -> None:
+    """Durably date one answered exact lookup of a failed ENTER (#2348).
+
+    The ENTER stays ``failed``/``rejected`` whatever the answer (no fold
+    reopens it), so the attempt records ``RESOLVED_FAILURE`` -- the same
+    outcome :func:`_reconcile_effect` records for a terminally failed effect.
+    """
+    order = repo.order(order_ref)
+    effect = None if order is None else repo.effect_operation(order.effect_operation_id)
+    if order is None or effect is None:
+        raise ReconciliationInvariantError(
+            f"looked-up failed ENTER {order_ref!r} has no order or owning effect"
+        )
+    _record_reconciliation_attempt(
+        repo,
+        effect=effect,
+        order_ref=order_ref,
+        trigger=trigger,
+        outcome="RESOLVED_FAILURE",
+    )
+
+
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
@@ -712,12 +886,18 @@ async def reconcile_account(
     trigger: Trigger = "AUTOMATIC",
     intake: ReentrantAsyncLock | None = None,
     pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Serialize snapshot-to-verdict passes for one live account authority.
 
     ``pricing`` is what the stuck-EXIT watchdog prices its extended-hours
     re-drive limits from (#2229); the degraded default defers rather than
     guessing a price.
+
+    ``run_ownership`` is the Clerk facade's book of which in-process runner
+    holds each ACTIVE run (#2369). With it, the pass retires every ACTIVE run
+    whose runner is gone; a caller that never admits runs through a facade
+    (a bare repository in a drill or test) has no such fact and passes none.
     """
     intake = _direct_reconciliation_intake(repo, intake)
     if intake.held_by_current_task():
@@ -747,6 +927,7 @@ async def reconcile_account(
                 trigger=trigger,
                 intake=intake,
                 pricing=pricing,
+                run_ownership=run_ownership,
             )
         except asyncio.CancelledError:
             if began:
@@ -846,6 +1027,7 @@ async def _reconcile_account_serialized(
     trigger: Trigger,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""
     snapshot = await _read_account_snapshot(repo, read, intake=intake)
@@ -892,10 +1074,29 @@ async def _reconcile_account_serialized(
         off_loop=to_thread,
     )
 
+    # A run whose in-process runner is gone is retired first (#2369), so the
+    # step below also cancels the ENTERs of a runner that ended without
+    # committing RUN_STOPPED.
+    if run_ownership is not None:
+        await _under_intake(intake, retire_runs_whose_runner_is_gone, repo, run_ownership)
+
     # No ENTER may stay working once its run is no longer ACTIVE (#2362):
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
     # POST that landed after Stop is cancelled within one sweep.
     await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
+
+    # A failed ENTER that filled and closed while trade_updates was down is
+    # absent from the open-order snapshot; fold it before the verdict so its
+    # detector can fence the fill (#2348).
+    await _recover_fills_on_terminal_enters(
+        repo,
+        broker_orders=broker_orders,
+        broker_positions=broker_positions,
+        trade=trade,
+        intake=intake,
+        trigger=trigger,
+        simulated_authority=simulated_authority,
+    )
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.
     # Re-read broker truth and fold the newest open-order evidence before the
@@ -952,6 +1153,15 @@ def _finalize_reconciliation_verdict(
     if repo.control_meta_snapshot().control_revision != expected_control_revision:
         return None
     _fold_snapshot_evidence(repo, broker_orders, simulated_authority=simulated_authority)
+    # An exact slice that arrived after its order's final REST fold is proven
+    # here, on recorded evidence, or its episode would never close (#2346).
+    repo.resolve_order_total_covered_coverage_conflicts()
+    # The canonical #2348 detector, re-derived from durable facts on every
+    # pass that reaches a verdict: it heals a fence lost to a crash between a
+    # fill's commit and the fence's own, whichever path folded the fill.
+    # Independent of the coverage proof above: that proof resolves only its
+    # own episode and moves no fill, so it can neither clear nor hide a fence.
+    fence_fills_on_terminal_enters(repo)
     instances = repo.strategy_instances()
     plan = plan_account_reconciliation(
         namespaces=frozenset(
@@ -962,9 +1172,8 @@ def _finalize_reconciliation_verdict(
         attributed_positions=repo.attributed_positions_by_symbol(),
         known_order_refs=frozenset(repo.all_order_refs()),
     )
-    for foreign_order in plan.foreign_orders:
-        observe_external_order(repo, order=foreign_order)
-    _sync_unexplained_order_hold(repo, plan.foreign_orders)
+    plan = _contain_unfoldable_orders(repo, plan)
+    _sync_unexplained_order_hold(repo, plan.unexplained_orders)
     _sync_position_drift(
         repo,
         drifted_symbols=plan.drifted_symbols,
@@ -978,6 +1187,7 @@ def _finalize_reconciliation_verdict(
         # so a non-flat instance here is a genuine flat-exit proof, never one
         # masked by an unproven in-flight mismatch.
         _resolve_flat_exit_fences(repo, instances)
+        _resolve_flat_failed_enter_filled_fences(repo, instances)
     resolve_incomplete_reconciliation_uncertainty(
         repo,
         evidence_refs=("complete_account_reconciliation",),

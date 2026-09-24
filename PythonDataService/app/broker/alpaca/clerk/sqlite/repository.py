@@ -52,6 +52,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     execution_is_quarantined,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
+    order_total_retained_exact_provenance,
     unreadable_quarantine_source_ids_for_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -655,6 +656,23 @@ class ClerkSqliteRepository(
                         )
                     )
                     return "coverage_conflict_quarantined"
+                if any(
+                    item.exact_execution.execution_id == facts.execution_id
+                    and self._same_slice_economics(
+                        symbol=item.exact_execution.symbol,
+                        side=item.exact_execution.side,
+                        qty=item.exact_execution.slice_qty,
+                        price=item.exact_execution.slice_price,
+                        facts=facts,
+                    )
+                    for item in order_total_retained_exact_provenance(self._conn, order_ref=order_ref)
+                ):
+                    # A redelivery of a slice an order-total proof already
+                    # accounted for (#2346): the set proof above refuses it
+                    # as a duplicate source. Frame-only differences (event
+                    # time, fee report) are the same execution; changed
+                    # economics still raise.
+                    return "duplicate"
                 uncertainty = build_coverage_conflict()
                 self._validate_execution_coverage_conflict(
                     uncertainty=uncertainty,
@@ -786,12 +804,29 @@ class ClerkSqliteRepository(
         order_ref: str,
     ) -> bool:
         """Whether an execution-ID replay preserves immutable economics."""
+        return existing["order_ref"] == order_ref and ClerkSqliteRepository._same_slice_economics(
+            symbol=existing["symbol"],
+            side=existing["side"],
+            qty=float(existing["qty"]),
+            price=float(existing["price"]),
+            facts=facts,
+        )
+
+    @staticmethod
+    def _same_slice_economics(
+        *,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        facts: ExecutionSliceFilledFacts,
+    ) -> bool:
+        """An execution slice's immutable economic identity; frame fields are not part of it."""
         return (
-            existing["order_ref"] == order_ref
-            and existing["symbol"].upper() == facts.symbol.upper()
-            and existing["side"] == facts.side
-            and float(existing["qty"]) == facts.slice_qty
-            and float(existing["price"]) == facts.slice_price
+            symbol.upper() == facts.symbol.upper()
+            and side == facts.side
+            and qty == facts.slice_qty
+            and price == facts.slice_price
         )
 
     def _validate_execution_coverage_conflict(

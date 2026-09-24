@@ -14,9 +14,11 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     WEBSOCKET_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fence_fills_on_terminal_enters,
+    fold_enter_unfilled_if_proven,
     fold_order_acknowledgement,
     fold_order_evidence,
 )
@@ -35,7 +37,10 @@ from app.broker.contract.ports import BrokerReadPort
 # The v12 registry spelling; this module used to carry its own copy of the
 # pre-normalisation string (ADR 0048 Decision 2).
 UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
-TradeUpdateDisposition = Literal["order_event", "unexplained_order"]
+# ``unfoldable_order``: a foreign broker order the fold cannot state
+# truthfully (#2363). It is recorded durably by name and contained to itself,
+# so the stream keeps folding every other order instead of reconnecting forever.
+TradeUpdateDisposition = Literal["order_event", "unexplained_order", "unfoldable_order"]
 
 logger = logging.getLogger(__name__)
 
@@ -148,13 +153,14 @@ class SqliteTradeUpdateEvidenceSink:
             if local_order is None and order is not None:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
-                # observation fold raises its own atomic account hold.
-                observe_external_order(
+                # observation fold raises its own atomic account hold; an
+                # order no row can state is contained to itself (#2363).
+                observed = observe_or_record_unfoldable(
                     self._repo,
                     order=order,
                     proof_reference=event_key,
                 )
-                return "unexplained_order"
+                return "unfoldable_order" if observed == "unfoldable" else "unexplained_order"
 
             if local_order is None or order is None:
                 evidence_refs = tuple(
@@ -228,6 +234,22 @@ class SqliteTradeUpdateEvidenceSink:
                 order=order,
                 append_stale_ack=False,
             )
+            # The same proven-unfilled fold the REST route reaches through
+            # ``fold_order_evidence``: the websocket usually sees a vendor
+            # cancel first, and the ack alone strands the ENTER (#2306).
+            # Also while the submit POST is still in flight: the ack above has
+            # already made the ENTER ``in_progress`` over a dead order, which
+            # no sweep revisits, so declining here would strand it.
+            fold_enter_unfilled_if_proven(
+                self._repo,
+                effect_operation_id=owner.effect_operation_id,
+                order=order,
+            )
+            if event.event_type in {"fill", "partial_fill"}:
+                # Early, for latency only: every reconciliation pass is the
+                # canonical detector and re-derives this from durable facts
+                # (#2348). Same function, scoped to this order, under intake.
+                fence_fills_on_terminal_enters(self._repo, order_ref=local_order.order_ref)
             return "order_event"
 
     async def reconcile_gap(self) -> None:

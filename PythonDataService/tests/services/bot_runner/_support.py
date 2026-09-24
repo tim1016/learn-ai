@@ -63,12 +63,14 @@ class _OrderingClerk(_CustodyClerk):
         self.stop_committed = asyncio.Event()
         self.fail_stop = False
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+    async def register_strategy_run(
+        self, binding: BrokerBotBinding, *, run_owner: object = None
+    ) -> None:
         self.registration_saw_bot_task = any(
             task.get_name() == f"bot:{binding.strategy_instance_id}"
             for task in asyncio.all_tasks()
         )
-        await super().register_strategy_run(binding)
+        await super().register_strategy_run(binding, run_owner=run_owner)
 
     async def stop_strategy_run(
         self,

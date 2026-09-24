@@ -24,19 +24,23 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
+    FailedEnterFilledCause,
     LossHoldCause,
     PositionDriftCause,
     StreamHealthHoldCause,
     UnexplainedOrderCause,
+    UnfoldableBrokerOrderCause,
     broker_snapshot_stale_cause_is_valid,
     reconciliation_incomplete_cause_is_valid,
 )
@@ -92,7 +96,39 @@ class ReasonPolicy:
     allows_reduction: bool
     cause_is_valid: Callable[[Any], bool]
     age: AgePolicy
+    #: Whether an open episode keeps a draining lane from answering flat
+    #: (#2344, ADR 0063 Decision 2 condition 4): true when the episode says
+    #: the Clerk does not know what it holds. Required, with no default, so
+    #: every row states it. False for account holds (``UNFOLDABLE_BROKER_ORDER``
+    #: included) and for ``EXECUTION_COVERAGE_CONFLICT``: their only resolvers
+    #: are refused while draining, so the broker-flat and attributed-flat reads
+    #: carry the load there, and blocking on them would wedge a flat lane
+    #: forever.
+    blocks_lane_quiet: bool
     facts_schema_version: int = FACTS_SCHEMA_VERSION
+    # Whether an active episode leaves the safe-flatten recovery available.
+    # Distinct from ``allows_reduction``: POSITION_DRIFT and the loss hold
+    # admit a proven REDUCE, yet a flatten plan built from attributed
+    # quantities must still refuse under them. Set only for causes a flatten
+    # exists to clear (a stuck/not-flat EXIT, a fill on a failed ENTER #2348)
+    # or that say nothing about any attributed quantity (an unfoldable foreign
+    # order, #2363).
+    admits_safe_flatten: bool = False
+    # Whether an admitted episode is *broker-side* evidence the latest
+    # successful account reconciliation must postdate before a safe flatten
+    # may rely on it. Set for an unfoldable foreign order (#2363 review): it
+    # can be raised by the trade-update stream after the reconciliation, and
+    # the flatten must not reuse broker truth that predates it. Not set for
+    # EXIT_NOT_FLAT / EXIT_STUCK: those are the Clerk's own EXIT bookkeeping,
+    # refreshed by every automatic re-drive, and requiring a newer
+    # reconciliation after each would refuse the very flatten that clears
+    # them; their attributed quantities are already pinned by the
+    # position-evidence freshness gate. Not set for FAILED_ENTER_FILLED
+    # (#2348) either: it is derived from a folded fill, so every raise moves
+    # the fenced symbol's attributed position with it (pinned by the same
+    # freshness gate), and a sweep's re-derive raises from fills that sweep's
+    # broker snapshot already contains.
+    safe_flatten_requires_later_reconciliation: bool = False
 
 
 def _position_drift_cause_is_valid(value: Any) -> bool:
@@ -125,6 +161,14 @@ def _exit_stuck_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _failed_enter_filled_cause_is_valid(value: Any) -> bool:
+    try:
+        FailedEnterFilledCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
     try:
         ExecutionCoverageConflictCause.from_mapping(value)
@@ -136,6 +180,14 @@ def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
 def _unexplained_order_cause_is_valid(value: Any) -> bool:
     try:
         UnexplainedOrderCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _unfoldable_broker_order_cause_is_valid(value: Any) -> bool:
+    try:
+        UnfoldableBrokerOrderCause.from_mapping(value)
     except ValueError:
         return False
     return True
@@ -164,6 +216,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=True,
         cause_is_valid=_position_drift_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     BROKER_SNAPSHOT_STALE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -171,6 +224,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=broker_snapshot_stale_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     RECONCILIATION_INCOMPLETE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -178,6 +232,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=reconciliation_incomplete_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -189,27 +244,52 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # sole definition of the definitive-absence receipt code;
         # order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE derives from it.
         age=VoidAfter(grace_ms=30_000, summary_code="ORDER_SUBMIT_FAILED_ABSENT"),
+        blocks_lane_quiet=True,
     ),
     EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
         # Byte-identical replacement of the former
         # EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000 / EXIT_NOT_FLAT_MAX_REDRIVES
         # = 3 module constants in exit_watchdog.py.
         age=RedriveThenEscalate(after_ms=120_000, max_count=3, escalate_to=EXIT_STUCK_REASON_CODE),
+        blocks_lane_quiet=True,
     ),
     EXIT_STUCK_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_exit_stuck_cause_is_valid,
         # A durable escalation must not carry a clock: only an
         # attributed-flat proof or an operator may end it. VoidAfter here
         # would silently discard the episode the escalation exists to
         # preserve (ADR 0048 Decision 1).
         age=CauseCleared(),
+        blocks_lane_quiet=True,
+    ),
+    # #2348: a fill on an ENTER already folded terminal. The Clerk keeps the
+    # real position; this fences the instance against new exposure and admits
+    # only reduction of the contradicted symbols, so the operator's flatten or
+    # a strategy EXIT can close it. Ended only by an attributed-flat proof on a
+    # clean broker reconciliation -- never on a timer.
+    FAILED_ENTER_FILLED_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        cause_is_valid=_failed_enter_filled_cause_is_valid,
+        age=CauseCleared(),
+        # Blocks lane quiet (#2344): it says the strategy's belief and the
+        # Clerk's custody disagree about a position. It cannot wedge a flat
+        # draining lane: its only exit is the reconciliation sweep's
+        # attributed-flat proof on a clean verdict, which runs on its own and
+        # through ``reconcile_now`` -- a quiesce action a draining lane still
+        # routes (#2351). A flat broker with no open orders is a clean verdict.
+        blocks_lane_quiet=True,
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -217,6 +297,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
     # The two former ``holds`` causes (ADR 0048 Decision 2). A hold was
     # always an uncertainty whose policy had nowhere to live: account-wide,
@@ -234,6 +315,31 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_unexplained_order_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
+    ),
+    # #2363: a broker order the Clerk cannot state truthfully (e.g. a
+    # multi-leg parent with a null side). Like the unexplained-order hold it
+    # fences new exposure account-wide until an operator acknowledges each
+    # named order (``acknowledge_unfoldable_broker_order``). Unlike that hold
+    # it admits reductions: refusing them is the account-wide exit freeze the
+    # containment exists to end, and any position effect the order had is
+    # still fenced per symbol by the reconciliation sweep's POSITION_DRIFT.
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        safe_flatten_requires_later_reconciliation=True,
+        cause_is_valid=_unfoldable_broker_order_cause_is_valid,
+        age=CauseCleared(),
+        # Does not block lane quiet (#2344), like the unexplained-order hold:
+        # its only exit, the operator acknowledgement
+        # (``custody_external_order_ack``), is refused while draining, so
+        # blocking would wedge a flat lane forever. It doubts no held
+        # quantity -- any position effect is fenced per symbol by
+        # POSITION_DRIFT, which does block -- and an order still working is
+        # caught by the broker open-order read.
+        blocks_lane_quiet=False,
     ),
     STREAM_HEALTH_HOLD_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -241,6 +347,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_stream_health_hold_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
     # ADR 0059 D4: the loss hold refuses entries account-wide and lets every
     # program keep managing its own position. It clears only by the guarded
@@ -251,6 +358,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=True,
         cause_is_valid=_loss_hold_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
 }
 

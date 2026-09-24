@@ -164,7 +164,7 @@ async def test_account_quiet_read_returns_the_canonical_probe_answer() -> None:
     answer = await read_lane_account_quiet(LaneAccountQuietSource(account_id="PA1", probe=probe))
 
     assert answer is not None
-    assert answer.outstanding == ("the account is not flat",)
+    assert answer.outstanding == ("the account or the lane's custody is not flat",)
 
 
 @pytest.mark.asyncio

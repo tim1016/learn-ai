@@ -117,8 +117,10 @@ class _DetonatingClerk:
         self._detonate("unresolved_effect_count")
         return 0
 
-    async def register_strategy_run(self, binding: Any, *, admission_snapshot: Any = None) -> None:
-        del binding, admission_snapshot
+    async def register_strategy_run(
+        self, binding: Any, *, admission_snapshot: Any = None, run_owner: Any = None
+    ) -> None:
+        del binding, admission_snapshot, run_owner
         self._detonate("register_strategy_run")
 
     async def stop_strategy_run(

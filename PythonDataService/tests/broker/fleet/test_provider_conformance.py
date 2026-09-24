@@ -739,6 +739,133 @@ async def test_a_typed_refusal_after_dispatch_still_settles_the_routing_receipt(
     assert settled and settled[0].state is RoutingReceiptState.OUTCOME_UNKNOWN
 
 
+class _BlockingLane:
+    """An in-process lane whose first command dispatch parks until released.
+
+    Counts every dispatch that reaches it, so a test can prove how many
+    times the coordinator forwarded one idempotency key (#2319). Only the
+    first dispatch parks: a redelivery answers at once, so the defect fails
+    the assertion instead of hanging the test.
+    """
+
+    def __init__(self) -> None:
+        import asyncio
+
+        self.dispatches = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def handler(self, request):
+        from app.broker.fleet.delivery import DeliveryResult
+
+        self.dispatches += 1
+        if self.dispatches == 1:
+            self.entered.set()
+            await self.release.wait()
+        return DeliveryResult(
+            status_code=200, headers=request.pinned_headers(), body=b"{}"
+        )
+
+
+async def _send_bot_action(router, lane, *, label: str, key: str):
+    from app.broker.fleet.routing import CommandEnvelope
+
+    bot_action = _alpha_operation("submit_bot_action")
+    return await router.deliver_command(
+        broker="fake_alpha",
+        clerk_id=lane.clerk_id,
+        operation=bot_action,
+        path_params={"account_id": f"acct-{label}", "sid": "bot-1"},
+        query={},
+        body={},
+        envelope=CommandEnvelope(
+            capability=bot_action.capability.value,
+            idempotency_key=key,
+            expected_effective_binding_generation=1,
+            target={},
+        ),
+    )
+
+
+async def test_a_same_key_retry_while_the_first_dispatch_is_in_flight_is_never_redelivered(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2319: the D11 gate covered only *settled* attempts. A same-key retry
+    arriving while the first dispatch still awaits the lane found the row at
+    ``not_dispatched`` (with ``dispatched_at_ms`` set), re-marked it
+    idempotently and forwarded the command a second time. The retry must
+    answer reconcile-by-identity and the lane must see exactly one dispatch."""
+    import asyncio
+
+    from app.broker.fleet.errors import ClerkRoutingOutcomeUnknown
+    from app.broker.fleet.records import RoutingReceiptState
+
+    blocking = _BlockingLane()
+    router, lane, service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="inflight", handler=blocking.handler
+    )
+    first = asyncio.create_task(
+        _send_bot_action(router, lane, label="inflight", key="inflight-key")
+    )
+    await asyncio.wait_for(blocking.entered.wait(), timeout=5.0)
+
+    with pytest.raises(ClerkRoutingOutcomeUnknown) as excinfo:
+        await _send_bot_action(router, lane, label="inflight", key="inflight-key")
+    assert "never resubmit" in (excinfo.value.next_step or "").lower()
+    assert blocking.dispatches == 1
+
+    blocking.release.set()
+    delivered = await asyncio.wait_for(first, timeout=5.0)
+    assert delivered.status_code == 200
+    assert blocking.dispatches == 1
+    receipts = [
+        r
+        for r in service._store.list_routing_receipts(clerk_id=lane.clerk_id)
+        if r.idempotency_key == "inflight-key"
+    ]
+    assert len(receipts) == 1
+    assert receipts[0].state is RoutingReceiptState.DELIVERED
+
+
+async def test_a_cancelled_dispatch_stays_a_lost_outcome_that_a_retry_never_redelivers(
+    control_dir: Path, clock: FrozenClock, fleet_service
+) -> None:
+    """#2319: a task cancelled between the dispatch mark and settlement
+    (``CancelledError`` is a ``BaseException``, so no ``except`` settles it)
+    leaves the row unsettled — the lost-outcome reconciliation obligation of
+    ADR 0063. The next same-key retry must reconcile against it, not
+    re-send it, and the row must stay an unsettled lost outcome."""
+    import asyncio
+
+    from app.broker.fleet.errors import ClerkRoutingOutcomeUnknown
+    from app.broker.fleet.records import RoutingReceiptState
+
+    blocking = _BlockingLane()
+    router, lane, service = _routed_lane_with_handler(
+        control_dir, clock, fleet_service, label="cancelled", handler=blocking.handler
+    )
+    first = asyncio.create_task(
+        _send_bot_action(router, lane, label="cancelled", key="cancelled-key")
+    )
+    await asyncio.wait_for(blocking.entered.wait(), timeout=5.0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    blocking.release.set()
+    with pytest.raises(ClerkRoutingOutcomeUnknown):
+        await _send_bot_action(router, lane, label="cancelled", key="cancelled-key")
+    assert blocking.dispatches == 1
+
+    with service._store.transaction() as conn:
+        unsettled = service._store.list_unsettled_routing_receipts_on(
+            conn, lane.clerk_id
+        )
+    assert [r.idempotency_key for r in unsettled] == ["cancelled-key"]
+    assert unsettled[0].state is RoutingReceiptState.NOT_DISPATCHED
+    assert unsettled[0].dispatched_at_ms is not None
+
+
 async def test_an_unrouted_404_without_an_echo_surfaces_the_lanes_own_refusal_body(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:

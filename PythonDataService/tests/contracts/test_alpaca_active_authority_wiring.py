@@ -297,6 +297,25 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
     )
 
 
+def test_every_reconciliation_sweep_retires_runs_whose_runner_is_gone() -> None:
+    """A sweep without the facade's run-ownership book never retires a dead run.
+
+    ``reconcile_account`` skips the #2369 step when it is handed no book, so a
+    construction site that omits ``run_ownership`` would leave a runner-less
+    run ACTIVE -- and its ENTER working -- with every unit test still green.
+    """
+    source = _authority_selector_source()
+
+    constructions = source.count("ReconciliationSweep(")
+    wired = source.count("run_ownership=facade.run_ownership")
+
+    assert constructions > 0, "no sweep construction found; update this guard"
+    assert wired == constructions, (
+        f"{constructions} ReconciliationSweep construction(s) but {wired} pass "
+        "the facade's `run_ownership`; that sweep never retires a dead runner's run"
+    )
+
+
 def test_the_stream_health_hold_sync_is_started_by_the_real_authority() -> None:
     """An unstarted hold sync is worse than none at all (#1777 WP4).
 

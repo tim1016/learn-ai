@@ -158,6 +158,7 @@ def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
         "sealed_envelope_readable": reading.seal_readable,
         "last_equity_known": reading.observation.last_equity_usd is not None,
         "external_orders_today": None if day_pnl is None else day_pnl.external_orders_today,
+        "unfoldable_orders_today": None if day_pnl is None else day_pnl.unfoldable_orders_today,
         "execution_coverage": None if day_pnl is None else day_pnl.execution_coverage,
         "fee_fidelity": None if day_pnl is None else day_pnl.fee_fidelity,
     }

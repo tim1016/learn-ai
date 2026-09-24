@@ -18,7 +18,12 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     ExecutionRow,
     SqliteEconomicProjectionReader,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    UnfoldableBrokerOrderAcknowledgement,
+    acknowledge_external_order,
+    acknowledge_unfoldable_broker_order,
+    unfoldable_broker_order_is_unreviewed,
+)
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
@@ -243,21 +248,42 @@ def sqlite_acknowledge_external_order(
     account_id: str,
     external_order_id: str,
     operator: str,
-) -> ExternalOrderResource | None:
-    """Acknowledge one external-order observation in the active SQLite authority.
+) -> ExternalOrderResource | UnfoldableBrokerOrderAcknowledgement | None:
+    """Acknowledge one foreign broker order in the active SQLite authority.
 
     ``None`` means SQLite is not the selected authority, allowing the router
     to retain its established no-fallback behavior.  The external-order fold
     owns both the durable acknowledgement and narrowly scoped hold release.
+    An order the Clerk could not record is reviewed on the same route by
+    broker order id, releasing only its entry fence (#2363). One broker id can
+    carry both records -- it folded once, then a later observation of it
+    could not -- so an active unfoldable fence is released first and an
+    external row is acknowledged as well; neither record can shadow the
+    other. The answer names the unfoldable review when one was released.
     """
     clerk = _active_clerk(account_id)
     if clerk is None:
         return None
+    repo = clerk.repository
     try:
-        return acknowledge_external_order(
-            clerk.repository,
-            external_order_id=external_order_id,
-            operator=operator,
+        released = (
+            acknowledge_unfoldable_broker_order(
+                repo, broker_order_id=external_order_id, operator=operator
+            )
+            if unfoldable_broker_order_is_unreviewed(repo, broker_order_id=external_order_id)
+            else None
+        )
+        if repo.external_order(external_order_id) is not None:
+            acknowledged = acknowledge_external_order(
+                repo, external_order_id=external_order_id, operator=operator
+            )
+            return released if released is not None else acknowledged
+        if released is not None:
+            return released
+        # Neither record is open: answer the order's latest unfoldable review,
+        # or 404 for an id no record ever named.
+        return acknowledge_unfoldable_broker_order(
+            repo, broker_order_id=external_order_id, operator=operator
         )
     except ExternalOrderNotFoundError as exc:
         raise ExternalOrderAcknowledgementNotFound(str(exc)) from exc
