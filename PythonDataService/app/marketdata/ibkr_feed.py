@@ -34,9 +34,10 @@ without utc.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
+from datetime import timedelta
 
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import (
@@ -47,8 +48,14 @@ from app.broker.ibkr.bars import (
     fetch_historical_minute_bars,
     stream_minute_bars,
 )
-from app.broker.ibkr.client import IbkrClient, NotConnectedError
+from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError
+from app.lean_sidecar.trading_calendar import (
+    expected_sessions,
+    session_close_ms_utc,
+    session_open_ms_utc,
+)
 from app.marketdata.feed import (
+    WARMUP_HISTORY_UNAVAILABLE,
     BarProvenanceTag,
     ContinuityPolicy,
     FeedHealth,
@@ -56,6 +63,7 @@ from app.marketdata.feed import (
     MarketDataFeedError,
 )
 from app.marketdata.ibkr_continuity import ContinuityLoop, ResolvedBar
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -73,6 +81,66 @@ class _SymbolLiveness:
     last_source_wall_ms: int | None = None
     first_bar_seen: bool = False
     active_count: int = 0
+
+
+def _earliest_owed_warmup_session_close_ms(lookback_days: int, *, now_ms: int) -> int | None:
+    """Close of the oldest session a ``lookback_days`` warmup must reach, or ``None``.
+
+    The window is the ``lookback_days`` calendar days ending at ``now_ms``.
+    The ET date the window starts on is excluded, because a calendar-day
+    duration can begin partway through it (after that day's close, even).
+    The owed sessions are the NYSE sessions strictly after that date that
+    have already opened by ``now_ms``, from the canonical calendar. ``None``
+    means the window owes no session -- e.g. a one-day lookback before the
+    open -- so an empty history is then a true "nothing to warm on".
+    """
+    now_date = et_date_at_ms(now_ms)
+    first_day = et_date_at_ms(now_ms - lookback_days * 86_400_000) + timedelta(days=1)
+    if first_day > now_date:
+        return None
+    owed = [
+        session
+        for session in expected_sessions(first_day, now_date)
+        if session_open_ms_utc(session) <= now_ms
+    ]
+    return session_close_ms_utc(owed[0]) if owed else None
+
+
+def require_warmup_coverage(
+    bars: Sequence[MarketDataBar], *, lookback_days: int, now_ms: int
+) -> None:
+    """Refuse fetched warmup history that does not reach its lookback window (#2365).
+
+    ``ib_async`` does not raise request errors by default
+    (``RaiseRequestErrors`` is False): an error such as 162 (pacing, data
+    farm) ends the request with whatever rows arrived -- often none -- and
+    ``fetch_historical_minute_bars`` returns them as if complete. Without
+    this check that short history would start the run on the bare
+    indicator minimum instead of its sealed lookback.
+
+    Coverage rule: when the window owes at least one session, some bar must
+    start before the close of the *earliest* owed session -- the history
+    reaches into (or past) it. The exact first minute is not required, so a
+    vendor window that opens a few minutes late is not refused. Empty
+    history, or history covering only later sessions, is refused.
+
+    Applied to a fresh IBKR fetch only. A resumed run warms from its
+    retained source-bar ledger (``_RetainedSourceBarFeed``), which replays
+    exactly what its first start consumed -- that start passed this check --
+    and the offline replay/qualification harnesses serve their pinned warmup
+    by design; neither reaches this method.
+    """
+    owed_close_ms = _earliest_owed_warmup_session_close_ms(lookback_days, now_ms=now_ms)
+    if owed_close_ms is None:
+        return
+    oldest_start_ms = min((bar.start_ms for bar in bars), default=None)
+    if oldest_start_ms is not None and oldest_start_ms < owed_close_ms:
+        return
+    raise MarketDataFeedError(
+        f"the {lookback_days}-day warmup history does not reach the session closing at "
+        f"{owed_close_ms} (oldest bar start: {oldest_start_ms}, bars: {len(bars)})",
+        reason=WARMUP_HISTORY_UNAVAILABLE,
+    )
 
 
 class IbkrMarketDataFeed:
@@ -329,12 +397,14 @@ class IbkrMarketDataFeed:
         ADX/EMA-class indicators with multi-day lookback periods) -- never
         itself treated as a decision.
 
-        A fetch failure raises ``MarketDataFeedError`` with reason
-        ``WARMUP_HISTORY_UNAVAILABLE`` (#2365). It used to return ``[]`` and
-        let the run start cold, which silently replaced the sealed warmup
-        lookback with the bare indicator minimum and changed which real
-        orders the program placed. A run that cannot warm up as sealed does
-        not start; the runner records the refusal as a typed crash.
+        A fetch failure -- or a fetch that ends without reaching the
+        ``lookback_days`` window (see :func:`require_warmup_coverage`) --
+        raises ``MarketDataFeedError`` with reason
+        ``WARMUP_HISTORY_UNAVAILABLE`` (#2365). Both used to let the run
+        start cold, which silently replaced the sealed warmup lookback with
+        the bare indicator minimum and changed which real orders the program
+        placed. A run that cannot warm up as sealed does not start; the
+        runner records the refusal under that reason.
         """
         normalized_symbol = symbol.upper()
         # Anchor the closed-bar cutoff before broker I/O. A request that starts
@@ -349,7 +419,9 @@ class IbkrMarketDataFeed:
                 duration=f"{lookback_days} D",
                 use_rth=use_rth,
             )
-        except (IBKRBarStreamError, NotConnectedError) as exc:
+        except (IBKRBarStreamError, BrokerError, ValueError) as exc:
+            # BrokerError covers NotConnectedError and a contract that cannot
+            # be qualified; the same set the go-live IBKR bar check refuses on.
             logger.error(
                 "Historical warmup bars unavailable; refusing to start the run cold",
                 extra={
@@ -363,7 +435,7 @@ class IbkrMarketDataFeed:
             raise MarketDataFeedError(
                 f"the {lookback_days}-day warmup history for {normalized_symbol} "
                 f"could not be fetched: {exc}",
-                reason="WARMUP_HISTORY_UNAVAILABLE",
+                reason=WARMUP_HISTORY_UNAVAILABLE,
             ) from exc
         bars = [self._translate(bar) for bar in historical]
         # IBKR's historical endpoint includes the still-forming minute as its
@@ -382,6 +454,21 @@ class IbkrMarketDataFeed:
                     "dropped": len(bars) - len(closed),
                 },
             )
+        try:
+            require_warmup_coverage(closed, lookback_days=lookback_days, now_ms=requested_at_ms)
+        except MarketDataFeedError as exc:
+            logger.error(
+                "Historical warmup bars do not reach the sealed lookback; refusing to start the run cold",
+                extra={
+                    "action": "warmup_bars_short",
+                    "feed_id": self.feed_id,
+                    "symbol": normalized_symbol,
+                    "lookback_days": lookback_days,
+                    "bars": len(closed),
+                    "error": str(exc),
+                },
+            )
+            raise
         return closed
 
     def active_symbols(self) -> tuple[str, ...]:

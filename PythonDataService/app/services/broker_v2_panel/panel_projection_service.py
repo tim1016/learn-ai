@@ -27,6 +27,7 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
+from app.marketdata.feed import WARMUP_HISTORY_UNAVAILABLE
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -87,6 +88,11 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_CUSTODY_UNPROVABLE": (
         "Stopped; custody unprovable",
         "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
+    ),
+    WARMUP_HISTORY_UNAVAILABLE: (
+        "Refused: warmup history unavailable",
+        "The run's sealed warmup lookback could not be fetched from IB Gateway, so it was "
+        "refused rather than started cold. Start again once the Gateway is logged in.",
     ),
 }
 

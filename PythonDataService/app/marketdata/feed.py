@@ -58,6 +58,12 @@ class MarketDataFeedError(Exception):
         self.reason = reason
 
 
+WARMUP_HISTORY_UNAVAILABLE = "WARMUP_HISTORY_UNAVAILABLE"
+"""``MarketDataFeedError.reason`` for a run whose sealed warmup lookback could
+not be fetched or was not covered by what was fetched (#2365). The run is
+refused rather than started cold."""
+
+
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
 """Canonical session-phase label. Single definition repo-wide: every other site
 imports this object instead of restating the six members —
@@ -367,12 +373,14 @@ class MarketDataFeed(Protocol):
 
         Used to warm up a consumer's indicator state before it starts
         making decisions from ``stream_bars`` -- never itself a decision
-        input. A source that has no history to serve returns an empty list.
-        A source whose history fetch *fails* raises ``MarketDataFeedError``
-        (reason ``WARMUP_HISTORY_UNAVAILABLE``) rather than returning an
-        empty list: a failure silently read as "no history" would start the
-        run cold on a shorter lookback than the one it was sealed with
-        (#2365).
+        input. A live history source whose fetch fails, or returns history
+        that does not reach the ``lookback_days`` window, raises
+        ``MarketDataFeedError`` (reason ``WARMUP_HISTORY_UNAVAILABLE``)
+        rather than returning a short list: a short list silently read as
+        "that is all the history there is" would start the run cold on a
+        shorter lookback than the one it was sealed with (#2365). Replay and
+        qualification harnesses that serve pinned warmup by design may
+        return it as-is, including empty.
         """
         ...
 

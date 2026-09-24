@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -34,8 +35,8 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.ibkr.bars import IBKRBarStreamError
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
-from app.marketdata.feed import MarketDataBar, MarketDataFeedError
-from app.marketdata.ibkr_feed import IbkrMarketDataFeed
+from app.marketdata.feed import WARMUP_HISTORY_UNAVAILABLE, MarketDataBar, MarketDataFeedError
+from app.marketdata.ibkr_feed import IbkrMarketDataFeed, require_warmup_coverage
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy_warmup import (
     _WARMUP_LOOKBACK_DAYS,
@@ -162,25 +163,64 @@ async def test_replay_warmup_bars_requests_the_floor_for_an_unregistered_strateg
     assert feed.recorded_lookback_days == _WARMUP_LOOKBACK_DAYS
 
 
+# 2026-09-23 (Wed) 15:00 EDT. A 7-day lookback starts on Wed 09-16, so the
+# owed sessions are Thu 09-17 .. Wed 09-23 and the earliest closes 16:00 EDT
+# on 09-17 (canonical calendar; no hardcoded time in the code under test).
+_NOW_MS = 1_790_190_000_000
+_EARLIEST_OWED_CLOSE_MS = 1_789_675_200_000  # 2026-09-17 16:00 EDT
+_TODAY_OPEN_MS = 1_790_170_200_000  # 2026-09-23 09:30 EDT
+
+
+def _ibkr_history_bar(start_ms: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        symbol="SPY",
+        start_ms=start_ms,
+        end_ms=start_ms + 60_000,
+        open=Decimal("400"),
+        high=Decimal("401"),
+        low=Decimal("399"),
+        close=Decimal("400.5"),
+        volume=1000,
+        fetched_at_ms=_NOW_MS,
+        provenance="ibkr_historical",
+        spans_interruption=False,
+        session_phase="RTH",
+    )
+
+
+async def _history_fails(*_args: Any, **_kwargs: Any) -> list[Any]:
+    raise IBKRBarStreamError("historical data farm connection is broken")
+
+
+async def _history_empty(*_args: Any, **_kwargs: Any) -> list[Any]:
+    # ib_async ends a request on error 162 (pacing / data farm) with whatever
+    # rows arrived -- often none -- and does not raise by default.
+    return []
+
+
+async def _history_last_session_only(*_args: Any, **_kwargs: Any) -> list[Any]:
+    return [_ibkr_history_bar(_TODAY_OPEN_MS + minute * 60_000) for minute in range(60)]
+
+
 @pytest.mark.asyncio
-async def test_replay_warmup_bars_refuses_the_run_when_the_sealed_lookback_cannot_be_fetched(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "history",
+    [_history_fails, _history_empty, _history_last_session_only],
+    ids=["fetch_raises", "fetch_returns_nothing", "fetch_returns_only_the_last_session"],
+)
+async def test_replay_warmup_bars_refuses_the_run_when_the_sealed_lookback_is_not_met(
+    monkeypatch: pytest.MonkeyPatch, history: Any
 ) -> None:
-    """#2365: a failed history fetch must not start the run cold.
+    """#2365: a warmup that does not reach the sealed lookback never starts cold.
 
     Drives the real ``IbkrMarketDataFeed`` warmup path with only the IBKR
-    history call faked to fail. Before the fix the feed returned ``[]`` and
-    replay finished normally -- the strategy then decided on the bare
-    indicator minimum instead of the sealed 7-day lookback. Now the replay
-    ends with the feed's typed refusal before any warmup state is built.
+    history call faked. Before the fix every case replayed normally -- the
+    strategy then decided on the bare indicator minimum (or on one session)
+    instead of the sealed 7-day lookback. Now replay ends with the typed
+    refusal before any warmup state is built.
     """
-
-    async def _history_fails(*_args: Any, **_kwargs: Any) -> list[Any]:
-        raise IBKRBarStreamError("historical data farm connection is broken")
-
-    monkeypatch.setattr(
-        "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _history_fails
-    )
+    monkeypatch.setattr("app.marketdata.ibkr_feed.fetch_historical_minute_bars", history)
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: _NOW_MS)
     client = MagicMock()
     client.is_connected.return_value = True
     client.connection_lost = False
@@ -195,8 +235,55 @@ async def test_replay_warmup_bars_refuses_the_run_when_the_sealed_lookback_canno
             captured_decisions=None,
         )
 
-    assert refused.value.reason == "WARMUP_HISTORY_UNAVAILABLE"
+    assert refused.value.reason == WARMUP_HISTORY_UNAVAILABLE
     assert runtime.strategy.force_flat_calls == 0
+
+
+def _bar_at(start_ms: int) -> MarketDataBar:
+    return IbkrMarketDataFeed._translate(_ibkr_history_bar(start_ms))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "oldest_start_ms",
+    [
+        pytest.param(_EARLIEST_OWED_CLOSE_MS - 60_000, id="last-minute-of-the-earliest-owed-session"),
+        pytest.param(_EARLIEST_OWED_CLOSE_MS - 24 * 3_600_000, id="the-day-before-the-window"),
+    ],
+)
+def test_warmup_coverage_accepts_history_reaching_the_earliest_owed_session(
+    oldest_start_ms: int,
+) -> None:
+    """The rule is "reaches into the earliest owed session", not "starts at its
+    first minute": a late-opening vendor window must not refuse a start."""
+    bars = [_bar_at(oldest_start_ms), _bar_at(_TODAY_OPEN_MS)]
+
+    require_warmup_coverage(bars, lookback_days=7, now_ms=_NOW_MS)
+
+
+def test_warmup_coverage_refuses_history_ending_at_the_earliest_owed_close() -> None:
+    bars = [_bar_at(_EARLIEST_OWED_CLOSE_MS), _bar_at(_TODAY_OPEN_MS)]
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        require_warmup_coverage(bars, lookback_days=7, now_ms=_NOW_MS)
+
+    assert refused.value.reason == WARMUP_HISTORY_UNAVAILABLE
+
+
+def test_warmup_coverage_is_monotone_in_time_so_a_first_start_s_window_covers_a_later_resume() -> None:
+    """A resumed run warms from its retained ledger and never reaches the IBKR
+    check, but the rule itself is still monotone: history that covered a
+    start covers the same window seen from any later instant."""
+    retained = [_bar_at(_EARLIEST_OWED_CLOSE_MS - 60_000), _bar_at(_TODAY_OPEN_MS)]
+    two_days_later_ms = _NOW_MS + 2 * 24 * 3_600_000
+
+    require_warmup_coverage(retained, lookback_days=7, now_ms=two_days_later_ms)
+
+
+def test_warmup_coverage_owes_nothing_before_the_first_owed_session_opens() -> None:
+    """A one-day lookback before today's open owes no session: empty is not a refusal."""
+    before_open_ms = _TODAY_OPEN_MS - 3_600_000
+
+    require_warmup_coverage([], lookback_days=1, now_ms=before_open_ms)
 
 
 def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> None:
