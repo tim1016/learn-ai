@@ -58,6 +58,10 @@ from tests.broker.alpaca.clerk.sqlite.test_exit import (
     _FakeTrade,
     _make_entry,
 )
+from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
+    _held_position,
+    _register_second_spy_lane,
+)
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _broker_order as _flatten_broker_order,
 )
@@ -264,6 +268,30 @@ async def test_attributed_exposure_blocks_quiet_even_with_the_broker_flat(
     """#2344: attributed exposure alone, before any episode names the drift."""
     await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     assert repo.attributed_positions_by_symbol() == {"SPY": 10.0}
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
+    assert observation.broker_work_ended and observation.intents_resolved
+    assert not observation.account_flat
+
+
+async def test_opposing_custody_subjects_do_not_net_to_flat(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2382 review: lane A +10 SPY, lane B -10 SPY, broker flat.
+
+    The account-wide attribution nets to zero, but each subject still holds
+    exposure it can act on. Flat is per custody subject and symbol, never a sum.
+    """
+    await _held_position(repo, sid=SID, run_id=RUN_ID)
+    sid_b, run_b = _register_second_spy_lane(repo)
+    await _held_position(repo, suffix="b", sid=sid_b, run_id=run_b, side="sell")
+    assert repo.position(SID, "SPY") == 10.0
+    assert repo.position(sid_b, "SPY") == -10.0
+    assert repo.attributed_positions_by_symbol() == {"SPY": 0.0}
+    assert repo.active_uncertainties() == []
     read = _ScriptedRead([EMPTY, EMPTY])
 
     observation = await observe_account_quiet(repo, read)

@@ -1076,6 +1076,17 @@ def attributed_positions_by_symbol(conn: sqlite3.Connection) -> dict[str, float]
     return {row["symbol"]: row["qty"] for row in rows}
 
 
+def attributed_positions_by_subject(conn: sqlite3.Connection) -> dict[tuple[str, str], float]:
+    """Every custody subject's attributed quantity per symbol, un-netted (#2344).
+
+    Keyed ``(subject_id, symbol)``, the ``positions`` primary key, so a
+    subject long 10 and another short 10 stay two rows of exposure. Use this,
+    not ``attributed_positions_by_symbol``, to ask whether custody holds nothing.
+    """
+    rows = conn.execute("SELECT subject_id, symbol, attributed_qty FROM positions").fetchall()
+    return {(row["subject_id"], row["symbol"]): row["attributed_qty"] for row in rows}
+
+
 def attributed_positions_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> dict[str, float]:
     rows = conn.execute(
         "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty FROM positions "

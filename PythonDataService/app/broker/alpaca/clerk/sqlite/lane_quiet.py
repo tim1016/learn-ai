@@ -85,9 +85,11 @@ def _custody_flat(repo: ClerkSqliteRepository) -> bool:
     Logs which half blocks, by count and reason code only: the coordinator
     hears only the account-flat condition, never a symbol or a quantity.
     """
-    exposed_symbols = sum(
+    # Per custody subject, never the account-wide net: +10 in one subject
+    # and -10 in another is two exposures, not flat.
+    exposed_positions = sum(
         position_quantity_is_nonzero(quantity)
-        for quantity in repo.attributed_positions_by_symbol().values()
+        for quantity in repo.attributed_positions_by_subject().values()
     )
     open_episodes = sorted(
         {
@@ -96,13 +98,13 @@ def _custody_flat(repo: ClerkSqliteRepository) -> bool:
             if _episode_blocks_lane_quiet(episode["reason_code"])
         }
     )
-    if exposed_symbols or open_episodes:
+    if exposed_positions or open_episodes:
         logger.info(
             "lane-quiet: the lane's custody is not flat",
             extra={
                 "action": "lane_quiet_custody_not_flat",
                 "account_id": repo.account_id,
-                "attributed_symbol_count": exposed_symbols,
+                "attributed_position_count": exposed_positions,
                 "open_episode_reason_codes": open_episodes,
             },
         )
