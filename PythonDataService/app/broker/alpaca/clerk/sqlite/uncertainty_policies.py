@@ -92,6 +92,14 @@ class ReasonPolicy:
     allows_reduction: bool
     cause_is_valid: Callable[[Any], bool]
     age: AgePolicy
+    #: Whether an open episode keeps a draining lane from answering flat
+    #: (#2344, ADR 0063 Decision 2 condition 4): true when the episode says
+    #: the Clerk does not know what it holds. Required, with no default, so
+    #: every row states it. False for account holds and for
+    #: ``EXECUTION_COVERAGE_CONFLICT``, whose only resolver is refused while
+    #: draining — the broker-flat and attributed-flat reads carry the load
+    #: there, and blocking on it would wedge a flat lane forever.
+    blocks_lane_quiet: bool
     facts_schema_version: int = FACTS_SCHEMA_VERSION
 
 
@@ -164,6 +172,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=True,
         cause_is_valid=_position_drift_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     BROKER_SNAPSHOT_STALE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -171,6 +180,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=broker_snapshot_stale_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     RECONCILIATION_INCOMPLETE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -178,6 +188,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=reconciliation_incomplete_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -189,6 +200,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # sole definition of the definitive-absence receipt code;
         # order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE derives from it.
         age=VoidAfter(grace_ms=30_000, summary_code="ORDER_SUBMIT_FAILED_ABSENT"),
+        blocks_lane_quiet=True,
     ),
     EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -199,6 +211,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000 / EXIT_NOT_FLAT_MAX_REDRIVES
         # = 3 module constants in exit_watchdog.py.
         age=RedriveThenEscalate(after_ms=120_000, max_count=3, escalate_to=EXIT_STUCK_REASON_CODE),
+        blocks_lane_quiet=True,
     ),
     EXIT_STUCK_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -210,6 +223,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # would silently discard the episode the escalation exists to
         # preserve (ADR 0048 Decision 1).
         age=CauseCleared(),
+        blocks_lane_quiet=True,
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -217,6 +231,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
     # The two former ``holds`` causes (ADR 0048 Decision 2). A hold was
     # always an uncertainty whose policy had nowhere to live: account-wide,
@@ -234,6 +249,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_unexplained_order_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
     STREAM_HEALTH_HOLD_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -241,6 +257,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=False,
         cause_is_valid=_stream_health_hold_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
     # ADR 0059 D4: the loss hold refuses entries account-wide and lets every
     # program keep managing its own position. It clears only by the guarded
@@ -251,6 +268,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         allows_reduction=True,
         cause_is_valid=_loss_hold_cause_is_valid,
         age=CauseCleared(),
+        blocks_lane_quiet=False,
     ),
 }
 

@@ -228,7 +228,7 @@ class ClerkRecord:
 LANE_QUIET_CONDITIONS: tuple[tuple[str, str], ...] = (
     ("runner_idle", "a bot is still running"),
     ("broker_work_ended", "a working order on the account has not ended"),
-    ("account_flat", "the account is not flat"),
+    ("account_flat", "the account or the lane's custody is not flat"),
     ("intents_resolved", "an order intent is unresolved"),
 )
 

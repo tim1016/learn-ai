@@ -29,7 +29,12 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
+    raise_account_hold,
     raise_uncertainty,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
@@ -276,6 +281,74 @@ async def test_an_open_uncertainty_episode_blocks_quiet_with_custody_flat(
 
     assert observation is not None
     assert observation.broker_work_ended and observation.intents_resolved
+    assert not observation.account_flat
+
+
+async def test_an_open_execution_coverage_conflict_alone_does_not_block_quiet(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Its only resolver is refused while draining, so blocking would wedge
+    a flat lane forever; the broker-flat and attributed-flat reads carry it."""
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=SID,
+        reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+        headline="conflict",
+        explanation="exact execution conflicts with aggregate recovery",
+        operator_impact="entries are paused",
+        next_step="resolve execution coverage",
+        cause_facts={"order_ref": "ord-1", "execution_id": "exec-1"},
+    )
+    assert repo.active_uncertainties()
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
+    assert _quiet(observation)
+
+
+async def test_an_open_account_hold_does_not_block_quiet(repo: ClerkSqliteRepository) -> None:
+    """A hold fences entries; it is not a doubt about what the lane holds."""
+    raise_account_hold(
+        repo,
+        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        evidence_refs=[],
+        cause_facts={
+            "day_start_ms": T0,
+            "day_pnl_usd": -600.0,
+            "loss_limit_usd": 500.0,
+            "last_equity_usd": 9_400.0,
+            "observed_at_ms": T0,
+        },
+    )
+    assert repo.active_uncertainties()
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
+    assert observation.account_flat
+
+
+async def test_an_episode_with_no_registered_policy_blocks_quiet(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Fail closed: an unregistered code cannot declare itself harmless."""
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code="NOT_A_REGISTERED_CODE",
+        headline="unknown",
+        explanation="an unregistered cause",
+        operator_impact="entries are paused",
+        next_step="investigate",
+    )
+    read = _ScriptedRead([EMPTY, EMPTY])
+
+    observation = await observe_account_quiet(repo, read)
+
+    assert observation is not None
     assert not observation.account_flat
 
 
