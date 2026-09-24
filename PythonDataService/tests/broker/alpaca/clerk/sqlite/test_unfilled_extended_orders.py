@@ -16,7 +16,6 @@ Three pins:
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
@@ -53,6 +52,7 @@ from tests.broker.alpaca.clerk.sqlite.test_exit import (
     _broker_order,
     _FakeTrade,
     _make_entry,
+    _NoReconciler,
     repo,  # noqa: F401 — the shared EXIT-machine repository fixture
 )
 
@@ -606,11 +606,6 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
     assert leg.extended_hours is True
 
 
-class _NoReconciler:
-    async def reconcile_account(self, *, trigger: str) -> Any:
-        raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
-
-
 async def _frame(
     clerk: ClerkSqliteRepository,
     order: BrokerOrder,
@@ -749,3 +744,155 @@ async def test_a_websocket_cancelled_enter_that_later_fills_still_raises_the_fen
     assert episode is not None
     assert order_ref in episode["explanation"]
     assert len(_enter_unfilled_rows(repo, effect_id)) == 1
+
+
+def _is_reconcilable(clerk: ClerkSqliteRepository, effect_operation_id: str) -> bool:
+    return effect_operation_id in {
+        effect.effect_operation_id for effect in clerk.reconcilable_effect_operations()
+    }
+
+
+async def test_a_cancel_whose_ack_did_not_advance_keeps_the_enter_open(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """#2306 review: the fold follows only an ack that took effect.
+
+    A ``fill`` frame with no execution identity records only its ack
+    (``filled``, 10 reported), no fill row. A later ``canceled`` frame that
+    reports nothing filled cannot move the order off ``filled``, so it proves
+    nothing. Ending the ENTER there would hide 10 bought shares from every
+    fence and lookup; instead it stays open and on the sweep's worklist,
+    whose exact lookup re-derives the missing execution.
+    """
+    effect_id, order_ref = await _working_xh_enter(repo)
+    await _frame(
+        repo,
+        _broker_order(order_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.10),
+        event_type="fill",
+        source_ms=1_700_000_002_000,
+    )
+    assert not repo.fills_for_order(order_ref)
+
+    await _frame(
+        repo,
+        _broker_order(order_ref, status="canceled", filled_quantity=0.0),
+        event_type="canceled",
+        source_ms=1_700_000_003_000,
+    )
+
+    assert repo.effect_operation(effect_id).state in NONTERMINAL_EFFECT_STATES  # type: ignore[union-attr]
+    assert not _enter_unfilled_rows(repo, effect_id)
+    assert _is_reconcilable(repo, effect_id)
+
+
+class _CancelledDuringSubmit(_FakeTrade):
+    """The websocket reports the cancel while the submit POST is in flight."""
+
+    def __init__(self, clerk: ClerkSqliteRepository) -> None:
+        super().__init__()
+        self._clerk = clerk
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        await _frame(
+            self._clerk,
+            _broker_order(client_order_id, status="canceled", filled_quantity=0.0),
+            event_type="canceled",
+            source_ms=1_700_000_002_000,
+        )
+        return _broker_order(client_order_id, status="accepted").model_copy(
+            update={"updated_at_ms": 1_700_000_001_000}
+        )
+
+
+async def test_a_websocket_cancel_during_the_submit_post_ends_the_enter(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """Pins the fold while the ENTER's submit claim is held (#2306 review).
+
+    Declining here strands the ENTER: the frame's ack has already made it
+    ``in_progress`` over a ``canceled`` order, which drops it off the sweep's
+    worklist, and the submit response never folds ``ENTER_UNFILLED``. So the
+    frame ends it, and the late submit response does not revive it.
+    """
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_XH_LEG,
+        trade=_CancelledDuringSubmit(repo),
+    )
+    assert submission.effect_operation_id is not None
+
+    assert repo.effect_operation(submission.effect_operation_id).state == "failed"  # type: ignore[union-attr]
+    assert len(_enter_unfilled_rows(repo, submission.effect_operation_id)) == 1
+
+
+async def test_a_websocket_cancel_of_an_unknown_enter_ends_it_and_its_episode(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """The ENTER in charge of its own order folds from ``unknown`` too: the
+    receipt is keyed to the order, so the terminal fold resolves the
+    unknown-outcome episode and new exposure is admitted again."""
+    effect_id, order_ref = await _working_xh_enter(repo)
+    fold_uncertain(repo, effect_operation_id=effect_id, order_ref=order_ref, why="lost response")
+    assert repo.effect_operation(effect_id).state == "unknown"  # type: ignore[union-attr]
+
+    await _frame(
+        repo,
+        _broker_order(order_ref, status="canceled", filled_quantity=0.0),
+        event_type="canceled",
+        source_ms=1_700_000_002_000,
+    )
+
+    assert repo.effect_operation(effect_id).state == "failed"  # type: ignore[union-attr]
+    assert decide_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        strategy_instance_id=SID,
+    ).allowed
+
+
+async def test_a_replayed_websocket_cancel_folds_the_enter_once(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """A redelivered frame (reconnect, gap replay) finds the ENTER already
+    ``failed``; only one ``ENTER_UNFILLED`` is ever appended."""
+    effect_id, order_ref = await _working_xh_enter(repo)
+    for _ in range(3):
+        await _frame(
+            repo,
+            _broker_order(order_ref, status="canceled", filled_quantity=0.0),
+            event_type="canceled",
+            source_ms=1_700_000_002_000,
+        )
+
+    assert len(_enter_unfilled_rows(repo, effect_id)) == 1
+
+
+async def test_a_websocket_partial_fill_then_cancel_keeps_the_enter_open(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """A partial fill opened real exposure; the vendor cancelling the rest
+    does not prove the ENTER unfilled, on the websocket route either."""
+    effect_id, order_ref = await _working_xh_enter(repo)
+    await _frame(
+        repo,
+        _broker_order(
+            order_ref, status="partially_filled", filled_quantity=4.0, filled_avg_price=100.10
+        ),
+        event_type="partial_fill",
+        source_ms=1_700_000_002_000,
+        execution_id="exec-partial-1",
+    )
+    await _frame(
+        repo,
+        _broker_order(order_ref, status="canceled", filled_quantity=4.0, filled_avg_price=100.10),
+        event_type="canceled",
+        source_ms=1_700_000_003_000,
+    )
+
+    assert repo.effect_operation(effect_id).state in NONTERMINAL_EFFECT_STATES  # type: ignore[union-attr]
+    assert not _enter_unfilled_rows(repo, effect_id)
+    assert repo.position(SID, "SPY") == pytest.approx(4.0, abs=1e-9, rel=0)

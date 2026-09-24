@@ -237,6 +237,9 @@ class SqliteTradeUpdateEvidenceSink:
             # The same proven-unfilled fold the REST route reaches through
             # ``fold_order_evidence``: the websocket usually sees a vendor
             # cancel first, and the ack alone strands the ENTER (#2306).
+            # Also while the submit POST is still in flight: the ack above has
+            # already made the ENTER ``in_progress`` over a dead order, which
+            # no sweep revisits, so declining here would strand it.
             fold_enter_unfilled_if_proven(
                 self._repo,
                 effect_operation_id=owner.effect_operation_id,
