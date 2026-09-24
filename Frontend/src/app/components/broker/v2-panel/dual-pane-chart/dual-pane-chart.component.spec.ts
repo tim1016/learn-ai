@@ -198,6 +198,7 @@ describe('DualPaneChartComponent', () => {
       headline: 'Chart feed interrupted',
       explanation: "The chart's IBKR bar line failed and is being retried.",
       next_step: 'Do not read the chart as current.',
+      show_notice: true,
       attention_required: true,
       last_bar_at_ms: 1_777_905_300_000,
       last_error: 'IBKRBarSubscriptionStalled: no bar for 60s',
@@ -212,10 +213,10 @@ describe('DualPaneChartComponent', () => {
       expect(within(notice).getByText(ERRORED_FEED.explanation)).toBeTruthy();
       expect(within(notice).getByText('Do not read the chart as current.')).toBeTruthy();
       expect(within(notice).getByText('IBKRBarSubscriptionStalled: no bar for 60s')).toBeTruthy();
-      expect(within(notice).getByText(
-        formatTimestampDisplay(1_777_905_300_000, { mode: 'local' }),
-        { exact: false },
-      )).toBeTruthy();
+      // The last-bar time sits outside the alert, so a refresh never re-announces it.
+      const lastBar = formatTimestampDisplay(1_777_905_300_000, { mode: 'local' });
+      expect(within(notice).queryByText(lastBar, { exact: false })).toBeNull();
+      expect(screen.getByTestId('live-feed-last-bar').textContent).toContain(lastBar);
       expect(screen.queryByText('Refreshes every 5s')).toBeNull();
       expect(screen.getByText('Errored')).toBeTruthy();
       expect(container.querySelector('.source-tab--feed-down')).not.toBeNull();
@@ -237,12 +238,30 @@ describe('DualPaneChartComponent', () => {
           symbol: 'SPY',
           liveBars: [],
           histBars: [],
-          liveFeed: fakeChartFeed({ state: 'STARTING', headline: 'Chart feed starting' }),
+          liveFeed: fakeChartFeed({
+            state: 'STARTING',
+            headline: 'Chart feed starting',
+            show_notice: true,
+          }),
         },
       });
 
       expect(screen.getByRole('status', { name: 'Chart feed starting' })).toBeTruthy();
       expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('shows a notice only when the backend says so, whatever the state', async () => {
+      await render(DualPaneChartComponent, {
+        inputs: {
+          symbol: 'SPY',
+          liveBars: [],
+          histBars: [],
+          liveFeed: fakeChartFeed({ state: 'STARTING', headline: 'Chart feed starting' }),
+        },
+      });
+
+      expect(screen.queryByRole('status', { name: 'Chart feed starting' })).toBeNull();
+      expect(screen.getByText('Refreshes every 5s')).toBeTruthy();
     });
   });
 

@@ -157,16 +157,17 @@
             @if (feed.next_step; as nextStep) {
               <span>{{ nextStep }}</span>
             }
-            @if (feed.last_bar_at_ms !== null) {
-              <span class="feed-notice__meta">
-                Last chart bar
-                <app-timestamp-display [value]="feed.last_bar_at_ms" [mode]="timeZone()" />
-              </span>
-            }
             @if (feed.last_error; as lastError) {
               <code class="feed-notice__meta">{{ lastError }}</code>
             }
           </section>
+          <!-- Outside the alert, so a refreshed timestamp never re-announces it. -->
+          @if (feed.last_bar_at_ms !== null) {
+            <div class="feed-notice__meta feed-notice__last-bar" data-testid="live-feed-last-bar">
+              Last chart bar
+              <app-timestamp-display [value]="feed.last_bar_at_ms" [mode]="timeZone()" />
+            </div>
+          }
         }
         @for (notice of liveNotices(); track notice.code) {
           <div class="overlay-notice" role="status" aria-live="polite">

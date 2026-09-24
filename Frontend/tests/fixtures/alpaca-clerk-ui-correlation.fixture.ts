@@ -227,6 +227,7 @@ export function snapshotAtRevision(
         headline: 'Chart feed live',
         explanation: "The chart's IBKR bar line is delivering bars within its expected cadence.",
         next_step: null,
+        show_notice: false,
         attention_required: false,
         last_bar_at_ms: null,
         last_error: null,

@@ -12,10 +12,11 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
+from app.broker.ibkr.bars import REALTIME_BAR_STALL_TIMEOUT_S
 from app.data_lake.polygon_fetcher import (
     PolygonBar,
     PolygonFetchError,
@@ -23,6 +24,7 @@ from app.data_lake.polygon_fetcher import (
 )
 from app.lean_sidecar.trading_calendar import (
     SessionWindow,
+    current_trading_session_window,
     session_state_at_ms,
     session_windows_ms_utc,
 )
@@ -32,6 +34,9 @@ from app.services.polygon_notice_classifier import (
     classify_polygon_exception,
     missing_polygon_api_key_notice,
 )
+
+if TYPE_CHECKING:
+    from app.services.live_bar_aggregator import LiveLineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,7 @@ TIMEFRAME_MS: dict[ChartTimeframe, int] = {
 CHART_TIMEFRAME_BY_VALUE: dict[str, ChartTimeframe] = {value: value for value in TIMEFRAME_MS}
 _NY_TZ = ZoneInfo("America/New_York")
 _POLYGON_OVERLAY_CACHE_MAX = 128
+_REALTIME_BAR_STALL_TIMEOUT_MS = int(REALTIME_BAR_STALL_TIMEOUT_S * 1000)
 _POLYGON_OVERLAY_CACHE: OrderedDict[tuple[str, date, int], list[PolygonBar]] = OrderedDict()
 
 
@@ -66,9 +72,9 @@ class LiveChartAggregator(Protocol):
 
     def snapshot_5s(self, symbol: str) -> list[IbkrMinuteBar]: ...
 
-    def status(self, symbol: str) -> tuple[str, str | None, int | None]: ...
+    def status(self, symbol: str) -> LiveLineStatus: ...
 
-    def status_5s(self, symbol: str) -> tuple[str, str | None, int | None]: ...
+    def status_5s(self, symbol: str) -> LiveLineStatus: ...
 
 
 @dataclass(frozen=True)
@@ -478,31 +484,57 @@ def _chart_feed_status(
 ) -> ChartFeedStatus:
     """Classify the chart's own bar line from the aggregator's status (#2355).
 
-    A pump error is sticky on the aggregator until the next bar arrives, so an
-    ``errored`` line reads ``ERRORED`` through every restart that has not yet
-    delivered. A ``streaming`` line whose newest bar is older than the
-    resolution's freshness budget is ``STALLED`` (the IBKR stall watchdog only
-    errors the line later).
+    Only what happened since today's session open counts. An ``errored`` or
+    ``resubscribing`` status written before the open (the Gateway's nightly
+    restart, an overnight reconnect) and a last bar from yesterday are
+    leftovers, not current faults, so at the open the line reads ``STARTING``
+    rather than an alarm.
+
+    * A failure written since the open: ``ERRORED`` (the pump error is sticky
+      until the next bar) or ``RECOVERING`` (resubscribing after a reconnect).
+    * A ``streaming`` line with a bar since the open: ``LIVE`` while that bar
+      is within the resolution's freshness budget, else ``STALLED``.
+    * Otherwise the line is waiting for its first bar of the session:
+      ``STARTING``, bounded by the IBKR stall timeout plus the freshness budget
+      from the later of the open and the subscribe. Past that, ``STALLED``:
+      a line whose contract qualification never returns is otherwise never
+      errored by the stall watchdog, which only starts once the request is sent.
     """
     threshold_ms = 30_000 if resolution == "5s" else 180_000
     if from_ms > now_ms or to_ms < now_ms - threshold_ms:
         return CHART_FEED_NOT_EXPECTED
-    if session_state_at_ms(now_ms) != "RTH_OPEN":
+    session = current_trading_session_window(now_ms)
+    if session is None or session_state_at_ms(now_ms) != "RTH_OPEN":
         return CHART_FEED_NOT_EXPECTED
-    status, last_error, last_bar_ms = (
+    line = (
         live_aggregator.status_5s(symbol)
         if resolution == "5s"
         else live_aggregator.status(symbol)
     )
-    if status == "errored":
-        return ChartFeedStatus(state="ERRORED", last_bar_ms=last_bar_ms, last_error=last_error)
-    if status == "resubscribing":
-        return ChartFeedStatus(state="RECOVERING", last_bar_ms=last_bar_ms)
-    if status != "streaming":
-        return ChartFeedStatus(state="STARTING", last_bar_ms=last_bar_ms)
-    if last_bar_ms is None or now_ms - int(last_bar_ms) > threshold_ms:
-        return ChartFeedStatus(state="STALLED", last_bar_ms=last_bar_ms)
-    return ChartFeedStatus(state="LIVE", last_bar_ms=last_bar_ms)
+    open_ms = session.open_ms_utc
+    # Only a status written, or a bar drawn, since the open is today's fact.
+    changed_since_open_ms = _since(line.status_changed_at_ms, open_ms)
+    bar_since_open_ms = _since(line.last_bar_ms, open_ms)
+    if line.status == "errored" and changed_since_open_ms is not None:
+        return ChartFeedStatus(
+            state="ERRORED", last_bar_ms=line.last_bar_ms, last_error=line.last_error
+        )
+    if line.status == "resubscribing" and changed_since_open_ms is not None:
+        return ChartFeedStatus(state="RECOVERING", last_bar_ms=line.last_bar_ms)
+    if line.status == "streaming" and bar_since_open_ms is not None:
+        fresh = now_ms - bar_since_open_ms <= threshold_ms
+        return ChartFeedStatus(state="LIVE" if fresh else "STALLED", last_bar_ms=line.last_bar_ms)
+    waiting_since_ms = max(open_ms, bar_since_open_ms or open_ms, changed_since_open_ms or open_ms)
+    first_bar_budget_ms = _REALTIME_BAR_STALL_TIMEOUT_MS + threshold_ms
+    return ChartFeedStatus(
+        state="STARTING" if now_ms - waiting_since_ms <= first_bar_budget_ms else "STALLED",
+        last_bar_ms=line.last_bar_ms,
+    )
+
+
+def _since(ms: int | None, open_ms: int) -> int | None:
+    """``ms`` when it falls in today's session (at or after ``open_ms``), else ``None``."""
+    return ms if ms is not None and ms >= open_ms else None
 
 
 def _expected_minute_starts(window: SessionWindow, from_ms: int, to_ms: int) -> set[int]:

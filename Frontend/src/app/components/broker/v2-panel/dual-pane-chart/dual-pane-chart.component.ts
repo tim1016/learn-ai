@@ -331,10 +331,10 @@ export class DualPaneChartComponent implements AfterViewInit {
     () => this.historyFailed() || this.historyUnavailableNotice() !== null,
   );
 
-  /** A chart-line state worth a notice: anything but delivering or not due. */
+  /** The chart line's notice, when the backend says it has one to show. */
   protected readonly liveFeedNotice = computed<ChartFeedView | null>(() => {
     const feed = this.liveFeed();
-    return feed !== null && feed.state !== 'LIVE' && feed.state !== 'NOT_EXPECTED' ? feed : null;
+    return feed?.show_notice ? feed : null;
   });
   protected readonly liveFeedDown = computed(() => this.liveFeed()?.attention_required === true);
 

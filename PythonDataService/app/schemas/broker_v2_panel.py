@@ -971,9 +971,12 @@ class ChartFeedView(BaseModel):
     feed that ``MarketPulseView`` describes, so a chart that stopped drawing
     says so here instead of freezing silently under a live headline.
     ``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;
-    ``STARTING`` is the first subscription before its first bar; ``STALLED``,
-    ``ERRORED`` and ``RECOVERING`` are a line that is not delivering.
-    ``last_error`` is the aggregator's diagnostic, shown verbatim.
+    ``STARTING`` is the line waiting for its first bar of the session;
+    ``STALLED``, ``ERRORED`` and ``RECOVERING`` are a line that is not
+    delivering. ``show_notice`` says whether the chart shows this state at all
+    and ``attention_required`` whether it is an alarm; the client keeps no
+    state list of its own. ``last_error`` is the aggregator's diagnostic,
+    shown verbatim.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -982,6 +985,7 @@ class ChartFeedView(BaseModel):
     headline: str
     explanation: str
     next_step: str | None
+    show_notice: bool
     attention_required: bool
     last_bar_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     last_error: str | None

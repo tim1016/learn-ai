@@ -14,13 +14,16 @@ import type {
 
 const OBSERVED_AT_MS = 1_700_000_001_000;
 
-/** A `ChartLiveResponse.feed` (#2355): quiet (`LIVE`) unless a spec is about the chart line. */
+/** A `ChartLiveResponse.feed` (#2355): quiet (`LIVE`) unless a spec is about the chart line.
+ * An override that changes `state` also sets `show_notice` / `attention_required`:
+ * the backend owns that policy and the client reads it as given. */
 export function fakeChartFeed(overrides: Partial<ChartFeedView> = {}): ChartFeedView {
   return {
     state: 'LIVE',
     headline: 'Chart feed live',
     explanation: "The chart's IBKR bar line is delivering bars within its expected cadence.",
     next_step: null,
+    show_notice: false,
     attention_required: false,
     last_bar_at_ms: null,
     last_error: null,

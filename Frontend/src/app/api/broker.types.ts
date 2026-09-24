@@ -10499,9 +10499,12 @@ export interface components {
          *     feed that ``MarketPulseView`` describes, so a chart that stopped drawing
          *     says so here instead of freezing silently under a live headline.
          *     ``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;
-         *     ``STARTING`` is the first subscription before its first bar; ``STALLED``,
-         *     ``ERRORED`` and ``RECOVERING`` are a line that is not delivering.
-         *     ``last_error`` is the aggregator's diagnostic, shown verbatim.
+         *     ``STARTING`` is the line waiting for its first bar of the session;
+         *     ``STALLED``, ``ERRORED`` and ``RECOVERING`` are a line that is not
+         *     delivering. ``show_notice`` says whether the chart shows this state at all
+         *     and ``attention_required`` whether it is an alarm; the client keeps no
+         *     state list of its own. ``last_error`` is the aggregator's diagnostic,
+         *     shown verbatim.
          */
         ChartFeedView: {
             /** Attention Required */
@@ -10516,6 +10519,8 @@ export interface components {
             last_error: string | null;
             /** Next Step */
             next_step: string | null;
+            /** Show Notice */
+            show_notice: boolean;
             /**
              * State
              * @enum {string}

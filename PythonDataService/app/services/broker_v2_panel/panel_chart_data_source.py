@@ -24,7 +24,6 @@ from app.services.broker_v2_panel.chart_projection_service import (
     live_window,
 )
 from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
-from app.services.broker_v2_panel.market_pulse import qualify_pulse_for_chart_feed
 from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
 from app.services.broker_v2_panel.panel_errors import (
     PanelDataError,
@@ -185,11 +184,6 @@ async def get_live_snapshot_parts(
         resolution=resolution,
         now_ms=observed_at_ms,
     )
-    # The snapshot carries the panel and the chart together, so its headline
-    # must not call market data live beside a chart whose own line is down.
-    qualified_pulse = qualify_pulse_for_chart_feed(panel.market_pulse, chart.feed)
-    if qualified_pulse is not panel.market_pulse:
-        panel = panel.model_copy(update={"market_pulse": qualified_pulse})
     return panel, chart
 
 

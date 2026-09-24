@@ -834,12 +834,7 @@ describe('BotPanelShellComponent', () => {
       const chartDown: BotPanelLiveSnapshot = {
         ...liveSnapshot({
           ...PANEL,
-          market_pulse: {
-            ...PANEL.market_pulse,
-            headline: 'Bot market data live; chart feed not live',
-            explanation: "The bot's feed is delivering bars; the chart's own IBKR bar line is not.",
-            attention_required: true,
-          },
+          market_pulse: { ...PANEL.market_pulse, headline: 'Bot market data live' },
         }),
         live_chart: {
           ...LIVE_CHART,
@@ -848,6 +843,7 @@ describe('BotPanelShellComponent', () => {
             headline: 'Chart feed stalled',
             explanation: "The chart's IBKR bar line has not delivered a bar within its expected cadence.",
             next_step: 'Do not read the chart as current.',
+            show_notice: true,
             attention_required: true,
             last_bar_at_ms: 1_753_800_000_000,
           }),
@@ -864,8 +860,8 @@ describe('BotPanelShellComponent', () => {
 
       const notice = screen.getByRole('alert', { name: 'Chart feed stalled' });
       expect(within(notice).getByText('Do not read the chart as current.')).toBeTruthy();
-      expect(screen.getByText('Bot market data live; chart feed not live')).toBeTruthy();
-      expect(screen.queryByText('Market data live')).toBeNull();
+      // The headline speaks for the bot's own line; the chart speaks for its own.
+      expect(screen.getByText('Bot market data live')).toBeTruthy();
       expect(screen.queryByRole('alert', { name: 'The live panel stopped updating.' })).toBeNull();
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(false);
     });

@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.broker_capability import SessionDataCapability
-from app.schemas.broker_v2_panel import ChartFeedView, MarketPulseView
+from app.schemas.broker_v2_panel import MarketPulseView
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_admission_fact
 from app.services.market_data_capability_service import extended_phase_proven_at_ms
@@ -97,7 +97,7 @@ def build_market_pulse(
     )
     # The Market badge (market_state) renders right beside `headline` in the
     # V2 header (panel-header.component.html) — reporting the raw "CLOSED"
-    # liveness value here while the headline below says "Market data live"
+    # liveness value here while the headline below says "Bot market data live"
     # would show operators a self-contradictory panel during every proven
     # extended-hours session. TRADABLE is what the exemption actually
     # concluded, so the badge must say what the headline says.
@@ -156,8 +156,13 @@ def build_market_pulse(
         next_step = None
         attention_required = False
     elif feed_state == "LIVE":
-        headline = "Market data live"
-        explanation = "The feed is connected and delivering data within its expected cadence."
+        # Scoped to the bot's own line: the LIVE chart runs a separate IBKR
+        # bar line and reports its own state on the chart (#2355).
+        headline = "Bot market data live"
+        explanation = (
+            "The bot's feed is connected and delivering data within its expected "
+            "cadence. The chart reports its own bar line separately."
+        )
         next_step = None
         attention_required = False
     elif feed_state == "IDLE":
@@ -202,31 +207,3 @@ def build_market_pulse(
         observed_at_ms=fact.observed_at_ms,
     )
 
-
-def qualify_pulse_for_chart_feed(pulse: MarketPulseView, chart_feed: ChartFeedView) -> MarketPulseView:
-    """Stop a live headline from vouching for a chart line that is down (#2355).
-
-    ``pulse`` describes the bot's own feed, the fact Start admission consumes;
-    the LIVE chart runs a separate IBKR bar line. When the bot's feed is live
-    and nothing else needs attention, the headline would otherwise say "Market
-    data live" beside a frozen chart. The typed ``feed_state`` stays the bot
-    feed's (admission reads the same fact); only the operator copy and the
-    attention flag change. A pulse already requiring attention keeps its own,
-    stronger headline, and the chart's notice still renders on the chart.
-    """
-    if not chart_feed.attention_required:
-        return pulse
-    if pulse.attention_required or pulse.feed_state != "LIVE":
-        return pulse
-    return pulse.model_copy(
-        update={
-            "headline": "Bot market data live; chart feed not live",
-            "explanation": (
-                "The bot's feed is delivering bars within its expected cadence, "
-                "but the chart draws from its own IBKR bar line, which is not. "
-                f"{chart_feed.explanation}"
-            ),
-            "next_step": chart_feed.next_step,
-            "attention_required": True,
-        }
-    )

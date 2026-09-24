@@ -320,6 +320,11 @@
   font-size: var(--fs-xxs);
 }
 
+.feed-notice__last-bar {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
 .overlay-notice {
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(255, 152, 0, 0.2);

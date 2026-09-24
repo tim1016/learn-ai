@@ -7198,7 +7198,7 @@
       },
       "ChartFeedView": {
         "additionalProperties": false,
-        "description": "The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).\n\nThe chart runs its own ``reqRealTimeBars`` line, separate from the bot's\nfeed that ``MarketPulseView`` describes, so a chart that stopped drawing\nsays so here instead of freezing silently under a live headline.\n``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;\n``STARTING`` is the first subscription before its first bar; ``STALLED``,\n``ERRORED`` and ``RECOVERING`` are a line that is not delivering.\n``last_error`` is the aggregator's diagnostic, shown verbatim.",
+        "description": "The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).\n\nThe chart runs its own ``reqRealTimeBars`` line, separate from the bot's\nfeed that ``MarketPulseView`` describes, so a chart that stopped drawing\nsays so here instead of freezing silently under a live headline.\n``LIVE`` and ``NOT_EXPECTED`` (no live bar due now) are the quiet states;\n``STARTING`` is the line waiting for its first bar of the session;\n``STALLED``, ``ERRORED`` and ``RECOVERING`` are a line that is not\ndelivering. ``show_notice`` says whether the chart shows this state at all\nand ``attention_required`` whether it is an alarm; the client keeps no\nstate list of its own. ``last_error`` is the aggregator's diagnostic,\nshown verbatim.",
         "properties": {
           "attention_required": {
             "title": "Attention Required",
@@ -7247,6 +7247,10 @@
             ],
             "title": "Next Step"
           },
+          "show_notice": {
+            "title": "Show Notice",
+            "type": "boolean"
+          },
           "state": {
             "enum": [
               "LIVE",
@@ -7265,6 +7269,7 @@
           "headline",
           "explanation",
           "next_step",
+          "show_notice",
           "attention_required",
           "last_bar_at_ms",
           "last_error"
