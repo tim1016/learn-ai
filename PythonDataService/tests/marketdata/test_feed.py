@@ -18,6 +18,8 @@ The tests use a fake bar source so no real IBKR connection is needed.
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
+from datetime import datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -28,6 +30,7 @@ import pytest
 from httpx import ASGITransport
 
 from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.broker.ibkr import bars as bars_module
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -39,7 +42,12 @@ from app.marketdata.feed import (
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
 from app.services.decision_session import RunDecisionSession
-from tests._helpers.ibkr_feed_adversarial import NeverFirstBarFeedFixture
+from tests._helpers.ibkr_feed_adversarial import (
+    RTH_MINUTE,
+    NeverFirstBarFeedFixture,
+    ScriptedLinesFeedFixture,
+    raw_minute,
+)
 
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
@@ -899,3 +907,78 @@ async def test_stream_bars_accepts_continuity_none_and_behaves_as_before(
     observed = await anext(feed.stream_bars("SPY", continuity=None))
 
     assert observed.start_ms == bar.start_ms
+
+
+# -- #2364: the policy-less path never delivers a short minute as complete --
+
+
+def _ms(instant: datetime) -> int:
+    return int(instant.timestamp() * 1000)
+
+
+def _scripted_legacy_feed(monkeypatch: pytest.MonkeyPatch, *plans: tuple) -> tuple[IbkrMarketDataFeed, Any]:
+    """The real feed and bar stream on scripted IBKR lines; transport and clocks faked."""
+    monkeypatch.setattr(bars_module, "_REALTIME_BAR_SUBSCRIPTIONS", bars_module._RealtimeBarSubscriptionRegistry())
+    fixture = ScriptedLinesFeedFixture(*plans)
+    fixture.install(monkeypatch)
+    return IbkrMarketDataFeed(fixture.client), fixture
+
+
+@pytest.mark.asyncio
+async def test_legacy_stall_replacement_never_delivers_the_short_first_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2301 G-4: the replacement line joins 10:30 at :40 and holds 4 of its 12 prints.
+
+    The first line's six contributions go with its per-attempt assembler, so the
+    replacement's first minute is short by construction. It used to be
+    delivered as plain ``realtime``; it is omitted, and the first bar the
+    consumer sees is the first whole minute.
+    """
+    feed, fixture = _scripted_legacy_feed(
+        monkeypatch,
+        raw_minute(RTH_MINUTE, range(0, 30, 5)),
+        raw_minute(RTH_MINUTE, (40, 45, 50, 55))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=1), range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=2), (0,)),
+    )
+    stream = feed.stream_bars("SPY")
+    pending = asyncio.create_task(anext(stream))
+    await fixture.wait_until_subscribed(1)
+    # The fixture's monotonic clock is the event loop's too: advancing it is
+    # what lets the line's stall timer fire, not a real sixty-second wait.
+    fixture.clock.advance_ms(60_001)
+
+    first = await asyncio.wait_for(pending, timeout=2)
+    await stream.aclose()
+
+    assert fixture.subscription_count == 2
+    assert (first.start_ms, first.volume) == (_ms(RTH_MINUTE) + 60_000, 120)
+
+
+@pytest.mark.asyncio
+async def test_legacy_short_rth_minute_on_a_connected_line_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2364: with no continuity policy a 6/12 regular-session minute is fatal, not delivered."""
+    feed, _fixture = _scripted_legacy_feed(
+        monkeypatch,
+        raw_minute(RTH_MINUTE, range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=1), (0, 5, 10, 15, 50, 55))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=2), range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=3), (0,)),
+    )
+    delivered: list[MarketDataBar] = []
+
+    async def _drain() -> None:
+        async with aclosing(feed.stream_bars("SPY")) as bars:
+            async for bar in bars:
+                delivered.append(bar)
+                if len(delivered) == 3:
+                    return
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await asyncio.wait_for(_drain(), timeout=2)
+
+    assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
+    assert excinfo.value.reason == "MINUTE_INCOMPLETE"

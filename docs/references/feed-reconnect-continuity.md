@@ -121,7 +121,8 @@ A continuity refusal always finalizes the run `FEED_DEATH`; the typed reason bel
 | Reason | Meaning |
 |---|---|
 | `DECISION_BAR_MISSED` | The socket was not healthy again by `next_trigger_ms(L) + delivery_allowance_ms`; the decision bar can no longer arrive in time. Raised from the wait (`app/marketdata/ibkr_continuity.py`). |
-| `SUBSTITUTION_NOT_AUTHORIZED` | The grant author refused: no authorization artifact, or one that is expired, revoked, or keyed to a different provider contract / instrument / program seal / decision session. **Every** in-session unresolvable minute takes this path in this build, because the shipped author refuses unconditionally. |
+| `SUBSTITUTION_NOT_AUTHORIZED` | The grant author refused: no authorization artifact, or one that is expired, revoked, or keyed to a different provider contract / instrument / program seal / decision session. **Every** in-session unresolvable minute an interruption touched or swallowed takes this path in this build, because the shipped author refuses unconditionally. |
+| `MINUTE_INCOMPLETE` | A regular-session minute no interruption touched held fewer than `RTH_CONTRIBUTIONS_PER_MINUTE` (12) contributions — a sub-60 s silence on a connected line (#2364). `MinuteAssembler.completeness` classifies it `unprovable`; the continuity path refuses it without asking the grant author (it is not an interruption episode), and the policy-less path ends the stream with the same code. The minute is RTH by the phase the assembler stamped from the canonical calendar, so a half-day's 12:59 owes twelve and its 13:00 owes none. |
 | `SUBSTITUTION_PATH_UNAVAILABLE` | A `SubstitutionGrant` was issued and the feed refused it anyway, because no historical-substitution path exists in this build. Fail-closed backstop (ADR 0053 §4, ruling R3); logged at error level, never a fetch. |
 | `SUBSTITUTION_SHAPE_UNPROVEN` | Declared on the port's `SubstitutionRefusal` for the window shape the authorization has not proved (longer than the proven maximum, or a second episode in the same decision session). **No code path produces it in this build**; it exists so the port type does not change when the authorization producer lands. |
 | `SUBSTITUTION_WARMUP_TAINTED` | Declared for a run whose retained replay already contains a substitute. **No code path produces it in this build** (same reason as above). |
@@ -138,7 +139,7 @@ evidence and a run that dies has already said why.
 |---|---|
 | `interruption` | Delivery stopped — socket down, 1100 soft loss, stall, or a fenced generation. Written before the feed enters the wait, carrying the anchored `deadline_ms` that wait will enforce. |
 | `recovered` | Live delivery resumed on a new connection generation. Written before the first post-recovery bar is yielded; its ref is stamped on that bar. |
-| `gap` | A window of minutes the live stream never delivered and nothing will fill — an unresolvable minute outside the decision session. Written before the bar that follows the omitted window. |
+| `gap` | A window of minutes the live stream never delivered and nothing will fill — an unresolvable minute outside the decision session (no `cause`), or the minute the stream joined partway through (`cause="stream_joined"`, which may fall inside the decision session; #2364). Written before the bar that follows the omitted window. |
 | `substituted` | A gap window was backfilled under a `SubstitutionGrant`. Unreachable in this build; the kind exists so the ledger schema and the receipt digest do not change when substitution lands. |
 | `refused` | A continuity rule refused, with the typed reason above, its window and its deadline. Written before the terminal `MarketDataFeedError` is raised. |
 

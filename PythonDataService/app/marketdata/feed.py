@@ -174,6 +174,12 @@ ContinuityEventKind = Literal["interruption", "recovered", "gap", "substituted",
 InterruptionCause = Literal["socket_down", "soft_loss_1100", "data_lost_1101", "stall", "generation_changed"]
 """Why delivery stopped, in the vocabulary the broker boundary can prove."""
 
+GapCause = Literal["stream_joined"]
+"""Why a ``gap`` was recorded, when it is not an unresolvable window outside the
+decision session (which carries no cause). ``stream_joined`` is the minute the
+stream joined partway through: short by construction, omitted rather than
+decided on, and possibly inside the decision session (#2364)."""
+
 DecisionSession = Literal["rth", "extended"]
 """Which minutes the consumer's decision clock treats as decidable: the
 calendar's regular session, or the executing broker's declared extended
@@ -194,7 +200,13 @@ class FeedContinuityEvent(BaseModel):
     feed_id: str
     symbol: str
     observed_at_ms: int = Field(..., description="Wall-clock at which the fact was observed, int64 ms UTC.")
-    cause: InterruptionCause | None = None
+    cause: InterruptionCause | GapCause | None = Field(
+        default=None,
+        description=(
+            "Why delivery stopped, on an ``interruption``; on a ``gap``, what omitted the "
+            "window when it was not an unresolvable window outside the decision session."
+        ),
+    )
     generation_from: int | None = None
     generation_to: int | None = None
     window_start_ms: int | None = None
