@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolView,
     redrive_or_escalate_stale_exits,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
 )
@@ -962,9 +962,22 @@ def _finalize_reconciliation_verdict(
         attributed_positions=repo.attributed_positions_by_symbol(),
         known_order_refs=frozenset(repo.all_order_refs()),
     )
-    for foreign_order in plan.foreign_orders:
-        observe_external_order(repo, order=foreign_order)
-    _sync_unexplained_order_hold(repo, plan.foreign_orders)
+    # An order no external row can state is contained under its own entry
+    # fence (#2363) and kept out of the unexplained-order hold: that hold is
+    # released by acknowledging an external row this order can never have.
+    unfoldable_order_ids = {
+        foreign_order.order_id
+        for foreign_order in plan.foreign_orders
+        if observe_or_record_unfoldable(repo, order=foreign_order) == "unfoldable"
+    }
+    _sync_unexplained_order_hold(
+        repo,
+        tuple(
+            foreign_order
+            for foreign_order in plan.foreign_orders
+            if foreign_order.order_id not in unfoldable_order_ids
+        ),
+    )
     _sync_position_drift(
         repo,
         drifted_symbols=plan.drifted_symbols,

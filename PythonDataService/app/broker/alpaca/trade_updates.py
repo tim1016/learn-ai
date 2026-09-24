@@ -685,17 +685,8 @@ class TradeUpdatesConsumer:
         if kind == "unexplained_order":
             self._counters.unexplained += 1
         elif kind == "unfoldable_order":
+            # Logged by the recorder with its reason; counted here.
             self._counters.unfoldable_orders += 1
-            logger.warning(
-                "alpaca trade_updates set aside an order the Clerk could not fold",
-                extra={
-                    "action": "trade_updates_order_unfoldable",
-                    "event": event.event_type,
-                    "event_key": key,
-                    "order_id": order_id,
-                    "client_order_id": client_order_id,
-                },
-            )
         else:
             self._counters.events_applied += 1
         # Mark the order finalized (owned or not) so a later re-observation of

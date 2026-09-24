@@ -274,6 +274,30 @@ def _resolve_account_uncertainty(
     )
 
 
+# Causes an operator review ends. Each is a condition no broker proof can
+# clear (the order itself can never fold), so the review is its only exit.
+_OPERATOR_ACKNOWLEDGEABLE_REASONS = frozenset({UNFOLDABLE_BROKER_ORDER_REASON_CODE})
+
+
+def resolve_operator_acknowledged_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    reason_code: str,
+    summary_code: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Resolve an account episode whose registered exit is an operator review."""
+    if reason_code not in _OPERATOR_ACKNOWLEDGEABLE_REASONS:
+        raise ValueError(f"{reason_code!r} is not resolved by operator acknowledgement")
+    return _resolve_account_uncertainty(
+        repo,
+        reason_code=reason_code,
+        resolution_kind="OPERATOR_ACKNOWLEDGED",
+        summary_code=summary_code,
+        evidence_refs=evidence_refs,
+    )
+
+
 def resolve_reconciliation_uncertainty(
     repo: ClerkSqliteRepository,
     *,

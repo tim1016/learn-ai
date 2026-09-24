@@ -95,6 +95,13 @@ class ReasonPolicy:
     cause_is_valid: Callable[[Any], bool]
     age: AgePolicy
     facts_schema_version: int = FACTS_SCHEMA_VERSION
+    # Whether an active episode leaves the safe-flatten recovery available.
+    # Distinct from ``allows_reduction``: POSITION_DRIFT and the loss hold
+    # admit a proven REDUCE, yet a flatten plan built from attributed
+    # quantities must still refuse under them. Set only for causes a flatten
+    # exists to clear (a stuck/not-flat EXIT) or that say nothing about any
+    # attributed quantity (an unfoldable foreign order, #2363).
+    admits_safe_flatten: bool = False
 
 
 def _position_drift_cause_is_valid(value: Any) -> bool:
@@ -204,6 +211,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
         # Byte-identical replacement of the former
         # EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000 / EXIT_NOT_FLAT_MAX_REDRIVES
@@ -214,6 +222,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_exit_stuck_cause_is_valid,
         # A durable escalation must not carry a clock: only an
         # attributed-flat proof or an operator may end it. VoidAfter here
@@ -245,17 +254,18 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=_unexplained_order_cause_is_valid,
         age=CauseCleared(),
     ),
-    # #2363: a broker order the trade-update fold cannot state truthfully.
-    # The episode is the durable record that names it; it gates nothing.
-    # Blocking entries account-wide would have no release path (the order
-    # can never fold), and refusing reductions is exactly the account-wide
-    # exit freeze the containment exists to end. Any position effect the
-    # order had is still caught per symbol by the reconciliation sweep's
-    # POSITION_DRIFT, which is the fence scoped to what it actually taints.
+    # #2363: a broker order the Clerk cannot state truthfully (e.g. a
+    # multi-leg parent with a null side). Like the unexplained-order hold it
+    # fences new exposure account-wide until an operator acknowledges each
+    # named order (``acknowledge_unfoldable_broker_order``). Unlike that hold
+    # it admits reductions: refusing them is the account-wide exit freeze the
+    # containment exists to end, and any position effect the order had is
+    # still fenced per symbol by the reconciliation sweep's POSITION_DRIFT.
     UNFOLDABLE_BROKER_ORDER_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
-        blocks_new_exposure=False,
+        blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_unfoldable_broker_order_cause_is_valid,
         age=CauseCleared(),
     ),

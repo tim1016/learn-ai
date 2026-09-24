@@ -18,7 +18,11 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     ExecutionRow,
     SqliteEconomicProjectionReader,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    UnfoldableBrokerOrderAcknowledgement,
+    acknowledge_external_order,
+    acknowledge_unfoldable_broker_order,
+)
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
@@ -243,20 +247,28 @@ def sqlite_acknowledge_external_order(
     account_id: str,
     external_order_id: str,
     operator: str,
-) -> ExternalOrderResource | None:
-    """Acknowledge one external-order observation in the active SQLite authority.
+) -> ExternalOrderResource | UnfoldableBrokerOrderAcknowledgement | None:
+    """Acknowledge one foreign broker order in the active SQLite authority.
 
     ``None`` means SQLite is not the selected authority, allowing the router
     to retain its established no-fallback behavior.  The external-order fold
     owns both the durable acknowledgement and narrowly scoped hold release.
+    An order the Clerk could not record has no external row; the same route
+    reviews it by broker order id and releases only its entry fence (#2363).
     """
     clerk = _active_clerk(account_id)
     if clerk is None:
         return None
     try:
-        return acknowledge_external_order(
+        if clerk.repository.external_order(external_order_id) is not None:
+            return acknowledge_external_order(
+                clerk.repository,
+                external_order_id=external_order_id,
+                operator=operator,
+            )
+        return acknowledge_unfoldable_broker_order(
             clerk.repository,
-            external_order_id=external_order_id,
+            broker_order_id=external_order_id,
             operator=operator,
         )
     except ExternalOrderNotFoundError as exc:

@@ -14,11 +14,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     WEBSOCKET_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import (
-    ExternalOrderObservationError,
-    observe_external_order,
-    record_unfoldable_broker_order,
-)
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
@@ -155,38 +151,14 @@ class SqliteTradeUpdateEvidenceSink:
             if local_order is None and order is not None:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
-                # observation fold raises its own atomic account hold.
-                try:
-                    observe_external_order(
-                        self._repo,
-                        order=order,
-                        proof_reference=event_key,
-                    )
-                except ExternalOrderObservationError as exc:
-                    # Only the fold's refusal to interpret this one record is
-                    # contained (#2363); it is raised before anything is
-                    # appended. Storage and transport errors still propagate.
-                    outcome = record_unfoldable_broker_order(
-                        self._repo,
-                        order=order,
-                        reason=str(exc),
-                        proof_reference=event_key,
-                    )
-                    logger.error(
-                        "alpaca trade update names a broker order the Clerk cannot fold; "
-                        "recorded and set aside",
-                        extra={
-                            "action": "trade_update_order_unfoldable",
-                            "broker_order_id": order.order_id,
-                            "client_order_id": client_order_id,
-                            "symbol": order.symbol,
-                            "reason": str(exc),
-                            "event_key": event_key,
-                            "uncertainty_outcome": outcome,
-                        },
-                    )
-                    return "unfoldable_order"
-                return "unexplained_order"
+                # observation fold raises its own atomic account hold; an
+                # order no row can state is contained to itself (#2363).
+                observed = observe_or_record_unfoldable(
+                    self._repo,
+                    order=order,
+                    proof_reference=event_key,
+                )
+                return "unfoldable_order" if observed == "unfoldable" else "unexplained_order"
 
             if local_order is None or order is None:
                 evidence_refs = tuple(

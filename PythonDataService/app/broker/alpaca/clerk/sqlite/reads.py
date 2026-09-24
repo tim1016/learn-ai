@@ -381,6 +381,70 @@ def external_orders_observed_since(conn: sqlite3.Connection, *, since_ms: int) -
     )
 
 
+UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE = "UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED"
+# Evidence-ref prefixes on the acknowledgement's resolution transition. The
+# prefixes keep the order id and the operator unambiguous in one ref list.
+UNFOLDABLE_ACK_ORDER_REF_PREFIX = "broker_order:"
+UNFOLDABLE_ACK_OPERATOR_REF_PREFIX = "operator:"
+
+
+def unfoldable_broker_order_acknowledgements(
+    conn: sqlite3.Connection,
+) -> dict[str, tuple[str, int]]:
+    """Every operator-acknowledged unfoldable broker order (#2363).
+
+    ``broker_order_id -> (operator, recorded_at_ms)``, first acknowledgement
+    wins. The hash-chained resolution transition is the durable record: an
+    unfoldable order has no ``external_orders`` row to carry the review.
+    """
+    acknowledged: dict[str, tuple[str, int]] = {}
+    for row in conn.execute(
+        "SELECT facts_json, recorded_at_ms FROM custody_transitions "
+        "WHERE transition_kind = 'UNCERTAINTY_RESOLVED' AND summary_code = ? "
+        "ORDER BY sequence",
+        (UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE,),
+    ):
+        refs = json.loads(row["facts_json"])["evidence_refs"]
+        operator = next(
+            ref.removeprefix(UNFOLDABLE_ACK_OPERATOR_REF_PREFIX)
+            for ref in refs
+            if ref.startswith(UNFOLDABLE_ACK_OPERATOR_REF_PREFIX)
+        )
+        for ref in refs:
+            if ref.startswith(UNFOLDABLE_ACK_ORDER_REF_PREFIX):
+                acknowledged.setdefault(
+                    ref.removeprefix(UNFOLDABLE_ACK_ORDER_REF_PREFIX),
+                    (operator, row["recorded_at_ms"]),
+                )
+    return acknowledged
+
+
+def unfoldable_broker_orders_observed_since(
+    conn: sqlite3.Connection, *, reason_code: str, since_ms: int
+) -> int:
+    """How many distinct unfoldable broker orders were first observed at or after ``since_ms``.
+
+    The day-P&L fact's companion to :func:`external_orders_observed_since`:
+    an order the Clerk could not record has no journaled fills either. Read
+    from every raise/refresh of the episode, so an acknowledged (released)
+    order still counts for the day it was seen.
+    """
+    first_seen: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT facts_json FROM custody_transitions "
+        "WHERE transition_kind IN ('UNCERTAINTY_RAISED', 'UNCERTAINTY_REFRESHED') "
+        "AND json_extract(facts_json, '$.reason_code') = ?",
+        (reason_code,),
+    ):
+        for order in json.loads(row["facts_json"])["cause_facts"]["orders"]:
+            broker_order_id = order["broker_order_id"]
+            observed_at_ms = order["observed_at_ms"]
+            first_seen[broker_order_id] = min(
+                observed_at_ms, first_seen.get(broker_order_id, observed_at_ms)
+            )
+    return sum(1 for observed_at_ms in first_seen.values() if observed_at_ms >= since_ms)
+
+
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:
     row = conn.execute(
         f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE command_id = ?",

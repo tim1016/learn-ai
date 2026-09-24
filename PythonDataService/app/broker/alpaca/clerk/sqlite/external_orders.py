@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import math
 import sqlite3
 import threading
@@ -28,13 +29,22 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import TransitionProvenance, raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
+    ExternalOrderNotFoundError,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    TransitionProvenance,
+    raise_uncertainty,
+    resolve_operator_acknowledged_uncertainty,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     UnfoldableBrokerOrder,
     UnfoldableBrokerOrderCause,
 )
 from app.broker.contract.models import BrokerOrder
+
+logger = logging.getLogger(__name__)
 
 
 class ExternalOrderObservationError(ValueError):
@@ -103,6 +113,37 @@ def observe_external_order(
     )
 
 
+def observe_or_record_unfoldable(
+    repo: ClerkSqliteRepository,
+    *,
+    order: BrokerOrder,
+    proof_reference: str | None = None,
+) -> Literal["observed", "unfoldable"]:
+    """The one entrance every path uses to take custody of a foreign order (#2363).
+
+    Both the trade-update sink and the reconciliation verdict call this, so a
+    broker order no ``external_orders`` row can state truthfully (a multi-leg
+    parent with a null ``side``) is contained identically on both: recorded
+    by name under ``UNFOLDABLE_BROKER_ORDER`` and never allowed to raise out
+    of the caller's loop. Only :class:`ExternalOrderObservationError` is
+    contained -- it is raised before anything is appended. Storage and
+    transport errors still propagate.
+    """
+    try:
+        observe_external_order(repo, order=order, proof_reference=proof_reference)
+    except ExternalOrderObservationError as exc:
+        record_unfoldable_broker_order(
+            repo, order=order, reason=str(exc), proof_reference=proof_reference
+        )
+        return "unfoldable"
+    return "observed"
+
+
+# Every order the broker supplied no id for collapses into one entry, so a
+# stream of anonymous poison cannot grow the episode without bound.
+UNIDENTIFIED_BROKER_ORDER_ID = "unidentified-broker-order"
+
+
 def record_unfoldable_broker_order(
     repo: ClerkSqliteRepository,
     *,
@@ -112,67 +153,174 @@ def record_unfoldable_broker_order(
 ) -> str:
     """Durably name one foreign order :func:`observe_external_order` refused (#2363).
 
-    A broker order this fold cannot state truthfully (a multi-leg parent with
-    a null ``side``) must neither be written as a guessed external-order row
-    nor be silently dropped. It joins the one account-scoped
-    ``UNFOLDABLE_BROKER_ORDER`` episode, keyed by broker order id, so the
-    operator sees every such order and its reason. A replay of the same order
-    re-states an identical cause and appends nothing. The episode's policy
-    gates nothing (see ``uncertainty_policies``); the caller keeps folding
-    every other order. Returns :func:`raise_uncertainty`'s outcome.
+    The order joins the one account-scoped ``UNFOLDABLE_BROKER_ORDER``
+    episode, keyed by broker order id: new exposure is fenced account-wide
+    until an operator acknowledges it, reductions stay admitted. An order
+    already in the episode keeps its first entry, so a replay appends
+    nothing. An acknowledged order is never re-fenced, mirroring an
+    acknowledged external-order row. Returns ``"acknowledged"`` for that
+    case, else :func:`raise_uncertainty`'s outcome.
     """
     entry = UnfoldableBrokerOrder(
-        broker_order_id=order.order_id.strip() or f"unidentified:{proof_reference}",
+        broker_order_id=order.order_id.strip() or UNIDENTIFIED_BROKER_ORDER_ID,
         client_order_id=order.client_order_id or None,
         reason=reason,
+        observed_at_ms=order.observed_at_ms,
     )
-    known = {entry.broker_order_id: entry}
+    with repo.unfoldable_order_write_serialized():
+        if entry.broker_order_id in repo.unfoldable_broker_order_acknowledgements():
+            outcome = "acknowledged"
+        else:
+            known = _active_unfoldable_orders(repo)
+            known.setdefault(entry.broker_order_id, entry)
+            outcome = _state_unfoldable_episode(
+                repo,
+                orders=known,
+                provenance=TransitionProvenance(
+                    broker_order_id=entry.broker_order_id,
+                    proof_reference=proof_reference or entry.broker_order_id,
+                    source_event_at_ms=order.observed_at_ms,
+                ),
+            )
+    # Loud when the fence changed; a replay or sweep re-seeing the same order
+    # (every 15 s while it rests) is still logged, at INFO, never dropped.
+    logger.log(
+        logging.ERROR if outcome in ("raised", "refreshed") else logging.INFO,
+        "a broker order the Clerk cannot record was set aside",
+        extra={
+            "action": "unfoldable_broker_order_recorded",
+            "broker_order_id": entry.broker_order_id,
+            "client_order_id": entry.client_order_id,
+            "symbol": order.symbol,
+            "reason": reason,
+            "proof_reference": proof_reference,
+            "uncertainty_outcome": outcome,
+        },
+    )
+    return outcome
+
+
+@dataclass(frozen=True)
+class UnfoldableBrokerOrderAcknowledgement:
+    """The durable operator review of one unfoldable broker order.
+
+    Field names match :class:`ExternalOrderResource`'s acknowledgement so the
+    one external-order acknowledgement route answers both.
+    """
+
+    external_order_id: str
+    acknowledged_at_ms: int
+    ack_operator: str
+
+
+def acknowledge_unfoldable_broker_order(
+    repo: ClerkSqliteRepository,
+    *,
+    broker_order_id: str,
+    operator: str,
+) -> UnfoldableBrokerOrderAcknowledgement:
+    """Release exactly one unfoldable order from the entry fence (#2363).
+
+    The review is recorded as the episode's resolution (hash-chained, naming
+    the order and the operator); any other orders still unreviewed are
+    re-stated as a fresh episode, so the fence stays up until each is
+    reviewed. Acknowledging an already-reviewed order returns that review.
+    Raises :class:`ExternalOrderNotFoundError` for an order the episode
+    never named.
+    """
+    if not broker_order_id:
+        raise ValueError("broker_order_id must be non-empty")
+    if not operator or len(operator) > 64:
+        raise ValueError("operator must be between 1 and 64 characters")
+    with repo.unfoldable_order_write_serialized():
+        prior = repo.unfoldable_broker_order_acknowledgements().get(broker_order_id)
+        if prior is not None:
+            return UnfoldableBrokerOrderAcknowledgement(
+                external_order_id=broker_order_id,
+                acknowledged_at_ms=prior[1],
+                ack_operator=prior[0],
+            )
+        remaining = _active_unfoldable_orders(repo)
+        if remaining.pop(broker_order_id, None) is None:
+            raise ExternalOrderNotFoundError(
+                f"unfoldable broker order {broker_order_id!r} was not found"
+            )
+        resolve_operator_acknowledged_uncertainty(
+            repo,
+            reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+            summary_code=reads.UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE,
+            evidence_refs=(
+                f"{reads.UNFOLDABLE_ACK_ORDER_REF_PREFIX}{broker_order_id}",
+                f"{reads.UNFOLDABLE_ACK_OPERATOR_REF_PREFIX}{operator}",
+            ),
+        )
+        if remaining:
+            _state_unfoldable_episode(repo, orders=remaining, provenance=TransitionProvenance())
+        operator_name, acknowledged_at_ms = repo.unfoldable_broker_order_acknowledgements()[
+            broker_order_id
+        ]
+    return UnfoldableBrokerOrderAcknowledgement(
+        external_order_id=broker_order_id,
+        acknowledged_at_ms=acknowledged_at_ms,
+        ack_operator=operator_name,
+    )
+
+
+def unfoldable_broker_orders_observed_since(repo: ClerkSqliteRepository, *, since_ms: int) -> int:
+    """Distinct unfoldable orders first observed at or after ``since_ms``, released or not."""
+    return repo.unfoldable_broker_orders_observed_since(
+        reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE, since_ms=since_ms
+    )
+
+
+def _active_unfoldable_orders(repo: ClerkSqliteRepository) -> dict[str, UnfoldableBrokerOrder]:
     active = repo.active_uncertainty(
         scope="ACCOUNT_CLERK",
         reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
         strategy_instance_id=None,
     )
-    if active is not None:
-        prior = UnfoldableBrokerOrderCause.from_mapping(
-            UncertaintyRaisedFacts.from_facts_json(active["facts_json"]).cause_facts
-        )
-        known = {prior_order.broker_order_id: prior_order for prior_order in prior.orders} | known
-    cause = UnfoldableBrokerOrderCause(
-        orders=tuple(known[broker_order_id] for broker_order_id in sorted(known))
+    if active is None:
+        return {}
+    cause = UnfoldableBrokerOrderCause.from_mapping(
+        UncertaintyRaisedFacts.from_facts_json(active["facts_json"]).cause_facts
     )
-    named = "; ".join(f"{unfoldable.broker_order_id}: {unfoldable.reason}" for unfoldable in cause.orders)
+    return {order.broker_order_id: order for order in cause.orders}
+
+
+def _state_unfoldable_episode(
+    repo: ClerkSqliteRepository,
+    *,
+    orders: dict[str, UnfoldableBrokerOrder],
+    provenance: TransitionProvenance,
+) -> str:
+    cause = UnfoldableBrokerOrderCause(
+        orders=tuple(orders[broker_order_id] for broker_order_id in sorted(orders))
+    )
+    named = "; ".join(f"{order.broker_order_id}: {order.reason}" for order in cause.orders)
     return raise_uncertainty(
         repo,
         strategy_instance_id=None,
         reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
         headline="A broker order could not be recorded",
         explanation=(
-            f"The Clerk could not record {len(cause.orders)} broker order(s) from the "
-            f"trade-update stream ({named}). Each was set aside so every other order "
-            "keeps folding."
+            f"The Clerk could not record {len(cause.orders)} broker order(s) ({named}). "
+            "Each was set aside so every other order keeps folding, but the Clerk "
+            "cannot prove new exposure would be attributable while one is unreviewed."
         ),
         operator_impact=(
-            "Nothing is paused by this record. Any position change these orders made is "
-            "still checked per symbol by reconciliation."
+            "New entries are paused account-wide. Exits, stuck-exit re-drives and "
+            "cancels still run."
         ),
-        next_step="Inspect each named order at Alpaca and confirm no bot position depends on it.",
-        evidence_refs=tuple(
-            sorted(
-                {
-                    ref
-                    for unfoldable in cause.orders
-                    for ref in (unfoldable.broker_order_id, unfoldable.client_order_id)
-                    if ref is not None
-                }
-            )
+        next_step=(
+            "Inspect each named order at Alpaca, then acknowledge it to release the "
+            "entry pause."
         ),
+        # Broker order ids only: each is exactly what the acknowledgement
+        # route takes. Client order ids stay in the cause and explanation.
+        evidence_refs=tuple(order.broker_order_id for order in cause.orders),
         cause_facts=cause.to_mapping(),
         severity="error",
-        provenance=TransitionProvenance(
-            broker_order_id=entry.broker_order_id,
-            proof_reference=proof_reference or entry.broker_order_id,
-            source_event_at_ms=order.observed_at_ms,
-        ),
+        provenance=provenance,
     )
 
 
@@ -406,12 +554,17 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
 
 
 __all__ = [
+    "UNIDENTIFIED_BROKER_ORDER_ID",
     "ExternalOrderLifecycleState",
     "ExternalOrderObservationError",
     "ExternalOrderPage",
     "InvalidExternalOrderCursor",
     "SqliteExternalOrderReader",
+    "UnfoldableBrokerOrderAcknowledgement",
     "acknowledge_external_order",
+    "acknowledge_unfoldable_broker_order",
     "observe_external_order",
+    "observe_or_record_unfoldable",
     "record_unfoldable_broker_order",
+    "unfoldable_broker_orders_observed_since",
 ]

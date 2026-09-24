@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.external_orders import (
+        UnfoldableBrokerOrderAcknowledgement,
+    )
     from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 
 TransactionFeedState = Literal[
@@ -49,7 +52,7 @@ class ExternalOrderAcknowledgementResponse(BaseModel):
     @classmethod
     def from_external_order(
         cls,
-        resource: ExternalOrderResource,
+        resource: ExternalOrderResource | UnfoldableBrokerOrderAcknowledgement,
     ) -> ExternalOrderAcknowledgementResponse:
         """Adapt a fold-owned acknowledgement without accepting client fields."""
         if resource.acknowledged_at_ms is None or resource.ack_operator is None:

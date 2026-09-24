@@ -12,7 +12,10 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnlAttribution
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    observe_external_order,
+    record_unfoldable_broker_order,
+)
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -256,6 +259,76 @@ async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_
         "ack_operator": "operator-1",
     }
     assert calls == [("PA-TEST", "external-1", "operator-1")]
+
+
+async def test_external_order_acknowledgement_route_releases_an_unfoldable_order(
+    tmp_path: Path,
+) -> None:
+    """#2363: an order no external row can state is reviewed on the same route.
+
+    The real SQLite service dispatches by broker order id; the response keeps
+    the route's one contract, and an id nothing named still 404s.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=_ACCOUNT_NUMBER, artifacts_root=tmp_path)
+    broker = object()
+    record_unfoldable_broker_order(
+        repo,
+        order=BrokerOrder(
+            broker="alpaca",
+            order_id="mleg-parent-1",
+            client_order_id="alpaca-console:mleg-1",
+            symbol="AAPL",
+            asset_class="us_option",
+            side="None",
+            order_type="limit",
+            time_in_force="day",
+            quantity=1.0,
+            filled_quantity=0.0,
+            limit_price=1.25,
+            stop_price=None,
+            filled_avg_price=None,
+            status="new",
+            submitted_at_ms=1_700_000_000_000,
+            created_at_ms=1_700_000_000_000,
+            updated_at_ms=1_700_000_000_000,
+            filled_at_ms=None,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            events=[],
+            observed_at_ms=1_700_000_000_000,
+        ),
+        reason="external order side must be buy or sell",
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            released = await client.post(
+                f"/api/accounts/{_ACCOUNT_NUMBER}/transactions/external-orders/"
+                "mleg-parent-1/acknowledge",
+                json={"operator": "operator-1"},
+            )
+            unknown = await client.post(
+                f"/api/accounts/{_ACCOUNT_NUMBER}/transactions/external-orders/"
+                "never-seen/acknowledge",
+                json={"operator": "operator-1"},
+            )
+        remaining = repo.active_uncertainties()
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert released.status_code == 200, released.text
+    assert released.json()["external_order_id"] == "mleg-parent-1"
+    assert released.json()["ack_operator"] == "operator-1"
+    assert unknown.status_code == 404
+    assert remaining == []
 
 
 async def test_external_order_acknowledgement_rejects_blank_operator(

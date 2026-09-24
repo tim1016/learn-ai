@@ -8,12 +8,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from app.broker.alpaca import adapter
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_unfoldable_broker_order
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
+    ExternalOrderNotFoundError,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     Capability,
@@ -29,6 +36,7 @@ from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
+from app.services.sqlite_clerk_compat import sqlite_clerk_status
 
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
@@ -854,17 +862,16 @@ async def test_gap_replay_contains_an_unfoldable_closed_order_and_keeps_folding_
             strategy_instance_id=None,
         )
         assert episode is not None
-        facts = json.loads(episode["facts_json"])
-        assert facts["cause_facts"] == {
-            "orders": [
-                {
-                    "broker_order_id": "mleg-parent-1",
-                    "client_order_id": "alpaca-console:mleg-1",
-                    "reason": "external order side must be buy or sell",
-                }
-            ]
+        (recorded,) = json.loads(episode["facts_json"])["cause_facts"]["orders"]
+        # The replay re-maps the REST snapshot, so its observation instant is
+        # the consumer's clock; only its presence is pinned here.
+        assert isinstance(recorded.pop("observed_at_ms"), int)
+        assert recorded == {
+            "broker_order_id": "mleg-parent-1",
+            "client_order_id": "alpaca-console:mleg-1",
+            "reason": "external order side must be buy or sell",
         }
-        assert "mleg-parent-1" in json.loads(episode["evidence_refs_json"])
+        assert json.loads(episode["evidence_refs_json"]) == ["mleg-parent-1"]
         # A repeated replay of the same poison does not grow the hash chain.
         appended = repo._conn.execute(
             "SELECT COUNT(*) FROM custody_transitions WHERE transition_kind IN "
@@ -921,9 +928,84 @@ async def test_second_unfoldable_order_joins_the_episode_without_dropping_the_fi
             ("mleg-a", None),
             ("mleg-b", "alpaca-console:x"),
         ]
-        # The record gates nothing: entries are not fenced by it either.
+        # Entries are fenced until each order is acknowledged, one at a time.
+        entry = decide_capability(repo, capability=Capability.NEW_EXPOSURE, subject_id="s")
+        assert entry.allowed is False and entry.reason_code == "UNFOLDABLE_BROKER_ORDER"
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-a", operator="op-1")
+        still = repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="UNFOLDABLE_BROKER_ORDER",
+            strategy_instance_id=None,
+        )
+        assert still is not None and json.loads(still["evidence_refs_json"]) == ["mleg-b"]
         assert decide_capability(
-            repo, capability=Capability.NEW_EXPOSURE, subject_id="any-subject"
+            repo, capability=Capability.NEW_EXPOSURE, subject_id="s"
+        ).allowed is False
+        acknowledged = acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="mleg-b", operator="op-2"
+        )
+        assert acknowledged.ack_operator == "op-2"
+        assert repo.active_uncertainties() == []
+        assert decide_capability(
+            repo, capability=Capability.NEW_EXPOSURE, subject_id="s"
         ).allowed is True
+        # A later replay of a reviewed order never re-fences it, and a repeat
+        # acknowledgement returns the first review.
+        replay = await sink.record_lifecycle_event(
+            client_order_id="alpaca-console:x",
+            event=BrokerOrderEvent(event_type="fill", occurred_at_ms=1, price=None, quantity=None),
+            event_key="mleg-b|fill",
+            order=_owned_order("alpaca-console:x").model_copy(
+                update={"order_id": "mleg-b", "side": "None"}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        assert replay == "unfoldable_order"
+        assert repo.active_uncertainties() == []
+        assert acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="mleg-b", operator="someone-else"
+        ) == acknowledged
+        with pytest.raises(ExternalOrderNotFoundError):
+            acknowledge_unfoldable_broker_order(repo, broker_order_id="never-seen", operator="op")
+    finally:
+        repo.close()
+
+
+async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
+    tmp_path: Path,
+) -> None:
+    """The panel/verdict/posture derivations all read active uncertainties;
+    once the operator reviews the order they must stop reporting it."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+
+    def posture_condition() -> str | None:
+        reader = SqliteClerkProjectionReader.from_repository(repo)
+        try:
+            projection = reader.account_snapshot()
+        finally:
+            reader.close()
+        assert projection is not None
+        posture = sqlite_clerk_status(projection).operator_posture
+        return None if posture is None else posture.condition.id
+
+    try:
+        baseline = posture_condition()
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id="alpaca-console:mleg-1",
+            event=BrokerOrderEvent(event_type="new", occurred_at_ms=1, price=None, quantity=None),
+            event_key="mleg-1|new",
+            order=_owned_order("alpaca-console:mleg-1").model_copy(
+                update={"order_id": "mleg-1", "side": "None"}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        fenced = posture_condition()
+        assert fenced != baseline and fenced is not None and fenced.startswith("alpaca_clerk")
+
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-1", operator="op-1")
+
+        assert posture_condition() == baseline
     finally:
         repo.close()

@@ -237,6 +237,53 @@ describe('AlpacaSqliteCustodyComponent', () => {
       .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
   });
 
+  it('acknowledges an order the Clerk could not record on the external-order route', async () => {
+    const blocked = projection([]);
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue({
+      ...blocked,
+      uncertainties: [{
+        uncertainty_id: 'uncertainty:unfoldable',
+        scope: 'ACCOUNT_CLERK',
+        severity: 'error',
+        blocks_new_exposure: true,
+        allows_reduction: true,
+        custody_owner: 'ACCOUNT_CLERK',
+        strategy_instance_id: null,
+        reason_code: 'UNFOLDABLE_BROKER_ORDER',
+        headline: 'A broker order could not be recorded',
+        explanation: 'The Clerk could not record 1 broker order(s).',
+        operator_impact: 'New entries are paused account-wide.',
+        next_step: 'Inspect each named order at Alpaca, then acknowledge it.',
+        observed_at_ms: NOW,
+        evidence_age_ms: 0,
+        evidence_refs: ['mleg-parent-1'],
+      }],
+    });
+    const acknowledgeExternalOrder = vi.fn().mockResolvedValue({
+      external_order_id: 'mleg-parent-1',
+      acknowledged_at_ms: NOW,
+      ack_operator: 'operator-1',
+    });
+    await renderCustody({ getSqliteClerkProjection, acknowledgeExternalOrder });
+
+    const acknowledge = await screen.findByRole('button', {
+      name: 'Acknowledge broker order mleg-parent-1',
+    });
+    expect((acknowledge as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(screen.getByLabelText('Reviewed by'), { target: { value: ' operator-1 ' } });
+    fireEvent.click(acknowledge);
+
+    await waitFor(() => expect(acknowledgeExternalOrder).toHaveBeenCalledOnce());
+    const [target, brokerOrderId, operator] = acknowledgeExternalOrder.mock.calls[0];
+    expect(brokerOrderId).toBe('mleg-parent-1');
+    expect(operator).toBe('operator-1');
+    expect(target).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA1', bindingGeneration: 4 });
+    expect(await screen.findByText(
+      'The order was acknowledged and released from the entry pause.',
+    )).toBeTruthy();
+    await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(2));
+  });
+
   it('paginates the custody timeline instead of silently truncating past the first page', async () => {
     const getSqliteClerkTimeline = vi.fn()
       .mockResolvedValueOnce(timeline({

@@ -316,34 +316,50 @@ class UnexplainedOrderCause:
 
 @dataclass(frozen=True)
 class UnfoldableBrokerOrder:
-    """One broker order the fold refused, and the fold's own reason."""
+    """One broker order the fold refused, the fold's own reason, and when.
+
+    ``observed_at_ms`` is the first observation, never advanced by a replay:
+    the day-P&L fact reads it to know the day holds P&L it cannot journal.
+    """
 
     broker_order_id: str
     client_order_id: str | None
     reason: str
+    observed_at_ms: int
 
     def to_mapping(self) -> dict[str, Any]:
         return {
             "broker_order_id": self.broker_order_id,
             "client_order_id": self.client_order_id,
             "reason": self.reason,
+            "observed_at_ms": self.observed_at_ms,
         }
 
     @classmethod
     def from_mapping(cls, value: Any) -> UnfoldableBrokerOrder:
         if not isinstance(value, dict):
             raise ValueError("unfoldable broker order must be an object")
-        _require_exact_keys(value, {"broker_order_id", "client_order_id", "reason"})
+        _require_exact_keys(
+            value, {"broker_order_id", "client_order_id", "reason", "observed_at_ms"}
+        )
         broker_order_id = value["broker_order_id"]
         client_order_id = value["client_order_id"]
         reason = value["reason"]
+        observed_at_ms = value["observed_at_ms"]
         if not isinstance(broker_order_id, str) or not broker_order_id:
             raise ValueError("unfoldable broker_order_id must be a non-empty string")
         if client_order_id is not None and (not isinstance(client_order_id, str) or not client_order_id):
             raise ValueError("unfoldable client_order_id must be null or a non-empty string")
         if not isinstance(reason, str) or not reason:
             raise ValueError("unfoldable reason must be a non-empty string")
-        return cls(broker_order_id=broker_order_id, client_order_id=client_order_id, reason=reason)
+        if isinstance(observed_at_ms, bool) or not isinstance(observed_at_ms, int) or observed_at_ms < 0:
+            raise ValueError("unfoldable observed_at_ms must be a non-negative int64 ms")
+        return cls(
+            broker_order_id=broker_order_id,
+            client_order_id=client_order_id,
+            reason=reason,
+            observed_at_ms=observed_at_ms,
+        )
 
 
 @dataclass(frozen=True)
