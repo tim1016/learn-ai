@@ -1481,6 +1481,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions/quiesce": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute one presented quiesce action: stop, flatten or reconcile (§11, #2351)
+         * @description The panel's quiesce actions, on an operation of their own.
+         *
+         *     A draining lane routes this operation and refuses ``/actions`` (#2351,
+         *     ADR 0063 §2): the request schema admits only the actions that stop a bot,
+         *     reduce its exposure or reconcile, and the execution is the one every
+         *     panel action shares.
+         */
+        post: operations["run_quiesce_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_quiesce_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/authority-facts": {
         parameters: {
             query?: never;
@@ -2200,6 +2225,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions (bot_action).
          */
         post: operations["fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/actions/quiesce": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Panel Quiesce Action
+         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions/quiesce (bot_action).
+         */
+        post: operations["fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -19662,6 +19707,30 @@ export interface components {
             supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
+         * PanelQuiesceActionRequest
+         * @description Execute one presented action that stops a bot, reduces exposure or reconciles.
+         *
+         *     The same request as :class:`PanelActionRequest`, narrowed to the quiesce
+         *     actions a draining lane still routes (#2351, ``QUIESCE_ACTION_IDS``): the
+         *     action set is closed at the schema, so a resume or continue sent here
+         *     refuses before it runs.
+         */
+        PanelQuiesceActionRequest: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "stop" | "flatten_stop" | "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now";
+            /** Concurrency Token */
+            concurrency_token: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason?: string | null;
+            /** Revision */
+            revision: number;
+        };
+        /**
          * ParamPropertySchema
          * @description One parameter's JSON-schema leaf metadata.
          */
@@ -29825,6 +29894,63 @@ export interface operations {
             };
         };
     };
+    run_quiesce_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_quiesce_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PanelQuiesceActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionResult"];
+                };
+            };
+            /** @description The action's revision/concurrency token is stale, or it is no longer available. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The performer began but did not return a terminal command receipt. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionErrorResponse"];
+                };
+            };
+        };
+    };
     get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get: {
         parameters: {
             query?: never;
@@ -31301,6 +31427,46 @@ export interface operations {
         };
     };
     fleet_bot_panel_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post: {
         parameters: {
             query?: never;
             header?: {

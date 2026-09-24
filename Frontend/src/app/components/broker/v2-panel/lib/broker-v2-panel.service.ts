@@ -37,7 +37,40 @@ import type {
   PanelActionRequest,
   PanelActionResult,
   PanelProfile,
+  PanelQuiesceActionId,
 } from './broker-v2-panel.types';
+
+/** Keyed by the generated quiesce action union (the backend's
+ * `QuiesceActionId`), so a set the backend widens or narrows fails to compile
+ * here instead of drifting (#2351). */
+const QUIESCE_ACTIONS: Readonly<Record<PanelQuiesceActionId, true>> = {
+  stop: true,
+  flatten_stop: true,
+  stop_bot_decisions: true,
+  cancel_verified_working_orders: true,
+  execute_safe_flatten: true,
+  reconcile_now: true,
+};
+
+function isQuiesceAction(actionId: PanelActionRequest['action_id']): actionId is PanelQuiesceActionId {
+  return Object.hasOwn(QUIESCE_ACTIONS, actionId);
+}
+
+/** The key the deploy-window fallback posts under. A coordinator that did
+ * route the quiesce attempt recorded it under the frozen key, and it refuses
+ * that key on a different operation. */
+const LEGACY_ACTIONS_KEY_SUFFIX = ':actions';
+const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
+
+/** A 404 no handler produced: the framework's own unrouted answer
+ * (`{"detail": "Not Found"}`), never a typed refusal — a fleet refusal
+ * carries a `reason`, a panel refusal a structured `detail`. */
+function isUnroutedNotFound(error: unknown): boolean {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 404) return false;
+  const body: unknown = error.error;
+  if (typeof body !== 'object' || body === null || 'reason' in body) return false;
+  return 'detail' in body && body.detail === 'Not Found';
+}
 
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
@@ -264,14 +297,52 @@ export class BrokerV2PanelService {
     );
   }
 
-  runAction(
+  /**
+   * Run one presented panel action. The quiesce actions — stop, flatten,
+   * the recovery stop/cancel/flatten and reconcile — travel on their own
+   * catalog operation, which a draining lane still routes while it refuses
+   * every other action (#2351, ADR 0063 §2) — so the operator can make a
+   * draining lane quiet from this panel.
+   *
+   * Deploy window: `my-frontend` serves this code the moment the main
+   * checkout is pulled, while a coordinator or clerk still running the
+   * previous build has no `/actions/quiesce` route until it restarts. Only
+   * that unrouted 404 — nothing ran — falls back to `/actions`, under a
+   * derived key; a typed refusal never does.
+   */
+  async runAction(
+    target: ResourceTarget,
+    sid: string,
+    request: PanelActionRequest,
+  ): Promise<PanelActionResult> {
+    if (!isQuiesceAction(request.action_id)) {
+      return this.postPanelAction('bot_panel_action', target, sid, request);
+    }
+    try {
+      return await this.postPanelAction('bot_panel_quiesce_action', target, sid, request);
+    } catch (error) {
+      const fallbackKey = `${request.idempotency_key}${LEGACY_ACTIONS_KEY_SUFFIX}`;
+      if (!isUnroutedNotFound(error) || fallbackKey.length > IDEMPOTENCY_KEY_MAX_LENGTH) {
+        throw error;
+      }
+      return this.postPanelAction(
+        'bot_panel_action',
+        withCommand(target, 'bot_action', fallbackKey),
+        sid,
+        { ...request, idempotency_key: fallbackKey },
+      );
+    }
+  }
+
+  private postPanelAction(
+    operation: 'bot_panel_action' | 'bot_panel_quiesce_action',
     target: ResourceTarget,
     sid: string,
     request: PanelActionRequest,
   ): Promise<PanelActionResult> {
     return firstValueFrom(
       this.http.post<PanelActionResult>(
-        operationUrl('bot_panel_action', { ...target, sid }),
+        operationUrl(operation, { ...target, sid }),
         this.commandBody(target, 'bot_action', request),
       ),
     );

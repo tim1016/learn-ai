@@ -1,6 +1,6 @@
 """The fleet control plane's closed refusal vocabulary (#2067).
 
-Forty distinct reason codes exist on the fleet surface: the 35-class
+Forty-two distinct reason codes exist on the fleet surface: the 37-class
 ``FleetControlError`` subclass closure (``FleetControlError`` itself plus
 every subclass, wherever in ``app/`` it is declared) and 5 codes minted
 without a ``FleetControlError`` at all -- a Pydantic-typed literal
@@ -92,7 +92,7 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The complete fleet refusal vocabulary: the 35-class FleetControlError
+#: The complete fleet refusal vocabulary: the 37-class FleetControlError
 #: subclass closure plus the 5 codes minted outside it. Sorted by code.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
@@ -136,6 +136,9 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     ),
     "clerk_lane_quiet_unproven": RefusalFamily(
         409, "No lane-quiet confirmation answers the retirement gate; force-retire is the named exit."
+    ),
+    "clerk_lane_retired": RefusalFamily(
+        404, "The lane's own clerk is retired; the lane stops its bots and never re-enrols."
     ),
     "clerk_not_found": RefusalFamily(
         404, "No clerk carries this identity, including malformed or retired ones."
@@ -196,6 +199,9 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     ),
     "fleet_lane_draining": RefusalFamily(
         409, "The coordinator refused this presence call because the lane itself is drained."
+    ),
+    "fleet_lane_retired": RefusalFamily(
+        404, "The coordinator refused this presence call because the lane's own clerk is retired."
     ),
     "fleet_lane_capacity_exhausted": RefusalFamily(
         503, "A lane's bounded request or stream budget could not admit the caller."

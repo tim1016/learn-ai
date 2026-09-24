@@ -897,6 +897,25 @@ async def _service_lifespan(
         if fleet_lane is not None:
             fleet_lane.lane_quiet_probe = account_quiet_probe
 
+    # #2351: a lane that learns its own clerk was retired (force-retire
+    # releases the account on a deadline, quiet or not) stops every bot it
+    # still runs, through the same lane-wide stop an operator uses.
+    if fleet_lane is not None and bot_task_registry is not None:
+        from app.services.lane_quiesce import stop_all_bots_on_lane
+
+        retiring_registry = bot_task_registry
+        retired_clerk_id = fleet_lane.clerk_id
+
+        async def _stop_bots_on_retired_lane() -> bool:
+            receipt = await stop_all_bots_on_lane(
+                retiring_registry,
+                operator="fleet_lane_retired",
+                change_ref=f"clerk {retired_clerk_id} retired by the fleet coordinator",
+            )
+            return receipt.all_stopped
+
+        fleet_lane.stop_bots = _stop_bots_on_retired_lane
+
     # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
     # sweep cannot race the boot reconciliation pass (both call reconcile_once).
     _pending_sweep = (
