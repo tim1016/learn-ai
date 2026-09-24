@@ -18,6 +18,8 @@ Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
   with ``CANCELLED_WITHOUT_STOP_INTENT``.
 - bar stream ended on its own → ``"EXITED_UNVERIFIED"`` with
   ``BAR_STREAM_ENDED``.
+- the Clerk retired the run after its liveness lease lapsed (#2369) →
+  ``"EXITED_UNVERIFIED"`` with ``RUN_LEASE_EXPIRED``.
 
 Restart intensity uses the canonical :class:`RestartIntensityPolicy`. Trade
 mode delegates effects to the Alpaca Clerk; the runner never authors broker
@@ -102,8 +104,10 @@ from app.services.bot_carryover import (
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
     ClerkAdmissionTokenStaleError,
+    RunLeaseLostError,
     commit_stop_before_task_cancel,
     register_alpaca_duty_run,
+    run_holding_lease,
     stop_interrupted_alpaca_duty_run,
 )
 from app.services.bot_dry_run import DryRunActivity
@@ -1772,12 +1776,15 @@ class BotTaskRegistry:
         sid = binding.strategy_instance_id
         try:
             source_bars = self._authority_for(binding).source_bars()
-            await execute_bot_run(
+            await run_holding_lease(
                 binding,
-                feed,
-                run_gate=run_gate,
-                instance_dir=self._confined_instance_dir(sid),
-                source_bars=source_bars,
+                execute_bot_run(
+                    binding,
+                    feed,
+                    run_gate=run_gate,
+                    instance_dir=self._confined_instance_dir(sid),
+                    source_bars=source_bars,
+                ),
             )
         except asyncio.CancelledError:
             managed = self._bots.get(sid)
@@ -1792,6 +1799,19 @@ class BotTaskRegistry:
                     reason_code="CANCELLED_WITHOUT_STOP_INTENT",
                 )
             raise
+        except RunLeaseLostError:
+            # The Clerk already committed this run's STOP (#2369): its runner
+            # went unheard past the liveness TTL, so the sweep retired it.
+            logger.error(
+                "Bot stopped: the Clerk retired its run after the liveness lease lapsed",
+                extra={"action": "bot_run_lease_lost", "strategy_instance_id": sid},
+            )
+            self._terminal.finalize(
+                binding,
+                kind="EXITED_UNVERIFIED",
+                reason_code="RUN_LEASE_EXPIRED",
+            )
+            self._schedule_run_replay_receipt(binding)
         except MarketDataFeedError as exc:
             logger.error(
                 "Bot crashed: market-data feed died",

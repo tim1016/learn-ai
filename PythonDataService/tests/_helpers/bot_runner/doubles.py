@@ -236,6 +236,9 @@ class _CustodyClerk:
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
 
+    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        return self.active_runs.get(strategy_instance_id) == run_id
+
     async def recover(self) -> None:
         return
 
@@ -465,6 +468,9 @@ class _FakeClerk:
                 strategy_instance_id=binding.strategy_instance_id,
                 lifecycle_run_id=binding.run_id,
             )
+
+    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        return self.active_runs.get(strategy_instance_id) == run_id
 
     async def stop_strategy_run(
         self,

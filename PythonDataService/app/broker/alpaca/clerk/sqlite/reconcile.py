@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.run_liveness import retire_runs_whose_runner_is_gone
 from app.broker.alpaca.clerk.sqlite.stopped_run_entries import (
     cancel_entries_of_inactive_runs,
 )
@@ -891,6 +892,11 @@ async def _reconcile_account_serialized(
         pricing=pricing,
         off_loop=to_thread,
     )
+
+    # A run whose runner stopped renewing its liveness lease is retired first
+    # (#2369), so the step below also cancels the ENTERs of a runner that died
+    # without committing RUN_STOPPED.
+    await _under_intake(intake, retire_runs_whose_runner_is_gone, repo)
 
     # No ENTER may stay working once its run is no longer ACTIVE (#2362):
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a

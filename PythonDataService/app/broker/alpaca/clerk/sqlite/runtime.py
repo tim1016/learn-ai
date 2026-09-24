@@ -120,6 +120,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.run_liveness import renew_run_lease
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
@@ -617,6 +618,7 @@ class SqliteAlpacaClerkFacade:
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
+                    self._stamp_run_lease(binding)
                     return
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} already has "
@@ -630,6 +632,29 @@ class SqliteAlpacaClerkFacade:
             )
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
+            self._stamp_run_lease(binding)
+
+    def _stamp_run_lease(self, binding: BrokerBotBinding) -> None:
+        """Admission is the run's first liveness stamp, on the Clerk's clock."""
+        renew_run_lease(
+            self._repo,
+            strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id=binding.run_id,
+        )
+
+    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        """The runner's heartbeat: keep its ACTIVE run's liveness lease (#2369).
+
+        ``False`` when ``run_id`` is not the instance's ACTIVE run -- the
+        sweep retired it, or it was stopped -- which tells a slow runner its
+        run is gone. The Clerk stamps its own clock; the runner sends no time.
+        """
+        async with self._intake:
+            return renew_run_lease(
+                self._repo,
+                strategy_instance_id=strategy_instance_id,
+                lifecycle_run_id=run_id,
+            )
 
     def _require_current_admission_snapshot(
         self,

@@ -104,6 +104,10 @@ class ActiveAlpacaClerk(Protocol):
         reason: str | None = None,
     ) -> CommandSubmission | None: ...
 
+    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        """Renew the run's Clerk-clocked liveness lease; ``False`` once it is not ACTIVE (#2369)."""
+        ...
+
     async def execute_for_instance(
         self,
         *,
