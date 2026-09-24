@@ -454,6 +454,29 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.orders_for_effect_operation(self._conn, effect_operation_id)
 
+    def terminal_entry_orders_with_fills(
+        self: ClerkSqliteRepository, *, order_ref: str | None = None
+    ) -> list[tuple[str, str]]:
+        with self._write_lock:
+            return reads.terminal_entry_orders_with_fills(self._conn, order_ref=order_ref)
+
+    def terminal_entry_orders_unproven_at_broker(
+        self: ClerkSqliteRepository,
+        *,
+        symbols: frozenset[str],
+        exclude_client_order_ids: frozenset[str],
+        rested_since_ms: int,
+        limit: int,
+    ) -> list[str]:
+        with self._write_lock:
+            return reads.terminal_entry_orders_unproven_at_broker(
+                self._conn,
+                symbols=symbols,
+                exclude_client_order_ids=exclude_client_order_ids,
+                rested_since_ms=rested_since_ms,
+                limit=limit,
+            )
+
     def all_order_refs(self: ClerkSqliteRepository) -> frozenset[str]:
         with self._write_lock:
             return reads.all_order_refs(self._conn)
@@ -544,6 +567,12 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.attributed_positions_by_symbol(self._conn)
 
+    def attributed_positions_by_subject(
+        self: ClerkSqliteRepository,
+    ) -> dict[tuple[str, str], float]:
+        with self._write_lock:
+            return reads.attributed_positions_by_subject(self._conn)
+
     def market_data_symbols(self: ClerkSqliteRepository) -> tuple[str, ...]:
         """Server-owned demand from deployed strategies and live custody."""
         with self._write_lock:
@@ -610,6 +639,22 @@ class ClerkSqliteRepositoryReadApi:
         """Every unresolved uncertainty on the account, oldest first (#2228)."""
         with self._write_lock:
             return reads.active_uncertainties(self._conn)
+
+    def uncertainty_history(
+        self: ClerkSqliteRepository,
+        *,
+        scope: str,
+        reason_code: str,
+        strategy_instance_id: str | None,
+    ) -> list[dict]:
+        """Every episode, active or resolved, for one cause identity."""
+        with self._write_lock:
+            return reads.uncertainty_history(
+                self._conn,
+                scope=scope,
+                reason_code=reason_code,
+                strategy_instance_id=strategy_instance_id,
+            )
 
     def active_uncertainty(
         self: ClerkSqliteRepository,

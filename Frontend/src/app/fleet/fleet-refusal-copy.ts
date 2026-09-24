@@ -219,9 +219,14 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     message: "This lane's request or stream budget is exhausted.",
     nextStep: 'Retry once the lane has available capacity.',
   },
+  fleet_presence_refused: {
+    outcome: 'conflict',
+    message: "The coordinator refused this lane's identity or admission.",
+    nextStep: 'Resolve the refusal the coordinator names; the lane asks again every heartbeat and starts new bots once admitted.',
+  },
   fleet_presence_unavailable: {
     outcome: 'failure',
-    message: "The coordinator could not be reached, or refused this agent's presence call.",
+    message: 'The coordinator could not be reached, or gave no answer about this lane.',
     nextStep: 'Retry once the coordinator is reachable again.',
   },
   fleet_protocol_incompatible: {

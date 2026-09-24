@@ -68,6 +68,7 @@ from app.broker.fleet.errors import (
     ClerkNotFound,
     ClerkReassignmentBlocked,
     ClerkRoutingAttemptConflict,
+    ClerkRoutingOutcomeUnknown,
     ClerkUnreachable,
     ClerkVolumeAlreadyRegistered,
     ClerkVolumeCloneDetected,
@@ -2343,20 +2344,33 @@ class FleetControlService:
         return receipt
 
     def mark_routing_dispatched(self, *, correlation_id: str) -> RoutingReceiptRecord:
-        """Record that the attempt was handed to the provider clerk.
+        """Claim the attempt's one dispatch to the provider clerk.
 
         One-way: once dispatched, an attempt can never present as
-        definitively un-sent. Idempotent for a repeated marking.
+        definitively un-sent. The claim is exclusive, not idempotent: an
+        attempt already dispatched and not settled is either still in flight
+        or its outcome was lost (ADR 0063's reconciliation obligation), and a
+        same-key retry must reconcile it by identity rather than deliver the
+        command a second time (ADR 0062 D11, #2319).
         """
         now = self._clock()
         with self._store.transaction() as conn:
-            updated = self._store.mark_routing_receipt_dispatched(
+            claimed = self._store.mark_routing_receipt_dispatched(
                 conn, correlation_id=correlation_id, dispatched_at_ms=now
             )
         receipt = self._store.read_routing_receipt(correlation_id)
-        if not updated or receipt is None:
+        if receipt is None:
             raise ClerkRoutingAttemptConflict(
                 f"No routing attempt carries correlation {correlation_id!r}.",
+            )
+        if not claimed:
+            raise ClerkRoutingOutcomeUnknown(
+                f"Idempotency key {receipt.idempotency_key} was already "
+                f"dispatched as attempt {correlation_id} and is "
+                f"{receipt.state.value}: it is still in flight, or its outcome "
+                "was lost; reconcile with the provider clerk's receipt.",
+                next_step="Read the command's outcome by its durable identity; "
+                "never resubmit the same key.",
             )
         return receipt
 

@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwnership
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
@@ -65,8 +66,12 @@ class ReconciliationSweep:
         after_pass: AfterPassHook | None = None,
         on_lease_revived: LeaseRevivedHook | None = None,
         pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+        run_ownership: RunOwnership | None = None,
     ) -> None:
         self._repo = repo
+        # The facade's book of which in-process runner holds each ACTIVE run;
+        # each pass retires a run whose runner is gone (#2369).
+        self._run_ownership = run_ownership
         self._on_result = on_result
         self._after_pass = after_pass
         self._on_lease_revived = on_lease_revived
@@ -385,6 +390,7 @@ class ReconciliationSweep:
                 trigger="AUTOMATIC",
                 intake=self._intake,
                 pricing=self._pricing,
+                run_ownership=self._run_ownership,
             )
             if self._on_result is not None:
                 self._on_result(result)

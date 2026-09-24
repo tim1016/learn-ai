@@ -60,6 +60,7 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.presence import (
     FleetLaneRetired,
     FleetPresenceError,
+    FleetPresenceRefused,
     LocalPresence,
     RemotePresence,
     SessionInfo,
@@ -621,10 +622,8 @@ async def test_an_unwritable_volume_still_stops_the_bots_and_retries_the_tombsto
         clock.advance(drained.drain_deadline_at_ms - clock() + 1)
         # Force-retire a lane whose drain mark never landed: the tombstone is
         # still owed, and the disk now refuses it.
-        write_confirmation_evidence(
-            root,
-            replace(read_confirmation_evidence(root), lifecycle_state="provisioned"),
-        )
+        unmarked = replace(read_confirmation_evidence(root), lifecycle_state="provisioned")
+        write_confirmation_evidence(root, unmarked)
         evidence_dir.chmod(0o555)
         service.force_retire_clerk(
             clerk_id=boot.clerk_id, operator=OPERATOR, change_ref=CHANGE_REF
@@ -687,8 +686,9 @@ class _RetiredPresence:
 
 
 class _UnknownClerkPresence:
-    """A coordinator whose refusal is NOT retirement: an unknown identity
-    over the wire (plain ``clerk_not_found``) arrives as unavailability."""
+    """A coordinator whose refusal is NOT retirement: unavailability on the
+    beat and on every re-registration, which starts at the volume identity
+    gate's expectation (#2320's one registration unit)."""
 
     def __init__(self) -> None:
         self.registrations = 0
@@ -696,9 +696,12 @@ class _UnknownClerkPresence:
     async def observe(self, **_kwargs) -> str:
         raise FleetPresenceError("The fleet coordinator refused: clerk_not_found")
 
-    async def register(self, **_kwargs) -> SessionInfo:
+    async def expectation(self, **_kwargs) -> dict[str, object]:
         self.registrations += 1
         raise FleetPresenceError("The fleet coordinator refused: clerk_not_found")
+
+    async def register(self, **_kwargs) -> SessionInfo:
+        raise AssertionError("registration never runs past a failed identity gate")
 
 
 def _stub_boot(tmp_path: Path, presence: object) -> FleetLaneBoot:
@@ -817,16 +820,21 @@ def _not_found_coordinator_app() -> FastAPI:
     return coordinator
 
 
-async def test_remote_presence_keeps_a_plain_not_found_in_the_unavailability_family() -> None:
+async def test_remote_presence_reads_a_plain_not_found_as_a_refusal_not_retirement() -> None:
+    """Retirement is learned only from its typed code (#2351); a plain
+    not-found is the coordinator's refusal — never retirement, and since
+    #2320 never unavailability either (FR-066 rides out only an outage)."""
     server = _RealServer(_not_found_coordinator_app())
     server.start()
     try:
         presence = RemotePresence(base_url=server.base_url, agent_service_token=CLERK_TOKEN)
-        with pytest.raises(FleetPresenceError):
+        with pytest.raises(FleetPresenceRefused) as refused:
             await presence.observe(
                 clerk_id="clrk_aaaaaaaaaaaaaaaaaaaaaaaa",
                 agent_instance_id="agnt_0000000000000000000000aa",
             )
+        assert not isinstance(refused.value, FleetLaneRetired | FleetPresenceError)
+        assert refused.value.coordinator_reason == "clerk_not_found"
     finally:
         server.stop()
 

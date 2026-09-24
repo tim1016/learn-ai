@@ -1174,10 +1174,17 @@ class FleetRegistryStore:
     def mark_routing_receipt_dispatched(
         self, conn: sqlite3.Connection, *, correlation_id: str, dispatched_at_ms: int
     ) -> bool:
-        """Set the dispatch timestamp; one-way and idempotent."""
+        """Claim the attempt's one dispatch; one-way compare-and-set.
+
+        Succeeds only for a never-dispatched, unsettled attempt. A second
+        claim is refused, never absorbed: a same-key attempt already
+        dispatched is in flight or has a lost outcome, and either way it is
+        reconciled by identity, not delivered again (#2319).
+        """
         cursor = conn.execute(
-            "UPDATE routing_receipts SET dispatched_at_ms = "
-            "COALESCE(dispatched_at_ms, ?), updated_at_ms = ? WHERE correlation_id = ?",
+            "UPDATE routing_receipts SET dispatched_at_ms = ?, updated_at_ms = ? "
+            "WHERE correlation_id = ? AND dispatched_at_ms IS NULL "
+            "AND state = 'not_dispatched'",
             (dispatched_at_ms, dispatched_at_ms, correlation_id),
         )
         return cursor.rowcount == 1

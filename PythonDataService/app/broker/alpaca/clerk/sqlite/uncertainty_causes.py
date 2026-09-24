@@ -18,6 +18,9 @@ ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
 EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
 EXIT_STUCK_REASON_CODE = "EXIT_STUCK"
 EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
+# A fill recorded on an ENTER the Clerk had already folded terminal (#2348):
+# contradicting evidence, never absorbed silently.
+FAILED_ENTER_FILLED_REASON_CODE = "FAILED_ENTER_FILLED"
 # A broker order the trade-update fold cannot state truthfully (#2363), e.g. a
 # multi-leg parent whose ``side`` is null. Contained to that order: recorded
 # and surfaced, never folded, never allowed to wedge the execution stream.
@@ -217,6 +220,86 @@ class ExitStuckCause:
             redrive_count=redrive_count,
             first_observed_at_ms=first_observed_at_ms,
         )
+
+
+@dataclass(frozen=True)
+class FailedEnterFilledOrder:
+    """One ENTRY order that filled after its ENTER was folded terminal.
+
+    ``filled_qty`` is the order's effective fill quantity when the episode
+    named it. It is what makes the detector idempotent across resolution: an
+    order an episode (active or resolved) recorded at its current quantity is
+    answered; a later fill on the same order is a new contradiction.
+    """
+
+    order_ref: str
+    symbol: str
+    filled_qty: float
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "order_ref": self.order_ref,
+            "symbol": self.symbol,
+            "filled_qty": self.filled_qty,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> FailedEnterFilledOrder:
+        if not isinstance(value, dict):
+            raise ValueError("failed-ENTER-filled order must be an object")
+        _require_exact_keys(value, {"order_ref", "symbol", "filled_qty"})
+        order_ref = value["order_ref"]
+        symbol = value["symbol"]
+        if not isinstance(order_ref, str) or not order_ref:
+            raise ValueError("failed-ENTER-filled order_ref must be a non-empty string")
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
+            raise ValueError("failed-ENTER-filled symbol must be a non-empty uppercase string")
+        return cls(
+            order_ref=order_ref,
+            symbol=symbol,
+            filled_qty=_finite_number(value["filled_qty"], field_name="filled_qty"),
+        )
+
+
+@dataclass(frozen=True)
+class FailedEnterFilledCause:
+    """Every contradicted ENTRY order one strategy instance still answers for (#2348).
+
+    Orders accumulate while the episode is open, so a second contradiction on
+    the same instance widens the episode instead of replacing the first.
+    """
+
+    orders: tuple[FailedEnterFilledOrder, ...]
+
+    @property
+    def symbols(self) -> frozenset[str]:
+        return frozenset(order.symbol for order in self.orders)
+
+    def with_order(self, order: FailedEnterFilledOrder) -> FailedEnterFilledCause:
+        """Name ``order``, replacing any earlier record of the same order_ref."""
+        if order in self.orders:
+            return self
+        others = (existing for existing in self.orders if existing.order_ref != order.order_ref)
+        return FailedEnterFilledCause(
+            orders=tuple(sorted((*others, order), key=lambda item: item.order_ref))
+        )
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"orders": [order.to_mapping() for order in self.orders]}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> FailedEnterFilledCause:
+        if not isinstance(value, dict):
+            raise ValueError("failed-ENTER-filled cause must be an object")
+        _require_exact_keys(value, {"orders"})
+        raw_orders = value["orders"]
+        if not isinstance(raw_orders, list) or not raw_orders:
+            raise ValueError("failed-ENTER-filled cause must name at least one order")
+        orders = tuple(FailedEnterFilledOrder.from_mapping(item) for item in raw_orders)
+        refs = [order.order_ref for order in orders]
+        if refs != sorted(set(refs)):
+            raise ValueError("failed-ENTER-filled orders must have unique sorted order_refs")
+        return cls(orders=orders)
 
 
 @dataclass(frozen=True)
@@ -535,6 +618,7 @@ __all__ = [
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "EXIT_STUCK_REASON_CODE",
+    "FAILED_ENTER_FILLED_REASON_CODE",
     "HOLD_REASON_CODES",
     "HOLD_REASON_CODE_SQL_PARAMS",
     "HOLD_REASON_CODE_SQL_PLACEHOLDERS",
@@ -548,6 +632,8 @@ __all__ = [
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "ExitStuckCause",
+    "FailedEnterFilledCause",
+    "FailedEnterFilledOrder",
     "LossHoldCause",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",

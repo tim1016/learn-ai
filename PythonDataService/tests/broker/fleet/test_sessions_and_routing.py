@@ -10,6 +10,7 @@ from app.broker.fleet.errors import (
     ClerkBrokerMismatch,
     ClerkIdentityMismatch,
     ClerkNotFound,
+    ClerkRoutingOutcomeUnknown,
     ClerkUnreachable,
 )
 from app.broker.fleet.records import RoutingReceiptState
@@ -267,8 +268,12 @@ def test_routing_attempt_identity_is_per_lane_and_idempotent(
 
     dispatched = fleet_service.mark_routing_dispatched(correlation_id=first.correlation_id)
     assert dispatched.dispatched_at_ms is not None
-    # Marking is idempotent: the first dispatch timestamp survives.
-    again = fleet_service.mark_routing_dispatched(correlation_id=first.correlation_id)
+    # The dispatch claim is exclusive (#2319): a second claim refuses as
+    # outcome-unknown, and the first dispatch timestamp survives.
+    with pytest.raises(ClerkRoutingOutcomeUnknown):
+        fleet_service.mark_routing_dispatched(correlation_id=first.correlation_id)
+    again = fleet_service._store.read_routing_receipt(first.correlation_id)
+    assert again is not None
     assert again.dispatched_at_ms == dispatched.dispatched_at_ms
 
     settled = fleet_service.settle_routing_attempt(

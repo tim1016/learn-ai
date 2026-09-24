@@ -146,7 +146,7 @@ async def test_an_outstanding_condition_reaches_the_gate_and_is_named(
 
         confirmation = await _await_confirmation_at(service, boot.clerk_id, clock)
         assert not confirmation.is_quiet
-        with pytest.raises(ClerkLaneQuietUnproven, match="the account is not flat"):
+        with pytest.raises(ClerkLaneQuietUnproven, match="the account or the lane's custody is not flat"):
             service.retire_clerk(clerk_id=boot.clerk_id)
         await close_fleet_lane(boot)
     finally:
@@ -297,7 +297,7 @@ async def test_the_internal_route_records_the_answer_and_refuses_a_partial_one(
             assert recorded.status_code == 200
             assert recorded.json() == {
                 "quiet": False,
-                "outstanding": ["the account is not flat"],
+                "outstanding": ["the account or the lane's custody is not flat"],
             }
 
             partial = {key: value for key, value in body.items() if key != "account_flat"}

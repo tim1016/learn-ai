@@ -5,13 +5,15 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.lean_sidecar.trading_calendar import is_trading_day, session_window_for_date
 from app.lean_sidecar.trading_calendar import session_state_at_ms as calendar_session_state_at_ms
-from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.services.session_authority import (
     CAPABILITY_MAX_AGE_MS,
     evaluate_session_submit,
     order_mechanism_sessions_from_capability,
+    scheduled_exchange_phase_at_ms,
+    scheduled_extended_session_bounds,
     session_state_at_ms,
 )
 from app.utils.timestamps import to_ms_utc
@@ -324,3 +326,80 @@ def test_evaluate_session_submit_branch_table(
         )
         == expected
     )
+
+
+def test_scheduled_extended_session_bounds_regular_day() -> None:
+    bounds = scheduled_extended_session_bounds(date(2026, 9, 22))
+
+    assert bounds is not None
+    assert (bounds.open_ms, bounds.rth_open_ms, bounds.rth_close_ms, bounds.close_ms) == (
+        _ny_ms(2026, 9, 22, 4, 0),
+        _ny_ms(2026, 9, 22, 9, 30),
+        _ny_ms(2026, 9, 22, 16, 0),
+        _ny_ms(2026, 9, 22, 20, 0),
+    )
+
+
+def test_scheduled_extended_session_bounds_early_close_moves_after_hours() -> None:
+    # Black Friday 2026: regular close 13:00 ET, after-hours close 17:00 ET.
+    bounds = scheduled_extended_session_bounds(date(2026, 11, 27))
+
+    assert bounds is not None
+    assert bounds.rth_close_ms == _ny_ms(2026, 11, 27, 13, 0)
+    assert bounds.close_ms == _ny_ms(2026, 11, 27, 17, 0)
+
+
+@pytest.mark.parametrize("day", [date(2026, 1, 10), date(2026, 1, 19)], ids=["weekend", "holiday"])
+def test_scheduled_extended_session_bounds_none_off_session(day: date) -> None:
+    assert scheduled_extended_session_bounds(day) is None
+    assert scheduled_exchange_phase_at_ms(_ny_ms(day.year, day.month, day.day, 8, 0)) == "CLOSED"
+
+
+def test_scheduled_exchange_phase_grants_no_strategy_permission() -> None:
+    """The scheduled phase labels bars; ``session_state_at_ms`` still proves only RTH without a window."""
+    pre = _ny_ms(2026, 9, 22, 8, 0)
+
+    assert scheduled_exchange_phase_at_ms(pre) == "PRE"
+    assert session_state_at_ms(now_ms=pre).phase == "CLOSED"
+
+
+@pytest.mark.parametrize(
+    "day",
+    [
+        pytest.param(date(2026, 9, 22), id="regular-day"),
+        # The 2026 DST switches fall on Sundays (03-08, 11-01); the first
+        # sessions under the new offset are the Mondays after them.
+        pytest.param(date(2026, 3, 9), id="first-session-after-spring-forward"),
+        pytest.param(date(2026, 11, 2), id="first-session-after-fall-back"),
+        pytest.param(date(2026, 11, 27), id="half-day-black-friday"),
+        pytest.param(date(2026, 12, 24), id="half-day-christmas-eve"),
+    ],
+)
+def test_scheduled_extended_session_bounds_regular_session_parity_with_trading_calendar(day: date) -> None:
+    """Parity with the canonical ``app/lean_sidecar/trading_calendar.py`` (#2391).
+
+    ``scheduled_extended_session_bounds`` is a thin adapter kept outside the
+    sealed canonical module until the next re-seal; its regular open and close
+    must be exactly ``session_window_for_date``'s, and its extended bounds
+    must enclose them.
+    """
+    canonical = session_window_for_date(day)
+    bounds = scheduled_extended_session_bounds(day)
+
+    assert bounds is not None
+    assert (bounds.rth_open_ms, bounds.rth_close_ms) == (canonical.open_ms_utc, canonical.close_ms_utc)
+    assert bounds.open_ms < bounds.rth_open_ms < bounds.rth_close_ms < bounds.close_ms
+
+
+@pytest.mark.parametrize(
+    "day",
+    [
+        pytest.param(date(2026, 3, 8), id="spring-forward-sunday"),
+        pytest.param(date(2026, 11, 1), id="fall-back-sunday"),
+        pytest.param(date(2026, 11, 26), id="holiday-thanksgiving"),
+    ],
+)
+def test_scheduled_extended_session_bounds_off_session_parity_with_trading_calendar(day: date) -> None:
+    """No bounds exactly where ``app/lean_sidecar/trading_calendar.py`` has no session."""
+    assert is_trading_day(day) is False
+    assert scheduled_extended_session_bounds(day) is None

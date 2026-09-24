@@ -120,12 +120,14 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner, RunOwnership
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
     execute_safe_flatten_plan,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLED_REASON_CODE
 from app.broker.alpaca.clerk.stream_health import (
     STREAM_HEALTH_REASON_CODE,
     StreamHealthGate,
@@ -301,6 +303,9 @@ class SqliteAlpacaClerkFacade:
         # also publish. A custody-guard pass during a mutating Start/Resume
         # must not read as evidence the background sweep is alive.
         self._last_sweep_pass_completed_at_ms: int | None = None
+        # #2369: which in-process runner holds each ACTIVE run this facade
+        # admitted. Read and written only under ``self._intake``.
+        self._run_ownership = RunOwnership()
 
     @property
     def account_id(self) -> str:
@@ -329,6 +334,11 @@ class SqliteAlpacaClerkFacade:
     @property
     def intake(self) -> ReentrantAsyncLock:
         return self._intake
+
+    @property
+    def run_ownership(self) -> RunOwnership:
+        """The book the reconciliation sweep retires runner-less runs from (#2369)."""
+        return self._run_ownership
 
     @property
     def recovery_pricing(self) -> RecoveryPricing:
@@ -569,8 +579,17 @@ class SqliteAlpacaClerkFacade:
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot | None = None,
+        run_owner: RunOwner | None = None,
     ) -> None:
-        """Durably register immutable strategy + run before order capability."""
+        """Durably register immutable strategy + run before order capability.
+
+        ``run_owner`` is what holds the run in this process -- its ``done()``
+        turns true once the runner has ended (#2369). It is recorded in the
+        same intake critical section that admits the run, so the sweep can
+        never see an owned run as unowned. A run registered without one is
+        unowned: the sweep retires it after one pass's grace (see
+        :mod:`app.broker.alpaca.clerk.sqlite.run_ownership`).
+        """
         from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
         async with self._intake:
@@ -617,6 +636,7 @@ class SqliteAlpacaClerkFacade:
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
+                    self._hold_run(binding, run_owner)
                     return
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} already has "
@@ -630,6 +650,15 @@ class SqliteAlpacaClerkFacade:
             )
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
+            self._hold_run(binding, run_owner)
+
+    def _hold_run(self, binding: BrokerBotBinding, run_owner: RunOwner | None) -> None:
+        if run_owner is not None:
+            self._run_ownership.hold(
+                strategy_instance_id=binding.strategy_instance_id,
+                lifecycle_run_id=binding.run_id,
+                owner=run_owner,
+            )
 
     def _require_current_admission_snapshot(
         self,
@@ -1190,6 +1219,7 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger="AUTOMATIC",
                 intake=self._intake,
+                run_ownership=self._run_ownership,
             )
         )
 
@@ -1254,6 +1284,7 @@ class SqliteAlpacaClerkFacade:
                 # the same sealed policy and live quote the operator's
                 # flatten does (#2229).
                 pricing=self.recovery_pricing,
+                run_ownership=self._run_ownership,
             )
         )
 
@@ -1426,6 +1457,10 @@ class SqliteAlpacaClerkFacade:
         working = self._working_order_refs_for_proof(strategy_instance_id)
         unresolved = self._unresolved_order_refs(strategy_instance_id)
         freeze = _freeze_state(result, observed_at_ms=self._repo.clock())
+        if not freeze.active:
+            freeze = _failed_enter_filled_freeze(
+                self._repo, strategy_instance_id, observed_at_ms=self._repo.clock()
+            )
         exposure = {
             symbol: quantity
             for symbol, quantity in self._repo.attributed_positions_for_strategy(
@@ -1656,6 +1691,36 @@ def _freeze_state(
             else "The SQLite Account Clerk could not obtain fresh broker proof."
         ),
         next_step="Reconcile the account before allowing new exposure.",
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def _failed_enter_filled_freeze(
+    repo: ClerkSqliteRepository,
+    strategy_instance_id: str,
+    *,
+    observed_at_ms: int,
+) -> AccountFreezeState:
+    """This bot's own #2348 fence, read live from its durable episode.
+
+    The account verdict stays ``clean`` -- broker and journal agree on the
+    position -- so the proof keeps the exposure known and freezes only the
+    fenced bot. Its Start/Resume is refused on that freeze: the strategy
+    believes it is flat and would never exit the position it would inherit.
+    """
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if episode is None:
+        return AccountFreezeState()
+    return AccountFreezeState(
+        active=True,
+        # The position is real and attributed, but no live decision owns it.
+        category="ACCOUNT_STATE_UNATTRIBUTABLE",
+        explanation=episode["explanation"],
+        next_step=episode["next_step"],
         observed_at_ms=observed_at_ms,
     )
 

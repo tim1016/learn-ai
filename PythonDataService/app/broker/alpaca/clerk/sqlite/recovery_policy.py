@@ -667,8 +667,8 @@ def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     """Executor gates = prepare gates, plus two.
 
     Episodes whose policy declares ``admits_safe_flatten`` (EXIT_NOT_FLAT /
-    EXIT_STUCK -- the exact states this executor exists to clear -- and an
-    unfoldable foreign order) are already admitted by the shared prepare
+    EXIT_STUCK / FAILED_ENTER_FILLED -- the exact states this executor exists
+    to clear -- and an unfoldable foreign order) are already admitted by the shared prepare
     gate; the downstream ``require_capability(REDUCE, …)`` still enforces
     movement toward zero per leg. (1) Execution is single-strategy, one
     leg. (2) No run may be ACTIVE: a running strategy could re-enter
