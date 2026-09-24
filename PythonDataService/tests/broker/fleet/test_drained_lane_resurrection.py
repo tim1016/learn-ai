@@ -23,7 +23,6 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -182,29 +181,6 @@ def test_marking_drained_preserves_the_grant_and_is_idempotent(
     bare = tmp_path / "bare"
     bare.mkdir()
     assert mark_confirmation_evidence_draining(bare) is False
-
-
-def test_a_confirmation_written_over_a_tombstone_keeps_the_tombstone(
-    tmp_path: Path,
-) -> None:
-    """#2349: the registry lifecycle is irreversible, so the evidence's is too.
-
-    A confirmation was committed fenced on ``provisioned``; a tombstone on the
-    volume records a drain the coordinator committed *later*. Whatever order
-    the two land on disk, the grant fields move forward and the lifecycle
-    never steps back.
-    """
-    root = tmp_path / "clerk"
-    root.mkdir()
-    write_confirmation_evidence(root, _evidence(CLERK, "vol_x"))
-    assert mark_confirmation_evidence_draining(root) is True
-    reconfirmed = replace(_evidence(CLERK, "vol_x"), confirmed_at_ms=2, routing_epoch=2)
-    write_confirmation_evidence(root, reconfirmed)
-    evidence = read_confirmation_evidence(root)
-    assert evidence is not None
-    assert evidence.lifecycle_state == "draining"
-    assert evidence.confirmed_at_ms == 2
-    assert evidence.routing_epoch == 2
 
 
 def test_drained_evidence_vouches_for_nothing(tmp_path: Path) -> None:
@@ -822,6 +798,57 @@ async def test_a_drain_first_heard_at_confirmation_marks_and_refuses(
             )
             is False
         )
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_confirmation_over_a_tombstone_the_lane_never_learned_refuses(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2349 review: a tombstone on the volume with no drain learned in this
+    process means the coordinator confirmed a binding this volume records as
+    drained — a stale registry (#2350). The confirmation refuses loudly and
+    leaves the tombstone in place, rather than overwriting it back to
+    ``provisioned`` or silently keeping it."""
+    service = _service(control_dir, clock)
+    try:
+        _provisioned, root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        from app.broker.alpaca.clerk.fleet_boot import (
+            FleetBootRefused,
+            close_fleet_lane,
+            confirm_binding,
+        )
+
+        # The volume carries a drain the (restored, older) registry forgot.
+        assert mark_confirmation_evidence_draining(root) is True
+        assert boot.draining is False
+        grant_before = boot.confirmed_grant
+
+        with caplog.at_level("ERROR"), pytest.raises(
+            FleetBootRefused, match="registry is stale"
+        ):
+            await confirm_binding(
+                boot,
+                external_account_id=ACCOUNT,
+                binding_generation=1,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+            )
+        assert any(
+            getattr(record, "action", None) == "confirm_over_tombstone_refused"
+            for record in caplog.records
+        )
+        evidence = read_confirmation_evidence(root)
+        assert evidence is not None
+        assert evidence.lifecycle_state == "draining"
+        assert boot.confirmed_grant is grant_before
         await close_fleet_lane(boot)
     finally:
         service.close()
