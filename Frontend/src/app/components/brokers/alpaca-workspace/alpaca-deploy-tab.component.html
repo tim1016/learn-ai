@@ -6,6 +6,7 @@
 } @else if (target(); as target) {
   @if (accountId(); as accountId) {
     <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" />
+    <app-deploy-resume-bots [target]="target" [accountId]="accountId" />
   }
 } @else {
   <section class="deploy-tab-context" role="status" aria-label="Loading Alpaca deploy context">

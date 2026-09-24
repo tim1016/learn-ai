@@ -86,6 +86,7 @@ async function renderDeployTab(options: {
         provide: BrokerV2PanelService,
         useValue: {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW),
+          getCatalog: vi.fn().mockResolvedValue([]),
           previewStartAdmission: vi.fn(),
           deployBot: vi.fn(),
         },

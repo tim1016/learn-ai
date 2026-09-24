@@ -1,0 +1,92 @@
+.resume-bots {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+  padding: var(--space-6);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+h2,
+h3 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+h2 {
+  font-size: var(--fs-h2);
+}
+
+p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.resume-bots__header {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.resume-bots__muted {
+  color: var(--text-subtle);
+}
+
+.resume-bots__outcome {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid rgba(38, 166, 154, 0.42);
+  border-radius: var(--radius-md);
+}
+
+.resume-bots__outcome--refused {
+  border-color: var(--bear);
+}
+
+.resume-bots__verdict {
+  color: var(--text-primary);
+  font-weight: var(--fw-bold);
+}
+
+dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+dt {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+dd {
+  margin: 0;
+}
+
+.resume-bots__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.resume-bots__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-light);
+}
+
+.resume-bots__symbol {
+  margin-left: var(--space-2);
+  color: var(--text-subtle);
+}
