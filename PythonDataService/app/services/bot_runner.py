@@ -195,6 +195,7 @@ __all__ = [
     "UnknownBotError",
     "drained_lane_start_gate",
     "go_live_start_gate",
+    "refused_lane_start_gate",
 ]
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,25 @@ def drained_lane_start_gate(is_draining: Callable[[], bool]) -> LaneStartGate:
             )
 
     return refuse_if_lane_drained
+
+
+def refused_lane_start_gate(refusal: Callable[[], str | None]) -> LaneStartGate:
+    """#2320/#2321: an offline lane the coordinator refused starts no new runs.
+
+    ``refusal`` returns the coordinator's reason code while it refuses to
+    readmit this lane, ``None`` otherwise; a later admission reopens starts.
+    """
+
+    def refuse_if_lane_refused(_strategy_instance_id: str) -> None:
+        reason = refusal()
+        if reason is not None:
+            raise RunAdmissionRefusedError(
+                "The fleet coordinator refused this lane; it starts no new bots.",
+                detail=f"The coordinator answered this lane's registration with "
+                f"{reason}. New starts refuse until it admits the lane again.",
+            )
+
+    return refuse_if_lane_refused
 
 
 def go_live_start_gate(read_hold: Callable[[], GoLiveHoldState]) -> LaneStartGate:

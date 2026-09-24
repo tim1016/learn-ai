@@ -313,7 +313,11 @@ async def lifespan(app: FastAPI):
     # opens on the clerk volume — before the installation lock file, before
     # the profiles database, before the broker client.
     fleet_lane = await _open_verified_fleet_lane()
-    if fleet_lane is not None and fleet_lane.online:
+    if fleet_lane is not None:
+        # An offline boot (FR-066) beats too: its beat is how it rejoins and
+        # hears its drain or retirement once the coordinator answers (#2321);
+        # its identity echo reads no session until then.
+        #
         # Presence belongs to the lane, not to its binding. The installation
         # below installs no binding on four reachable paths — the lock refused
         # this process, the profiles database is unavailable, a profile was
@@ -634,7 +638,9 @@ async def _service_lifespan(
             alpaca_clerk_runtime = await acknowledge_runtime_binding(
                 bound=alpaca_binding, runtime=alpaca_clerk_runtime,
             )
-            if fleet_lane is not None and fleet_lane.online:
+            if fleet_lane is not None:
+                # Offline, this holds the evidence-vouched grant for the
+                # beat to re-present once the lane rejoins (#2321).
                 from app.broker.alpaca.clerk.fleet_boot import confirm_and_report
                 from app.broker_configuration.runtime import (
                     get_broker_configuration_service,
@@ -810,6 +816,7 @@ async def _service_lifespan(
         BotTaskRegistry,
         drained_lane_start_gate,
         go_live_start_gate,
+        refused_lane_start_gate,
         set_bot_task_registry,
     )
     from app.services.strategy_validation_admission import current_deployment_strategy_validation_fact
@@ -828,6 +835,11 @@ async def _service_lifespan(
                 # new bot start refuses; existing bots settle undisturbed. Probed
                 # per request, so the drain lands on the next operator action.
                 drained_lane_start_gate(lambda: fleet_lane is not None and fleet_lane.draining),
+                # #2320/#2321: an offline lane the coordinator answered with a
+                # refusal starts nothing until it is admitted again.
+                refused_lane_start_gate(
+                    lambda: None if fleet_lane is None else fleet_lane.admission_refusal
+                ),
                 # #2269: a lane restored by installation migration starts no bot
                 # until `migrate_installation go-live` removes the hold marker
                 # import wrote at its clerk volume root — read there, not at the
@@ -906,11 +918,22 @@ async def _service_lifespan(
         retiring_registry = bot_task_registry
         retired_clerk_id = fleet_lane.clerk_id
 
+        stopping_lane = fleet_lane
+
         async def _stop_bots_on_retired_lane() -> bool:
+            # #2320/#2321: an offline lane the coordinator refused stops its
+            # bots through the same hook; the receipt names which it was.
+            if stopping_lane.retired:
+                operator = "fleet_lane_retired"
+                change_ref = f"clerk {retired_clerk_id} retired by the fleet coordinator"
+            else:
+                operator = "fleet_lane_admission_refused"
+                change_ref = (
+                    f"clerk {retired_clerk_id} refused by the fleet coordinator: "
+                    f"{stopping_lane.admission_refusal}"
+                )
             receipt = await stop_all_bots_on_lane(
-                retiring_registry,
-                operator="fleet_lane_retired",
-                change_ref=f"clerk {retired_clerk_id} retired by the fleet coordinator",
+                retiring_registry, operator=operator, change_ref=change_ref
             )
             return receipt.all_stopped
 

@@ -60,6 +60,7 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.presence import (
     FleetLaneRetired,
     FleetPresenceError,
+    FleetPresenceRefused,
     LocalPresence,
     RemotePresence,
     SessionInfo,
@@ -817,16 +818,21 @@ def _not_found_coordinator_app() -> FastAPI:
     return coordinator
 
 
-async def test_remote_presence_keeps_a_plain_not_found_in_the_unavailability_family() -> None:
+async def test_remote_presence_reads_a_plain_not_found_as_a_refusal_not_retirement() -> None:
+    """Retirement is learned only from its typed code (#2351); a plain
+    not-found is the coordinator's refusal — never retirement, and since
+    #2320 never unavailability either (FR-066 rides out only an outage)."""
     server = _RealServer(_not_found_coordinator_app())
     server.start()
     try:
         presence = RemotePresence(base_url=server.base_url, agent_service_token=CLERK_TOKEN)
-        with pytest.raises(FleetPresenceError):
+        with pytest.raises(FleetPresenceRefused) as refused:
             await presence.observe(
                 clerk_id="clrk_aaaaaaaaaaaaaaaaaaaaaaaa",
                 agent_instance_id="agnt_0000000000000000000000aa",
             )
+        assert not isinstance(refused.value, FleetLaneRetired | FleetPresenceError)
+        assert refused.value.coordinator_reason == "clerk_not_found"
     finally:
         server.stop()
 

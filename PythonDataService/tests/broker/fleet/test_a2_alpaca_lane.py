@@ -2373,24 +2373,22 @@ async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
         service.close()
 
 
-async def test_a_reachable_coordinator_that_refuses_expectation_boots_offline_too(
+async def test_a_reachable_coordinator_that_refuses_expectation_refuses_the_boot(
     control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FR-066 also covers refusal, not only unreachability.
+    """A refusal is the coordinator's answer, not its absence (#2320).
 
     Distinct from ``test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple``
-    above: that test dials a dead port and never gets a response at all. Here
-    the coordinator is a real, reachable process that answers every
-    boot-time ``expectation()`` call with a plain 403 — a wrong token or an
-    unknown clerk, never a connection failure.
+    above: that test dials a dead port and never gets a response at all, and
+    FR-066 rides that out offline. Here the coordinator is a real, reachable
+    process that answers every boot-time ``expectation()`` call with a plain
+    403 — a wrong token or an unknown clerk, never a connection failure.
 
-    The only reason this still reaches the FR-066 offline fallback is that
-    ``RemotePresence.expectation``'s non-200 branch in
-    ``app/broker/fleet/presence.py`` raises ``FleetPresenceError``. Before
-    that reclassification it raised the base ``FleetControlError``, which
-    ``fleet_boot.py``'s ``except FleetPresenceError as exc:`` does not catch
-    — boot would crash instead of falling back to the already-confirmed
-    evidence, for an already-confirmed live lane.
+    This test once pinned the opposite (FR-066 covering refusal too). That
+    was the #2320 defect: a retired or unknown clerk, or a mixed build the
+    version fences refused, booted its last binding offline against the very
+    coordinator that had just refused it. Now the boot refuses, and the
+    evidence is left untouched — a refusal is not a lifecycle lesson.
     """
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
@@ -2435,20 +2433,13 @@ async def test_a_reachable_coordinator_that_refuses_expectation_boots_offline_to
             CLERK_ID=provisioned.clerk.clerk_id,
             WORKER_KEY=provisioned.clerk.worker_key,
         )
-        from app.broker.alpaca.clerk.fleet_boot import offline_boot_matches, open_fleet_lane
+        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused, open_fleet_lane
 
-        boot = await open_fleet_lane(settings=settings, volume_root=root)
+        with pytest.raises(FleetBootRefused, match="refused"):
+            await open_fleet_lane(settings=settings, volume_root=root)
 
-        assert boot is not None
-        assert not boot.online
-        assert boot.offline_reason is not None
-        assert "refused" in boot.offline_reason
-        assert offline_boot_matches(
-            boot,
-            canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789",
-            effective_profile_id="prof_1",
-            effective_revision=2,
-        )
+        evidence = read_confirmation_evidence(root)
+        assert evidence is not None and evidence.lifecycle_state == "provisioned"
     finally:
         server.stop()
         service.close()

@@ -53,15 +53,45 @@ class SessionInfo:
 
 
 class FleetPresenceError(FleetControlError):
-    """The coordinator could not be reached or refused the presence call.
+    """The coordinator could not be reached, or failed serving the call (5xx).
 
     The agent's boot treats this exactly like the coordinator being absent
     (PRD FR-066): an already-confirmed lane may recover its last-effective
     binding; a first assignment, a changed binding and new enrolment refuse.
+    A coordinator that *answered* with a refusal is never this family — see
+    ``FleetPresenceRefused``.
     """
 
     reason = "fleet_presence_unavailable"
     status_code = 503
+
+
+class FleetPresenceRefused(FleetControlError):
+    """A reachable coordinator answered this presence call with a refusal (#2320).
+
+    Deliberately *not* a ``FleetPresenceError``: FR-066's offline fallback
+    rides out a coordinator the lane cannot reach, never one that answered.
+    An unknown clerk, a mixed build refused by the version fences, a token
+    the coordinator does not accept — each is the coordinator's word about
+    this lane, and a lane that read it as absence booted its last binding
+    offline against the very coordinator that had just refused it (#2320,
+    #2340). ``coordinator_reason`` carries the refusal's own code when the
+    body had one.
+    """
+
+    reason = "fleet_presence_refused"
+    status_code = 409
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        coordinator_reason: str | None,
+        next_step: str | None = None,
+    ) -> None:
+        """Capture the refusal and the coordinator's own reason code."""
+        super().__init__(message, next_step=next_step)
+        self.coordinator_reason = coordinator_reason
 
 
 class FleetLaneDraining(FleetControlError):
@@ -403,7 +433,8 @@ class RemotePresence:
             )
         if response.status_code != 200:
             detail = _error_detail(response)
-            if _error_reason(response) == "clerk_lane_draining":
+            coordinator_reason = _error_reason(response)
+            if coordinator_reason == "clerk_lane_draining":
                 # The refusal the lane must learn from, kept clearly out of
                 # the unavailability family: FR-066's offline fallback would
                 # otherwise boot the drained binding right back up (#2155).
@@ -412,7 +443,7 @@ class RemotePresence:
                     next_step="Finish the drain ceremony on the coordinator; "
                     "this lane marks its own evidence drained and stays down.",
                 )
-            if _error_reason(response) == "clerk_lane_retired":
+            if coordinator_reason == "clerk_lane_retired":
                 # Retirement is news about this lane, not an outage (#2351):
                 # the lane stops its bots and its beat rather than falling
                 # back to FR-066's offline boot or re-registering forever.
@@ -421,11 +452,9 @@ class RemotePresence:
                     next_step="Nothing re-enrols a retired lane; this lane "
                     "stops its bots and decommissions.",
                 )
-            raise FleetPresenceError(
+            raise _refused(
+                response,
                 f"The fleet coordinator refused {path}: {detail or response.status_code}",
-                next_step="Retry once the coordinator is reachable; an "
-                "already-confirmed lane may recover its last-effective "
-                "binding meanwhile.",
             )
         try:
             body = response.json()
@@ -464,11 +493,10 @@ class RemotePresence:
                 f"for clerk {clerk_id}: {response.status_code}.",
             )
         if response.status_code != 200:
-            raise FleetPresenceError(
+            raise _refused(
+                response,
                 "The fleet coordinator refused to serve the volume expectation "
                 f"for clerk {clerk_id}: {_error_detail(response) or response.status_code}",
-                next_step="Retry the volume-expectation call once the "
-                "coordinator is reachable.",
             )
         try:
             body = response.json()
@@ -657,6 +685,17 @@ def matches_service_token(presented: str, expected: str) -> bool:
     return hmac.compare_digest(presented, expected)
 
 
+def _refused(response: object, message: str) -> FleetPresenceRefused:
+    """A reachable coordinator's non-lesson 4xx: its answer, not an outage (#2320)."""
+    coordinator_reason = _error_reason(response)
+    return FleetPresenceRefused(
+        message if coordinator_reason is None else f"{message} ({coordinator_reason})",
+        coordinator_reason=coordinator_reason,
+        next_step="The coordinator answered; this lane runs nothing on a "
+        "refusal. Resolve the refusal it names, then restart the lane.",
+    )
+
+
 def _error_detail(response: object) -> str | None:
     """Best-effort reason extraction from a refusal body."""
     body = _error_body(response)
@@ -730,6 +769,7 @@ __all__ = [
     "FleetLaneRetired",
     "FleetPresence",
     "FleetPresenceError",
+    "FleetPresenceRefused",
     "LocalPresence",
     "RemotePresence",
     "SessionInfo",

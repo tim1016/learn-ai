@@ -153,9 +153,13 @@
       "status_code": 404,
       "meaning": "The coordinator refused this presence call because the lane's own clerk is retired."
     },
+    "fleet_presence_refused": {
+      "status_code": 409,
+      "meaning": "A reachable coordinator answered the agent's presence call with a refusal."
+    },
     "fleet_presence_unavailable": {
       "status_code": 503,
-      "meaning": "The coordinator could not be reached or refused the agent's presence call."
+      "meaning": "The coordinator could not be reached, or failed serving the agent's presence call."
     },
     "fleet_protocol_incompatible": {
       "status_code": 409,
