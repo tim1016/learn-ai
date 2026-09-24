@@ -133,6 +133,36 @@ class RetainedContinuityEvent(FeedContinuityEvent):
     evidence_seq: int = Field(ge=1)
 
 
+WarmupJoinOutcome = Literal["contiguous", "filled", "refused"]
+
+
+class RetainedWarmupJoin(BaseModel):
+    """How one resumed run joined its retained bars to the present (#2314).
+
+    ``contiguous`` means the retained bars already reached every minute the
+    run decides on; ``filled`` means ``filled_count`` IBKR history bars
+    spanning ``filled_start_ms``..``filled_end_ms`` were retained first;
+    ``refused`` means the hole could not be filled and ``reason_code`` says
+    why. A fresh run, which retained nothing, records no join.
+
+    ``warm_from_ms`` is set when the hole outran the sealed warmup lookback:
+    the run warmed only on bars opening at or after it, like a fresh deploy,
+    and its replay proof must too.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: str
+    outcome: WarmupJoinOutcome
+    retained_end_ms: int = Field(ge=0)
+    joined_at_ms: int = Field(ge=0)
+    filled_count: int = Field(default=0, ge=0)
+    filled_start_ms: int | None = None
+    filled_end_ms: int | None = None
+    warm_from_ms: int | None = None
+    reason_code: str | None = None
+
+
 class SourceBarConflictError(RuntimeError):
     """A provider reused evidence identity or violated delivery monotonicity."""
 
@@ -308,6 +338,54 @@ class SourceBarLedger:
     def append_history(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
         """Persist one ordered warmup observation before live delivery begins."""
         return self._append(bar, delivery="history", run_id=run_id)
+
+    def append_backfill(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
+        """Persist one history bar that fills the hole after the retained tail (#2314).
+
+        The one history delivery allowed after live delivery has begun: a
+        resumed run fills the minutes no run observed live, before its own
+        live stream starts. The monotonic rule still applies, so a backfill
+        can only extend the stream past its newest retained bar — it never
+        rewrites or interleaves with an observation already made.
+        """
+        return self._append(bar, delivery="backfill", run_id=run_id)
+
+    def record_warmup_join(self, join: RetainedWarmupJoin) -> None:
+        """Record, once per run, how its retained bars were joined to the present."""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO source_run_warmup_join (
+                    run_id, outcome, retained_end_ms, joined_at_ms, filled_count,
+                    filled_start_ms, filled_end_ms, warm_from_ms, reason_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (
+                    join.run_id,
+                    join.outcome,
+                    join.retained_end_ms,
+                    join.joined_at_ms,
+                    join.filled_count,
+                    join.filled_start_ms,
+                    join.filled_end_ms,
+                    join.warm_from_ms,
+                    join.reason_code,
+                ),
+            )
+
+    def warmup_join(self, *, run_id: str) -> RetainedWarmupJoin | None:
+        """The run's recorded join, or ``None`` for a fresh run or a pre-#2314 file."""
+        with self._lock:
+            has_table = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_run_warmup_join'"
+            ).fetchone()
+            if has_table is None:
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM source_run_warmup_join WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return None if row is None else RetainedWarmupJoin.model_validate(dict(row))
 
     def append_event(self, event: FeedContinuityEvent, *, run_id: str) -> ContinuityEventRef:
         """Persist one continuity fact and its journal position in one transaction.
@@ -590,7 +668,7 @@ class SourceBarLedger:
         self,
         bar: MarketDataBar,
         *,
-        delivery: Literal["history", "live"],
+        delivery: Literal["history", "backfill", "live"],
         run_id: str | None,
     ) -> RetainedSourceBar:
         candidate = RetainedSourceBar.from_market_bar(seq=1, account_id=self.account_id, bar=bar)

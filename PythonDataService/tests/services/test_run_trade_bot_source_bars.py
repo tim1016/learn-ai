@@ -304,7 +304,9 @@ async def test_retained_feed_appends_bars_with_the_run_id_and_provenance(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_retained_warmup_bars_keep_their_continuity_provenance(tmp_path: Path) -> None:
+async def test_retained_warmup_bars_keep_their_continuity_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Resume must not launder a recovered bar into an ordinary one (ruling P4).
 
     Warmup after a crash replays the retained rows, so the provenance a
@@ -312,6 +314,8 @@ async def test_retained_warmup_bars_keep_their_continuity_provenance(tmp_path: P
     continuity event explains it -- has to survive the rebuild. Dropping it
     would let a resumed run's evidence claim every warmup bar was ordinary.
     """
+    # Resumed the instant the retained bar closed: no hole to fill (#2314).
+    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: _T0 + 60_000)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
         ledger.append(

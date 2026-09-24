@@ -1054,6 +1054,7 @@ class RunReplayProofService:
                     else stored_evidence_end_seq
                 )
                 events = ledger.events(run_id=run_record.run_id, evidence_end_seq=evidence_end_seq)
+                warmup_join = ledger.warmup_join(run_id=run_record.run_id)
             finally:
                 ledger.close(checkpoint=False)
             bars = bounded_replay_bars(
@@ -1062,6 +1063,11 @@ class RunReplayProofService:
                 terminal_recorded_at_ms=terminal_recorded_at_ms,
                 evidence_end_seq=evidence_end_seq,
             )
+            # A resume whose hole outran the sealed lookback warmed like a fresh
+            # deploy, on the bars from ``warm_from_ms`` only (#2314); the run's
+            # input starts there, so its replay does too.
+            if warmup_join is not None and warmup_join.warm_from_ms is not None:
+                bars = [bar for bar in bars if bar.start_ms >= warmup_join.warm_from_ms]
             if not bars:
                 raise RunReplayUnavailableError(
                     f"No retained source bars exist for {binding.symbol!r} within this run's bounds.",

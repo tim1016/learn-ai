@@ -63,6 +63,23 @@ WARMUP_HISTORY_UNAVAILABLE = "WARMUP_HISTORY_UNAVAILABLE"
 not be fetched or was not covered by what was fetched (#2365). The run is
 refused rather than started cold."""
 
+RESUME_HOLE_AFTER_HOURS = "RESUME_HOLE_AFTER_HOURS"
+"""``MarketDataFeedError.reason`` for a resumed run whose retained bars end
+before an extended-hours minute its session decides on (#2314). IBKR's
+1-minute history reproduces the live-assembled regular-hours minutes exactly
+but not the extended-hours ones, so that hole cannot be filled faithfully and
+the run is refused."""
+
+RESUME_HOLE_UNFILLED = "RESUME_HOLE_UNFILLED"
+"""``MarketDataFeedError.reason`` for a resumed run whose retained bars end
+before regular-hours minutes the IBKR 1-minute history did not return (#2314).
+Warming across the hole would decide on indicators that skipped it."""
+
+WARMUP_REFUSAL_REASONS = frozenset(
+    {WARMUP_HISTORY_UNAVAILABLE, RESUME_HOLE_AFTER_HOURS, RESUME_HOLE_UNFILLED}
+)
+"""Every reason a run is refused during warmup, before it decided anything."""
+
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
 """Canonical session-phase label. Single definition repo-wide: every other site

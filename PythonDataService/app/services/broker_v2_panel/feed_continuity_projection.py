@@ -9,8 +9,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from app.schemas.broker_v2_panel import FeedContinuityEventView, FeedContinuityView
-from app.services.source_bar_ledger import RetainedContinuityEvent
+from app.marketdata.feed import (
+    RESUME_HOLE_AFTER_HOURS,
+    RESUME_HOLE_UNFILLED,
+    WARMUP_HISTORY_UNAVAILABLE,
+)
+from app.schemas.broker_v2_panel import (
+    FeedContinuityEventView,
+    FeedContinuityView,
+    WarmupJoinView,
+)
+from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedWarmupJoin
 
 _CONTINUITY_EVENT_COPY: dict[str, tuple[str, str]] = {
     "interruption": (
@@ -192,4 +201,73 @@ def build_feed_continuity(
         last_recovery_at_ms=last_recovery_at_ms,
         latest_bar_at_ms=latest_bar_at_ms,
         events=event_views[-12:],
+    )
+
+
+WARMUP_REFUSAL_COPY: dict[str, tuple[str, str]] = {
+    RESUME_HOLE_AFTER_HOURS: (
+        "Refused: after-hours hole",
+        "This bot decides on extended-hours minutes, and some passed while it was stopped. "
+        "IBKR history does not reproduce extended-hours minutes exactly, so the gap cannot "
+        "be filled and the run was refused rather than warmed across it. Deploy a new bot "
+        "instead of resuming this one.",
+    ),
+    RESUME_HOLE_UNFILLED: (
+        "Refused: gap could not be filled",
+        "IBKR history did not return every regular-hours minute that passed while the bot "
+        "was stopped, so the run was refused rather than warmed across the gap. Check that "
+        "IB Gateway's historical-data farm is connected, then resume again.",
+    ),
+    WARMUP_HISTORY_UNAVAILABLE: (
+        "Refused: warmup history unavailable",
+        "The run's sealed warmup lookback could not be fetched in full from IB Gateway, so it "
+        "was refused rather than started cold. Before starting again, check that the Gateway "
+        "is logged in, its historical-data farm is connected (not paced or down), and the "
+        "symbol qualifies as a contract.",
+    ),
+}
+"""Operator copy for each warmup refusal. The duty-outcome card reads the same map."""
+
+
+def build_warmup_join(join: RetainedWarmupJoin | None) -> WarmupJoinView | None:
+    """Project one run's recorded warmup join, or ``None`` when it recorded none."""
+    if join is None:
+        return None
+    history_only = join.warm_from_ms is not None
+    if join.outcome == "refused":
+        assert join.reason_code is not None  # the store's CHECK pairs them
+        label, explanation = WARMUP_REFUSAL_COPY.get(
+            join.reason_code,
+            ("Refused during warmup", "The run was refused before it decided anything."),
+        )
+    elif join.outcome == "contiguous":
+        label, explanation = (
+            "Warmed on its retained bars",
+            "The bars kept from earlier runs already reached this resume; nothing was missing.",
+        )
+    elif history_only:
+        label, explanation = (
+            "Warmed from IBKR history",
+            f"The bot was stopped for longer than its warmup lookback, so it warmed on that "
+            f"lookback's IBKR 1-minute history ({join.filled_count} bars), as a fresh deploy does.",
+        )
+    else:
+        label, explanation = (
+            f"Filled {join.filled_count} missing bars from IBKR history",
+            "The minutes that passed while the bot was stopped were fetched from IBKR 1-minute "
+            "history, which matches the live-built regular-hours minutes exactly, and replayed "
+            "before the bot decided anything.",
+        )
+    return WarmupJoinView(
+        run_id=join.run_id,
+        state=join.outcome,
+        label=label,
+        explanation=explanation,
+        retained_end_ms=join.retained_end_ms,
+        joined_at_ms=join.joined_at_ms,
+        filled_count=join.filled_count,
+        filled_start_ms=join.filled_start_ms,
+        filled_end_ms=join.filled_end_ms,
+        warmed_from_history_only=history_only,
+        reason_code=join.reason_code,
     )

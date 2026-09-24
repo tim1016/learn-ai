@@ -283,6 +283,32 @@ class FeedContinuityView(BaseModel):
     events: list[FeedContinuityEventView]
 
 
+class WarmupJoinView(BaseModel):
+    """How the current run joined its retained bars to the present (#2314).
+
+    Present only for a run that resumed on retained bars. ``state`` is
+    ``contiguous`` (nothing missing), ``filled`` (the hole was fetched from
+    IBKR 1-minute history before warmup) or ``refused`` (the hole could not
+    be filled, so the run never decided). ``warmed_from_history_only`` means
+    the bot was stopped longer than its warmup lookback and warmed on that
+    lookback's history, as a fresh deploy does.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    state: Literal["contiguous", "filled", "refused"]
+    label: str
+    explanation: str
+    retained_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    joined_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    filled_count: int = Field(ge=0)
+    filled_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    filled_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    warmed_from_history_only: bool
+    reason_code: str | None
+
+
 class ClerkCard(BaseModel):
     """Account/clerk card beside the rail (§7.3)."""
 
@@ -572,6 +598,9 @@ class BotPanelView(BaseModel):
     revision: int
     market_pulse: MarketPulseView
     feed_continuity: FeedContinuityView
+    # ``None`` for a fresh run, a run whose ledger is unreadable, or a run
+    # that has not reached warmup yet.
+    warmup_join: WarmupJoinView | None = None
     mission_verdict: MissionVerdictView
     execution_policy: str
     health: BotHealthCard

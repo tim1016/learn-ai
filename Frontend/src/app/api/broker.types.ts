@@ -9362,6 +9362,7 @@ export interface components {
             symbol: string;
             /** Updated At Ms */
             updated_at_ms: number;
+            warmup_join?: components["schemas"]["WarmupJoinView"] | null;
             /** Working Orders */
             working_orders: components["schemas"]["WorkingOrderView"][];
         };
@@ -26720,6 +26721,44 @@ export interface components {
              * @default
              */
             train_start?: string;
+        };
+        /**
+         * WarmupJoinView
+         * @description How the current run joined its retained bars to the present (#2314).
+         *
+         *     Present only for a run that resumed on retained bars. ``state`` is
+         *     ``contiguous`` (nothing missing), ``filled`` (the hole was fetched from
+         *     IBKR 1-minute history before warmup) or ``refused`` (the hole could not
+         *     be filled, so the run never decided). ``warmed_from_history_only`` means
+         *     the bot was stopped longer than its warmup lookback and warmed on that
+         *     lookback's history, as a fresh deploy does.
+         */
+        WarmupJoinView: {
+            /** Explanation */
+            explanation: string;
+            /** Filled Count */
+            filled_count: number;
+            /** Filled End Ms */
+            filled_end_ms: number | null;
+            /** Filled Start Ms */
+            filled_start_ms: number | null;
+            /** Joined At Ms */
+            joined_at_ms: number;
+            /** Label */
+            label: string;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Retained End Ms */
+            retained_end_ms: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "contiguous" | "filled" | "refused";
+            /** Warmed From History Only */
+            warmed_from_history_only: boolean;
         };
         /**
          * WindowSummary

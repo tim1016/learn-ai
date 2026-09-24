@@ -1,0 +1,311 @@
+"""A resumed run fills the hole after its retained bars from history, or is refused (#2314)."""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.marketdata.feed import (
+    RESUME_HOLE_AFTER_HOURS,
+    RESUME_HOLE_UNFILLED,
+    MarketDataBar,
+    MarketDataFeedError,
+)
+from app.services.bot_trade_strategy import _RetainedSourceBarFeed
+from app.services.decision_session import RunDecisionSession
+from app.services.retained_tail_join import join_retained_tail, owed_hole
+from app.services.session_authority import et_minute_of_day_ms
+from app.services.source_bar_ledger import SourceBarConflictError, SourceBarLedger
+
+_RTH = RunDecisionSession(kind="rth", window=None)
+_EXTENDED = RunDecisionSession(
+    kind="extended", window=ExtendedHoursWindow(open_minute_et=7 * 60, close_minute_et=18 * 60)
+)
+_WED, _THU = date(2026, 9, 23), date(2026, 9, 24)
+_MIN = 60_000
+
+
+def _et(day: date, hour: int, minute: int) -> int:
+    return et_minute_of_day_ms(day, hour * 60 + minute)
+
+
+def _minute_bar(start_ms: int, *, phase: str = "RTH", close: str = "500") -> MarketDataBar:
+    return MarketDataBar(
+        symbol="SPY",
+        start_ms=start_ms,
+        end_ms=start_ms + _MIN,
+        open=Decimal(close),
+        high=Decimal(close),
+        low=Decimal(close),
+        close=Decimal(close),
+        volume=100,
+        fetched_at_ms=start_ms + _MIN,
+        feed_id="ibkr",
+        session_phase=phase,
+        provenance="history",
+    )
+
+
+def _regular_bars(day: date, *, until_end_ms: int | None = None) -> list[MarketDataBar]:
+    """Every regular-hours minute of ``day`` whose close is at or before ``until_end_ms``."""
+    window = session_window_for_date(day)
+    last_end = window.close_ms_utc if until_end_ms is None else until_end_ms
+    return [
+        _minute_bar(start)
+        for start in range(window.open_ms_utc, window.close_ms_utc, _MIN)
+        if start + _MIN <= last_end
+    ]
+
+
+class _HistoryFeed:
+    """IBKR's history endpoint: serves fixed bars and records each lookback asked for."""
+
+    feed_id = "ibkr"
+
+    def __init__(self, bars: list[MarketDataBar]) -> None:
+        self._bars = bars
+        self.lookbacks: list[int] = []
+
+    async def recent_closed_bars(
+        self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
+    ) -> list[MarketDataBar]:
+        del symbol
+        assert use_rth is False  # the ledger retains unfiltered observations
+        self.lookbacks.append(lookback_days)
+        return list(self._bars)
+
+
+# ── owed_hole ────────────────────────────────────────────────────────────────
+
+
+def test_owed_hole_counts_the_regular_minutes_a_mid_session_stop_skipped() -> None:
+    hole = owed_hole(_RTH, retained_end_ms=_et(_THU, 10, 7), now_ms=_et(_THU, 13, 0) + 30_000)
+
+    assert hole.regular_minute_ends_ms[0] == _et(_THU, 10, 8)
+    assert hole.regular_minute_ends_ms[-1] == _et(_THU, 13, 0)
+    assert len(hole.regular_minute_ends_ms) == 173
+    assert hole.extended_minute_end_ms is None
+
+
+def test_owed_hole_is_empty_across_a_closed_night_for_a_regular_session() -> None:
+    open_ms = session_window_for_date(_THU).open_ms_utc
+    hole = owed_hole(
+        _RTH, retained_end_ms=session_window_for_date(_WED).close_ms_utc, now_ms=open_ms
+    )
+
+    assert hole.regular_minute_ends_ms == ()
+    assert hole.extended_minute_end_ms is None
+
+
+def test_owed_hole_names_the_first_extended_minute_an_extended_session_decides_on() -> None:
+    hole = owed_hole(_EXTENDED, retained_end_ms=_et(_WED, 17, 0), now_ms=_et(_THU, 10, 0))
+
+    assert hole.extended_minute_end_ms == _et(_WED, 17, 1)
+
+
+# ── join_retained_tail ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_join_fills_the_hole_from_history() -> None:
+    now_ms = _et(_THU, 13, 0) + 30_000
+    feed = _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms))
+
+    join = await join_retained_tail(
+        feed, symbol="SPY", session=_RTH, retained_end_ms=_et(_THU, 10, 7), now_ms=now_ms, lookback_days=5
+    )
+
+    assert feed.lookbacks == [1]
+    assert join.filled[0].start_ms == _et(_THU, 10, 7)
+    assert join.filled[-1].end_ms == _et(_THU, 13, 0)
+    assert len(join.filled) == 173
+    assert join.warm_from_ms is None
+
+
+@pytest.mark.asyncio
+async def test_join_does_not_fetch_when_nothing_is_owed() -> None:
+    feed = _HistoryFeed([])
+    retained_end_ms = _et(_THU, 10, 7)
+
+    join = await join_retained_tail(
+        feed, symbol="SPY", session=_RTH, retained_end_ms=retained_end_ms,
+        now_ms=retained_end_ms + 59_000, lookback_days=5,
+    )
+
+    assert join.filled == ()
+    assert feed.lookbacks == []
+
+
+@pytest.mark.asyncio
+async def test_join_refuses_when_history_misses_an_owed_minute() -> None:
+    now_ms = _et(_THU, 13, 0) + 30_000
+    bars = [bar for bar in _regular_bars(_THU, until_end_ms=now_ms) if bar.end_ms != _et(_THU, 11, 0)]
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await join_retained_tail(
+            _HistoryFeed(bars), symbol="SPY", session=_RTH,
+            retained_end_ms=_et(_THU, 10, 7), now_ms=now_ms, lookback_days=5,
+        )
+
+    assert refused.value.reason == RESUME_HOLE_UNFILLED
+
+
+@pytest.mark.asyncio
+async def test_join_refuses_an_extended_session_hole_without_fetching() -> None:
+    feed = _HistoryFeed(_regular_bars(_THU))
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await join_retained_tail(
+            feed, symbol="SPY", session=_EXTENDED,
+            retained_end_ms=_et(_WED, 17, 0), now_ms=_et(_THU, 10, 0), lookback_days=5,
+        )
+
+    assert refused.value.reason == RESUME_HOLE_AFTER_HOURS
+    assert feed.lookbacks == []
+
+
+@pytest.mark.asyncio
+async def test_a_hole_longer_than_the_lookback_warms_on_the_lookback_history_only() -> None:
+    """A week-old tail is outside a two-day warmup: fetch two days, not the week."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+    feed = _HistoryFeed(history)
+
+    join = await join_retained_tail(
+        feed, symbol="SPY", session=_RTH,
+        retained_end_ms=_et(date(2026, 9, 16), 10, 7), now_ms=now_ms, lookback_days=2,
+    )
+
+    assert feed.lookbacks == [2]
+    assert join.warm_from_ms == history[0].start_ms
+    assert len(join.filled) == len(history)
+
+
+# ── _RetainedSourceBarFeed (the resumed run's warmup) ───────────────────────
+
+
+def _ledger_with_live_bars_through(tmp_path: Path, end_ms: int) -> SourceBarLedger:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:resume")
+    for bar in _regular_bars(_THU, until_end_ms=end_ms):
+        ledger.append(bar.model_copy(update={"provenance": "realtime"}), run_id="run-1")
+    return ledger
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_run_warms_on_a_series_with_no_hole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2314 regression: Stop at 10:07, Resume at 13:00 -- warmup used to jump the gap."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
+    try:
+        feed = _RetainedSourceBarFeed(
+            _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms)), ledger, run_id="run-2", session=_RTH
+        )
+
+        warmup = await feed.recent_closed_bars("SPY", use_rth=True)
+
+        ends = [bar.end_ms for bar in warmup]
+        assert all(later - earlier == _MIN for earlier, later in zip(ends, ends[1:], strict=False))
+        assert ends[-1] == _et(_THU, 13, 0)
+        backfilled = [row for row in ledger.bars(provider="ibkr", symbol="SPY") if row.run_id == "run-2"]
+        assert len(backfilled) == 173
+        assert {row.provenance for row in backfilled} == {"history"}
+        join = ledger.warmup_join(run_id="run-2")
+        assert join is not None
+        assert (join.outcome, join.filled_count) == ("filled", 173)
+        assert (join.filled_start_ms, join.filled_end_ms) == (_et(_THU, 10, 7), _et(_THU, 13, 0))
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_run_with_nothing_missing_records_a_contiguous_join(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.services.bot_trade_strategy.now_ms_utc", lambda: _et(_THU, 10, 7) + 20_000
+    )
+    ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
+    try:
+        feed = _RetainedSourceBarFeed(_HistoryFeed([]), ledger, run_id="run-2", session=_RTH)
+
+        warmup = await feed.recent_closed_bars("SPY", use_rth=True)
+
+        assert warmup[-1].end_ms == _et(_THU, 10, 7)
+        join = ledger.warmup_join(run_id="run-2")
+        assert join is not None and join.outcome == "contiguous"
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unfillable_hole_refuses_the_run_and_records_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now_ms = _et(_THU, 13, 0) + 30_000
+    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
+    try:
+        feed = _RetainedSourceBarFeed(_HistoryFeed([]), ledger, run_id="run-2", session=_RTH)
+
+        with pytest.raises(MarketDataFeedError) as refused:
+            await feed.recent_closed_bars("SPY", use_rth=True)
+
+        assert refused.value.reason == RESUME_HOLE_UNFILLED
+        join = ledger.warmup_join(run_id="run-2")
+        assert join is not None
+        assert (join.outcome, join.reason_code) == ("refused", RESUME_HOLE_UNFILLED)
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_a_hole_past_the_lookback_drops_the_stale_retained_bars_from_warmup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now_ms = _et(_THU, 13, 0) + 30_000
+    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:resume")
+    stale_day = date(2026, 9, 16)
+    for bar in _regular_bars(stale_day, until_end_ms=_et(stale_day, 10, 7)):
+        ledger.append(bar.model_copy(update={"provenance": "realtime"}), run_id="run-1")
+    history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+    try:
+        feed = _RetainedSourceBarFeed(_HistoryFeed(history), ledger, run_id="run-2", session=_RTH)
+
+        warmup = await feed.recent_closed_bars("SPY", use_rth=True, lookback_days=2)
+
+        assert warmup[0].start_ms == history[0].start_ms
+        join = ledger.warmup_join(run_id="run-2")
+        assert join is not None and join.warm_from_ms == history[0].start_ms
+    finally:
+        ledger.close()
+
+
+# ── ledger ───────────────────────────────────────────────────────────────────
+
+
+def test_backfill_is_accepted_after_live_delivery_but_stays_monotonic(tmp_path: Path) -> None:
+    ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
+    try:
+        ledger.append_backfill(_minute_bar(_et(_THU, 10, 7)), run_id="run-2")
+
+        with pytest.raises(SourceBarConflictError, match="NON_MONOTONIC_BACKFILL"):
+            ledger.append_backfill(_minute_bar(_et(_WED, 15, 0)), run_id="run-2")
+    finally:
+        ledger.close()
+
+
+def test_a_fresh_run_records_no_warmup_join(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:resume")
+    try:
+        assert ledger.warmup_join(run_id="run-1") is None
+    finally:
+        ledger.close()

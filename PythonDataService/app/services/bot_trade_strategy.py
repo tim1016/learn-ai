@@ -44,10 +44,12 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.marketdata.feed import (
+    WARMUP_REFUSAL_REASONS,
     ContinuityPolicy,
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
+    MarketDataFeedError,
 )
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
@@ -65,7 +67,8 @@ from app.services.market_liveness import (
     market_data_bars_live,
     market_liveness_fact,
 )
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.retained_tail_join import join_retained_tail
+from app.services.source_bar_ledger import RetainedSourceBar, RetainedWarmupJoin, SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -298,7 +301,12 @@ class _RetainedSourceBarFeed:
         if retained:
             # Recovery must rebuild the session from the precise observations
             # that drove its first run. A provider's corrected history is new
-            # information, not safe warmup input for an already-running bot.
+            # information, not safe warmup input for an already-running bot --
+            # except across the hole after the last retained bar, which no run
+            # observed and which is filled from history or refused (#2314).
+            warmup_rows = await self._join_retained_tail(
+                symbol, retained, lookback_days=lookback_days
+            )
             return [
                 MarketDataBar(
                     symbol=row.symbol,
@@ -319,7 +327,7 @@ class _RetainedSourceBarFeed:
                     authorization_id=row.authorization_id,
                     continuity_event_ref=row.continuity_event_ref,
                 )
-                for row in retained
+                for row in warmup_rows
                 if session.includes(row)
             ]
         bars = await self._source.recent_closed_bars(
@@ -328,6 +336,59 @@ class _RetainedSourceBarFeed:
         for bar in bars:
             self._ledger.append_history(bar, run_id=self._run_id)
         return [bar for bar in bars if session.includes(bar)]
+
+    async def _join_retained_tail(
+        self, symbol: str, retained: list[RetainedSourceBar], *, lookback_days: int
+    ) -> list[RetainedSourceBar]:
+        """Retain the history that fills the hole after ``retained``, record the join, and
+        return the rows this run warms on.
+
+        Those are every retained row plus the backfill, unless the hole
+        outran the lookback: then only rows opening at or after the join's
+        ``warm_from_ms``, as a fresh deploy would.
+        """
+        retained_end_ms = retained[-1].end_ms
+        joined_at_ms = now_ms_utc()
+        try:
+            join = await join_retained_tail(
+                self._source,
+                symbol=symbol,
+                session=self._session,
+                retained_end_ms=retained_end_ms,
+                now_ms=joined_at_ms,
+                lookback_days=lookback_days,
+            )
+        except MarketDataFeedError as exc:
+            if exc.reason in WARMUP_REFUSAL_REASONS:
+                self._ledger.record_warmup_join(
+                    RetainedWarmupJoin(
+                        run_id=self._run_id,
+                        outcome="refused",
+                        retained_end_ms=retained_end_ms,
+                        joined_at_ms=joined_at_ms,
+                        reason_code=exc.reason,
+                    )
+                )
+            raise
+        filled = [self._ledger.append_backfill(bar, run_id=self._run_id) for bar in join.filled]
+        self._ledger.record_warmup_join(
+            RetainedWarmupJoin(
+                run_id=self._run_id,
+                outcome="filled" if filled else "contiguous",
+                retained_end_ms=retained_end_ms,
+                joined_at_ms=joined_at_ms,
+                filled_count=len(filled),
+                filled_start_ms=filled[0].start_ms if filled else None,
+                filled_end_ms=filled[-1].end_ms if filled else None,
+                warm_from_ms=join.warm_from_ms,
+            )
+        )
+        warm_from_ms = join.warm_from_ms
+        return [
+            row
+            for row in (*retained, *filled)
+            if warm_from_ms is None or row.start_ms >= warm_from_ms
+        ]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)

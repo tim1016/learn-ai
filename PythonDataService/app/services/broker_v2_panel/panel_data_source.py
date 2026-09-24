@@ -16,6 +16,7 @@ import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Literal, NoReturn
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
@@ -116,6 +117,7 @@ from app.services.market_data_capability_service import get_market_data_capabili
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
+    RetainedWarmupJoin,
     SourceBarLedger,
     SourceBarLedgerCorruptError,
     SourceBarLedgerMissingError,
@@ -201,15 +203,23 @@ def _program_build_for_display(
     return prove_running_program_build(binding, verified_at_ms=verified_at_ms)
 
 
-def _feed_continuity_events_for(
-    binding: BrokerBotBinding,
-) -> list[RetainedContinuityEvent] | None:
-    """Read this binding's durable current-run continuity facts.
+@dataclass(frozen=True)
+class RunSourceEvidence:
+    """One run's source-stream facts the panel shows, read at one open of its ledger."""
+
+    events: list[RetainedContinuityEvent]
+    warmup_join: RetainedWarmupJoin | None
+
+
+def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | None:
+    """Read this binding's durable current-run continuity facts and warmup join.
 
     ``None`` is an explicit unavailable state (mode retains no source bars,
     ledger absent, ledger unreadable, or no primary custody authority
-    installed to resolve the evidence namespace from). An empty list means
-    the run's ledger exists and has recorded no interruptions.
+    installed to resolve the evidence namespace from). An empty ``events``
+    means the run's ledger exists and has recorded no interruptions; a
+    ``None`` ``warmup_join`` means the run did not resume on retained bars
+    (#2314), or has not reached warmup yet.
 
     This is a read path, not a start path: unlike
     ``bot_binding_authority.primary_custody_kind`` (which refuses a *start*
@@ -237,7 +247,10 @@ def _feed_continuity_events_for(
             read_only=True,
         )
         try:
-            return ledger.events(run_id=binding.run_id)
+            return RunSourceEvidence(
+                events=ledger.events(run_id=binding.run_id),
+                warmup_join=ledger.warmup_join(run_id=binding.run_id),
+            )
         finally:
             ledger.close(checkpoint=False)
     except SourceBarLedgerMissingError:
@@ -406,6 +419,7 @@ async def _get_panel_with_entries_from_authority(
 
     market_data_feed = get_market_data_feed()
     capability_account_id = market_data_capability_account_id(market_data_feed)
+    source_evidence = _run_source_evidence_for(binding)
     panel = build_panel(
         status,
         clerk,
@@ -455,8 +469,9 @@ async def _get_panel_with_entries_from_authority(
             bot_running=status.running,
             extended_window=active_program_leg_policy().window,
         ),
-        feed_continuity_events=_feed_continuity_events_for(binding),
+        feed_continuity_events=None if source_evidence is None else source_evidence.events,
         feed_continuity_run_id=binding.run_id,
+        warmup_join=None if source_evidence is None else source_evidence.warmup_join,
     )
     # The transaction-rail stored-key fallback (PRD Sec 19, issue #1729 AC #6/#7)
     # needs the same repository `read_sqlite_panel_evidence` resolved internally

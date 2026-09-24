@@ -27,7 +27,6 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
-from app.marketdata.feed import WARMUP_HISTORY_UNAVAILABLE
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -59,7 +58,11 @@ from app.services.broker_v2_panel.channel_health import (
     channel_state,
     evaluate_channel_health,
 )
-from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity
+from app.services.broker_v2_panel.feed_continuity_projection import (
+    WARMUP_REFUSAL_COPY,
+    build_feed_continuity,
+    build_warmup_join,
+)
 from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
@@ -70,7 +73,7 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-from app.services.source_bar_ledger import RetainedContinuityEvent
+from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedWarmupJoin
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -89,13 +92,7 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
         "Stopped; custody unprovable",
         "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
     ),
-    WARMUP_HISTORY_UNAVAILABLE: (
-        "Refused: warmup history unavailable",
-        "The run's sealed warmup lookback could not be fetched in full from IB Gateway, so it "
-        "was refused rather than started cold. Before starting again, check that the Gateway "
-        "is logged in, its historical-data farm is connected (not paced or down), and the "
-        "symbol qualifies as a contract.",
-    ),
+    **WARMUP_REFUSAL_COPY,
 }
 
 
@@ -790,6 +787,7 @@ def build_panel(
     market_pulse: MarketPulseView,
     feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
     feed_continuity_run_id: str | None = None,
+    warmup_join: RetainedWarmupJoin | None = None,
     symbol_unresolvable: bool = False,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
@@ -927,6 +925,7 @@ def build_panel(
             latest_bar_at_ms=market_pulse.latest_bar_at_ms,
             now_ms=now_ms,
         ),
+        warmup_join=build_warmup_join(warmup_join),
         mission_verdict=_mission_verdict(
             status,
             clerk,

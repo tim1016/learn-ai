@@ -675,14 +675,20 @@ async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_refused_warmup_records_its_own_reason_and_stops_the_run(tmp_path: Path) -> None:
-    """#2365: through the real ``_supervise`` -> ``finalize_crash`` path, a run
-    refused for unmet warmup is recorded under its typed reason, reaped, and
+@pytest.mark.parametrize(
+    "reason",
+    ["WARMUP_HISTORY_UNAVAILABLE", "RESUME_HOLE_AFTER_HOURS", "RESUME_HOLE_UNFILLED"],
+)
+async def test_refused_warmup_records_its_own_reason_and_stops_the_run(
+    tmp_path: Path, reason: str
+) -> None:
+    """#2365, #2314: through the real ``_supervise`` -> ``finalize_crash`` path,
+    a run refused during warmup is recorded under its typed reason, reaped, and
     left STOPPED -- never resumed on its own and never shown as FEED_DEATH."""
     feed = _FakeFeed(
         [_bar(_T0)],
         mode="crash",
-        error=MarketDataFeedError("no warmup history", reason="WARMUP_HISTORY_UNAVAILABLE"),
+        error=MarketDataFeedError("refused during warmup", reason=reason),
     )
     registry = _registry(tmp_path, feed)
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
@@ -693,10 +699,10 @@ async def test_refused_warmup_records_its_own_reason_and_stops_the_run(tmp_path:
     assert view.running is False
     assert view.duty_outcome is not None
     assert view.duty_outcome.kind == "CRASHED"
-    assert view.duty_outcome.reason_code == "WARMUP_HISTORY_UNAVAILABLE"
+    assert view.duty_outcome.reason_code == reason
     assert view.desired_state == "STOPPED"
     assert _desired_json(tmp_path)["desired_state"] == "STOPPED"
-    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == "WARMUP_HISTORY_UNAVAILABLE"
+    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == reason
 
 
 @pytest.mark.asyncio

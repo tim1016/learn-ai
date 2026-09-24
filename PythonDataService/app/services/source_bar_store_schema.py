@@ -146,6 +146,19 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             CHECK((kind = 'extended') = (window_open_minute_et IS NOT NULL)),
             CHECK((kind = 'extended') = (window_close_minute_et IS NOT NULL))
         );
+        CREATE TABLE IF NOT EXISTS source_run_warmup_join (
+            run_id TEXT PRIMARY KEY,
+            outcome TEXT NOT NULL CHECK(outcome IN ('contiguous','filled','refused')),
+            retained_end_ms INTEGER NOT NULL CHECK(retained_end_ms >= 0),
+            joined_at_ms INTEGER NOT NULL CHECK(joined_at_ms >= 0),
+            filled_count INTEGER NOT NULL CHECK(filled_count >= 0),
+            filled_start_ms INTEGER,
+            filled_end_ms INTEGER,
+            warm_from_ms INTEGER,
+            reason_code TEXT,
+            CHECK((outcome = 'filled') = (filled_count > 0)),
+            CHECK((outcome = 'refused') = (reason_code IS NOT NULL))
+        );
         CREATE TABLE IF NOT EXISTS source_evidence_journal (
             evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT,
