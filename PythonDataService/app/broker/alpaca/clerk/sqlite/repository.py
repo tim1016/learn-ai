@@ -52,7 +52,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     execution_is_quarantined,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
-    quarantined_facts_for_order,
+    order_total_retained_exact_provenance,
     unreadable_quarantine_source_ids_for_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -658,10 +658,11 @@ class ClerkSqliteRepository(
                     return "coverage_conflict_quarantined"
                 if any(
                     item.exact_execution == facts
-                    for item in quarantined_facts_for_order(self._conn, order_ref=order_ref)
+                    for item in order_total_retained_exact_provenance(self._conn, order_ref=order_ref)
                 ):
                     # A redelivery of a slice an order-total proof already
-                    # accounted for (#2346); changed economics still raise.
+                    # accounted for (#2346): the set proof above refuses it
+                    # as a duplicate source. Changed economics still raise.
                     return "duplicate"
                 uncertainty = build_coverage_conflict()
                 self._validate_execution_coverage_conflict(

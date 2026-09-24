@@ -7,11 +7,14 @@ auditable in one small module.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    ORDER_TOTAL_PROVEN_RESOLUTION_KIND,
+    ORDER_TOTAL_PROVEN_SUMMARY_CODE,
     QTY_ATOL,
     CumulativeRecoveryFill,
     ExecutionCoverageExactProvenance,
@@ -31,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
     effective_exact_execution_ids_for_order,
     execution_coverage_candidate,
     order_total_coverage_evidence,
+    order_total_retained_exact_provenance,
     quarantined_exact_provenance_for_conflict,
     unreadable_quarantine_source_ids_for_order,
 )
@@ -100,6 +104,9 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
         caller's repository write coordinator. The fold repeats the proof
         inside the append transaction before it mutates ``fills``; both checks
         are required because a planned transition is immutable once mirrored.
+        Exacts an order-total proof already accounted for (#2346) join the
+        set as prior observations, so a late exact still completes the set
+        proof after that episode closed instead of opening a new one.
         """
         if exact_transition.order_ref is None:
             raise ValueError("coverage supersession requires an order reference")
@@ -120,13 +127,18 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
             symbol=facts.symbol,
             side=facts.side,
         )
+        prior = order_total_retained_exact_provenance(self._conn, order_ref=exact_transition.order_ref)
         proof = prove_execution_coverage_set(
             execution_coverage_candidate(
                 identity=identity,
                 cumulative=cumulative,
-                prior=(),
+                prior=prior,
                 exact=facts,
                 effective_exact_source_ids=effective_exact_execution_ids_for_order(
+                    self._conn,
+                    order_ref=exact_transition.order_ref,
+                ),
+                unreadable_source_ids=unreadable_quarantine_source_ids_for_order(
                     self._conn,
                     order_ref=exact_transition.order_ref,
                 ),
@@ -141,7 +153,7 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
             proof=proof,
             cumulative=cumulative,
             resolved_uncertainty_id=None,
-            prior=(),
+            prior=prior,
         )
 
     def _accumulated_execution_coverage_supersession_transition(
@@ -289,14 +301,18 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
         reconciliation pass can both call it without broker I/O. An order
         with more than one active episode stays fail-closed, as it does for
         the accumulated set proof. The quarantined exacts stay immutable
-        custody evidence; no fill changes, so the position is untouched.
+        custody evidence; no fill changes, so the position is untouched. A
+        later exact of the same order is proven together with them by the
+        canonical set proof (:func:`order_total_retained_exact_provenance`).
+        The generic ``UNCERTAINTY_RESOLVED`` carries no fence facts, so an
+        operator replay of the episode reports it as "no longer active".
         Returns the number of episodes resolved.
         """
         with self._write_lock:
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
             active = active_execution_coverage_conflicts(self._conn, order_ref=order_ref)
-            episodes_per_order: dict[str, int] = {}
-            for conflict in active:
-                episodes_per_order[conflict.order_ref] = episodes_per_order.get(conflict.order_ref, 0) + 1
+            episodes_per_order = Counter(conflict.order_ref for conflict in active)
             resolved = 0
             for conflict in active:
                 if episodes_per_order[conflict.order_ref] != 1:
@@ -307,15 +323,16 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 self.append_transition(
                     TransitionInput(
                         strategy_instance_id=conflict.strategy_instance_id,
+                        order_ref=conflict.order_ref,
                         transition_kind="UNCERTAINTY_RESOLVED",
                         custody_owner="ACCOUNT_CLERK",
                         execution_authority="ACCOUNT_CLERK",
                         operation_state="succeeded",
                         clerk_observed_at_ms=self._clock(),
-                        summary_code="EXECUTION_COVERAGE_ORDER_TOTAL_PROVEN",
+                        summary_code=ORDER_TOTAL_PROVEN_SUMMARY_CODE,
                         facts_json=UncertaintyResolvedFacts(
                             uncertainty_id=conflict.uncertainty_id,
-                            resolution_kind="ORDER_TOTAL_PROVEN",
+                            resolution_kind=ORDER_TOTAL_PROVEN_RESOLUTION_KIND,
                             evidence_refs=sorted(
                                 {
                                     f"order:{conflict.order_ref}",

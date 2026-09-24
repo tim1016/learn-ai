@@ -12,6 +12,7 @@ import sqlite3
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    FINAL_CUMULATIVE_BROKER_STATES,
     ActiveExecutionCoverageConflict,
     CumulativeCoverageObservation,
     CumulativeRecoveryFill,
@@ -20,13 +21,13 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ExecutionCoverageIdentity,
     ExecutionCoverageSetCandidate,
     OrderTotalCoverageEvidence,
+    QuarantineObservation,
     cumulative_recovery_fills_for_order,
+    first_quarantine_per_execution,
+    order_total_proven_conflict_execution_ids,
+    quarantine_observations_for_order,
 )
-from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCoverageQuarantinedFacts,
-    ExecutionSliceFilledFacts,
-    validate_execution_coverage_quarantined_facts,
-)
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 
 
 def quarantined_exact_provenance_for_conflict(
@@ -35,36 +36,59 @@ def quarantined_exact_provenance_for_conflict(
     conflict: ActiveExecutionCoverageConflict,
 ) -> tuple[ExecutionCoverageExactProvenance, ...]:
     """Read each retained exact together with its immutable observation clocks."""
-    rows = conn.execute(
-        "SELECT sequence, clerk_observed_at_ms, recorded_at_ms, facts_json "
-        "FROM custody_transitions WHERE order_ref = ? "
-        "AND transition_kind = 'EXECUTION_COVERAGE_QUARANTINED' ORDER BY sequence ASC",
-        (conflict.order_ref,),
-    ).fetchall()
-    observations: list[ExecutionCoverageExactProvenance] = []
-    seen_execution_ids: set[str] = set()
-    for row in rows:
-        try:
-            facts = ExecutionCoverageQuarantinedFacts.from_facts_json(row["facts_json"])
-            validate_execution_coverage_quarantined_facts(facts)
-        except (KeyError, TypeError, ValueError):
-            continue
-        if facts.conflict_execution_id != conflict.conflict_execution_id:
-            continue
-        execution_id = facts.exact_execution.execution_id
-        if execution_id in seen_execution_ids:
-            continue
-        seen_execution_ids.add(execution_id)
-        observations.append(
-            ExecutionCoverageExactProvenance(
-                exact_execution=facts.exact_execution,
-                observation_transition_sequence=row["sequence"],
-                clerk_observed_at_ms=row["clerk_observed_at_ms"],
-                recorded_at_ms=row["recorded_at_ms"],
-                recorded_transition_sequence=row["sequence"],
-            )
+    return _exact_provenance(
+        first_quarantine_per_execution(
+            quarantine_observations_for_order(conn, order_ref=conflict.order_ref),
+            conflict_execution_ids=frozenset({conflict.conflict_execution_id}),
         )
-    return tuple(observations)
+    )
+
+
+def order_total_retained_exact_provenance(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> tuple[ExecutionCoverageExactProvenance, ...]:
+    """Quarantined exacts an order-total proof accounted for that are still not effective (#2346).
+
+    The order-level proof closes an episode without moving a fill, so its
+    exacts stay quarantined behind the cumulative-recovery row. A later exact
+    of the same order is proven together with them through the canonical set
+    proof, exactly as the accumulated episode proof would have done. Sorted by
+    execution ID, the order the supersession fold compares.
+    """
+    episode_execution_ids = order_total_proven_conflict_execution_ids(conn, order_ref=order_ref)
+    if not episode_execution_ids:
+        return ()
+    effective_ids = effective_exact_execution_ids_for_order(conn, order_ref=order_ref)
+    retained = _exact_provenance(
+        first_quarantine_per_execution(
+            quarantine_observations_for_order(conn, order_ref=order_ref),
+            conflict_execution_ids=episode_execution_ids,
+        )
+    )
+    return tuple(
+        sorted(
+            (item for item in retained if item.exact_execution.execution_id not in effective_ids),
+            key=lambda item: item.exact_execution.execution_id,
+        )
+    )
+
+
+def _exact_provenance(
+    observations: tuple[QuarantineObservation, ...],
+) -> tuple[ExecutionCoverageExactProvenance, ...]:
+    return tuple(
+        ExecutionCoverageExactProvenance(
+            exact_execution=observation.facts.exact_execution,
+            observation_transition_sequence=observation.sequence,
+            clerk_observed_at_ms=observation.clerk_observed_at_ms,
+            recorded_at_ms=observation.recorded_at_ms,
+            recorded_transition_sequence=observation.sequence,
+        )
+        for observation in observations
+        if observation.facts is not None
+    )
 
 
 def unreadable_quarantine_source_ids_for_order(
@@ -73,19 +97,15 @@ def unreadable_quarantine_source_ids_for_order(
     order_ref: str,
 ) -> tuple[str, ...]:
     """Name malformed quarantine transitions so a set proof can refuse them."""
-    rows = conn.execute(
-        "SELECT sequence, facts_json FROM custody_transitions WHERE order_ref = ? "
-        "AND transition_kind = 'EXECUTION_COVERAGE_QUARANTINED'",
-        (order_ref,),
-    ).fetchall()
-    unreadable: list[str] = []
-    for row in rows:
-        try:
-            facts = ExecutionCoverageQuarantinedFacts.from_facts_json(row["facts_json"])
-            validate_execution_coverage_quarantined_facts(facts)
-        except (KeyError, TypeError, ValueError):
-            unreadable.append(f"quarantine-transition:{row['sequence']}")
-    return tuple(unreadable)
+    return _unreadable_source_ids(quarantine_observations_for_order(conn, order_ref=order_ref))
+
+
+def _unreadable_source_ids(observations: tuple[QuarantineObservation, ...]) -> tuple[str, ...]:
+    return tuple(
+        f"quarantine-transition:{observation.sequence}"
+        for observation in observations
+        if observation.facts is None
+    )
 
 
 def order_total_coverage_evidence(
@@ -98,14 +118,18 @@ def order_total_coverage_evidence(
     ``None`` keeps the episode open without a proof attempt: unreadable
     quarantine evidence, an episode whose originating exact is not a
     quarantined, non-effective slice (a changed redelivery of an effective
-    execution ID is a genuine conflict), or an exact whose side differs from
-    the cumulative recovery it would be covered by.
+    execution ID is a genuine conflict), an exact whose side differs from
+    the cumulative recovery it would be covered by, or an order with no
+    acknowledgement in a final state. The state and the total both come from
+    that one final acknowledgement (see
+    :func:`reads.latest_acknowledgement_in_states`).
     """
-    if unreadable_quarantine_source_ids_for_order(conn, order_ref=conflict.order_ref):
+    observations = quarantine_observations_for_order(conn, order_ref=conflict.order_ref)
+    if _unreadable_source_ids(observations):
         return None
     effective_ids = effective_exact_execution_ids_for_order(conn, order_ref=conflict.order_ref)
     quarantined: dict[str, ExecutionSliceFilledFacts] = {}
-    for facts in quarantined_facts_for_order(conn, order_ref=conflict.order_ref):
+    for facts in (observation.facts for observation in observations if observation.facts is not None):
         exact = facts.exact_execution
         if exact.execution_id in effective_ids:
             continue
@@ -118,43 +142,22 @@ def order_total_coverage_evidence(
     sides = {item.side for item in cumulative} | {item.side for item in quarantined.values()}
     if not cumulative or len(sides) != 1:
         return None
-    order = reads.order(conn, conflict.order_ref)
+    final_ack = reads.latest_acknowledgement_in_states(
+        conn, conflict.order_ref, FINAL_CUMULATIVE_BROKER_STATES
+    )
+    if final_ack is None:
+        return None
+    broker_state, reported_filled_quantity = final_ack
     effective_quantity, _ = reads.effective_fill_totals_for_order(conn, conflict.order_ref)
     return OrderTotalCoverageEvidence(
-        broker_state=order.broker_state if order is not None else None,
-        reported_filled_quantity=reads.latest_reported_filled_quantity(conn, conflict.order_ref),
+        broker_state=broker_state,
+        reported_filled_quantity=reported_filled_quantity,
         effective_quantity=effective_quantity,
         cumulative_recovery_quantity=math.fsum(item.quantity for item in cumulative),
         quarantined_exact_quantities=tuple(
             quarantined[execution_id].slice_qty for execution_id in sorted(quarantined)
         ),
     )
-
-
-def quarantined_facts_for_order(
-    conn: sqlite3.Connection,
-    *,
-    order_ref: str,
-) -> tuple[ExecutionCoverageQuarantinedFacts, ...]:
-    """Every readable quarantine of the order, across all of its episodes.
-
-    Unreadable rows are skipped here; callers that prove anything from this
-    read refuse first through :func:`unreadable_quarantine_source_ids_for_order`.
-    """
-    rows = conn.execute(
-        "SELECT facts_json FROM custody_transitions WHERE order_ref = ? "
-        "AND transition_kind = 'EXECUTION_COVERAGE_QUARANTINED' ORDER BY sequence ASC",
-        (order_ref,),
-    ).fetchall()
-    quarantined: list[ExecutionCoverageQuarantinedFacts] = []
-    for row in rows:
-        try:
-            facts = ExecutionCoverageQuarantinedFacts.from_facts_json(row["facts_json"])
-            validate_execution_coverage_quarantined_facts(facts)
-        except (KeyError, TypeError, ValueError):
-            continue
-        quarantined.append(facts)
-    return tuple(quarantined)
 
 
 def effective_exact_execution_ids_for_order(

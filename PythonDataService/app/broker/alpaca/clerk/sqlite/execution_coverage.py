@@ -32,10 +32,12 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageQuarantinedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
+    UncertaintyResolvedFacts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_slice_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
@@ -334,8 +336,17 @@ def prove_execution_coverage_set(
 
 #: Broker order states whose reported cumulative filled quantity is final: no
 #: later execution can join the order, so the broker's total bounds every
-#: exact slice it will ever report (#2346).
-FINAL_CUMULATIVE_BROKER_STATES = frozenset({"filled", "canceled", "expired"})
+#: exact slice it will ever report (#2346). These are exactly the canonical
+#: terminal statuses. ``replaced`` is final for its own order ID: Alpaca books
+#: every later execution on the replacement order, which carries its own
+#: ``order_ref``. ``rejected`` reports no fill, so its absent total can never
+#: prove a quarantined exact, and a rejection that did report one is still
+#: that order's last word.
+FINAL_CUMULATIVE_BROKER_STATES = ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+
+#: The ``UNCERTAINTY_RESOLVED`` vocabulary of the order-level coverage proof.
+ORDER_TOTAL_PROVEN_RESOLUTION_KIND = "ORDER_TOTAL_PROVEN"
+ORDER_TOTAL_PROVEN_SUMMARY_CODE = "EXECUTION_COVERAGE_ORDER_TOTAL_PROVEN"
 
 
 @dataclass(frozen=True)
@@ -645,27 +656,118 @@ def quarantined_executions_for_conflict(
     conflict: ActiveExecutionCoverageConflict,
 ) -> tuple[ExecutionCoverageQuarantinedFacts, ...]:
     """Return every distinct exact slice retained for one active episode."""
+    return tuple(
+        observation.facts
+        for observation in first_quarantine_per_execution(
+            quarantine_observations_for_order(conn, order_ref=conflict.order_ref),
+            conflict_execution_ids=frozenset({conflict.conflict_execution_id}),
+        )
+        if observation.facts is not None
+    )
+
+
+@dataclass(frozen=True)
+class QuarantineObservation:
+    """One ``EXECUTION_COVERAGE_QUARANTINED`` transition; ``facts`` is ``None`` when unreadable."""
+
+    sequence: int
+    clerk_observed_at_ms: int
+    recorded_at_ms: int
+    facts: ExecutionCoverageQuarantinedFacts | None
+
+
+def quarantine_observations_for_order(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> tuple[QuarantineObservation, ...]:
+    """The one reader of an order's quarantine transitions, readable or not, in sequence order.
+
+    Callers that prove anything from these rows refuse on any unreadable one
+    rather than proving around it.
+    """
     rows = conn.execute(
-        "SELECT facts_json FROM custody_transitions WHERE order_ref = ? "
+        "SELECT sequence, clerk_observed_at_ms, recorded_at_ms, facts_json "
+        "FROM custody_transitions WHERE order_ref = ? "
         "AND transition_kind = 'EXECUTION_COVERAGE_QUARANTINED' ORDER BY sequence ASC",
-        (conflict.order_ref,),
+        (order_ref,),
     ).fetchall()
-    quarantined: list[ExecutionCoverageQuarantinedFacts] = []
-    seen_execution_ids: set[str] = set()
+    observations: list[QuarantineObservation] = []
     for row in rows:
+        facts: ExecutionCoverageQuarantinedFacts | None
         try:
             facts = ExecutionCoverageQuarantinedFacts.from_facts_json(row["facts_json"])
             validate_execution_coverage_quarantined_facts(facts)
         except (KeyError, TypeError, ValueError):
-            continue
-        if facts.conflict_execution_id != conflict.conflict_execution_id:
+            facts = None
+        observations.append(
+            QuarantineObservation(
+                sequence=row["sequence"],
+                clerk_observed_at_ms=row["clerk_observed_at_ms"],
+                recorded_at_ms=row["recorded_at_ms"],
+                facts=facts,
+            )
+        )
+    return tuple(observations)
+
+
+def first_quarantine_per_execution(
+    observations: tuple[QuarantineObservation, ...],
+    *,
+    conflict_execution_ids: frozenset[str],
+) -> tuple[QuarantineObservation, ...]:
+    """The first readable quarantine of each exact slice the named episodes retain."""
+    retained: list[QuarantineObservation] = []
+    seen_execution_ids: set[str] = set()
+    for observation in observations:
+        facts = observation.facts
+        if facts is None or facts.conflict_execution_id not in conflict_execution_ids:
             continue
         execution_id = facts.exact_execution.execution_id
         if execution_id in seen_execution_ids:
             continue
         seen_execution_ids.add(execution_id)
-        quarantined.append(facts)
-    return tuple(quarantined)
+        retained.append(observation)
+    return tuple(retained)
+
+
+def order_total_proven_conflict_execution_ids(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> frozenset[str]:
+    """The root exact IDs of the order's episodes an order-total proof closed (#2346).
+
+    Their quarantined exacts are accounted for by the broker's final total but
+    are not effective fills, so a later exact may still complete their set
+    proof. An episode whose raised facts are unreadable contributes nothing,
+    which leaves any later set proof short and therefore fail-closed.
+    """
+    resolutions = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE order_ref = ? "
+        "AND transition_kind = 'UNCERTAINTY_RESOLVED' AND summary_code = ?",
+        (order_ref, ORDER_TOTAL_PROVEN_SUMMARY_CODE),
+    ).fetchall()
+    execution_ids: set[str] = set()
+    for resolution in resolutions:
+        resolved = UncertaintyResolvedFacts.from_facts_json(resolution["facts_json"])
+        if resolved.resolution_kind != ORDER_TOTAL_PROVEN_RESOLUTION_KIND:
+            continue
+        raised = conn.execute(
+            "SELECT facts_json FROM uncertainties WHERE uncertainty_id = ? AND reason_code = ?",
+            (resolved.uncertainty_id, EXECUTION_COVERAGE_CONFLICT_REASON_CODE),
+        ).fetchone()
+        if raised is None:
+            continue
+        try:
+            cause = ExecutionCoverageConflictCause.from_mapping(
+                UncertaintyRaisedFacts.from_facts_json(raised["facts_json"]).cause_facts
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if cause.order_ref == order_ref:
+            execution_ids.add(cause.execution_id)
+    return frozenset(execution_ids)
 
 
 def execution_is_quarantined(
