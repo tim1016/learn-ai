@@ -194,7 +194,7 @@ async def test_account_quiet_names_each_open_condition_not_flat() -> None:
     assert body["quiet"] is False
     assert body["outstanding"] == [
         "a working order on the account has not ended",
-        "the account is not flat",
+        "the account or the lane's custody is not flat",
     ]
 
 
