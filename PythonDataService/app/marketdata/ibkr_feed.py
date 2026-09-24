@@ -48,7 +48,7 @@ from app.broker.ibkr.bars import (
     stream_minute_bars,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
-from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE, falls_short_of_calendar
+from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE
 from app.marketdata.feed import (
     BarProvenanceTag,
     ContinuityPolicy,
@@ -56,16 +56,12 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeedError,
 )
-from app.marketdata.ibkr_continuity import ContinuityLoop, ResolvedBar
+from app.marketdata.ibkr_continuity import MINUTE_INCOMPLETE_REASON_CODE, ContinuityLoop, ResolvedBar
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 _STALE_THRESHOLD_MS: int = 30_000
-
-MINUTE_INCOMPLETE_REASON_CODE = "MINUTE_INCOMPLETE"
-"""Why the policy-less path ended a stream: a regular-session minute held fewer
-5-second prints than the calendar says it owes (#2364)."""
 
 
 @dataclass
@@ -258,8 +254,15 @@ class IbkrMarketDataFeed:
             raise MarketDataFeedError(str(exc)) from exc
 
     def _legacy_minute_is_deliverable(self, ibkr_bar: IbkrMinuteBar, assembler: MinuteAssembler) -> bool:
-        """Omit a short join minute; fail fast on any other minute short of the calendar."""
-        if assembler.is_short_join_minute(ibkr_bar):
+        """Omit a short join minute; fail fast on any other minute short of the calendar.
+
+        Dispatches on ``MinuteAssembler.completeness`` exactly as the
+        continuity path does. Nothing on this path observes an interruption,
+        so ``touched`` is False; a minute whose prints span connection
+        generations still classifies as touched through ``spans_interruption``.
+        """
+        completeness = assembler.completeness(ibkr_bar, touched=False)
+        if completeness == "short_join":
             logger.warning(
                 "Omitted the minute the IBKR stream joined partway through",
                 extra={
@@ -271,7 +274,7 @@ class IbkrMarketDataFeed:
                 },
             )
             return False
-        if falls_short_of_calendar(ibkr_bar):
+        if completeness == "unprovable":
             raise MarketDataFeedError(
                 f"minute {ibkr_bar.start_ms}..{ibkr_bar.end_ms} for {ibkr_bar.symbol} holds "
                 f"{ibkr_bar.contribution_count} of the {RTH_CONTRIBUTIONS_PER_MINUTE} 5-second "

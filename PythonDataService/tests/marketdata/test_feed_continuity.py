@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import aclosing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock
@@ -18,6 +18,9 @@ from app.broker.ibkr.bars import (
     IBKRBarSubscriptionStalled,
 )
 from app.broker.ibkr.client import NotConnectedError
+from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
+from app.engine.data.trade_bar import TradeBar
+from app.lean_sidecar.trading_calendar import is_early_close, session_close_ms_utc
 from app.marketdata import ibkr_feed as feed_module
 from app.marketdata.feed import (
     ContinuityEventRef,
@@ -28,6 +31,7 @@ from app.marketdata.feed import (
     SubstitutionRefusal,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
+from app.services import feed_continuity_policy as fcp
 from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import session_state_at_ms
 from tests._helpers.ibkr_feed_adversarial import RTH_MINUTE, ScriptedLinesFeedFixture, raw_minute
@@ -1098,12 +1102,12 @@ def _ms(instant: datetime) -> int:
 
 
 async def _drain_real_chain(
-    feed: IbkrMarketDataFeed, policy: ContinuityPolicy, n: int
+    feed: IbkrMarketDataFeed, policy: ContinuityPolicy, n: int, *, use_rth: bool = True
 ) -> tuple[list, MarketDataFeedError | None]:
     """Collect up to ``n`` bars through the real stream, or the error that ended it."""
     out: list = []
     try:
-        async with aclosing(feed.stream_bars("SPY", continuity=policy)) as bars:
+        async with aclosing(feed.stream_bars("SPY", use_rth=use_rth, continuity=policy)) as bars:
             async for bar in bars:
                 out.append(bar)
                 if len(out) == n:
@@ -1124,8 +1128,8 @@ def _real_rth_chain(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.services.decision_session.session_state_at_ms", session_state_at_ms)
     monkeypatch.setattr(bars_module, "_REALTIME_BAR_SUBSCRIPTIONS", bars_module._RealtimeBarSubscriptionRegistry())
 
-    def _build(*plans: tuple) -> IbkrMarketDataFeed:
-        fixture = ScriptedLinesFeedFixture(*plans)
+    def _build(*plans: tuple, use_rth: bool = True) -> IbkrMarketDataFeed:
+        fixture = ScriptedLinesFeedFixture(*plans, use_rth=use_rth)
         fixture.install(monkeypatch)
         return IbkrMarketDataFeed(fixture.client)
 
@@ -1138,7 +1142,9 @@ async def test_a_short_rth_minute_on_a_connected_line_is_refused_not_delivered(_
     No interruption touched it, so it used to reach the strategy as a plain
     ``realtime`` bar, field-for-field identical to a complete minute. The
     calendar says a regular-session minute owes twelve prints; one holding six
-    is refused inside the decision session, with its count on the evidence.
+    is refused inside the decision session, with its count on the evidence and
+    ``MINUTE_INCOMPLETE`` -- the policy-less path's code for the same fact. No
+    interruption episode exists, so no substitution grant is asked about it.
     """
     feed = _real_rth_chain(
         raw_minute(RTH_MINUTE, range(0, 60, 5))
@@ -1147,15 +1153,21 @@ async def test_a_short_rth_minute_on_a_connected_line_is_refused_not_delivered(_
         + raw_minute(RTH_MINUTE + timedelta(minutes=3), (0,))
     )
     sink = _RecordingSink()
+    asked: list[tuple[int, int]] = []
 
-    delivered, error = await _drain_real_chain(feed, _policy(sink), 3)
+    def _grant(start_ms: int, end_ms: int) -> SubstitutionRefusal:
+        asked.append((start_ms, end_ms))
+        return SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED")
+
+    delivered, error = await _drain_real_chain(feed, _policy(sink, grant=_grant), 3)
 
     short_start_ms = _ms(RTH_MINUTE + timedelta(minutes=1))
     assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
-    assert error is not None and error.reason == "SUBSTITUTION_NOT_AUTHORIZED"
-    assert [(e.kind, e.window_start_ms, e.contribution_count) for e in sink.events] == [
-        ("refused", short_start_ms, 6)
+    assert error is not None and error.reason == "MINUTE_INCOMPLETE"
+    assert [(e.kind, e.reason, e.window_start_ms, e.contribution_count) for e in sink.events] == [
+        ("refused", "MINUTE_INCOMPLETE", short_start_ms, 6)
     ]
+    assert asked == []
 
 
 async def test_a_short_join_minute_is_omitted_as_a_recorded_gap(_real_rth_chain) -> None:
@@ -1178,6 +1190,134 @@ async def test_a_short_join_minute_is_omitted_as_a_recorded_gap(_real_rth_chain)
     join_start_ms = _ms(RTH_MINUTE)
     assert error is None
     assert [(bar.start_ms, bar.volume) for bar in delivered] == [(join_start_ms + 60_000, 120)]
-    assert [(e.kind, e.window_start_ms, e.window_end_ms, e.contribution_count) for e in sink.events] == [
-        ("gap", join_start_ms, join_start_ms + 60_000, 6)
+    assert [
+        (e.kind, e.cause, e.window_start_ms, e.window_end_ms, e.contribution_count) for e in sink.events
+    ] == [("gap", "stream_joined", join_start_ms, join_start_ms + 60_000, 6)]
+
+
+@pytest.mark.parametrize(
+    "sparse_minute",
+    [
+        datetime(2026, 5, 4, 13, 0, tzinfo=UTC),  # 09:00 ET: pre-market
+        datetime(2026, 5, 4, 20, 30, tzinfo=UTC),  # 16:30 ET: after hours
+    ],
+    ids=["PRE", "POST"],
+)
+async def test_an_untouched_sparse_extended_hours_minute_is_still_delivered(
+    _real_rth_chain, sparse_minute: datetime
+) -> None:
+    """#2364 owes a count only to regular-session minutes.
+
+    Outside RTH sparse 5-second bars are normal, so a 3/12 minute no
+    interruption touched is delivered as it always was -- the calendar owes it
+    no prints. It is not the join minute: the stream joined the whole minute
+    before it.
+    """
+    joined = sparse_minute - timedelta(minutes=1)
+    feed = _real_rth_chain(
+        raw_minute(joined, range(0, 60, 5))
+        + raw_minute(sparse_minute, (0, 25, 50))
+        + raw_minute(sparse_minute + timedelta(minutes=1), (0,)),
+        use_rth=False,
+    )
+    sink = _RecordingSink()
+
+    delivered, error = await _drain_real_chain(feed, _policy(sink), 2, use_rth=False)
+
+    assert error is None
+    assert [(bar.start_ms, bar.volume) for bar in delivered] == [(_ms(joined), 120), (_ms(sparse_minute), 30)]
+    assert sink.events == []
+
+
+_HALF_DAY = date(2026, 11, 27)  # the day after Thanksgiving: NYSE closes early
+
+
+async def test_on_a_half_day_the_last_session_minute_owes_twelve_and_the_next_owes_none(
+    _real_rth_chain,
+) -> None:
+    """#2364 on a real early close, read from the canonical calendar.
+
+    12:59 ET is the half-day's last regular-session minute, so a 6/12 there is
+    refused; 13:00 ET is already after hours, so a 6/12 there is delivered.
+    Nothing here hardcodes 13:00 -- the boundary is the calendar's close.
+    """
+    assert is_early_close(_HALF_DAY)
+    close = datetime.fromtimestamp(session_close_ms_utc(_HALF_DAY) / 1000, tz=UTC)
+    last_rth, first_post = close - timedelta(minutes=1), close
+    six_prints = (0, 5, 10, 15, 50, 55)
+
+    refused_feed = _real_rth_chain(
+        raw_minute(last_rth - timedelta(minutes=1), range(0, 60, 5))
+        + raw_minute(last_rth, six_prints)
+        + raw_minute(first_post, (0,)),
+        use_rth=False,
+    )
+    refused_sink = _RecordingSink()
+    refused_bars, refused_error = await _drain_real_chain(refused_feed, _policy(refused_sink), 2, use_rth=False)
+
+    delivered_feed = _real_rth_chain(
+        raw_minute(last_rth, range(0, 60, 5))
+        + raw_minute(first_post, six_prints)
+        + raw_minute(first_post + timedelta(minutes=1), (0,)),
+        use_rth=False,
+    )
+    delivered_sink = _RecordingSink()
+    delivered_bars, delivered_error = await _drain_real_chain(
+        delivered_feed, _policy(delivered_sink), 2, use_rth=False
+    )
+
+    assert [bar.start_ms for bar in refused_bars] == [_ms(last_rth) - 60_000]
+    assert refused_error is not None and refused_error.reason == "MINUTE_INCOMPLETE"
+    assert [(e.kind, e.window_start_ms, e.contribution_count) for e in refused_sink.events] == [
+        ("refused", _ms(last_rth), 6)
     ]
+    assert delivered_error is None
+    assert [(bar.start_ms, bar.volume) for bar in delivered_bars] == [(_ms(last_rth), 120), (_ms(first_post), 60)]
+    assert delivered_sink.events == []
+
+
+async def test_an_omitted_join_minute_that_is_the_buckets_trigger_makes_its_enter_late(
+    _real_rth_chain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0053 §13: the join-minute hole in a multi-minute decision timeframe.
+
+    A 5-minute run whose warmup ended at 10:34 ET joins the live line at
+    10:34:30. 10:34 is the first live bucket's trigger minute; omitted, it
+    leaves the bucket without its last minute, so the bucket cannot fire at
+    10:35. It fires lazily on 10:35's minute, delivered at 10:36, carrying the
+    close of the last minute it holds (10:34) -- two minutes stale against the
+    20 s allowance, so the runner's lateness gate refuses that ENTER.
+    """
+    bucket_start = RTH_MINUTE  # 10:30 ET
+    trigger_minute = bucket_start + timedelta(minutes=4)  # 10:34 ET
+    feed = _real_rth_chain(
+        raw_minute(trigger_minute, range(30, 60, 5))
+        + raw_minute(trigger_minute + timedelta(minutes=1), range(0, 60, 5))
+        + raw_minute(trigger_minute + timedelta(minutes=2), (0,))
+    )
+    sink = _RecordingSink()
+    (live,), error = await _drain_real_chain(feed, _policy(sink), 1)
+    assert error is None
+    assert [(e.kind, e.cause, e.window_start_ms) for e in sink.events] == [
+        ("gap", "stream_joined", _ms(trigger_minute))
+    ]
+
+    consolidator = TradeBarConsolidator(timedelta(minutes=5))
+    warmup = [_trade_bar(_ms(bucket_start) + i * 60_000) for i in range(4)]  # 10:30-10:33
+    fired = [consolidator.update(bar) for bar in [*warmup, _trade_bar(live.start_ms)]]
+    bucket = fired[-1]
+
+    assert fired[:-1] == [None] * 4
+    assert bucket is not None and bucket.start_ms == _ms(bucket_start)
+    assert bucket.end_ms == _ms(trigger_minute)  # the hole: 10:34 never arrived
+    monkeypatch.setattr(fcp, "now_ms_utc", lambda: live.end_ms)  # decided when 10:35 lands
+    late = fcp.late_decision(_policy(sink), bucket.end_ms)
+    assert late is not None and late.lateness_ms == 120_000 > late.allowance_ms
+
+
+def _trade_bar(start_ms: int) -> TradeBar:
+    one = Decimal("100")
+    return TradeBar(
+        symbol="SPY", start_ms=start_ms, end_ms=start_ms + 60_000,
+        open=one, high=one, low=one, close=one, volume=10,
+    )

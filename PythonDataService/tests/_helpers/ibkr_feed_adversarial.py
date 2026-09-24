@@ -45,8 +45,9 @@ class AcceleratedFeedClock:
 class _AdversarialRealtimeBarTransport:
     """IBKR-shaped transport that returns one deterministic plan per request."""
 
-    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...]) -> None:
+    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...], *, use_rth: bool = True) -> None:
         self._plans = plans
+        self._use_rth = use_rth
         self._subscriptions: list[list[SimpleNamespace]] = []
         self._subscription_opened = asyncio.Event()
         self.cancel_count = 0
@@ -70,8 +71,8 @@ class _AdversarialRealtimeBarTransport:
     ) -> list[SimpleNamespace]:
         if getattr(contract, "symbol", None) != "SPY":
             raise ValueError("adversarial feed fixture supports only SPY")
-        if bar_size != 5 or what_to_show != "TRADES" or not useRTH:
-            raise ValueError("adversarial feed fixture requires RTH 5-second trades")
+        if bar_size != 5 or what_to_show != "TRADES" or useRTH != self._use_rth:
+            raise ValueError(f"adversarial feed fixture requires 5-second trades with useRTH={self._use_rth}")
         plan_index = len(self._subscriptions)
         if plan_index >= len(self._plans):
             raise RuntimeError("adversarial feed fixture exhausted its subscription plans")
@@ -109,10 +110,10 @@ class _AdversarialIbkrClient:
 
 
 class _AdversarialFeedFixture:
-    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...]) -> None:
+    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...], *, use_rth: bool = True) -> None:
         wall_ms = int((_RTH_START + timedelta(minutes=1)).timestamp() * 1_000)
         self.clock = AcceleratedFeedClock(wall_ms=wall_ms)
-        self._transport = _AdversarialRealtimeBarTransport(plans)
+        self._transport = _AdversarialRealtimeBarTransport(plans, use_rth=use_rth)
         self.client = _AdversarialIbkrClient(self._transport)
 
     @property
@@ -170,11 +171,13 @@ class ScriptedLinesFeedFixture(_AdversarialFeedFixture):
     The line stays connected throughout: a plan that simply omits some
     5-second bars is a connected line that went quiet (a data-farm blip with
     no 1100), and a plan that runs out mid-minute is a line the stall timer
-    will replace with the next plan (#2364).
+    will replace with the next plan (#2364). ``use_rth=False`` is the
+    extended-hours subscription a regular-hours run streams on, which is how
+    PRE/POST prints reach it.
     """
 
-    def __init__(self, *plans: tuple[SimpleNamespace, ...]) -> None:
-        super().__init__(plans)
+    def __init__(self, *plans: tuple[SimpleNamespace, ...], use_rth: bool = True) -> None:
+        super().__init__(plans, use_rth=use_rth)
         self.client.settings = SimpleNamespace(feed_continuity_enabled=True)
 
 
