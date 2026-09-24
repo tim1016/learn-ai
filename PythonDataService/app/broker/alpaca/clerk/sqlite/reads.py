@@ -538,6 +538,29 @@ def orders_for_effect_operation(conn: sqlite3.Connection, effect_operation_id: s
     return [OrderResource(**dict(row)) for row in rows]
 
 
+def terminal_entry_orders_with_fills(
+    conn: sqlite3.Connection, *, order_ref: str | None = None
+) -> list[tuple[str, str]]:
+    """``(order_ref, strategy_instance_id)`` of every ENTRY order carrying a fill
+    row while its ENTER is ``failed``/``rejected`` (#2348).
+
+    No fold terminalizes an ENTER that has an effective fill, so each row is a
+    candidate contradiction; the caller nets superseded fills. ``order_ref``
+    narrows the scan to one order (the trade_updates sink's early check).
+    """
+    rows = conn.execute(
+        "SELECT o.order_ref, e.strategy_instance_id FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "AND (? IS NULL OR o.order_ref = ?) "
+        "AND EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref) "
+        "ORDER BY o.order_ref ASC",
+        (order_ref, order_ref),
+    ).fetchall()
+    return [(row["order_ref"], row["strategy_instance_id"]) for row in rows]
+
+
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     """Every immutable broker identity captured by this authority."""
     rows = conn.execute("SELECT order_ref FROM orders").fetchall()
@@ -1044,6 +1067,24 @@ def active_uncertainty(
         (scope, reason_code, strategy_instance_id),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def uncertainty_history(
+    conn: sqlite3.Connection, *, scope: str, reason_code: str, strategy_instance_id: str | None
+) -> list[dict]:
+    """Every episode, active or resolved, for one ``(scope, reason_code, instance)``.
+
+    Newest observation first. For a detector that must not re-raise a cause
+    an earlier episode already answered (#2348); the active-only read cannot
+    see an episode a legitimate flatten resolved.
+    """
+    rows = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE scope = ? AND reason_code = ? AND strategy_instance_id IS ? "
+        "ORDER BY observed_at_ms DESC, uncertainty_id DESC",
+        (scope, reason_code, strategy_instance_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def active_uncertainties(conn: sqlite3.Connection) -> list[dict]:

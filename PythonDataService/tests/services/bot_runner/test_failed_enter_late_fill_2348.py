@@ -14,9 +14,10 @@ and the 30 s submit-absence grace.
 
 After the late fill every path must end with the Clerk holding the real
 position, an instance-scoped ``FAILED_ENTER_FILLED`` episode naming the order,
-a non-``clean`` verdict, ENTER refused, and a reducing EXIT (an operator
-flatten on the bot's run) admitted -- whose fill then resolves the episode and
-returns the verdict to ``clean``.
+the bot's custody proof frozen on that fence (the account verdict stays
+``clean``: broker and journal agree), ENTER refused, and a reducing EXIT (a
+strategy EXIT on the active run) admitted -- whose fill then resolves the
+episode and lifts the freeze.
 """
 
 from __future__ import annotations
@@ -61,6 +62,10 @@ class _QueueFeed(_FakeFeed):
     def __init__(self) -> None:
         super().__init__([], mode="hold")
         self.q: asyncio.Queue = asyncio.Queue()
+        # Bars the strategy has finished with: the consumer only resumes this
+        # generator to ask for the next bar once the previous one -- clerk
+        # call included -- is fully handled.
+        self.bars_done = 0
 
     async def stream_bars(self, symbol, *, use_rth=True, continuity=None):
         self.continuity_seen = continuity
@@ -68,6 +73,7 @@ class _QueueFeed(_FakeFeed):
             bar = await self.q.get()
             self.bars_consumed += 1
             yield bar
+            self.bars_done += 1
 
 
 class _LateLandingBroker(_SqliteRuntimeBroker):
@@ -250,14 +256,12 @@ async def _run_late_fill_case(
             await land_late_order()
         for bar in (_red_bar(base + 120_000), _red_bar(base + 180_000), _green_bar(base + 240_000)):
             feed.q.put_nowait(bar)
-        await _wait_for(lambda: feed.bars_consumed == 5, timeout_s=5)
-        await asyncio.sleep(0.5)
+        await _wait_for(lambda: feed.bars_done == 5, timeout_s=5)
         if land == "after_exit":
             await land_late_order()
         for bar in (_green_bar(base + 300_000), _green_bar(base + 360_000), _green_bar(base + 420_000)):
             feed.q.put_nowait(bar)
-        await _wait_for(lambda: feed.bars_consumed == 8, timeout_s=5)
-        await asyncio.sleep(0.5)
+        await _wait_for(lambda: feed.bars_done == 8, timeout_s=5)
 
         # The Clerk's belief still matches the broker: it holds the real long.
         assert repo.position(_SID, "SPY") == pytest.approx(1.0, abs=1e-9, rel=0)
@@ -274,20 +278,26 @@ async def _run_late_fill_case(
         assert episode["blocks_new_exposure"]
         assert episode["allows_reduction"]
         cause = json.loads(episode["facts_json"])["cause_facts"]
-        assert cause["orders"] == [{"order_ref": entry_ref, "symbol": "SPY"}]
+        assert cause["orders"] == [{"order_ref": entry_ref, "symbol": "SPY", "filled_qty": 1.0}]
+        # Broker and journal agree, so the account verdict is clean; the fence
+        # freezes this bot's custody proof instead, with its exposure known.
         verdict = (await clerk.reconcile_account(trigger="AUTOMATIC")).verdict
-        assert verdict == "failed_enter_filled"
+        assert verdict == "clean"
+        proof = await clerk.prove_instance_custody(_SID)
+        assert proof.freeze.active
+        assert entry_ref in (proof.freeze.explanation or "")
+        assert proof.exposure == {"SPY": pytest.approx(1.0, abs=1e-9, rel=0)}
         decision = admit_new_exposure(repo, strategy_instance_id=_SID)
         assert not decision.allowed
         assert decision.reason_code == FAILED_ENTER_FILLED_REASON_CODE
 
-        # A reducing EXIT on the bot's run (an operator flatten or a strategy
-        # EXIT) must be admitted: the fence refuses exposure, not reduction.
+        # A strategy EXIT on the active run must be admitted: the fence
+        # refuses exposure, not reduction.
         strategy_call = strategy_kwargs[-1]
         receipt = await real_execute(
             strategy_instance_id=_SID,
             run_id=strategy_call["run_id"],
-            decision_id="operator-flatten:2348",
+            decision_id="strategy-exit:2348",
             purpose=EffectPurpose.EXIT,
             action_plan=strategy_call["action_plan"],
             quantity=strategy_call["quantity"],
@@ -306,6 +316,7 @@ async def _run_late_fill_case(
         assert repo.position(_SID, "SPY") == pytest.approx(0.0, abs=1e-9, rel=0)
         assert _instance_episodes(repo) == []
         assert result.verdict == "clean"
+        assert not (await clerk.prove_instance_custody(_SID)).freeze.active
         assert admit_new_exposure(repo, strategy_instance_id=_SID).reason_code != (
             FAILED_ENTER_FILLED_REASON_CODE
         )

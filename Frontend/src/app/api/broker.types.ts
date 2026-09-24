@@ -20979,7 +20979,7 @@ export interface components {
              * Verdict
              * @enum {string}
              */
-            verdict: "clean" | "unexplained_order" | "position_drift" | "failed_enter_filled" | "stale";
+            verdict: "clean" | "unexplained_order" | "position_drift" | "stale";
         };
         /**
          * ReconciliationSummary

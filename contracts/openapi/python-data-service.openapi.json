@@ -31076,7 +31076,6 @@
               "clean",
               "unexplained_order",
               "position_drift",
-              "failed_enter_filled",
               "stale"
             ],
             "title": "Verdict",

@@ -6,8 +6,9 @@ to end: where it is raised, what it refuses and admits, how reconciliation
 reports it, and how the operator's safe flatten closes it.
 
 Real code: ``submit_enter``, the SQLite folds, ``SqliteTradeUpdateEvidenceSink``,
-``reconcile_account``, the recovery catalog and ``execute_safe_flatten_plan``
-on a temp clerk repo. Faked: the broker ports and the clock.
+``reconcile_account``, the facade's custody proof, the recovery catalog and
+``execute_safe_flatten_plan`` on a temp clerk repo. Faked: the broker ports and
+the clock.
 """
 
 from __future__ import annotations
@@ -19,16 +20,12 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
-from app.broker.alpaca.clerk.sqlite.reconcile import (
-    AccountReconciliationResult,
-    reconcile_account,
-)
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
     ReentrantAsyncLock,
-    _instance_legacy_verdict,
-    _legacy_verdict,
+    SqliteAlpacaClerkFacade,
 )
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import execute_safe_flatten_plan
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -41,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLE
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.services.run_admission import evaluate_run_admission
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
     RUN_ID,
@@ -53,6 +51,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _position,
     crashed_with_exposure,  # noqa: F401 -- pytest fixture
 )
+from tests.services.test_run_admission import _NOW, _bot
 
 QTY_ATOL = 1e-9
 
@@ -86,12 +85,12 @@ async def _deliver_fill(
     )
 
 
-def _late_filled_entry(order_ref: str) -> BrokerOrder:
+def _late_filled_entry(order_ref: str, *, filled_quantity: int = 10) -> BrokerOrder:
     return _broker_order(
         order_ref,
         status="filled",
-        quantity=10.0,
-        filled_quantity=10,
+        quantity=float(filled_quantity),
+        filled_quantity=filled_quantity,
         filled_avg_price=100.0,
     ).model_copy(update={"order_id": "broker-late-1"})
 
@@ -168,21 +167,81 @@ async def test_fill_on_a_failed_enter_keeps_the_position_and_raises_the_fence(
     episode = _fence(repo)
     assert episode is not None
     assert episode["severity"] == "error"
-    assert _cause_orders(episode) == [{"order_ref": order_ref, "symbol": "SPY"}]
+    assert _cause_orders(episode) == [
+        {"order_ref": order_ref, "symbol": "SPY", "filled_qty": 10.0}
+    ]
     assert order_ref in episode["explanation"]
 
 
-async def test_a_fill_that_precedes_the_failed_fold_still_raises_the_fence(
+async def _sweep(repo: ClerkSqliteRepository, *, broker_spy: float = 10.0):
+    positions = [_position("SPY", quantity=broker_spy)] if broker_spy else []
+    return await reconcile_account(
+        repo, read=_FakeRead(positions=positions), trade=_FakeTrade()
+    )
+
+
+async def test_a_fill_that_precedes_the_failed_fold_is_fenced_by_the_next_pass(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
     repo, _clock = crashed_with_exposure
 
     order_ref = await _failed_enter_that_filled(repo, fill_first=True)
-
+    # The fill folded while the ENTER was still live; the failed fold that
+    # followed contradicts it, and the canonical detector is the sweep.
     assert repo.position(SID, "SPY") == pytest.approx(10.0, abs=QTY_ATOL, rel=0)
+
+    await _sweep(repo)
+
     episode = _fence(repo)
     assert episode is not None
-    assert _cause_orders(episode) == [{"order_ref": order_ref, "symbol": "SPY"}]
+    assert _cause_orders(episode) == [
+        {"order_ref": order_ref, "symbol": "SPY", "filled_qty": 10.0}
+    ]
+
+
+async def test_a_fence_lost_to_a_crash_after_the_fill_is_raised_by_the_next_sweep(
+    crashed_with_exposure,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The crash window between the fill's commit and the fence's own (#2348).
+
+    The fill commits, then the process dies before the episode is written:
+    here the raise throws once, exactly where a crash would stop it. The slice
+    is durable and deduplicated, so a redelivered frame is not "new"; only a
+    detector that re-derives from durable facts can see the contradiction.
+    """
+    repo, _clock = crashed_with_exposure
+    import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence
+
+    real_raise = order_evidence.raise_failed_enter_filled_uncertainty
+    crashes: list[str] = []
+
+    def crash_once(*args, **kwargs):
+        if not crashes:
+            crashes.append(kwargs["order_ref"])
+            raise RuntimeError("process died between the fill and the fence")
+        return real_raise(*args, **kwargs)
+
+    monkeypatch.setattr(order_evidence, "raise_failed_enter_filled_uncertainty", crash_once)
+    with pytest.raises(RuntimeError, match="process died"):
+        await _failed_enter_that_filled(repo)
+    order_ref = crashes[0]
+    assert repo.position(SID, "SPY") == pytest.approx(10.0, abs=QTY_ATOL, rel=0)
+    assert _fence(repo) is None
+
+    # The redelivered frame deduplicates, and the sweep is still clean
+    # (broker and journal agree), yet the fence is raised.
+    await _deliver_fill(
+        repo, _late_filled_entry(order_ref), quantity=10, execution_id="exec-late-1"
+    )
+    result = await _sweep(repo)
+
+    assert result.verdict == "clean"
+    episode = _fence(repo)
+    assert episode is not None
+    assert _cause_orders(episode) == [
+        {"order_ref": order_ref, "symbol": "SPY", "filled_qty": 10.0}
+    ]
 
 
 async def test_the_fence_refuses_entry_and_admits_only_reduction_toward_zero(
@@ -221,19 +280,27 @@ async def test_a_second_contradicted_order_widens_the_open_fence(
     order_ref = await _failed_enter_that_filled(repo)
 
     raise_failed_enter_filled_uncertainty(
-        repo, strategy_instance_id=SID, order_ref="aaa-other-order", symbol="qqq"
+        repo,
+        strategy_instance_id=SID,
+        order_ref="aaa-other-order",
+        symbol="qqq",
+        filled_qty=3.0,
     )
     episode = _fence(repo)
     assert episode is not None
     assert _cause_orders(episode) == [
-        {"order_ref": "aaa-other-order", "symbol": "QQQ"},
-        {"order_ref": order_ref, "symbol": "SPY"},
+        {"order_ref": "aaa-other-order", "symbol": "QQQ", "filled_qty": 3.0},
+        {"order_ref": order_ref, "symbol": "SPY", "filled_qty": 10.0},
     ]
 
     # Re-raising an order the episode already names changes nothing.
     assert (
         raise_failed_enter_filled_uncertainty(
-            repo, strategy_instance_id=SID, order_ref=order_ref, symbol="SPY"
+            repo,
+            strategy_instance_id=SID,
+            order_ref=order_ref,
+            symbol="SPY",
+            filled_qty=10.0,
         )
         == "unchanged"
     )
@@ -249,19 +316,19 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
         lifecycle_run_id=RUN_ID, operator_reason="operator_flatten",
     )
 
-    # Broker and Clerk agree (+10), yet the account is not clean.
+    # Broker and Clerk agree (+10): the account verdict is clean, and the
+    # fence -- not the verdict -- carries the contradiction.
     result = await reconcile_account(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
         trigger="OPERATOR_RECONCILE_NOW",
     )
-    assert result.verdict == "failed_enter_filled"
-    assert result.failed_enter_filled_instance_ids == (SID,)
+    assert result.verdict == "clean"
     assert _fence(repo) is not None
 
-    # The pass still proved broker truth, so the operator's flatten is offered
-    # and the fence it exists to clear does not gate it.
+    # The pass proved broker truth, so the operator's flatten is offered and
+    # the fence it exists to clear does not gate it.
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -313,19 +380,72 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
     assert clean.verdict == "clean"
     assert _fence(repo) is None
 
-    # A redelivered frame for the old order is not a new fill: no re-raise.
+    # A redelivered frame for the old order is not a new fill, and the sweep
+    # sees the fill total the resolved episode already answered: no re-raise.
     await _deliver_fill(
         repo, _late_filled_entry(order_ref), quantity=10, execution_id="exec-late-1"
     )
+    assert (await _sweep(repo, broker_spy=0.0)).verdict == "clean"
     assert _fence(repo) is None
 
+    # A genuinely new fill on the same failed order is a new contradiction.
+    await _deliver_fill(
+        repo,
+        _late_filled_entry(order_ref, filled_quantity=11),
+        quantity=1,
+        execution_id="exec-late-2",
+    )
+    episode = _fence(repo)
+    assert episode is not None
+    assert _cause_orders(episode) == [
+        {"order_ref": order_ref, "symbol": "SPY", "filled_qty": 11.0}
+    ]
 
-def test_only_the_fenced_instance_reads_the_unexplained_position() -> None:
-    result = AccountReconciliationResult(
-        verdict="failed_enter_filled",
-        failed_enter_filled_instance_ids=("fenced-bot",),
+
+async def test_the_fenced_bot_alone_is_frozen_with_its_exposure_still_proven(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    repo, _clock = crashed_with_exposure
+    repo.register_strategy_instance(strategy_instance_id="other-bot", symbol="QQQ", config_hash="h2")
+    order_ref = await _failed_enter_that_filled(repo)
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(),
     )
 
-    assert _legacy_verdict("failed_enter_filled") == "missing_intent"
-    assert _instance_legacy_verdict(result, "fenced-bot") == "missing_intent"
-    assert _instance_legacy_verdict(result, "other-bot") == "clean"
+    # The account-level answer is clean: broker and journal agree.
+    assert await facade.reconcile_once() == "clean"
+
+    proof = await facade.prove_instance_custody(SID)
+    assert proof.reconciliation_verdict == "clean"
+    assert proof.exposure == {"SPY": pytest.approx(10.0, abs=QTY_ATOL, rel=0)}
+    assert proof.freeze.active
+    assert order_ref in (proof.freeze.explanation or "")
+    assert "flatten" in (proof.freeze.next_step or "")
+
+    other = await facade.prove_instance_custody("other-bot")
+    assert other.reconciliation_verdict == "clean"
+    assert not other.freeze.active
+
+    # The custody snapshot keeps the +10 SPY known, and Start is refused on
+    # the fence's own freeze -- before the generic flat-custody rule.
+    snapshot = await facade.custody_snapshot(SID)
+    assert snapshot.reconciliation_state == "clean"
+    assert snapshot.exposure.state == "non_zero"
+    assert snapshot.exposure.positions == {"SPY": pytest.approx(10.0, abs=QTY_ATOL, rel=0)}
+    bot = _bot()
+    decision = evaluate_run_admission(
+        bot,
+        snapshot.model_copy(
+            update={
+                "strategy_instance_id": bot.strategy_instance_id,
+                "account_id": bot.sealed_account_id,
+                "observed_at_ms": _NOW - 500,
+            }
+        ),
+        evaluated_at_ms=_NOW,
+    )
+    assert not decision.allowed
+    assert decision.explanation == proof.freeze.explanation

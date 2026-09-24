@@ -397,12 +397,43 @@ def _active_failed_enter_filled_cause(
     )
 
 
+def failed_enter_fill_is_answered(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    order_ref: str,
+    filled_qty: float,
+) -> bool:
+    """Whether an episode already named this order at this fill quantity (#2348).
+
+    Active *or* resolved: a fence a legitimate flatten cleared must not
+    re-raise while the order's fills are unchanged, but a later fill on the
+    same order is a new contradiction and must.
+    """
+    for episode in repo.uncertainty_history(
+        scope="CUSTODY_SUBJECT",
+        reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
+    ):
+        cause = FailedEnterFilledCause.from_mapping(
+            UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).cause_facts
+        )
+        if any(
+            order.order_ref == order_ref
+            and not position_quantity_is_nonzero(order.filled_qty - filled_qty)
+            for order in cause.orders
+        ):
+            return True
+    return False
+
+
 def raise_failed_enter_filled_uncertainty(
     repo: ClerkSqliteRepository,
     *,
     strategy_instance_id: str,
     order_ref: str,
     symbol: str,
+    filled_qty: float,
 ) -> str:
     """Flag a fill on an ENTER the Clerk had already folded terminal (#2348).
 
@@ -413,8 +444,14 @@ def raise_failed_enter_filled_uncertainty(
     order, refuses new exposure for the instance, and admits reduction of the
     contradicted symbols only. A second contradicted order on the same
     instance widens the open episode rather than replacing it.
+
+    Read-merge-write: the active cause is read, widened, and written back as
+    a refresh. The caller must hold the Clerk's intake lock, or two
+    concurrent raisers could each widen a stale read and drop an order.
     """
-    order = FailedEnterFilledOrder(order_ref=order_ref, symbol=symbol.upper())
+    order = FailedEnterFilledOrder(
+        order_ref=order_ref, symbol=symbol.upper(), filled_qty=filled_qty
+    )
     active = _active_failed_enter_filled_cause(repo, strategy_instance_id=strategy_instance_id)
     cause = (
         FailedEnterFilledCause(orders=(order,)) if active is None else active.with_order(order)
@@ -564,34 +601,6 @@ def _position_drift_allows_action(
     ) and _moves_toward_zero_without_crossing(current_attributed, intent.signed_delta)
 
 
-def _exit_not_flat_allows_action(
-    *,
-    facts: UncertaintyRaisedFacts,
-    intent: ReductionIntent | None,
-) -> bool:
-    if intent is None or intent.quantity <= 0 or intent.side.upper() not in {"BUY", "SELL"}:
-        return False
-    try:
-        cause = ExitNotFlatCause.from_mapping(facts.cause_facts)
-    except ValueError:
-        return False
-    return cause.symbol == intent.symbol.upper()
-
-
-def _exit_stuck_allows_action(
-    *,
-    facts: UncertaintyRaisedFacts,
-    intent: ReductionIntent | None,
-) -> bool:
-    if intent is None or intent.quantity <= 0 or intent.side.upper() not in {"BUY", "SELL"}:
-        return False
-    try:
-        cause = ExitStuckCause.from_mapping(facts.cause_facts)
-    except ValueError:
-        return False
-    return cause.symbol == intent.symbol.upper()
-
-
 def _hold_defers_reduction_to_its_cause(reason_code: str) -> bool:
     """Whether this hold leaves REDUCE to the per-reason evaluation."""
     policy = reason_policy(reason_code)
@@ -611,6 +620,33 @@ def _position_drift_proof(
     )
 
 
+def _symbol_scoped_reduction_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    symbols: frozenset[str],
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    """A reduction of one of the cause's symbols, toward zero without crossing.
+
+    The shared proof of every custody-subject cause that names the symbols it
+    fences (EXIT_NOT_FLAT, EXIT_STUCK, FAILED_ENTER_FILLED): the intent must
+    be a well-formed order on a named symbol that moves the instance's
+    attributed position toward zero and never through it.
+    """
+    if (
+        intent is None
+        or strategy_instance_id is None
+        or intent.quantity <= 0
+        or intent.side.upper() not in {"BUY", "SELL"}
+    ):
+        return False
+    symbol = intent.symbol.upper()
+    return symbol in symbols and _moves_toward_zero_without_crossing(
+        repo.position(strategy_instance_id, symbol), intent.signed_delta
+    )
+
+
 def _exit_not_flat_proof(
     repo: ClerkSqliteRepository,
     *,
@@ -619,14 +655,15 @@ def _exit_not_flat_proof(
     intent: ReductionIntent | None,
     strategy_instance_id: str | None,
 ) -> bool:
-    return (
-        _exit_not_flat_allows_action(facts=facts, intent=intent)
-        and strategy_instance_id is not None
-        and intent is not None
-        and _moves_toward_zero_without_crossing(
-            repo.position(strategy_instance_id, intent.symbol.upper()),
-            intent.signed_delta,
-        )
+    try:
+        cause = ExitNotFlatCause.from_mapping(facts.cause_facts)
+    except ValueError:
+        return False
+    return _symbol_scoped_reduction_proof(
+        repo,
+        symbols=frozenset({cause.symbol}),
+        intent=intent,
+        strategy_instance_id=strategy_instance_id,
     )
 
 
@@ -638,14 +675,15 @@ def _exit_stuck_proof(
     intent: ReductionIntent | None,
     strategy_instance_id: str | None,
 ) -> bool:
-    return (
-        _exit_stuck_allows_action(facts=facts, intent=intent)
-        and strategy_instance_id is not None
-        and intent is not None
-        and _moves_toward_zero_without_crossing(
-            repo.position(strategy_instance_id, intent.symbol.upper()),
-            intent.signed_delta,
-        )
+    try:
+        cause = ExitStuckCause.from_mapping(facts.cause_facts)
+    except ValueError:
+        return False
+    return _symbol_scoped_reduction_proof(
+        repo,
+        symbols=frozenset({cause.symbol}),
+        intent=intent,
+        strategy_instance_id=strategy_instance_id,
     )
 
 
@@ -657,20 +695,15 @@ def _failed_enter_filled_proof(
     intent: ReductionIntent | None,
     strategy_instance_id: str | None,
 ) -> bool:
-    if (
-        intent is None
-        or strategy_instance_id is None
-        or intent.quantity <= 0
-        or intent.side.upper() not in {"BUY", "SELL"}
-    ):
-        return False
     try:
         cause = FailedEnterFilledCause.from_mapping(facts.cause_facts)
     except ValueError:
         return False
-    symbol = intent.symbol.upper()
-    return symbol in cause.symbols and _moves_toward_zero_without_crossing(
-        repo.position(strategy_instance_id, symbol), intent.signed_delta
+    return _symbol_scoped_reduction_proof(
+        repo,
+        symbols=cause.symbols,
+        intent=intent,
+        strategy_instance_id=strategy_instance_id,
     )
 
 
@@ -1019,6 +1052,7 @@ __all__ = [
     "admit_new_exposure",
     "classify_admission_refusal",
     "decide_capability",
+    "failed_enter_fill_is_answered",
     "raise_failed_enter_filled_uncertainty",
     "raise_uncertainty",
     "require_admission",

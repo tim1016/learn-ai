@@ -454,6 +454,12 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.orders_for_effect_operation(self._conn, effect_operation_id)
 
+    def terminal_entry_orders_with_fills(
+        self: ClerkSqliteRepository, *, order_ref: str | None = None
+    ) -> list[tuple[str, str]]:
+        with self._write_lock:
+            return reads.terminal_entry_orders_with_fills(self._conn, order_ref=order_ref)
+
     def all_order_refs(self: ClerkSqliteRepository) -> frozenset[str]:
         with self._write_lock:
             return reads.all_order_refs(self._conn)
@@ -610,6 +616,22 @@ class ClerkSqliteRepositoryReadApi:
         """Every unresolved uncertainty on the account, oldest first (#2228)."""
         with self._write_lock:
             return reads.active_uncertainties(self._conn)
+
+    def uncertainty_history(
+        self: ClerkSqliteRepository,
+        *,
+        scope: str,
+        reason_code: str,
+        strategy_instance_id: str | None,
+    ) -> list[dict]:
+        """Every episode, active or resolved, for one cause identity."""
+        with self._write_lock:
+            return reads.uncertainty_history(
+                self._conn,
+                scope=scope,
+                reason_code=reason_code,
+                strategy_instance_id=strategy_instance_id,
+            )
 
     def active_uncertainty(
         self: ClerkSqliteRepository,

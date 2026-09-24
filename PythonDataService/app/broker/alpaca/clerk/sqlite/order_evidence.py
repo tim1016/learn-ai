@@ -44,7 +44,10 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
 )
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import raise_failed_enter_filled_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    failed_enter_fill_is_answered,
+    raise_failed_enter_filled_uncertainty,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
@@ -80,7 +83,7 @@ __all__ = [
     "UNFILLED_TERMINAL_STATES",
     "entry_never_accepted_durably",
     "entry_order_symbol",
-    "flag_fill_on_terminal_enter",
+    "fence_fills_on_terminal_enters",
     "fold_entry_never_accepted",
     "fold_failed",
     "fold_order_acknowledgement",
@@ -104,60 +107,59 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
 
 
-TERMINAL_ENTER_STATES = frozenset({"failed", "rejected"})
-"""ENTER effect states that assert the entry opened nothing (#2348)."""
+def fence_fills_on_terminal_enters(
+    repo: ClerkSqliteRepository, *, order_ref: str | None = None
+) -> None:
+    """Raise ``FAILED_ENTER_FILLED`` for every fill that contradicts its ENTER (#2348).
 
-
-def flag_fill_on_terminal_enter(repo: ClerkSqliteRepository, *, order_ref: str) -> bool:
-    """Raise ``FAILED_ENTER_FILLED`` when an ENTRY order's fills contradict its ENTER.
-
-    No existing fold terminalizes an ENTER that has a recorded fill: the void,
+    No fold terminalizes an ENTER that has an effective fill: the void,
     ``ENTER_UNFILLED`` and the absence proofs all require zero fills. So a
-    recorded fill on an ENTER that is ``failed``/``rejected`` is always
+    fill on an ENTRY order whose ENTER is ``failed``/``rejected`` is always
     contradicting evidence -- #2304's live duplicate-id order, or #2342's
-    voided order whose abandoned POST landed (#2348). The fill stays folded
-    (the Clerk's position must match the broker's); this only refuses to
-    absorb it silently.
+    voided order whose abandoned POST landed. The fill stays folded (the
+    Clerk's position must match the broker's); this only refuses to absorb it
+    silently.
 
-    Called at exactly the two moments the contradiction can first appear: a
-    new fill recorded on the order, and the ENTER folded terminal while its
-    order already carries fills. Returns whether the contradiction holds.
+    The one detector, re-derived from durable facts on every reconciliation
+    pass, so a crash between a fill's commit and the fence's commit -- or an
+    instance wedged before this detector existed -- is fenced on the next
+    pass. ``order_ref`` narrows it to one order for the trade_updates sink's
+    early call. Idempotent: an order an episode (active or resolved) already
+    recorded at its current effective quantity is answered, so a fence a
+    flatten cleared stays cleared until the order fills further.
+
+    Caller must hold the Clerk's intake lock (the raise is a read-merge-write).
     """
-    order = repo.order(order_ref)
-    if order is None or order.role != "ENTRY":
-        return False
-    enter = repo.effect_operation(order.effect_operation_id)
-    if (
-        enter is None
-        or enter.kind != "ENTER"
-        or enter.state not in TERMINAL_ENTER_STATES
-        or enter.strategy_instance_id is None
+    for candidate_ref, strategy_instance_id in repo.terminal_entry_orders_with_fills(
+        order_ref=order_ref
     ):
-        return False
-    filled_qty, _ = repo.effective_fill_totals_for_order(order_ref)
-    if abs(filled_qty) < FILL_QTY_EPSILON:
-        return False
-    symbol = entry_order_symbol(repo, order_ref)
-    outcome = raise_failed_enter_filled_uncertainty(
-        repo,
-        strategy_instance_id=enter.strategy_instance_id,
-        order_ref=order_ref,
-        symbol=symbol,
-    )
-    logger.warning(
-        "fill recorded on an ENTER already folded terminal",
-        extra={
-            "action": "failed_enter_filled",
-            "order_ref": order_ref,
-            "effect_operation_id": enter.effect_operation_id,
-            "strategy_instance_id": enter.strategy_instance_id,
-            "enter_state": enter.state,
-            "symbol": symbol,
-            "filled_qty": filled_qty,
-            "episode": outcome,
-        },
-    )
-    return True
+        filled_qty, _ = repo.effective_fill_totals_for_order(candidate_ref)
+        if abs(filled_qty) < FILL_QTY_EPSILON or failed_enter_fill_is_answered(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            order_ref=candidate_ref,
+            filled_qty=filled_qty,
+        ):
+            continue
+        symbol = entry_order_symbol(repo, candidate_ref)
+        outcome = raise_failed_enter_filled_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            order_ref=candidate_ref,
+            symbol=symbol,
+            filled_qty=filled_qty,
+        )
+        logger.warning(
+            "fill recorded on an ENTER already folded terminal",
+            extra={
+                "action": "failed_enter_filled",
+                "order_ref": candidate_ref,
+                "strategy_instance_id": strategy_instance_id,
+                "symbol": symbol,
+                "filled_qty": filled_qty,
+                "episode": outcome,
+            },
+        )
 
 
 def fold_order_evidence(
@@ -273,8 +275,6 @@ def fold_order_evidence(
     _fold_enter_unfilled_if_proven(
         repo, effect=effect, order=order, order_ref=order_ref
     )
-    if fill_changed:
-        flag_fill_on_terminal_enter(repo, order_ref=order_ref)
 
 
 #: The execution-id namespaces the deterministic no-submit worlds mint
@@ -353,9 +353,8 @@ def _fold_simulated_execution_evidence(
     fails closed through the same typed ``EXECUTION_COVERAGE_CONFLICT``
     uncertainty as a real broker slice.
     """
-    appended = False
     for event in _simulated_fill_events_validated(order):
-        outcome = append_exact_execution_slice(
+        append_exact_execution_slice(
             repo,
             event=event,
             order=order,
@@ -364,7 +363,6 @@ def _fold_simulated_execution_evidence(
             evidence_source="simulated_execution",
             conflict_copy=SIMULATED_EXACT_CONFLICT_COPY,
         )
-        appended = appended or outcome == "appended"
 
     fold_order_acknowledgement(
         repo,
@@ -372,8 +370,6 @@ def _fold_simulated_execution_evidence(
         order=order,
         append_stale_ack=append_stale_ack,
     )
-    if appended:
-        flag_fill_on_terminal_enter(repo, order_ref=order_ref)
 
 
 def fold_order_acknowledgement(
@@ -729,11 +725,6 @@ def fold_failed(
             facts_json=facts.to_facts_json(),
         )
     )
-    if effect.kind == "ENTER":
-        # The fill can precede the terminal fold: a trade update for a live
-        # duplicate-id order can land before the submit's 422 returns (#2348).
-        for entry in repo.orders_for_effect_operation(effect_operation_id):
-            flag_fill_on_terminal_enter(repo, order_ref=entry.order_ref)
 
 
 SUBMIT_ABSENCE_SUMMARY_CODE = reason_age_policy(

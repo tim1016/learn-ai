@@ -220,26 +220,41 @@ class ExitStuckCause:
 
 @dataclass(frozen=True)
 class FailedEnterFilledOrder:
-    """One ENTRY order that filled after its ENTER was folded terminal."""
+    """One ENTRY order that filled after its ENTER was folded terminal.
+
+    ``filled_qty`` is the order's effective fill quantity when the episode
+    named it. It is what makes the detector idempotent across resolution: an
+    order an episode (active or resolved) recorded at its current quantity is
+    answered; a later fill on the same order is a new contradiction.
+    """
 
     order_ref: str
     symbol: str
+    filled_qty: float
 
-    def to_mapping(self) -> dict[str, str]:
-        return {"order_ref": self.order_ref, "symbol": self.symbol}
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "order_ref": self.order_ref,
+            "symbol": self.symbol,
+            "filled_qty": self.filled_qty,
+        }
 
     @classmethod
     def from_mapping(cls, value: Any) -> FailedEnterFilledOrder:
         if not isinstance(value, dict):
             raise ValueError("failed-ENTER-filled order must be an object")
-        _require_exact_keys(value, {"order_ref", "symbol"})
+        _require_exact_keys(value, {"order_ref", "symbol", "filled_qty"})
         order_ref = value["order_ref"]
         symbol = value["symbol"]
         if not isinstance(order_ref, str) or not order_ref:
             raise ValueError("failed-ENTER-filled order_ref must be a non-empty string")
         if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
             raise ValueError("failed-ENTER-filled symbol must be a non-empty uppercase string")
-        return cls(order_ref=order_ref, symbol=symbol)
+        return cls(
+            order_ref=order_ref,
+            symbol=symbol,
+            filled_qty=_finite_number(value["filled_qty"], field_name="filled_qty"),
+        )
 
 
 @dataclass(frozen=True)
@@ -257,10 +272,12 @@ class FailedEnterFilledCause:
         return frozenset(order.symbol for order in self.orders)
 
     def with_order(self, order: FailedEnterFilledOrder) -> FailedEnterFilledCause:
-        if any(existing.order_ref == order.order_ref for existing in self.orders):
+        """Name ``order``, replacing any earlier record of the same order_ref."""
+        if order in self.orders:
             return self
+        others = (existing for existing in self.orders if existing.order_ref != order.order_ref)
         return FailedEnterFilledCause(
-            orders=tuple(sorted((*self.orders, order), key=lambda item: item.order_ref))
+            orders=tuple(sorted((*others, order), key=lambda item: item.order_ref))
         )
 
     def to_mapping(self) -> dict[str, Any]:

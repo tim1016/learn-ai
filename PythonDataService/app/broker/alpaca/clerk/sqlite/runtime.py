@@ -126,6 +126,7 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     execute_safe_flatten_plan,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLED_REASON_CODE
 from app.broker.alpaca.clerk.stream_health import (
     STREAM_HEALTH_REASON_CODE,
     StreamHealthGate,
@@ -1422,10 +1423,14 @@ class SqliteAlpacaClerkFacade:
         strategy_instance_id: str,
         result: AccountReconciliationResult,
     ) -> InstanceCustodyProof:
-        verdict = _instance_legacy_verdict(result, strategy_instance_id)
+        verdict = _legacy_verdict(result.verdict)
         working = self._working_order_refs_for_proof(strategy_instance_id)
         unresolved = self._unresolved_order_refs(strategy_instance_id)
-        freeze = _freeze_state(verdict, observed_at_ms=self._repo.clock())
+        freeze = _freeze_state(result, observed_at_ms=self._repo.clock())
+        if not freeze.active:
+            freeze = _failed_enter_filled_freeze(
+                self._repo, strategy_instance_id, observed_at_ms=self._repo.clock()
+            )
         exposure = {
             symbol: quantity
             for symbol, quantity in self._repo.attributed_positions_for_strategy(
@@ -1629,38 +1634,17 @@ def _legacy_verdict(value: str) -> ReconciliationVerdict:
         return "unexplained_order"
     if value == "missing_intent":
         return "missing_intent"
-    if value == "failed_enter_filled":
-        # Account-wide: the broker holds a position of ours that no live
-        # intent explains -- a filled ENTER the Clerk had folded failed (#2348).
-        return "missing_intent"
     if value == "stale":
         return "stale"
     raise ValueError(f"unsupported SQLite reconciliation verdict {value!r}")
 
 
-def _instance_legacy_verdict(
-    result: AccountReconciliationResult, strategy_instance_id: str
-) -> ReconciliationVerdict:
-    """One instance's verdict: a #2348 fence is scoped to the instance it names.
-
-    Broker truth matched attribution on a ``failed_enter_filled`` pass, so an
-    instance without the fence reads ``clean``; only the fenced instance
-    reports the unexplained position.
-    """
-    if result.verdict == "failed_enter_filled":
-        return (
-            "missing_intent"
-            if strategy_instance_id in result.failed_enter_filled_instance_ids
-            else "clean"
-        )
-    return _legacy_verdict(result.verdict)
-
-
 def _freeze_state(
-    verdict: ReconciliationVerdict,
+    result: AccountReconciliationResult,
     *,
     observed_at_ms: int,
 ) -> AccountFreezeState:
+    verdict = _legacy_verdict(result.verdict)
     if verdict == "clean":
         return AccountFreezeState()
     category = (
@@ -1677,6 +1661,36 @@ def _freeze_state(
             else "The SQLite Account Clerk could not obtain fresh broker proof."
         ),
         next_step="Reconcile the account before allowing new exposure.",
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def _failed_enter_filled_freeze(
+    repo: ClerkSqliteRepository,
+    strategy_instance_id: str,
+    *,
+    observed_at_ms: int,
+) -> AccountFreezeState:
+    """This bot's own #2348 fence, read live from its durable episode.
+
+    The account verdict stays ``clean`` -- broker and journal agree on the
+    position -- so the proof keeps the exposure known and freezes only the
+    fenced bot. Its Start/Resume is refused on that freeze: the strategy
+    believes it is flat and would never exit the position it would inherit.
+    """
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if episode is None:
+        return AccountFreezeState()
+    return AccountFreezeState(
+        active=True,
+        # The position is real and attributed, but no live decision owns it.
+        category="ACCOUNT_STATE_UNATTRIBUTABLE",
+        explanation=episode["explanation"],
+        next_step=episode["next_step"],
         observed_at_ms=observed_at_ms,
     )
 
