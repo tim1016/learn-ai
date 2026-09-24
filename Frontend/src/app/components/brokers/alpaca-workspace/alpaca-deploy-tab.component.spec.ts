@@ -63,6 +63,7 @@ function accountData({ hasAccount }: AccountDataDouble) {
     useValue: {
       target: () => TARGET,
       accountId: () => 'PA9',
+      fence: () => ({ bindingGeneration: 3, routingEpoch: 7 }),
       account: { hasValue: () => hasAccount, value: () => fakeAccount() },
     },
   };

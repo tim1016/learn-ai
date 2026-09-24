@@ -53,4 +53,5 @@ export class AlpacaDeployTabComponent {
 
   protected readonly target = this.accountData.target;
   protected readonly accountId = this.accountData.accountId;
+  protected readonly fence = this.accountData.fence;
 }

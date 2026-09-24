@@ -2,6 +2,8 @@ import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
+import type { LaneFence } from '../../../fleet/lane-fence';
 import { resourceTarget } from '../../../fleet/resource-target';
 import { fakeBotPanelView, fakeCatalogBot, fakePanelAction } from '../../../testing/bot-panel-fixtures';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
@@ -12,6 +14,8 @@ const TARGET = resourceTarget('alpaca', 'clrk_deploy', {
   accountId: 'PA9', bindingGeneration: 3, routingEpoch: 7,
 });
 const RESUMED_AT_MS = 1_790_000_000_000;
+/** Frozen at desk render, deliberately different from TARGET's live stamp. */
+const FENCE: LaneFence = { bindingGeneration: 2, routingEpoch: 6 };
 
 const STOPPED = fakeCatalogBot({
   strategy_instance_id: 'ema-spy',
@@ -40,10 +44,20 @@ function panelWith(overrides: Partial<BotPanelView>): BotPanelView {
   return fakeBotPanelView({ strategy_instance_id: 'ema-spy', ...overrides });
 }
 
-async function renderSection(service: Partial<Record<keyof BrokerV2PanelService, unknown>>) {
+async function renderSection(
+  service: Partial<Record<keyof BrokerV2PanelService, unknown>>,
+  fence: LaneFence = FENCE,
+) {
   return render(DeployResumeBotsComponent, {
-    inputs: { target: TARGET, accountId: 'PA9' },
-    providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: service }],
+    inputs: { target: TARGET, accountId: 'PA9', fence },
+    providers: [
+      provideRouter([]),
+      provideFleetDirectory({
+        observed_at_ms: 1_757_000_000_000,
+        clerks: [testLane({ clerk_id: 'clrk_deploy' })],
+      }),
+      { provide: BrokerV2PanelService, useValue: service },
+    ],
   });
 }
 
@@ -96,6 +110,8 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     expect(action.action_id).toBe('resume');
     expect(command.entityId).toBe('ema-spy');
     expect(command.idempotencyKey).not.toBeNull();
+    // Minted from the desk's frozen fence, never the live target's stamp (#2106).
+    expect([command.bindingGeneration, command.routingEpoch]).toEqual([2, 6]);
     expect(screen.getByText('Bot resumed.')).toBeTruthy();
 
     await vi.advanceTimersByTimeAsync(2_000);
@@ -120,19 +136,6 @@ describe('DeployResumeBotsComponent (#2314)', () => {
           recorded_at_ms: RESUMED_AT_MS + 3_000,
           run_id: 'run-2',
         },
-      },
-      warmup_join: {
-        run_id: 'run-2',
-        state: 'refused',
-        label: 'Refused: gap could not be filled',
-        explanation: 'IBKR history did not return every regular-hours minute.',
-        retained_end_ms: RESUMED_AT_MS - 10_000_000,
-        joined_at_ms: RESUMED_AT_MS + 1_000,
-        filled_count: 0,
-        filled_start_ms: null,
-        filled_end_ms: null,
-        warmed_from_history_only: false,
-        reason_code: 'RESUME_HOLE_UNFILLED',
       },
     });
     const { fixture } = await renderSection({
@@ -169,5 +172,39 @@ describe('DeployResumeBotsComponent (#2314)', () => {
 
     expect(screen.getByRole('status').textContent).toContain('EMA Crossover');
     expect(getPanel).not.toHaveBeenCalled();
+  });
+
+  it('refuses to mint a Resume when the desk fence cannot be enforced', async () => {
+    const runBotAction = vi.fn();
+    const { fixture } = await renderSection(
+      { getCatalog: vi.fn().mockResolvedValue([STOPPED]), runBotAction },
+      { bindingGeneration: null, routingEpoch: null },
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(runBotAction).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('says it could not read the bot when every re-read fails, not that the bot is silent', async () => {
+    vi.useFakeTimers();
+    const { fixture } = await renderSection({
+      getCatalog: vi.fn().mockResolvedValue([STOPPED]),
+      runBotAction: vi.fn().mockResolvedValue(resumeResult()),
+      getPanel: vi.fn().mockRejectedValue(new Error('panel read failed')),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await vi.advanceTimersByTimeAsync(2_000 * 45);
+    fixture.detectChanges();
+
+    expect(screen.getByText(/could not read the bot after Resume/)).toBeTruthy();
   });
 });
