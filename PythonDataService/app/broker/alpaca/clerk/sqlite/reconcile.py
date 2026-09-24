@@ -64,10 +64,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_account_hold,
     resolve_exit_not_flat_uncertainty,
     resolve_exit_stuck_uncertainty,
+    resolve_failed_enter_filled_uncertainty_if_flat,
     resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    FAILED_ENTER_FILLED_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     PositionDriftCause,
     PositionDriftObservation,
@@ -92,7 +94,14 @@ _RECONCILIATION_LOCKS_GUARD = threading.Lock()
 
 Trigger = Literal["AUTOMATIC", "OPERATOR_RECONCILE_NOW"]
 ReconciliationOutcome = Literal["STILL_UNKNOWN", "RESOLVED_SUCCESS", "RESOLVED_FAILURE"]
-AccountVerdict = Literal["clean", "unexplained_order", "position_drift", "stale"]
+AccountVerdict = Literal[
+    "clean", "unexplained_order", "position_drift", "failed_enter_filled", "stale"
+]
+# Verdicts whose final broker snapshot matched attribution exactly. A
+# ``failed_enter_filled`` pass proved broker truth too -- what it reports is an
+# open custody contradiction (#2348), not a broker mismatch -- so the operator
+# receipt still records the reconciliation a reducing flatten needs.
+_BROKER_AGREEING_VERDICTS: frozenset[str] = frozenset({"clean", "failed_enter_filled"})
 
 
 @dataclass(frozen=True)
@@ -562,6 +571,36 @@ def _resolve_flat_exit_fences(
         )
 
 
+def _sync_failed_enter_filled_fences(
+    repo: ClerkSqliteRepository, *, broker_agrees: bool
+) -> tuple[str, ...]:
+    """Resolve proven-flat #2348 fences; return the instances still fenced.
+
+    Only a pass whose broker snapshot matched attribution may resolve one --
+    the attributed-flat half alone is the Clerk's own belief. Whatever stays
+    open keeps the verdict off ``clean``: a real position the strategy does
+    not know it holds is never a clean account.
+    """
+    fenced = sorted(
+        {
+            uncertainty["strategy_instance_id"]
+            for uncertainty in repo.active_uncertainties()
+            if uncertainty["reason_code"] == FAILED_ENTER_FILLED_REASON_CODE
+        }
+    )
+    if not broker_agrees:
+        return tuple(fenced)
+    return tuple(
+        strategy_instance_id
+        for strategy_instance_id in fenced
+        if not resolve_failed_enter_filled_uncertainty_if_flat(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            evidence_refs=("fresh_account_snapshot", "attributed_flat"),
+        )
+    )
+
+
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
@@ -569,6 +608,8 @@ class AccountReconciliationResult:
     foreign_order_count: int = 0
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
     indeterminate_symbols: tuple[str, ...] = field(default_factory=tuple)
+    # Instances still fenced by FAILED_ENTER_FILLED after this pass (#2348).
+    failed_enter_filled_instance_ids: tuple[str, ...] = field(default_factory=tuple)
     receipt_id: str | None = None
     recorded_at_ms: int | None = None
 
@@ -769,7 +810,7 @@ def _record_operator_reconciliation_receipt(
     recorded_at_ms = repo.clock()
     facts = ReconciliationAttemptedFacts(
         trigger="OPERATOR_RECONCILE_NOW",
-        outcome="RESOLVED_SUCCESS" if result.verdict == "clean" else "STILL_UNKNOWN",
+        outcome="RESOLVED_SUCCESS" if result.verdict in _BROKER_AGREEING_VERDICTS else "STILL_UNKNOWN",
         why=f"operator account reconciliation completed with verdict {result.verdict}",
     )
     committed = repo.append_transition(
@@ -978,16 +1019,24 @@ def _finalize_reconciliation_verdict(
         # so a non-flat instance here is a genuine flat-exit proof, never one
         # masked by an unproven in-flight mismatch.
         _resolve_flat_exit_fences(repo, instances)
+    failed_enter_filled = _sync_failed_enter_filled_fences(
+        repo, broker_agrees=plan.verdict == "clean"
+    )
     resolve_incomplete_reconciliation_uncertainty(
         repo,
         evidence_refs=("complete_account_reconciliation",),
     )
     result = AccountReconciliationResult(
-        verdict=plan.verdict,
+        verdict=(
+            "failed_enter_filled"
+            if plan.verdict == "clean" and failed_enter_filled
+            else plan.verdict
+        ),
         resolved_count=resolved_count,
         foreign_order_count=len(plan.foreign_orders),
         drifted_symbols=plan.drifted_symbols,
         indeterminate_symbols=plan.indeterminate_symbols,
+        failed_enter_filled_instance_ids=failed_enter_filled,
     )
     if trigger != "OPERATOR_RECONCILE_NOW":
         return result

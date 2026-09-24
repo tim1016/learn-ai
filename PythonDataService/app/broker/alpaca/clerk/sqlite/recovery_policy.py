@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
 )
 
 RecoveryActionId = Literal[
@@ -623,12 +624,19 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     )
 
 
+_REDUCTION_CLEARED_REASON_CODES = frozenset(
+    {EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE, FAILED_ENTER_FILLED_REASON_CODE}
+)
+"""Episodes a safe-flatten execution exists to clear, so they never gate it."""
+
+
 def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     """Executor gates = prepare gates, two deltas.
 
-    (1) EXIT_NOT_FLAT / EXIT_STUCK episodes do not block: both declare
-    ``allows_reduction=True`` over a proven attributed quantity — they are
-    the exact states this executor exists to clear, and the downstream
+    (1) EXIT_NOT_FLAT / EXIT_STUCK / FAILED_ENTER_FILLED episodes do not
+    block: each declares ``allows_reduction=True`` over a proven attributed
+    quantity — they are the exact states this executor exists to clear
+    (#2348: a fill on a failed ENTER is closed by this flatten), and the downstream
     ``require_capability(REDUCE, …)`` still enforces movement toward zero
     per leg. (2) No run may be ACTIVE: a running strategy could re-enter
     right after the flatten; the operator stops decisions first
@@ -642,7 +650,7 @@ def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         uncertainties=tuple(
             item
             for item in ctx.uncertainties
-            if item.reason_code not in (EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE)
+            if item.reason_code not in _REDUCTION_CLEARED_REASON_CODES
         ),
     )
     base = _safe_flatten_decision(reduction_safe_ctx)

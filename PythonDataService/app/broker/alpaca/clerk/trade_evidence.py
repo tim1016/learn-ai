@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    flag_fill_on_terminal_enter,
     fold_order_acknowledgement,
     fold_order_evidence,
 )
@@ -201,11 +202,12 @@ class SqliteTradeUpdateEvidenceSink:
                 )
                 return "order_event"
 
+            appended: str | None = None
             if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None:
                 # One shared append flow with the no-submit adapters' exact
                 # evidence (#2178): identity dedup, auto-supersession and
                 # fail-closed quarantine live in exactly one implementation.
-                append_exact_execution_slice(
+                appended = append_exact_execution_slice(
                     self._repo,
                     event=event,
                     order=order,
@@ -228,6 +230,10 @@ class SqliteTradeUpdateEvidenceSink:
                 order=order,
                 append_stale_ack=False,
             )
+            if appended == "appended":
+                # A new slice on an ENTER already folded terminal is
+                # contradicting evidence, never absorbed silently (#2348).
+                flag_fill_on_terminal_enter(self._repo, order_ref=local_order.order_ref)
             return "order_event"
 
     async def reconcile_gap(self) -> None:

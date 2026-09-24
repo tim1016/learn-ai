@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
@@ -33,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
+    FailedEnterFilledCause,
     LossHoldCause,
     PositionDriftCause,
     StreamHealthHoldCause,
@@ -125,6 +127,14 @@ def _exit_stuck_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _failed_enter_filled_cause_is_valid(value: Any) -> bool:
+    try:
+        FailedEnterFilledCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
     try:
         ExecutionCoverageConflictCause.from_mapping(value)
@@ -209,6 +219,18 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # attributed-flat proof or an operator may end it. VoidAfter here
         # would silently discard the episode the escalation exists to
         # preserve (ADR 0048 Decision 1).
+        age=CauseCleared(),
+    ),
+    # #2348: a fill on an ENTER already folded terminal. The Clerk keeps the
+    # real position; this fences the instance against new exposure and admits
+    # only reduction of the contradicted symbols, so the operator's flatten or
+    # a strategy EXIT can close it. Ended only by an attributed-flat proof on a
+    # clean broker reconciliation -- never on a timer.
+    FAILED_ENTER_FILLED_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        cause_is_valid=_failed_enter_filled_cause_is_valid,
         age=CauseCleared(),
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(

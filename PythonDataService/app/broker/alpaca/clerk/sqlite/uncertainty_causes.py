@@ -18,6 +18,9 @@ ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
 EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
 EXIT_STUCK_REASON_CODE = "EXIT_STUCK"
 EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
+# A fill recorded on an ENTER the Clerk had already folded terminal (#2348):
+# contradicting evidence, never absorbed silently.
+FAILED_ENTER_FILLED_REASON_CODE = "FAILED_ENTER_FILLED"
 # The two former ``holds`` causes, folded into this registry by the v12
 # migration (ADR 0048 Decision 2). Both are stored under the wire spelling the
 # panel already publishes, so ``HOLD_REASON_BY_STORED_CODE``'s translation row
@@ -213,6 +216,69 @@ class ExitStuckCause:
             redrive_count=redrive_count,
             first_observed_at_ms=first_observed_at_ms,
         )
+
+
+@dataclass(frozen=True)
+class FailedEnterFilledOrder:
+    """One ENTRY order that filled after its ENTER was folded terminal."""
+
+    order_ref: str
+    symbol: str
+
+    def to_mapping(self) -> dict[str, str]:
+        return {"order_ref": self.order_ref, "symbol": self.symbol}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> FailedEnterFilledOrder:
+        if not isinstance(value, dict):
+            raise ValueError("failed-ENTER-filled order must be an object")
+        _require_exact_keys(value, {"order_ref", "symbol"})
+        order_ref = value["order_ref"]
+        symbol = value["symbol"]
+        if not isinstance(order_ref, str) or not order_ref:
+            raise ValueError("failed-ENTER-filled order_ref must be a non-empty string")
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
+            raise ValueError("failed-ENTER-filled symbol must be a non-empty uppercase string")
+        return cls(order_ref=order_ref, symbol=symbol)
+
+
+@dataclass(frozen=True)
+class FailedEnterFilledCause:
+    """Every contradicted ENTRY order one strategy instance still answers for (#2348).
+
+    Orders accumulate while the episode is open, so a second contradiction on
+    the same instance widens the episode instead of replacing the first.
+    """
+
+    orders: tuple[FailedEnterFilledOrder, ...]
+
+    @property
+    def symbols(self) -> frozenset[str]:
+        return frozenset(order.symbol for order in self.orders)
+
+    def with_order(self, order: FailedEnterFilledOrder) -> FailedEnterFilledCause:
+        if any(existing.order_ref == order.order_ref for existing in self.orders):
+            return self
+        return FailedEnterFilledCause(
+            orders=tuple(sorted((*self.orders, order), key=lambda item: item.order_ref))
+        )
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"orders": [order.to_mapping() for order in self.orders]}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> FailedEnterFilledCause:
+        if not isinstance(value, dict):
+            raise ValueError("failed-ENTER-filled cause must be an object")
+        _require_exact_keys(value, {"orders"})
+        raw_orders = value["orders"]
+        if not isinstance(raw_orders, list) or not raw_orders:
+            raise ValueError("failed-ENTER-filled cause must name at least one order")
+        orders = tuple(FailedEnterFilledOrder.from_mapping(item) for item in raw_orders)
+        refs = [order.order_ref for order in orders]
+        if refs != sorted(set(refs)):
+            raise ValueError("failed-ENTER-filled orders must have unique sorted order_refs")
+        return cls(orders=orders)
 
 
 @dataclass(frozen=True)
@@ -421,6 +487,7 @@ __all__ = [
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "EXIT_STUCK_REASON_CODE",
+    "FAILED_ENTER_FILLED_REASON_CODE",
     "HOLD_REASON_CODES",
     "HOLD_REASON_CODE_SQL_PARAMS",
     "HOLD_REASON_CODE_SQL_PLACEHOLDERS",
@@ -433,6 +500,8 @@ __all__ = [
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "ExitStuckCause",
+    "FailedEnterFilledCause",
+    "FailedEnterFilledOrder",
     "LossHoldCause",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",

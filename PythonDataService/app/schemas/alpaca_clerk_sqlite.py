@@ -35,6 +35,7 @@ ReconciliationVerdict = Literal[
     "clean",
     "unexplained_order",
     "position_drift",
+    "failed_enter_filled",
     "stale",
 ]
 CustodyScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]

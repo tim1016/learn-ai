@@ -1422,10 +1422,10 @@ class SqliteAlpacaClerkFacade:
         strategy_instance_id: str,
         result: AccountReconciliationResult,
     ) -> InstanceCustodyProof:
-        verdict = _legacy_verdict(result.verdict)
+        verdict = _instance_legacy_verdict(result, strategy_instance_id)
         working = self._working_order_refs_for_proof(strategy_instance_id)
         unresolved = self._unresolved_order_refs(strategy_instance_id)
-        freeze = _freeze_state(result, observed_at_ms=self._repo.clock())
+        freeze = _freeze_state(verdict, observed_at_ms=self._repo.clock())
         exposure = {
             symbol: quantity
             for symbol, quantity in self._repo.attributed_positions_for_strategy(
@@ -1629,17 +1629,38 @@ def _legacy_verdict(value: str) -> ReconciliationVerdict:
         return "unexplained_order"
     if value == "missing_intent":
         return "missing_intent"
+    if value == "failed_enter_filled":
+        # Account-wide: the broker holds a position of ours that no live
+        # intent explains -- a filled ENTER the Clerk had folded failed (#2348).
+        return "missing_intent"
     if value == "stale":
         return "stale"
     raise ValueError(f"unsupported SQLite reconciliation verdict {value!r}")
 
 
+def _instance_legacy_verdict(
+    result: AccountReconciliationResult, strategy_instance_id: str
+) -> ReconciliationVerdict:
+    """One instance's verdict: a #2348 fence is scoped to the instance it names.
+
+    Broker truth matched attribution on a ``failed_enter_filled`` pass, so an
+    instance without the fence reads ``clean``; only the fenced instance
+    reports the unexplained position.
+    """
+    if result.verdict == "failed_enter_filled":
+        return (
+            "missing_intent"
+            if strategy_instance_id in result.failed_enter_filled_instance_ids
+            else "clean"
+        )
+    return _legacy_verdict(result.verdict)
+
+
 def _freeze_state(
-    result: AccountReconciliationResult,
+    verdict: ReconciliationVerdict,
     *,
     observed_at_ms: int,
 ) -> AccountFreezeState:
-    verdict = _legacy_verdict(result.verdict)
     if verdict == "clean":
         return AccountFreezeState()
     category = (

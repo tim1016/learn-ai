@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
     HOLD_REASON_CODES,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
@@ -40,6 +41,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
+    FailedEnterFilledCause,
+    FailedEnterFilledOrder,
     PositionDriftCause,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
@@ -379,6 +382,111 @@ def resolve_exit_stuck_uncertainty(
     )
 
 
+def _active_failed_enter_filled_cause(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str
+) -> FailedEnterFilledCause | None:
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if episode is None:
+        return None
+    return FailedEnterFilledCause.from_mapping(
+        UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).cause_facts
+    )
+
+
+def raise_failed_enter_filled_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    order_ref: str,
+    symbol: str,
+) -> str:
+    """Flag a fill on an ENTER the Clerk had already folded terminal (#2348).
+
+    The fill itself is real and stays attributed -- the Clerk's belief must
+    keep matching the broker. What must not happen is absorbing it silently:
+    the strategy believes it is flat, so it would never exit, and every fresh
+    ENTER would be refused on the attributed exposure. This episode names the
+    order, refuses new exposure for the instance, and admits reduction of the
+    contradicted symbols only. A second contradicted order on the same
+    instance widens the open episode rather than replacing it.
+    """
+    order = FailedEnterFilledOrder(order_ref=order_ref, symbol=symbol.upper())
+    active = _active_failed_enter_filled_cause(repo, strategy_instance_id=strategy_instance_id)
+    cause = (
+        FailedEnterFilledCause(orders=(order,)) if active is None else active.with_order(order)
+    )
+    refs = ", ".join(item.order_ref for item in cause.orders)
+    symbols = ", ".join(sorted(cause.symbols))
+    return raise_uncertainty(
+        repo,
+        strategy_instance_id=strategy_instance_id,
+        reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+        headline="An entry the Clerk recorded as failed has filled",
+        explanation=(
+            f"Entry order {refs} was recorded as failed, but the broker later reported "
+            f"a fill. The Clerk now holds the resulting {symbols} position for this bot; "
+            "the strategy still believes it is flat and will not exit it."
+        ),
+        operator_impact=(
+            "New entries for this bot are refused. Reducing the position is allowed."
+        ),
+        next_step=(
+            "Stop the bot and flatten the position, then reconcile. The fence clears "
+            "once reconciliation proves the bot flat in the affected symbol."
+        ),
+        evidence_refs=tuple(item.order_ref for item in cause.orders),
+        cause_facts=cause.to_mapping(),
+        severity="error",
+    )
+
+
+def resolve_failed_enter_filled_uncertainty_if_flat(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Close the #2348 fence once every contradicted symbol is attributed-flat.
+
+    The caller supplies the broker half of the proof: this runs only from a
+    reconciliation pass whose broker snapshot matched attribution exactly.
+    """
+    cause = _active_failed_enter_filled_cause(repo, strategy_instance_id=strategy_instance_id)
+    if cause is None or any(
+        position_quantity_is_nonzero(repo.position(strategy_instance_id, symbol))
+        for symbol in cause.symbols
+    ):
+        return False
+
+    def build_transition(uncertainty_id: str) -> TransitionInput:
+        facts = UncertaintyResolvedFacts(
+            uncertainty_id=uncertainty_id,
+            resolution_kind="ATTRIBUTED_FLAT_PROVEN",
+            evidence_refs=list(evidence_refs),
+        )
+        return TransitionInput(
+            strategy_instance_id=strategy_instance_id,
+            transition_kind="UNCERTAINTY_RESOLVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="FAILED_ENTER_FILLED_RESOLVED",
+            facts_json=facts.to_facts_json(),
+        )
+
+    return repo.resolve_uncertainty_if_active(
+        scope="CUSTODY_SUBJECT",
+        reason_code=FAILED_ENTER_FILLED_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
+        build_transition=build_transition,
+    )
+
+
 @dataclass(frozen=True)
 class CapabilityDecision:
     allowed: bool
@@ -541,6 +649,31 @@ def _exit_stuck_proof(
     )
 
 
+def _failed_enter_filled_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    if (
+        intent is None
+        or strategy_instance_id is None
+        or intent.quantity <= 0
+        or intent.side.upper() not in {"BUY", "SELL"}
+    ):
+        return False
+    try:
+        cause = FailedEnterFilledCause.from_mapping(facts.cause_facts)
+    except ValueError:
+        return False
+    symbol = intent.symbol.upper()
+    return symbol in cause.symbols and _moves_toward_zero_without_crossing(
+        repo.position(strategy_instance_id, symbol), intent.signed_delta
+    )
+
+
 def _no_per_symbol_proof(
     repo: ClerkSqliteRepository,
     *,
@@ -588,6 +721,7 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     POSITION_DRIFT_REASON_CODE: _position_drift_proof,
     EXIT_NOT_FLAT_REASON_CODE: _exit_not_flat_proof,
     EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
+    FAILED_ENTER_FILLED_REASON_CODE: _failed_enter_filled_proof,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
 }
 
@@ -872,6 +1006,7 @@ __all__ = [
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "EXIT_STUCK_REASON_CODE",
+    "FAILED_ENTER_FILLED_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
@@ -884,6 +1019,7 @@ __all__ = [
     "admit_new_exposure",
     "classify_admission_refusal",
     "decide_capability",
+    "raise_failed_enter_filled_uncertainty",
     "raise_uncertainty",
     "require_admission",
     "require_capability",
@@ -891,6 +1027,7 @@ __all__ = [
     "require_manual_reduction",
     "resolve_exit_not_flat_uncertainty",
     "resolve_exit_stuck_uncertainty",
+    "resolve_failed_enter_filled_uncertainty_if_flat",
     "resolve_incomplete_reconciliation_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]
