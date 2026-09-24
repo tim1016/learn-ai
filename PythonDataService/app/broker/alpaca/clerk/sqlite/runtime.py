@@ -921,6 +921,13 @@ class SqliteAlpacaClerkFacade:
                             "reason_code": decision_evidence.reason_code,
                             "trace_digest": decision_evidence.trace_digest,
                             "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
+                            # Omitted when on time, so an on-time receipt's
+                            # facts stay byte-identical to every earlier one.
+                            **(
+                                {}
+                                if decision_evidence.decision_lateness_ms is None
+                                else {"decision_lateness_ms": decision_evidence.decision_lateness_ms}
+                            ),
                         }
                     ),
                 )

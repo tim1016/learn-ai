@@ -32,8 +32,8 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from tests._helpers.bot_runner.custody import _custody_proof
 from tests._helpers.bot_runner.doubles import _CustodyClerk
 from tests._helpers.bot_runner.market import (
-    patch_decisions_delivered_on_time,
     patch_fresh_live_market_liveness,
+    patch_wall_clock_to_the_fed_bar,
 )
 
 
@@ -43,8 +43,8 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _decisions_delivered_on_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    patch_decisions_delivered_on_time(monkeypatch)
+def _wall_clock_at_the_fed_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_wall_clock_to_the_fed_bar(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

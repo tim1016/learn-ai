@@ -57,8 +57,8 @@ class _OpenInterruption:
     #: interruption outlived it. Such a minute emits holding one generation's
     #: contributions, and nothing on the bar records that it was cut short --
     #: whether an interruption *touched* it is a fact only this loop can see
-    #: (ruling P9). ``None`` when the open minute was flushed complete, or when
-    #: there was none.
+    #: (ruling P9). ``None`` when there was none -- a minute complete by count
+    #: was already emitted by the assembler before delivery stopped.
     touched_minute_start_ms: int | None = None
     #: The recovery that ended the wait -- and, by being set at all, the fact
     #: that the next emitted bar must be scanned for wholly-missed minutes
@@ -117,8 +117,8 @@ def _is_unresolvable(bar: IbkrMinuteBar, *, interruption_touched: bool) -> bool:
 
     The proof is the count alone, in every session phase: twelve 5-second
     contributions is every print a minute can hold, so a minute holding them
-    is complete wherever it falls -- which is also why ``flush_if_complete``
-    may deliver one. Fewer is unprovable everywhere -- short in RTH, where
+    is complete wherever it falls -- which is also why the assembler emits one
+    on its twelfth print without waiting for the next minute. Fewer is unprovable everywhere -- short in RTH, where
     IBKR delivers 12/12, and undecidable outside it, where sparse bars are
     normal. Whether an unprovable minute is a gap or a refusal is the
     decision session's call, made in ``_resolve_unresolvable_window``.
@@ -133,11 +133,13 @@ class ContinuityLoop:
     """One ``stream_bars`` call's continuity contract and the choreography it owns.
 
     The feed's retry loop resubscribes and yields; every ordering rule the
-    spec pins lives here. In particular ruling P6 -- flush the open minute,
-    *then* anchor the deadline, then record the ``interruption``, and only then
-    let the flushed bar out -- is expressed by the order of statements in
-    :meth:`open_interruption`, because a bar that reaches the consumer before
-    the evidence explaining it would break spec §4.2 rule 9.
+    spec pins lives here. Ruling P6 -- a minute already complete when the
+    socket died is a delivered bar, and the deadline derives from it -- now
+    holds by construction: the assembler emits a minute on its twelfth print
+    (#2345), so it was delivered before the interruption opened. Spec §4.2
+    rule 9 -- no bar reaches the consumer before the evidence explaining it --
+    is kept by :meth:`open_interruption` recording the ``interruption`` before
+    the loop resubscribes, so every bar after it follows its evidence.
     """
 
     client: IbkrClient
@@ -194,17 +196,16 @@ class ContinuityLoop:
         self.last_delivered_end_ms = ibkr_bar.end_ms
         return ResolvedBar(bar=ibkr_bar, continuity_event_ref=explained_by)
 
-    async def open_interruption(self, exc: IBKRBarStreamError) -> ResolvedBar | None:
-        """Flush, anchor the deadline, record the interruption; hand back any held bar.
+    async def open_interruption(self, exc: IBKRBarStreamError) -> None:
+        """Anchor the deadline and record the interruption.
 
-        The order is ruling P6. A minute already complete when the socket died
-        is a delivered bar, and it moves the watermark the deadline derives
-        from -- often onto a decision trigger. Anchoring first would hold the
-        run to a deadline up to a whole decision interval too early and refuse
-        a reconnect that was still safely inside its window. The held bar is
-        returned rather than delivered here so that no bar can precede the
-        evidence explaining it: a sink that cannot be written raises out of
-        this call, having yielded nothing.
+        Ruling P6: a minute already complete when the socket died moves the
+        watermark the deadline derives from. The assembler emits such a minute
+        on its twelfth print, so it has already been delivered and the
+        watermark already moved; the open minute, if any, is short and becomes
+        the one the interruption touched. A sink that cannot be written raises
+        out of this call before the loop resubscribes, so no later bar can
+        precede the evidence explaining it (spec §4.2 rule 9).
         """
         if self.last_delivered_end_ms is None:
             if self.assembler.open_minute_start_ms is None:
@@ -212,18 +213,13 @@ class ContinuityLoop:
                 # there is no continuity to preserve. Fail as today.
                 raise MarketDataFeedError(str(exc)) from exc
             self.last_delivered_end_ms = self.assembler.open_minute_start_ms
-        complete = self.assembler.flush_if_complete()
-        held = await self.resolve_emitted(complete) if complete is not None else None
         self.interruption = interruption = _OpenInterruption(
             deadline_ms=self.policy.deadline_ms(self.last_delivered_end_ms),
-            # Nothing to flush means the interruption outlived the open minute:
-            # ruling P9's fact, which only this loop can see.
-            touched_minute_start_ms=(
-                self.assembler.open_minute_start_ms if complete is None else None
-            ),
+            # The interruption outlived the open minute: ruling P9's fact,
+            # which only this loop can see.
+            touched_minute_start_ms=self.assembler.open_minute_start_ms,
         )
         await self._record_interruption(interruption, _interruption_cause(exc))
-        return held
 
     async def await_recovery(self) -> None:
         """Wait the open interruption out under its own deadline, then record it."""

@@ -49,7 +49,7 @@ def _raw_5s(source_ms: int, close: str = "1") -> SimpleNamespace:
 
     Scripting these instead of pre-built minutes makes the feed's own assembler
     do the real work: the open minute, its contribution count, its generation
-    set and ``flush_if_complete`` are then facts, not fixtures.
+    set and its emission on the twelfth print are then facts, not fixtures.
     """
     return SimpleNamespace(
         time=datetime.fromtimestamp(source_ms / 1000, tz=UTC),

@@ -11,9 +11,11 @@ The fix has two legs, both pinned here:
 
 * the assembler emits a minute as soon as it is complete by count, so the
   final minute of an extended session is decided at the session's close;
-* the runner refuses, whatever the provenance, any decision whose bar closed
+* the runner judges, whatever the provenance, every decision whose bar closed
   more than the delivery allowance before the wall clock
-  (``feed_continuity_policy.late_decision``), with a ``DECISION_LATE`` receipt.
+  (``feed_continuity_policy.late_decision``): a late ENTER is refused with a
+  ``DECISION_LATE`` receipt; a late EXIT is exempt, as from the liveness gate,
+  and reaches the Clerk carrying its lateness.
 
 The IBKR prints are synthetic 5-second bars (the shape ``reqRealTimeBars``
 delivers); whether IBKR really prints nothing between the extended close and
@@ -53,8 +55,11 @@ from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import declared_session_bounds
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
-from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
-from tests.services.bot_runner._support import _green_bar
+from tests._helpers.bot_runner.market import (
+    patch_fresh_live_market_liveness,
+    patch_wall_clock_to_the_fed_bar,
+)
+from tests.services.bot_runner._support import _green_bar, _red_bar
 
 _EXTENDED = RunDecisionSession(kind="extended", window=ALPACA_EXTENDED_HOURS_WINDOW)
 _RTH = RunDecisionSession(kind="rth", window=None)
@@ -257,3 +262,47 @@ async def test_a_decision_inside_its_allowance_still_reaches_the_clerk(
 
     assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
     assert all(json.loads(r.facts_json)["reason_code"] != "DECISION_LATE" for r in receipts)
+
+
+@pytest.mark.asyncio
+async def test_a_late_exit_still_reaches_the_clerk_and_carries_its_lateness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A late EXIT is risk reduction: it is exempt, like the liveness gate's (#1671 AC3).
+
+    The ENTER is decided on time; the EXIT's bar is decided 45 s after its
+    close. It still reaches ``execute_for_instance``, with the lateness on its
+    decision evidence and a ``bot_decision_late`` log naming the exemption.
+    """
+    enter_ms = _DECISION_MINUTE_MS
+    bars = [
+        _green_bar(enter_ms - 60_000),
+        _green_bar(enter_ms),  # ENTER
+        _red_bar(enter_ms + 60_000),
+        _red_bar(enter_ms + 120_000),
+        _green_bar(enter_ms + 180_000),  # EXIT, three bars after entry
+    ]
+    exit_close_ms = bars[-1].end_ms
+    patch_wall_clock_to_the_fed_bar(monkeypatch)
+    fed_bar_clock = fcp.now_ms_utc
+    monkeypatch.setattr(
+        fcp, "now_ms_utc", lambda: fed_bar_clock() + (45_000 if fed_bar_clock() == exit_close_ms else 0)
+    )
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    set_alpaca_clerk(clerk)
+    try:
+        with caplog.at_level("WARNING", logger="app.services.bot_trade_strategy"):
+            await bot_trade_strategy.run_trade_bot(_rth_binding(), _FakeFeed(bars, mode="finite"))
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+    assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
+    assert clerk.calls[0]["decision_evidence"].decision_lateness_ms is None
+    assert clerk.calls[1]["decision_evidence"].decision_lateness_ms == 45_000
+    (late_log,) = [r for r in caplog.records if getattr(r, "action", None) == "bot_decision_late"]
+    assert (late_log.exempt, late_log.intent, late_log.lateness_ms) == ("exit", "EXIT", 45_000)

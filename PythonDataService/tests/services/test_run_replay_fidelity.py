@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 import pytest
 
@@ -103,6 +104,37 @@ async def test_run_fidelity_over_bars_classifies_a_blocked_enter_as_expected() -
     assert first.reason_code == "MARKET_CLOSED"
     assert first.replay_staged == "ENTER"
     assert first.live_outcome == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_run_fidelity_over_bars_classifies_a_decision_late_enter_as_expected() -> None:
+    """#2303/#2345: the runner's staleness gate is a live-only gate like liveness.
+
+    Its ``blocked``/``DECISION_LATE`` receipt must replay as an expected live
+    effect; outside the closed set it read as ``UNRECOGNIZED_BLOCK_REASON`` drift.
+    """
+    bars = _ema_parity_bars_through_first_exit()
+    records = await _record_live_pass(bars, block_first_enter=True)
+    blocked = next(i for i, record in enumerate(records) if record.outcome == "blocked")
+    records[blocked] = replace(records[blocked], reason_code="DECISION_LATE")
+
+    result = await run_fidelity_over_bars(
+        _binding(run_id="run-1"),
+        provider="fake-phase",
+        warmup=[],
+        live=_retained(bars),
+        records=records,
+        captured_decisions={},
+        session=_RTH_SESSION,
+    )
+
+    assert result.drift_count == 0
+    late = next(d for d in result.divergences if d.reason_code == "DECISION_LATE")
+    assert (late.classification, late.replay_staged, late.live_outcome) == (
+        "expected_live_effect",
+        "ENTER",
+        "blocked",
+    )
 
 
 @pytest.mark.asyncio

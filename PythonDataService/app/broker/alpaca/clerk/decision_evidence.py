@@ -24,6 +24,12 @@ class EffectDecisionEvidence(BaseModel):
     # strategies omit them; the replay receipt discloses digest coverage.
     trace_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     decision_bar_close_ms: int | None = Field(default=None, ge=0)
+    # #2303/#2345: how far past its close this decision was taken, when that
+    # exceeded the delivery allowance. Only an EXIT can carry one -- a late
+    # ENTER never reaches the Clerk, while a late EXIT does (the liveness
+    # gate's #1671 AC3 exemption), so its receipt says it was decided late.
+    # ``None`` means on time.
+    decision_lateness_ms: int | None = Field(default=None, gt=0)
 
     @property
     def reason_code(self) -> str:

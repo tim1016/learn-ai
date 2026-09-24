@@ -48,6 +48,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DECISION_LATE_REASON_CODE = "DECISION_LATE"
+"""Why a decision bar was refused for arriving after its delivery allowance --
+the continuity refusal's ``reason`` and the runner's ``blocked`` receipt code."""
+
 
 class FeedContinuityRefused(MarketDataFeedError):
     """A recovered bar this run cannot accept as a decision input.
@@ -125,7 +129,7 @@ async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar)
             feed_id=bar.feed_id,
             symbol=bar.symbol,
             observed_at_ms=late.observed_at_ms,
-            reason="DECISION_LATE",
+            reason=DECISION_LATE_REASON_CODE,
             window_start_ms=bar.start_ms,
             window_end_ms=bar.end_ms,
             bar_identity=f"{bar.feed_id}:{bar.symbol}:{bar.start_ms}:{bar.end_ms}",
@@ -133,7 +137,7 @@ async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar)
     )
     raise FeedContinuityRefused(
         f"trigger bar {bar.start_ms}..{bar.end_ms} delivered after the allowance",
-        reason="DECISION_LATE",
+        reason=DECISION_LATE_REASON_CODE,
     )
 
 

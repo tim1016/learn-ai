@@ -23109,11 +23109,11 @@ export interface components {
          *       ``append_history`` once live delivery has started for that
          *       provider/symbol seam (``SOURCE_BAR_HISTORY_AFTER_LIVE`` — the
          *       history/live watermark).
-         *     * ``app.services.bot_trade_strategy._signal_strategy_evaluations`` is the
-         *       one router that owns bucket closing: it force-flushes the trailing
-         *       partial consolidator bucket exactly at the canonical calendar's
-         *       ``session_close_ms_utc`` boundary rather than leaving it stranded
-         *       until the next session's bars arrive (FR-011).
+         *     * ``app.services.bot_trade_strategy._drain_bar`` is the one router that
+         *       owns bucket closing: it fires every complete bucket on the bar that
+         *       closes it, so a session's trailing bucket is flushed exactly at the
+         *       decision session's close rather than left stranded until the next
+         *       session's bars arrive (FR-011, #2303).
          *
          *     A second policy would need its own Literal member and a per-program field
          *     here, not a silent default change on these.

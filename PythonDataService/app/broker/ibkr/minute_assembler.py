@@ -72,6 +72,7 @@ class LiveBarCounters:
 
     skipped_duplicate: int = 0
     applied_correction: int = 0
+    ignored_post_emit_correction: int = 0
 
 
 def _to_utc_ms(value: datetime | int | float | str) -> int:
@@ -373,8 +374,8 @@ class MinuteAssembler:
     A minute is emitted as soon as it holds every contribution (by count), or
     otherwise when the first print of a later minute arrives.
 
-    ``_flushed`` remembers the minute :meth:`flush_if_complete` emitted early,
-    until a later minute arrives. Without it, the resubscribed socket's first
+    ``_flushed`` remembers the minute emitted early by count, until a later
+    minute arrives. Without it, the resubscribed socket's first
     5-second bars — which may still belong to that minute — would either crash
     the run ("not found in open minute", because ``current`` is now ``None``)
     or rebuild an accumulator for a minute the consumer has already decided on.
@@ -393,16 +394,20 @@ class MinuteAssembler:
         """Resolve a 5-second bar arriving after its minute was flushed early.
 
         Returns ``True`` when the bar was absorbed and must not reach the
-        accumulator: an exact redelivery of the flushed minute's *most recent*
-        contribution carries no new data. That is the whole of the live
-        relaxation ``.claude/rules/temporal-rigor.md`` grants -- the same one
-        ``aggregate_realtime_bar`` applies to the open minute -- and every
-        other bar inside the flushed minute is refused, identical payload or
-        not: an earlier timestamp belongs to an already-emitted aggregate, and
-        a changed payload would correct a minute downstream has consumed. A bar
-        belonging to a later minute clears the memory and proceeds normally;
-        one belonging to an earlier minute proceeds too, and the ordinary
-        non-monotonic guard fails it.
+        accumulator. A redelivery of the flushed minute's *most recent*
+        contribution is absorbed: an exact one carries no new data and is
+        skipped, and one with a different payload is a correction to a minute
+        downstream has already consumed, so it is ignored -- never applied,
+        never a rebuild -- and surfaced on
+        ``LiveBarCounters.ignored_post_emit_correction`` and a WARNING. IBKR
+        does redeliver the latest 5-second bar on a live subscription (the
+        live relaxation in ``.claude/rules/temporal-rigor.md``), and a minute
+        emitted on its twelfth print would otherwise die on the correction the
+        open minute used to absorb. Any *earlier* timestamp inside the flushed
+        minute belongs to an already-emitted aggregate and stays fatal,
+        identical payload or not. A bar belonging to a later minute clears the
+        memory and proceeds normally; one belonging to an earlier minute
+        proceeds too, and the ordinary non-monotonic guard fails it.
         """
         flushed = self._flushed
         if flushed is None:
@@ -411,11 +416,18 @@ class MinuteAssembler:
         if _minute_start_ms(source_ms) != flushed.start_ms:
             self._flushed = None
             return False
-        if source_ms == self.last_source_ms and flushed.contributions.get(source_ms) == _contribution(raw_bar):
-            self.counters.skipped_duplicate += 1
-            logger.info(
-                "Idempotent skip of a 5-second bar redelivered after its minute was flushed",
-                extra={"symbol": symbol, "source_ms": source_ms, "action": "skipped_duplicate"},
+        if source_ms == self.last_source_ms:
+            if flushed.contributions.get(source_ms) == _contribution(raw_bar):
+                self.counters.skipped_duplicate += 1
+                logger.info(
+                    "Idempotent skip of a 5-second bar redelivered after its minute was flushed",
+                    extra={"symbol": symbol, "source_ms": source_ms, "action": "skipped_duplicate"},
+                )
+                return True
+            self.counters.ignored_post_emit_correction += 1
+            logger.warning(
+                "Ignored a correction to a 5-second bar whose minute was already emitted",
+                extra={"symbol": symbol, "source_ms": source_ms, "action": "post_emit_correction_ignored"},
             )
             return True
         raise IBKRBarStreamError(
@@ -444,9 +456,9 @@ class MinuteAssembler:
         # hold it for the next minute's first print. That print can be a night
         # away -- an extended run's 19:59 ET minute otherwise waited for 04:00
         # the next trading day and was decided eight hours late (#2345).
-        return emitted if emitted is not None else self.flush_if_complete()
+        return emitted if emitted is not None else self._emit_if_complete()
 
-    def flush_if_complete(self) -> IbkrMinuteBar | None:
+    def _emit_if_complete(self) -> IbkrMinuteBar | None:
         """Emit the open minute now iff it already holds every RTH contribution."""
         if self.current is None or len(self.current.contributions) < RTH_CONTRIBUTIONS_PER_MINUTE:
             return None

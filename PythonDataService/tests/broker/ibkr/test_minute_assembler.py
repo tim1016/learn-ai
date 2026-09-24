@@ -90,14 +90,13 @@ def test_a_complete_minute_is_emitted_by_its_twelfth_contribution() -> None:
     assembler = MinuteAssembler()
     for second in range(0, 55, 5):
         assert assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True) is None
-    assert assembler.flush_if_complete() is None  # 11/12 is not complete
+    assert assembler.open_minute_start_ms is not None  # 11/12 is not complete: still open
 
     emitted = assembler.feed(_raw(55), symbol="SPY", generation=1, venue=None, use_rth=True)
 
     assert emitted is not None and emitted.contribution_count == RTH_CONTRIBUTIONS_PER_MINUTE
     assert emitted.start_ms == int(_MINUTE.timestamp() * 1000)
     assert assembler.open_minute_start_ms is None
-    assert assembler.flush_if_complete() is None
 
 
 def _fill_and_flush(assembler: MinuteAssembler) -> None:
@@ -137,18 +136,32 @@ def test_an_older_print_of_a_flushed_minute_is_fatal_even_when_identical() -> No
     assert assembler.open_minute_start_ms is None
 
 
-def test_contribution_of_a_flushed_minute_is_refused_rather_than_rebuilt() -> None:
-    # A corrected value for an already-emitted minute cannot be applied, and a
-    # new timestamp inside it must not silently rebuild an accumulator for a
-    # minute the consumer has already decided on.
+def test_a_correction_to_the_last_print_of_an_emitted_minute_is_ignored_and_counted() -> None:
+    # IBKR may redeliver the latest 5-second bar with different OHLCV. Once its
+    # minute is emitted the correction cannot be applied -- downstream decided
+    # on the minute -- but it must not kill the run either (commit 241864a7:
+    # a real redelivery once crashed a live run). Ignored, never rebuilt,
+    # counted and logged.
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
+
+    assert assembler.feed(_raw(55, close="101"), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+
+    assert assembler.counters.ignored_post_emit_correction == 1
+    assert assembler.counters.skipped_duplicate == 0
+    assert assembler.open_minute_start_ms is None
+    # The minute is still closed: the next minute opens a fresh accumulator.
+    assert assembler.feed(_next_minute_raw(), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+    assert assembler.open_minute_start_ms == int(_MINUTE.replace(minute=1).timestamp() * 1000)
+
+
+def test_a_new_timestamp_inside_an_emitted_minute_is_refused_rather_than_rebuilt() -> None:
+    # A timestamp the emitted minute never held must not silently rebuild an
+    # accumulator for a minute the consumer has already decided on.
     assembler = MinuteAssembler()
     _fill_and_flush(assembler)
 
     with pytest.raises(IBKRBarStreamError, match="already emitted"):
-        assembler.feed(_raw(55, close="101"), symbol="SPY", generation=2, venue=None, use_rth=True)
-    assert assembler.open_minute_start_ms is None
-
-    with pytest.raises(IBKRBarStreamError, match="already emitted"):  # a timestamp it never held
         assembler.feed(_raw(57), symbol="SPY", generation=2, venue=None, use_rth=True)
     assert assembler.open_minute_start_ms is None
 

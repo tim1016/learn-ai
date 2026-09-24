@@ -55,6 +55,7 @@ from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import (
+    DECISION_LATE_REASON_CODE,
     admit_on_delivery,
     continuity_policy_for,
     late_decision,
@@ -700,23 +701,32 @@ async def strategy_evaluations(
     qualification callers -- they re-drive bars a live run already judged,
     so a receipt from them would be a second, spurious record of one event.
 
-    ``session`` is the run's resolved decision session (ADR 0059 D5.2). A
-    custody runner resolves it once at its own boundary, from the executing
-    authority's declared window, and passes it here; the stream itself needs
-    nothing from it, because the session's bar filter is the feed's
-    (``_RetainedSourceBarFeed``) and a bucket fires on the bar that completes
-    it rather than on a session-close flush. Omitting it means "this caller
+    ``session`` is validation only: the caller's statement that it resolved
+    this run's decision session (ADR 0059 D5.2). The stream reads nothing from
+    it -- the session's bar filter is the feed's (``_RetainedSourceBarFeed``),
+    and a bucket fires on the bar that completes it -- so all it does is let a
+    caller that did resolve one through. Omitting it means "this caller
     declares no window", which a regular-hours binding resolves fine and an
-    extended one refuses loudly rather than deciding on nothing.
+    extended one refuses loudly (``_validate_decision_session``) rather than
+    deciding on bars no session filtered.
     """
     if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
-    if session is None:
-        require_decision_session(binding)
+    _validate_decision_session(binding, session)
     async for evaluation in _signal_strategy_evaluations(
         binding, feed, captured_decisions, quarantine_receipts
     ):
         yield evaluation
+
+
+def _validate_decision_session(binding: BrokerBotBinding, session: RunDecisionSession | None) -> None:
+    """Refuse a stream for a binding whose decision session nobody described.
+
+    A caller that resolved the run's session has proven it describable; one
+    that did not must hold a binding that needs no declared window.
+    """
+    if session is None:
+        require_decision_session(binding)
 
 
 async def strategy_intents(
@@ -880,7 +890,10 @@ async def run_trade_bot(
                 reason_code="PAUSED_OBSERVE_ONLY",
             )
             continue
-        if _refused_as_late(decision_receipts, binding=binding, evaluation=evaluation, continuity=continuity):
+        lateness = _screen_late_decision(
+            decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
+        )
+        if lateness.refused:
             continue
         # The liveness gate applies only to ENTER — creating new exposure.
         # EXIT is deliberately exempt and always reaches the Clerk unblocked:
@@ -930,7 +943,11 @@ async def run_trade_bot(
             },
         )
         retained, decision_evidence = _decision_bar_evidence(
-            binding, evaluation, intent, source_bars=source_bars
+            binding,
+            evaluation,
+            intent,
+            source_bars=source_bars,
+            decision_lateness_ms=lateness.exempt_lateness_ms,
         )
         try:
             receipt = await clerk.execute_for_instance(
@@ -1075,52 +1092,64 @@ def _dispose_transient_exit_refusal(
     )
 
 
-def _refused_as_late(
+@dataclass(frozen=True)
+class _LatenessScreen:
+    """What the staleness gate decided for one staged decision.
+
+    ``refused`` -- the candidate was disposed of here and must not reach the
+    Clerk. ``exempt_lateness_ms`` -- set only for a late EXIT, which proceeds
+    and carries its lateness onto the Clerk's decision receipt.
+    """
+
+    refused: bool
+    exempt_lateness_ms: int | None = None
+
+
+_ON_TIME = _LatenessScreen(refused=False)
+
+
+def _screen_late_decision(
     decision_receipts: SqliteDecisionReceipts,
     *,
     binding: BrokerBotBinding,
     evaluation: StrategyEvaluation,
+    intent: SignalIntent,
     continuity: ContinuityPolicy | None,
-) -> bool:
-    """Refuse a decision taken too long after its bar closed; ``True`` when refused.
+) -> _LatenessScreen:
+    """The one staleness gate between a staged candidate and the Clerk.
 
-    The one staleness gate between a staged candidate and the Clerk, shared by
-    both runners. Lateness is the wall clock minus the decision bar's close,
-    judged by ``feed_continuity_policy.late_decision`` against the run's own
-    delivery allowance -- whatever produced the bar. A minute the assembler
-    held until the next morning's first print (#2345), or a bucket whose
-    closing bar arrived after a quiet line resumed, is decided against a
-    market that has since moved; so is anything a replay left for the live
-    loop to fire (#2303).
+    Shared by both runners. Lateness is the wall clock minus the decision
+    bar's close, judged by ``feed_continuity_policy.late_decision`` against
+    the run's own delivery allowance -- whatever produced the bar. A minute the
+    assembler held until the next print (#2345), or a bucket whose closing bar
+    arrived after a quiet line resumed, is decided against a market that has
+    since moved.
 
-    Refused, not demoted to ``OBSERVE_ONLY``: the evaluation's mode is fixed in
-    its trace when it is staged, and ``PAUSED_OBSERVE_ONLY`` is the operator's
-    fact, not the clock's. The disposition is the liveness gate's -- DISCARD
-    (nothing was committed, so nothing unwinds) and a protected ``blocked``
-    receipt naming ``DECISION_LATE`` -- which also means a later Resume
-    replays this bucket as already decided and never decides it again.
-    Applies to EXIT as well as ENTER: an exit decided on a stale bar is still
-    an order the strategy did not ask for at this price.
+    Mirrors the liveness gate's split (#1671 AC3). A late ENTER -- new
+    exposure -- is refused: DISCARD (nothing was committed, so nothing
+    unwinds) and a protected ``blocked`` receipt naming ``DECISION_LATE``, so
+    a later Resume replays the bucket as already decided. Refused rather than
+    demoted to ``OBSERVE_ONLY``: the evaluation's mode is fixed in its trace
+    when it is staged, and ``PAUSED_OBSERVE_ONLY`` is the operator's fact, not
+    the clock's. A late EXIT is risk reduction and still reaches the Clerk --
+    holding it back would keep a position the strategy has decided to close,
+    overnight if the delay straddles the close -- but its lateness is logged
+    and returned so the Clerk's receipt records it.
     """
     late = late_decision(continuity, evaluation.decision_bar_close_ms)
     if late is None:
-        return False
-    _discard_evaluation(evaluation)
-    _append_decision_receipt(
-        decision_receipts,
-        binding=binding,
-        evaluation=evaluation,
-        outcome="blocked",
-        reason_code="DECISION_LATE",
-    )
+        return _ON_TIME
+    exempt = intent.kind is SignalIntentKind.EXIT
     logger.warning(
-        "Bot refused a decision taken after its delivery allowance",
+        "Bot decision taken after its delivery allowance",
         extra={
             "action": "bot_decision_late",
+            "exempt": "exit" if exempt else None,
             "strategy_instance_id": binding.strategy_instance_id,
             "run_id": binding.run_id,
             "strategy_key": binding.strategy_key,
             "symbol": binding.symbol,
+            "intent": intent.kind.value,
             "evaluation_id": evaluation.evaluation_id,
             "decision_bar_close_ms": evaluation.decision_bar_close_ms,
             "observed_at_ms": late.observed_at_ms,
@@ -1128,7 +1157,17 @@ def _refused_as_late(
             "allowance_ms": late.allowance_ms,
         },
     )
-    return True
+    if exempt:
+        return _LatenessScreen(refused=False, exempt_lateness_ms=late.lateness_ms)
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code=DECISION_LATE_REASON_CODE,
+    )
+    return _LatenessScreen(refused=True)
 
 
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
@@ -1144,6 +1183,7 @@ def _decision_bar_evidence(
     intent: SignalIntent,
     *,
     source_bars: SourceBarLedger | None,
+    decision_lateness_ms: int | None = None,
 ) -> tuple[RetainedSourceBar | None, EffectDecisionEvidence]:
     """The exact retained decision bar and the evidence that names it.
 
@@ -1178,6 +1218,7 @@ def _decision_bar_evidence(
         observed_at_ms=now_ms_utc(),
         trace_digest=_evaluation_trace_digest(evaluation),
         decision_bar_close_ms=evaluation.decision_bar_close_ms,
+        decision_lateness_ms=decision_lateness_ms,
     )
     return retained, evidence
 
@@ -1268,11 +1309,18 @@ async def run_dry_run_bot(
                 },
             )
             continue
-        if _refused_as_late(decision_receipts, binding=binding, evaluation=evaluation, continuity=continuity):
+        lateness = _screen_late_decision(
+            decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
+        )
+        if lateness.refused:
             continue
         side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
         retained, decision_evidence = _decision_bar_evidence(
-            binding, evaluation, intent, source_bars=source_bars
+            binding,
+            evaluation,
+            intent,
+            source_bars=source_bars,
+            decision_lateness_ms=lateness.exempt_lateness_ms,
         )
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,

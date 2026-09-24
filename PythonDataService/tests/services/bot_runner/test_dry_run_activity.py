@@ -147,15 +147,13 @@ async def test_dry_run_refuses_a_decision_taken_after_its_delivery_allowance(
 ) -> None:
     """#2345: the Dry Run runner applies the same staleness gate as the trade runner.
 
-    This package reads every decision as on time by default; this test puts the
-    real gate back and pins the wall clock a day past every decision bar.
+    This package pins the wall clock to each fed bar's close by default; this
+    test re-pins it a day past every decision bar.
     """
-    import app.services.bot_trade_strategy as bot_trade_strategy
     import app.services.feed_continuity_policy as feed_continuity_policy
     from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
     from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 
-    monkeypatch.setattr(bot_trade_strategy, "late_decision", feed_continuity_policy.late_decision)
     bars = _ema_parity_bars_through_first_exit()
     monkeypatch.setattr(feed_continuity_policy, "now_ms_utc", lambda: bars[-1].end_ms + 86_400_000)
     clerk = _FakeClerk()

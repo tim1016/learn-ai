@@ -2,8 +2,12 @@
 
 A decision for bucket K fires on the source minute that closes it: the live
 runner fires every complete bucket at once rather than waiting for the first
-minute of K+1 (``bot_trade_strategy._drain_bar``, #2303), so a session's last
-bucket is decided at the session close like any other. Both sessions are supported: the canonical calendar proves RTH; the
+minute of K+1 (``bot_trade_strategy._drain_bar``, #2303). When the timeframe
+divides the session, its last bucket therefore closes and is decided at the
+session close. When it does not, the close cuts the last bucket short: that
+bucket never completes, so nothing decides it at the close, and its trigger is
+the close only as the instant after which no decision for it can arrive.
+Both sessions are supported: the canonical calendar proves RTH; the
 extended session is the executing broker's declared window (ADR 0059 D5.2),
 resolved through ``session_authority`` -- broker capability data, not a
 session literal of this module's own. An absent window *is* the regular
@@ -117,7 +121,9 @@ def rth_trigger_instants(session_date: date, *, timeframe_ms: int) -> list[int]:
     """Every instant on ``session_date`` at which a regular-session decision is due.
 
     One entry per decision bucket, in ascending order: the bucket's end, or
-    the session close for a bucket the close cuts short.
+    the session close for a bucket the close cuts short (such a bucket never
+    completes, so no decision is actually taken at that instant; see the
+    module docstring).
 
     Formula:
         for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(open)`` while
@@ -147,8 +153,8 @@ def extended_trigger_instants(session_date: date, *, timeframe_ms: int, window: 
     """Every instant on ``session_date`` at which an extended-session decision is due.
 
     Same bucket rule as the regular session, applied to the broker's declared
-    window: the day's last bucket is decided at the declared close, and the
-    regular close is an ordinary bucket boundary inside the day.
+    window: the day's last trigger is the declared close, and the regular
+    close is an ordinary bucket boundary inside the day.
 
     Formula:
         for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(xh_open)`` while
