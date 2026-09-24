@@ -12,7 +12,6 @@ import sqlite3
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
-    FINAL_CUMULATIVE_BROKER_STATES,
     ActiveExecutionCoverageConflict,
     CumulativeCoverageObservation,
     CumulativeRecoveryFill,
@@ -120,9 +119,9 @@ def order_total_coverage_evidence(
     quarantined, non-effective slice (a changed redelivery of an effective
     execution ID is a genuine conflict), an exact whose side differs from
     the cumulative recovery it would be covered by, or an order with no
-    acknowledgement in a final state. The state and the total both come from
-    that one final acknowledgement (see
-    :func:`reads.latest_acknowledgement_in_states`).
+    acknowledgement. The state and the total both come from the order's one
+    governing acknowledgement (:func:`reads.governing_acknowledgement`); a
+    non-final governing state is refused by the proof itself.
     """
     observations = quarantine_observations_for_order(conn, order_ref=conflict.order_ref)
     if _unreadable_source_ids(observations):
@@ -142,12 +141,10 @@ def order_total_coverage_evidence(
     sides = {item.side for item in cumulative} | {item.side for item in quarantined.values()}
     if not cumulative or len(sides) != 1:
         return None
-    final_ack = reads.latest_acknowledgement_in_states(
-        conn, conflict.order_ref, FINAL_CUMULATIVE_BROKER_STATES
-    )
-    if final_ack is None:
+    governing_ack = reads.governing_acknowledgement(conn, conflict.order_ref)
+    if governing_ack is None:
         return None
-    broker_state, reported_filled_quantity = final_ack
+    broker_state, reported_filled_quantity = governing_ack
     effective_quantity, _ = reads.effective_fill_totals_for_order(conn, conflict.order_ref)
     return OrderTotalCoverageEvidence(
         broker_state=broker_state,

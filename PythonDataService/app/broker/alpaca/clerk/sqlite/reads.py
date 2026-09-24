@@ -971,69 +971,68 @@ def _effective_fill_totals_for_order(
     return float(row["qty"]), float(row["cost"])
 
 
-def _latest_reported_filled_quantity_sql(order_ref_sql: str) -> str:
-    """SQL scalar: the cumulative filled quantity the order's LATEST acknowledgement reported.
+_REPORTED_FILLED_QUANTITY_SQL = "CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL)"
 
-    The acknowledgement fold's change check (#2305): an incoming snapshot is
-    new evidence when it differs from the literal latest row. The shortfall
-    reads :func:`_governing_reported_filled_quantity_sql` instead; comparing
-    the change check against that one would re-append the same stale
-    working-state answer on every re-fold (#2385). ``NULL`` when the latest
-    acknowledgement reported no fill (and for every pre-#2305 row).
+
+def _latest_ack_reported_filled_quantity_sql(order_ref_sql: str) -> str:
+    """SQL scalar: the cumulative the order's literal LATEST acknowledgement reported.
+
+    Only for the acknowledgement fold's change check (#2305); the shortfall
+    reads the governing acknowledgement (#2385). ``NULL`` when that row
+    reported no fill.
     """
     return (
-        "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
+        "(SELECT " + _REPORTED_FILLED_QUANTITY_SQL + " "
         "FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
         "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' ORDER BY t.sequence DESC LIMIT 1)"
     )
 
 
-#: SQL ``IN`` list of :data:`FINAL_CUMULATIVE_BROKER_STATES` -- code-owned
-#: literals, the same set :func:`latest_acknowledgement_in_states` is handed
-#: by the order-total proof (#2346).
+#: SQL ``IN`` list of :data:`FINAL_CUMULATIVE_BROKER_STATES` (code-owned literals).
 _FINAL_BROKER_STATES_SQL = ", ".join(f"'{state}'" for state in sorted(FINAL_CUMULATIVE_BROKER_STATES))
 
 
-def _governing_reported_filled_quantity_sql(order_ref_sql: str) -> str:
-    """SQL scalar: the cumulative the shortfall compares against (#2305, #2385).
+def _governing_acknowledgement_sql(order_ref_sql: str, columns: str) -> str:
+    """SQL query: ``columns`` of the order's governing acknowledgement (#2346, #2385).
 
-    The order's latest acknowledgement whose OWN state is final, falling back
-    to the latest acknowledgement only while none is. A REST fold records its
-    acknowledgement even when stale (``append_stale_ack``), so a working-state
-    answer captured before the cancel can land after the ``canceled`` frame;
-    keyed on the plain latest acknowledgement, its pre-terminal cumulative
-    would read the order complete and drop it off the worklist with a lost
-    slice never re-derived (#2385). A working-state cumulative is never the
-    broker's last word once a final one exists.
+    The one definition of which acknowledgement carries the broker's word on
+    an order's total, read by the shortfall (#2305) and the order-total
+    coverage proof (#2346). An acknowledgement whose OWN state is final
+    (:data:`FINAL_CUMULATIVE_BROKER_STATES`) always outranks a working-state
+    one: a REST fold records its acknowledgement even when stale
+    (``append_stale_ack``), so a pre-cancel answer can land after the
+    ``canceled`` frame, and its pre-terminal cumulative would read a short
+    order complete (#2385). Only while no acknowledgement is final does the
+    latest one by sequence govern.
 
-    Among final acknowledgements the latest still wins, never the largest: an
-    exact lookup reporting a final total below an earlier frame (a broker
-    execution correction, #2348's 10 -> 5 -> 10) is the broker's current
-    word and must close the gap -- a maximum would keep the order short for
-    ever (#2305 review). ``NULL`` when the governing acknowledgement reported
-    no fill. The state and the total come from the same row, as in
-    :func:`latest_acknowledgement_in_states`.
+    Among final acknowledgements the latest by sequence wins -- never the
+    largest total, and not the newest broker source time: a lower final
+    total from the exact lookup (an execution correction) must close the
+    gap, or the order stays short and the EXIT re-appends rows on every
+    sweep (#2305 review Major A). Ordering by source time reopens that
+    whenever the lookup's ``updated_at`` sorts before the frame's. The cost
+    is that a stale final answer folded last governs (#2385 review; pinned
+    as a strict xfail). ``columns`` read the row as ``t``.
     """
     return (
-        "(SELECT CAST(json_extract(t.facts_json, '$.reported_filled_quantity') AS REAL) "
-        "FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
+        "SELECT " + columns + " FROM custody_transitions t WHERE t.order_ref = " + order_ref_sql + " "
         "AND t.transition_kind = 'ORDER_SUBMIT_ACKED' "
         "ORDER BY (lower(t.broker_state) IN (" + _FINAL_BROKER_STATES_SQL + ")) DESC, "
-        "t.sequence DESC LIMIT 1)"
+        "t.sequence DESC LIMIT 1"
     )
 
 
 def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
-    """SQL predicate: the governing broker-reported cumulative exceeds the effective fills.
+    """SQL predicate: the governing acknowledgement's cumulative exceeds the effective fills.
 
     ``NULL`` (never short) when the governing acknowledgement reported no
-    fill (:func:`_governing_reported_filled_quantity_sql`). ``order_ref_sql``
-    appears twice; binds :data:`FILL_QTY_EPSILON` last. The fill sum is
-    covered by ``ix_fills_order_ref`` and the effective-fill predicate by
-    ``ix_fills_superseded_execution_ref`` (schema v15).
+    fill. ``order_ref_sql`` appears twice; binds :data:`FILL_QTY_EPSILON`
+    last. The fill sum is covered by ``ix_fills_order_ref`` and the
+    effective-fill predicate by ``ix_fills_superseded_execution_ref``
+    (schema v15).
     """
     return (
-        "(" + _governing_reported_filled_quantity_sql(order_ref_sql) + " - "
+        "((" + _governing_acknowledgement_sql(order_ref_sql, _REPORTED_FILLED_QUANTITY_SQL) + ") - "
         "(SELECT COALESCE(SUM(f.qty), 0) FROM fills f WHERE f.order_ref = " + order_ref_sql + " "
         "AND " + _EFFECTIVE_FILL_PREDICATE + ") >= ?)"
     )
@@ -1042,35 +1041,30 @@ def _fills_short_of_broker_cumulative_sql(order_ref_sql: str) -> str:
 def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) -> float | None:
     """The cumulative filled quantity the order's latest acknowledgement reported, if any."""
     row = conn.execute(
-        "SELECT " + _latest_reported_filled_quantity_sql("?") + " AS reported", (order_ref,)
+        "SELECT " + _latest_ack_reported_filled_quantity_sql("?") + " AS reported", (order_ref,)
     ).fetchone()
     return float(row["reported"]) if row["reported"] is not None else None
 
 
-def latest_acknowledgement_in_states(
-    conn: sqlite3.Connection,
-    order_ref: str,
-    broker_states: frozenset[str],
-) -> tuple[str, float | None] | None:
-    """The state and reported cumulative of the order's latest acknowledgement in ``broker_states``.
+def governing_acknowledgement(
+    conn: sqlite3.Connection, order_ref: str
+) -> tuple[str | None, float | None] | None:
+    """The state and reported cumulative of the order's governing acknowledgement.
 
-    Both values come from the SAME acknowledgement. The ``orders`` fold keeps
-    a terminal state once it has seen one while a later stale REST fold can
-    still append a working-state acknowledgement with an older cumulative,
-    so pairing the order row's state with the latest acknowledgement's total
-    could claim a final total the broker never reported (#2346).
+    Both come from the SAME row (:func:`_governing_acknowledgement_sql`): the
+    ``orders`` fold keeps a terminal state once seen, so pairing it with
+    another acknowledgement's total could claim a final total the broker
+    never reported (#2346). ``None`` when the order has no acknowledgement.
     """
-    rows = conn.execute(
-        "SELECT broker_state, CAST(json_extract(facts_json, '$.reported_filled_quantity') AS REAL) "
-        "AS reported FROM custody_transitions WHERE order_ref = ? "
-        "AND transition_kind = 'ORDER_SUBMIT_ACKED' ORDER BY sequence DESC",
+    row = conn.execute(
+        _governing_acknowledgement_sql(
+            "?", "t.broker_state AS broker_state, " + _REPORTED_FILLED_QUANTITY_SQL + " AS reported"
+        ),
         (order_ref,),
-    )
-    for row in rows:
-        state = row["broker_state"]
-        if isinstance(state, str) and state.lower() in broker_states:
-            return state, (float(row["reported"]) if row["reported"] is not None else None)
-    return None
+    ).fetchone()
+    if row is None:
+        return None
+    return row["broker_state"], (float(row["reported"]) if row["reported"] is not None else None)
 
 
 def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
