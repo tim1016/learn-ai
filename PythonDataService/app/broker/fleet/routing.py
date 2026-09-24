@@ -468,7 +468,10 @@ class LaneRouter:
             )
         delivery = self._delivery_for(broker, session)
         # Dispatch is one-way from here: whatever happens next, the attempt
-        # can never present as definitively un-sent (D11).
+        # can never present as definitively un-sent (D11). The claim is
+        # exclusive — a same-key attempt already dispatched but unsettled
+        # (in flight, or its outcome lost) refuses outcome-unknown here and
+        # is never delivered again (#2319).
         self._service.mark_routing_dispatched(correlation_id=receipt.correlation_id)
         try:
             result = await delivery.deliver(request)
