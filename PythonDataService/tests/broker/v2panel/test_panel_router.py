@@ -864,6 +864,21 @@ async def test_stalled_live_projection_producer_is_served_stale_never_live(
         )
         assert stream_stall == rest_stall
 
+        # A cold client (no cursor: a page opened or reloaded mid-stall) gets
+        # the frozen frame as an explicitly stale bootstrap, then the stall,
+        # so the panel and its Pause/Stop/Flatten controls still mount.
+        cold_response = await broker_v2_panel.stream_live_snapshot_scoped(
+            "alpaca", ACCT, SID, "5s", None
+        )
+        cold = cold_response.body_iterator
+        try:
+            bootstrap = await asyncio.wait_for(cold.__anext__(), timeout=2.0)
+            assert bootstrap.startswith(f"id: {cursor}\nevent: snapshot\n"), bootstrap
+            cold_stale = await asyncio.wait_for(cold.__anext__(), timeout=2.0)
+            assert cold_stale.startswith("event: stale\n"), cold_stale
+        finally:
+            await cold.aclose()
+
         # Recovery republishes even when nothing semantic changed.
         hang["on"] = False
         release.set()
@@ -876,6 +891,75 @@ async def test_stalled_live_projection_producer_is_served_stale_never_live(
         if stream is not None:
             await stream.aclose()
         await live_projection.stop_live_projection_hubs()
+
+
+async def test_live_stream_announces_a_stall_whose_deadline_passed_mid_yield(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream that resumes just after the stall deadline must not sleep a
+    full keepalive before saying so: the stale frame follows at once."""
+    app, _repo = api
+    async with _client(app) as client:
+        panel = (
+            await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        ).json()
+    clock = {"now_ms": _T0, "monotonic": 1_000.0}
+    monkeypatch.setattr(surface_hub, "now_ms_utc", lambda: clock["now_ms"])
+    monkeypatch.setattr(surface_hub, "monotonic", lambda: clock["monotonic"])
+
+    async def assemble() -> BotPanelLiveSnapshot:
+        return BotPanelLiveSnapshot(
+            stream_epoch="assembled",
+            surface_version=0,
+            panel=panel,
+            live_chart=ChartLiveResponse(
+                strategy_instance_id=SID,
+                symbol="SPY",
+                trading_date_open_ms=_T0,
+                trading_date_close_ms=_T0 + 60_000,
+                resolution="5s",
+                bars=[],
+                fill_markers=[],
+                overlay_notices=[],
+                feed=chart_feed_view(CHART_FEED_NOT_EXPECTED),
+                as_of_ms=_T0,
+            ),
+        )
+
+    hub: surface_hub.SurfaceHub[BotPanelLiveSnapshot] = surface_hub.SurfaceHub(
+        strategy_instance_id=SID,
+        assemble=assemble,
+        refresh_interval_seconds=5.0,
+    )
+    await hub.refresh()
+
+    async def get_hub(*_args: object, **_kwargs: object) -> surface_hub.SurfaceHub:
+        return hub
+
+    monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
+    monkeypatch.setattr(
+        broker_v2_panel, "retain_live_projection_hub", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        broker_v2_panel, "release_live_projection_hub", lambda *_args, **_kwargs: None
+    )
+    response = await broker_v2_panel.stream_live_snapshot_scoped(
+        "alpaca", ACCT, SID, "5s", None
+    )
+    stream = response.body_iterator
+    try:
+        first = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        assert "event: snapshot" in first, first
+
+        # The generator resumes after the deadline already passed.
+        clock["now_ms"] += 20_500
+        clock["monotonic"] += 20.5
+        stale = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        assert stale.startswith("event: stale\n"), stale
+    finally:
+        await stream.aclose()
+        await hub.stop()
 
 
 async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None:
