@@ -189,6 +189,12 @@ def to_market_bar(bar: RetainedSourceBar) -> MarketDataBar:
         fetched_at_ms=bar.fetched_at_ms,
         feed_id=bar.provider,
         session_phase=bar.session_phase,
+        # The live run warmed on these rows with their provenance; dropping it
+        # would replay a history bucket as live-decided and flag its candidate
+        # as a crash artifact the live journal never recorded (#2314).
+        provenance=bar.provenance,
+        authorization_id=bar.authorization_id,
+        continuity_event_ref=bar.continuity_event_ref,
     )
 
 

@@ -59,23 +59,21 @@
   }
 
   <ul class="resume-bots__list">
-    @for (bot of stoppedBots(); track bot.strategy_instance_id) {
+    @for (entry of stoppedBots(); track entry.bot.strategy_instance_id) {
       <li class="resume-bots__row">
         <div>
           <div class="resume-bots__identity">
-            <strong>{{ bot.strategy_label }}</strong>
-            <app-asset-identity [symbol]="bot.symbol" size="sm" />
+            <strong>{{ entry.bot.strategy_label }}</strong>
+            <app-asset-identity [symbol]="entry.bot.symbol" size="sm" />
           </div>
-          <p>{{ bot.status_explanation }}</p>
+          <p>{{ entry.bot.status_explanation }}</p>
         </div>
-        @if (bot.row_action; as action) {
-          <app-panel-action-button
-            [action]="action"
-            [pending]="pendingSid() === bot.strategy_instance_id"
-            tone="primary"
-            (triggered)="resume(bot, $event)"
-          />
-        }
+        <app-panel-action-button
+          [action]="entry.resume"
+          [pending]="pendingSid() === entry.bot.strategy_instance_id"
+          tone="primary"
+          (triggered)="resume(entry, $event)"
+        />
       </li>
     }
   </ul>

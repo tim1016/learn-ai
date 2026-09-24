@@ -27,6 +27,7 @@ import type {
   BotCatalogView,
   BotPanelView,
   DutyOutcomeView,
+  PanelAction,
   PanelActionTrigger,
 } from '../v2-panel/lib/broker-v2-panel.types';
 import { deriveActionRejection } from '../v2-panel/lib/panel-action-outcome';
@@ -36,6 +37,13 @@ type WarmupJoinView = NonNullable<BotPanelView['warmup_join']>;
 /** How often, and for how long, a resumed bot is re-read until its warmup reports. */
 const WARMUP_POLL_MS = 2_000;
 const WARMUP_POLL_LIMIT = 45;
+
+/** A stopped bot, the Resume its panel presents, and the join its last run recorded. */
+interface ResumableBot {
+  readonly bot: BotCatalogView;
+  readonly resume: PanelAction;
+  readonly priorJoinRunId: string | null;
+}
 
 /** What the operator is shown for the bot they last resumed from this page. */
 interface ResumeOutcome {
@@ -81,15 +89,35 @@ export class DeployResumeBotsComponent {
   /** Bumped per Resume, so an older resume's poll stops writing once a newer one starts. */
   private resumeSeq = 0;
 
+  /**
+   * Every stopped bot with the Resume its own panel presents. The roster row
+   * carries only a recovery command, never a routine Resume, so the action --
+   * with its token, blockers and confirmation -- is read from the bot's panel,
+   * the one surface that presents it.
+   */
   protected readonly catalog = resource({
     params: () => this.target(),
-    loader: ({ params }) => this.panelService.getCatalog(params),
+    loader: async ({ params }): Promise<ResumableBot[]> => {
+      const stopped = (await this.panelService.getCatalog(params)).filter(
+        (bot) => !bot.running && bot.phase !== 'RETIRED',
+      );
+      const panels = await Promise.all(
+        stopped.map((bot) =>
+          this.panelService.getPanel(withEntity(params, bot.strategy_instance_id), bot.strategy_instance_id),
+        ),
+      );
+      return stopped.flatMap((bot, index) => {
+        const panel = panels[index];
+        const resume = panel.actions.find((action) => action.action_id === 'resume');
+        return resume === undefined
+          ? []
+          : [{ bot, resume, priorJoinRunId: panel.warmup_join?.run_id ?? null }];
+      });
+    },
   });
 
-  protected readonly stoppedBots = computed<BotCatalogView[]>(() =>
-    this.catalog.hasValue()
-      ? this.catalog.value().filter((bot) => bot.row_action?.action_id === 'resume')
-      : [],
+  protected readonly stoppedBots = computed<ResumableBot[]>(() =>
+    this.catalog.hasValue() ? this.catalog.value() : [],
   );
 
   protected readonly pendingSid = signal<string | null>(null);
@@ -106,7 +134,7 @@ export class DeployResumeBotsComponent {
     return ['/brokers', target.broker, 'clerks', target.clerkId, 'accounts', this.accountId(), 'bots', sid];
   }
 
-  protected async resume(bot: BotCatalogView, trigger: PanelActionTrigger): Promise<void> {
+  protected async resume({ bot, priorJoinRunId }: ResumableBot, trigger: PanelActionTrigger): Promise<void> {
     if (this.pendingSid() !== null) return;
     const sid = bot.strategy_instance_id;
     const seq = ++this.resumeSeq;
@@ -124,7 +152,7 @@ export class DeployResumeBotsComponent {
       );
       const result = await this.panelService.runBotAction(command, sid, trigger.action, trigger.reason);
       this.outcome.set(this.settled(shown, result.message, 'warming'));
-      void this.followWarmup(sid, seq, result.recorded_at_ms);
+      void this.followWarmup(sid, seq, result.recorded_at_ms, priorJoinRunId);
     } catch (error) {
       const rejection = deriveActionRejection(error, `Could not resume ${sid}.`);
       this.outcome.set(this.settled(shown, rejection.message, 'rejected'));
@@ -132,6 +160,7 @@ export class DeployResumeBotsComponent {
       // so the next Resume is minted against a lane the operator has seen.
       if (rejection.reasonCode === 'clerk_binding_generation_conflict') {
         void this.fleetDirectory.refresh().catch(() => {
+          if (seq !== this.resumeSeq) return;
           this.outcome.update((current) =>
             current === null ? current : { ...current, message: LANE_FENCE_REFRESH_FAILED_MESSAGE },
           );
@@ -162,7 +191,12 @@ export class DeployResumeBotsComponent {
   }
 
   /** Re-read the resumed bot until its current run reports its warmup join or ends. */
-  private async followWarmup(sid: string, seq: number, resumedAtMs: number): Promise<void> {
+  private async followWarmup(
+    sid: string,
+    seq: number,
+    resumedAtMs: number,
+    priorJoinRunId: string | null,
+  ): Promise<void> {
     let readAny = false;
     for (let attempt = 0; attempt < WARMUP_POLL_LIMIT; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, WARMUP_POLL_MS));
@@ -181,9 +215,10 @@ export class DeployResumeBotsComponent {
       const duty = panel.health.duty_outcome ?? null;
       const endedSinceResume =
         !panel.health.running && duty !== null && (duty.recorded_at_ms ?? 0) >= resumedAtMs;
-      // The panel reads the join of the bot's *current* run, and Resume binds
-      // the new run before it returns, so a join seen here is this resume's.
-      const join = panel.warmup_join ?? null;
+      // A coalesced read that started before Resume can still hand back the
+      // stopped run's join; only a join of another run is this resume's.
+      const candidate = panel.warmup_join ?? null;
+      const join = candidate !== null && candidate.run_id !== priorJoinRunId ? candidate : null;
       if (join !== null || endedSinceResume) {
         this.outcome.update((current) =>
           current === null || current.sid !== sid

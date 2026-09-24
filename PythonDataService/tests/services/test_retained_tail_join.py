@@ -214,19 +214,45 @@ async def test_an_old_after_hours_gap_is_refused_even_past_the_lookback() -> Non
 
 
 @pytest.mark.asyncio
-async def test_a_weekend_outrunning_the_lookback_warms_like_a_fresh_deploy() -> None:
-    """Review P1: Friday close to Monday 08:30 with a one-day lookback owes no session,
-    so an empty lookback is admitted -- the fresh-warmup coverage rule's answer."""
+async def test_a_weekend_longer_than_the_lookback_owes_nothing_and_keeps_the_retained_bars() -> None:
+    """Review: Friday close to Monday 08:30 with a one-day lookback is not refused,
+    and -- nothing being owed -- neither fetches nor drops the retained bars."""
     friday, monday = date(2026, 9, 18), date(2026, 9, 21)
-    now_ms = _et(monday, 8, 30)
+    feed = _HistoryFeed([])
 
     join = await join_retained_tail(
-        _HistoryFeed([]), symbol="SPY", session=_RTH,
-        retained_end_ms=session_window_for_date(friday).close_ms_utc, now_ms=now_ms, lookback_days=1,
+        feed, symbol="SPY", session=_RTH,
+        retained_end_ms=session_window_for_date(friday).close_ms_utc,
+        now_ms=_et(monday, 8, 30), lookback_days=1,
     )
 
-    assert join.filled == ()
-    assert join.warm_from_ms == now_ms
+    assert (join.filled, join.warm_from_ms, feed.lookbacks) == ((), None, [])
+
+
+@pytest.mark.asyncio
+async def test_history_reaching_back_to_the_tail_fills_the_hole_without_a_floor() -> None:
+    """An outrun hole whose fetched history still reaches the retained tail keeps the
+    retained bars: nothing between them is outside what history covers."""
+    now_ms = _et(_THU, 13, 0) + 30_000
+    history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
+
+    join = await join_retained_tail(
+        _HistoryFeed(history), symbol="SPY", session=_RTH,
+        retained_end_ms=_et(_WED, 10, 0), now_ms=now_ms, lookback_days=1,
+    )
+
+    assert join.warm_from_ms is None
+    assert join.filled[0].start_ms == _et(_WED, 10, 0)
+
+
+def test_replayed_rows_keep_their_provenance() -> None:
+    """Review: the replay proof must not replay a history bucket as live-decided."""
+    from app.services.run_replay_proof import to_market_bar
+    from app.services.source_bar_ledger import RetainedSourceBar
+
+    row = RetainedSourceBar.from_market_bar(seq=1, account_id="acct", bar=_minute_bar(_et(_THU, 10, 0)))
+
+    assert to_market_bar(row).provenance == "history"
 
 
 # ── _RetainedSourceBarFeed (the resumed run's warmup) ───────────────────────

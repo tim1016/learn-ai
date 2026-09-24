@@ -141,20 +141,28 @@ async def join_retained_tail(
             "minutes exactly, so the hole cannot be filled",
             reason=RESUME_HOLE_AFTER_HOURS,
         )
+    owed = owed_regular_minute_ends(after_ms=retained_end_ms, now_ms=now_ms)
+    if not owed:
+        # Nothing the run decides on passed while it was stopped (a closed
+        # night, a weekend): the retained bars already reach now, however long
+        # the wall-clock gap -- no fetch, and no floor that would drop them.
+        return unfilled
+    warm_from_ms: int | None = None
     if retained_end_ms >= warmup_window_start_ms(lookback_days, now_ms=now_ms):
-        owed = owed_regular_minute_ends(after_ms=retained_end_ms, now_ms=now_ms)
-        if not owed:
-            return unfilled
         # The smallest window reaching back to the tail; never past the lookback.
         hole_days = -(-(now_ms - retained_end_ms) // _DAY_MS)
         history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=hole_days)
-        warm_from_ms: int | None = None
     else:
         history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=lookback_days)
-        # An empty lookback passed the source's coverage rule, so it owes no
-        # session: the run warms on nothing before now, as a fresh deploy would.
-        warm_from_ms = min((bar.start_ms for bar in history), default=now_ms)
-        owed = owed_regular_minute_ends(after_ms=max(retained_end_ms, warm_from_ms), now_ms=now_ms)
+        first_start_ms = min((bar.start_ms for bar in history), default=now_ms)
+        if first_start_ms > retained_end_ms:
+            # History starts after the tail, so the stretch between them is
+            # outside the lookback: warm from history alone, as a fresh deploy
+            # would, and owe only what follows it. An empty lookback passed the
+            # source's coverage rule, so it owes no session and warms from now.
+            warm_from_ms = first_start_ms
+            owed = tuple(end_ms for end_ms in owed if end_ms > first_start_ms)
+        # Otherwise history reaches back to the tail and fills the whole hole.
     filled = tuple(
         sorted((bar for bar in history if bar.end_ms > retained_end_ms), key=lambda bar: bar.end_ms)
     )
