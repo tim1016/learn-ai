@@ -45,7 +45,7 @@ from zoneinfo import ZoneInfo
 
 from app.broker.ibkr.bar_models import BarProvenance, IbkrMinuteBar
 from app.marketdata.feed import BarSessionPhase
-from app.services.session_authority import session_state_at_ms
+from app.services.session_authority import scheduled_exchange_phase_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -103,8 +103,13 @@ def _minute_start_ms(ts_ms: int) -> int:
 
 
 def _session_phase_for_ms(ts_ms: int) -> BarSessionPhase:
-    """Classify one instant through the canonical session authority."""
-    return session_state_at_ms(now_ms=ts_ms).phase
+    """Classify one instant by the calendar's scheduled PRE/RTH/POST session.
+
+    Not ``session_state_at_ms``: with no declared window that proves only
+    RTH/CLOSED, which blinded the ``useRTH=0`` stall watchdog in PRE and POST
+    and stamped extended minutes ``CLOSED`` (#2299, #2313).
+    """
+    return scheduled_exchange_phase_at_ms(ts_ms)
 
 
 @dataclass(frozen=True)

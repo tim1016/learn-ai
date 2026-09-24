@@ -56,6 +56,14 @@ logger = logging.getLogger(__name__)
 
 NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
+# One threshold in every phase the line is scheduled to print (#2299, #2313).
+# It measures the line's 5-second cadence, not trading activity: IBKR sends a
+# volume-0 bar when nothing traded. Recorded evidence: 1,445 live IBKR POST
+# minutes (SPY/QQQ/AAPL/TSLA, 2026-08-31..09-10 source-bar ledgers) show no
+# missing minute, and the next minute's first 5 s bar arrived at p99 6.3 s past
+# the close -- the same as RTH -- including 193 minutes with no trade at all.
+# So sparse extended-hours *trades* do not starve the line; 60 s is twelve
+# missed 5 s bars. PRE has no recorded extended-line evidence yet.
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60

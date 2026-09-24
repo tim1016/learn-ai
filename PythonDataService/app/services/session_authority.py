@@ -8,6 +8,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.lean_sidecar import trading_calendar
 from app.lean_sidecar.trading_calendar import is_trading_day, next_trading_day, session_window_for_date
 from app.marketdata.feed import BarSessionPhase
 from app.schemas.broker_capability import SessionDataCapability, SessionKind
@@ -160,6 +161,57 @@ def session_state_at_ms(
         now_ms=now_ms,
         strategy_session_policy=strategy_session_policy,
         allowed_sessions=allowed_sessions,
+    )
+
+
+def scheduled_exchange_phase_at_ms(ts_ms: int) -> TradingSessionPhase:
+    """The phase the canonical calendar schedules for ``ts_ms``: PRE, RTH, POST or CLOSED.
+
+    This answers *when the exchange's extended session is scheduled*, which is
+    what labels an IBKR bar and what arms the liveness watchdog of a
+    ``useRTH=0`` line (#2299, #2313). It grants no strategy permission: that is
+    :func:`session_state_at_ms`, which still needs a declared window or a
+    capability snapshot before it will call an instant PRE or POST.
+
+    Every bound comes from the calendar's schedule, so a half-day's early close
+    moves the after-hours close with it. OVERNIGHT is never answered here: only
+    a matched capability snapshot can prove that session.
+    """
+    if ts_ms < 0:
+        raise ValueError("ts_ms must be non-negative int64 ms UTC")
+    bounds = scheduled_extended_session_bounds(_ny_dt(ts_ms).date())
+    if bounds is None or not (bounds.open_ms <= ts_ms < bounds.close_ms):
+        return "CLOSED"
+    if ts_ms < bounds.rth_open_ms:
+        return "PRE"
+    if ts_ms < bounds.rth_close_ms:
+        return "RTH"
+    return "POST"
+
+
+@lru_cache(maxsize=512)
+def scheduled_extended_session_bounds(session_date: date) -> ExtendedSessionBounds | None:
+    """``session_date``'s pre-market open, regular session and after-hours close, or ``None``.
+
+    Read from the canonical calendar's own ``pre``/``post`` market times on the
+    one calendar object that module constructs; no second calendar is built.
+    ``trading_calendar.py`` is a sealed program artifact (every signal
+    program's ``artifact_paths``), so a new accessor there would invalidate
+    every golden-qualification receipt; this lives here until the next planned
+    re-seal moves it. Memoised: a session day's schedule never changes, and the
+    bar-liveness gate asks about the same day every 100 ms.
+    """
+    schedule = trading_calendar._CALENDAR.schedule(
+        start_date=session_date, end_date=session_date, start="pre", end="post"
+    )
+    if schedule.empty:
+        return None
+    row = schedule.iloc[0]
+    return ExtendedSessionBounds(
+        open_ms=int(row["pre"].value // 1_000_000),
+        rth_open_ms=int(row["market_open"].value // 1_000_000),
+        rth_close_ms=int(row["market_close"].value // 1_000_000),
+        close_ms=int(row["post"].value // 1_000_000),
     )
 
 
