@@ -25,6 +25,7 @@ from app.main import app
 from app.routers import broker_v2_gallery
 from app.schemas.broker_v2_gallery import (
     GalleryBotView,
+    GalleryFeedView,
     GalleryLiveSnapshot,
     GalleryPrimaryAction,
     GallerySymbolBars,
@@ -101,6 +102,9 @@ class _FakeAggregator:
 
     async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
+
+    def status(self, symbol: str) -> tuple[str, str | None, int | None]:
+        return "streaming", None, 1_700_000_000_000
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]:
         return [
@@ -440,6 +444,9 @@ class _FullFiveSecondBufferAggregator(_FakeAggregator):
         bars = self._buffers.get(symbol, [])
         return list(bars) if since_ms is None else [b for b in bars if b.start_ms > since_ms]
 
+    def status_5s(self, symbol: str) -> tuple[str, str | None, int | None]:
+        return "streaming", None, 1_700_000_000_000
+
 
 def _five_second_hub(rows: list[_Cat2]) -> GalleryHub:
     return GalleryHub(
@@ -626,6 +633,13 @@ def _snapshot_frame_of_exact_size(target_bytes: int) -> GalleryLiveSnapshot:
                     session_change_pct=None,
                     fills_today=None,
                     primary_action=GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True),
+                    feed=GalleryFeedView(
+                        state="LIVE",
+                        headline="Feed live",
+                        detail="IBKR bars are arriving on schedule.",
+                        attention_required=False,
+                        last_error=None,
+                    ),
                 )
             ],
             symbols=[GallerySymbolBars(symbol="SPY", bars=bars)],

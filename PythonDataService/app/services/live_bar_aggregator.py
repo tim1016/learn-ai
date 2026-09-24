@@ -44,6 +44,7 @@ from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import stream_minute_bars, stream_raw_5s_bars
 from app.broker.ibkr.client import IbkrClient, NotConnectedError, get_client
 from app.broker.ibkr.minute_assembler import MinuteAssembler
+from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.services.bar_persistence import (
     BarPersistence,
     BarPersistenceRegressionError,
@@ -72,6 +73,66 @@ _EXPECTED_WINDOW_MS_5S = 5_000
 SubscriptionStatus = Literal[
     "idle", "subscribing", "streaming", "errored", "resubscribing"
 ]
+
+BarLineState = Literal["LIVE", "STARTING", "STALLED", "ERRORED", "RECOVERING", "NOT_EXPECTED"]
+
+# How old a line's newest bar (its ``start_ms``) may be before the line reads
+# ``STALLED``: several bar windows, so ordinary delivery jitter never alarms.
+BAR_LINE_FRESHNESS_MS: dict[Literal["5s", "1m"], int] = {"5s": 30_000, "1m": 180_000}
+
+
+@dataclass(frozen=True)
+class BarLineStatus:
+    """What one IBKR bar line is doing now, for a surface that draws it (#2330)."""
+
+    state: BarLineState
+    last_bar_ms: int | None = None
+    last_error: str | None = None
+
+
+def classify_bar_line(
+    status: SubscriptionStatus,
+    last_error: str | None,
+    last_bar_ms: int | None,
+    *,
+    resolution: Literal["5s", "1m"],
+    now_ms: int,
+) -> BarLineStatus:
+    """Classify one line from the aggregator's ``status``/``status_5s`` tuple.
+
+    ``NOT_EXPECTED`` outside the regular session (canonical calendar): no live
+    bar is due, so the line is neither live nor failing. Inside it, freshness
+    is measured from ``max(last_bar_ms, today's open)``, never from a prior
+    session's last bar, so a quiet open does not read as a stall.
+
+    The aggregator does not timestamp its status, and a pump error is sticky
+    until the next bar. So until the line delivers its first bar of the
+    session, its status may be a leftover from before the open: the line is
+    ``STARTING`` while the open is still within the freshness budget, or
+    while its task is still subscribing (the IBKR line's own stall watchdog
+    bounds that by turning it into an error). After that the status is
+    trusted: ``ERRORED``, ``RECOVERING``, or ``STALLED`` for a line whose
+    newest bar is older than the budget.
+    """
+    window = current_trading_session_window(now_ms)
+    if window is None or not window.open_ms_utc <= now_ms < window.close_ms_utc:
+        return BarLineStatus(state="NOT_EXPECTED", last_bar_ms=last_bar_ms)
+    session_bar_ms = (
+        last_bar_ms if last_bar_ms is not None and last_bar_ms >= window.open_ms_utc else None
+    )
+    anchor_ms = session_bar_ms if session_bar_ms is not None else window.open_ms_utc
+    fresh = now_ms - anchor_ms <= BAR_LINE_FRESHNESS_MS[resolution]
+    if session_bar_ms is None and (fresh or status == "subscribing"):
+        return BarLineStatus(state="STARTING", last_bar_ms=last_bar_ms)
+    if status == "errored":
+        return BarLineStatus(state="ERRORED", last_bar_ms=last_bar_ms, last_error=last_error)
+    if status == "resubscribing":
+        return BarLineStatus(state="RECOVERING", last_bar_ms=last_bar_ms)
+    if not fresh:
+        return BarLineStatus(state="STALLED", last_bar_ms=last_bar_ms)
+    if status == "streaming":
+        return BarLineStatus(state="LIVE", last_bar_ms=last_bar_ms)
+    return BarLineStatus(state="STARTING", last_bar_ms=last_bar_ms)
 
 
 @dataclass

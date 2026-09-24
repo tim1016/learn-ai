@@ -52,6 +52,22 @@
   white-space: nowrap;
 }
 
+.bot-tile__feed {
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: var(--fs-xxs);
+  white-space: nowrap;
+}
+
+.bot-tile__feed--alert {
+  border-color: rgba(255, 152, 0, 0.42);
+  background: var(--warn-soft);
+  color: var(--text-primary);
+}
+
 .bot-tile__chart {
   position: relative;
   min-height: 0;

@@ -63,12 +63,13 @@
 
     <div class="gallery-dock__status" role="status">
       <span class="gallery-dock__timeframe">Today · {{ resolution() }}</span>
+      @let wall = indicator();
       <span
         class="gallery-dock__live"
-        [class.gallery-dock__live--live]="status() === 'live'"
-        [class.gallery-dock__live--stale]="status() === 'stale'"
-        [class.gallery-dock__live--muted]="status() === 'connecting' || status() === 'error'"
-      ><span class="gallery-dock__live-dot" aria-hidden="true"></span>{{ statusLabel() }}</span>
+        [class.gallery-dock__live--live]="wall.tone === 'live'"
+        [class.gallery-dock__live--stale]="wall.tone === 'stale'"
+        [class.gallery-dock__live--muted]="wall.tone === 'muted'"
+      ><span class="gallery-dock__live-dot" aria-hidden="true"></span>{{ wall.label }}</span>
     </div>
 
     <div class="gallery-dock__pager">

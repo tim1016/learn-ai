@@ -31,6 +31,30 @@ class GalleryPrimaryAction(BaseModel):
     disabled_reason: str | None = None
 
 
+GalleryFeedState = Literal["LIVE", "STARTING", "STALLED", "ERRORED", "RECOVERING", "NOT_EXPECTED"]
+
+
+class GalleryFeedView(BaseModel):
+    """The IBKR bar line a tile charts, with backend-authored copy (#2330).
+
+    An open stream proves only that the transport works; this says whether
+    market data is arriving. ``LIVE`` and ``NOT_EXPECTED`` (no regular-session
+    bar is due now) are quiet; ``STARTING`` is a line that has not delivered
+    its first bar of the session yet; ``STALLED``, ``ERRORED`` and
+    ``RECOVERING`` are a line that is not delivering, so the tile's candles
+    are frozen (``attention_required``). ``last_error`` is the aggregator's
+    diagnostic, shown verbatim.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: GalleryFeedState
+    headline: str
+    detail: str
+    attention_required: bool
+    last_error: str | None
+
+
 class GalleryBotView(BaseModel):
     """One bot's tile state in the gallery wall."""
 
@@ -63,6 +87,8 @@ class GalleryBotView(BaseModel):
     fills_today: int | None
     last_bar_at_ms: int | None = None
     primary_action: GalleryPrimaryAction
+    # Required, never defaulted: a tile with no feed fact must not render as live.
+    feed: GalleryFeedView
 
 
 class GalleryBotDelta(GalleryBotView):

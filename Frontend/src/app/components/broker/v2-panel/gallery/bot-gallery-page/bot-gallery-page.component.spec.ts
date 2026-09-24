@@ -37,6 +37,13 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
     fills_today: 0,
     last_bar_at_ms: null,
     primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
+    feed: {
+      state: 'LIVE',
+      headline: 'Feed live',
+      detail: 'IBKR bars are arriving on schedule.',
+      attention_required: false,
+      last_error: null,
+    },
     ...overrides,
   };
 }

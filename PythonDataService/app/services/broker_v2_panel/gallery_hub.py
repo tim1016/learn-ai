@@ -42,6 +42,7 @@ from app.broker.alpaca.clerk.fills import FillRecord
 from app.schemas.broker_v2_gallery import (
     GalleryBotDelta,
     GalleryBotView,
+    GalleryFeedView,
     GalleryLiveSnapshot,
     GalleryLiveUpdate,
     GalleryPrimaryAction,
@@ -54,6 +55,12 @@ from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
     live_window,
     markers_in_window,
+)
+from app.services.live_bar_aggregator import (
+    BarLineState,
+    BarLineStatus,
+    SubscriptionStatus,
+    classify_bar_line,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -183,6 +190,55 @@ class GalleryBarAggregator(Protocol):
     async def ensure_subscribed_5s(self, symbol: str) -> object: ...
 
     def snapshot_5s(self, symbol: str, since_ms: int | None = None) -> list[object]: ...
+
+    def status(self, symbol: str) -> tuple[SubscriptionStatus, str | None, int | None]: ...
+
+    def status_5s(self, symbol: str) -> tuple[SubscriptionStatus, str | None, int | None]: ...
+
+
+# Operator copy per feed state (#2330): (headline, detail). The wall's
+# transport can be open while a symbol's IBKR line is down, so each tile says
+# what its own candles are doing.
+_FEED_COPY: dict[BarLineState, tuple[str, str]] = {
+    "LIVE": ("Feed live", "IBKR bars are arriving on schedule."),
+    "NOT_EXPECTED": (
+        "Market closed",
+        "No regular-session IBKR bar is due now; the chart shows the last bars received.",
+    ),
+    "STARTING": (
+        "Feed starting",
+        "The IBKR bar line is subscribed and waiting for its first bar of the session.",
+    ),
+    "STALLED": (
+        "Feed stalled",
+        "No IBKR bar has arrived within the expected cadence, so this chart has "
+        "stopped at its last candle. Check the Gateway connection.",
+    ),
+    "ERRORED": (
+        "Feed interrupted",
+        "The IBKR bar line failed and is being retried, so this chart has stopped "
+        "at its last candle. Check the Gateway connection.",
+    ),
+    "RECOVERING": (
+        "Feed recovering",
+        "The IBKR bar line is being resubscribed after a broker reconnect; candles "
+        "missed meanwhile are not backfilled.",
+    ),
+}
+# States in which the line is not failing: nothing is due, it is delivering,
+# or it has not had time to deliver its first bar of the session.
+_QUIET_FEED_STATES: frozenset[BarLineState] = frozenset({"LIVE", "NOT_EXPECTED", "STARTING"})
+
+
+def _feed_view(line: BarLineStatus) -> GalleryFeedView:
+    headline, detail = _FEED_COPY[line.state]
+    return GalleryFeedView(
+        state=line.state,
+        headline=headline,
+        detail=detail,
+        attention_required=line.state not in _QUIET_FEED_STATES,
+        last_error=line.last_error,
+    )
 
 
 class GalleryFillSource(Protocol):
@@ -352,6 +408,7 @@ class GalleryHub:
         *,
         session_change_pcts: dict[str, float],
         resume_actions: dict[str, PanelAction],
+        feeds: dict[str, GalleryFeedView],
         model: type[GalleryBotView] = GalleryBotView,
     ) -> GalleryBotView:
         """Project one catalog row into ``model`` (``GalleryBotView`` or its ``GalleryBotDelta`` subtype).
@@ -367,7 +424,8 @@ class GalleryHub:
         (``catalog_projection_service.day_pnl``) rather than left to any
         surface to sum for itself. ``session_change_pct`` is looked up by symbol in
         ``session_change_pcts`` (see ``_fetch_session_change_pcts``) —
-        ``None`` when that symbol has no session-scoped bar yet.
+        ``None`` when that symbol has no session-scoped bar yet. ``feed`` is
+        the symbol's chart line state from ``feeds`` (see ``_fetch_feeds``).
         """
         realized = getattr(row, "realized_pnl_today", None)
         open_pnl = getattr(row, "open_pnl", None)
@@ -386,7 +444,30 @@ class GalleryHub:
             fills_today=getattr(row, "fills_today", None),
             last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),
             primary_action=self._primary_action(row, resume_actions=resume_actions),
+            feed=feeds[row.symbol],
         )
+
+    def _fetch_feeds(self, symbols: list[str], *, now_ms: int) -> dict[str, GalleryFeedView]:
+        """Each symbol's chart line state at ``now_ms`` (#2330).
+
+        Reads the line the tile draws (``status_5s`` on a 5-second wall), a
+        synchronous in-memory read like ``snapshot``. The stream sends a
+        frame every poll whether or not a bar arrived, so this per-frame fact
+        is what tells a frozen chart apart from a quiet market.
+        """
+        feeds: dict[str, GalleryFeedView] = {}
+        for symbol in symbols:
+            status, last_error, last_bar_ms = (
+                self._aggregator.status_5s(symbol)
+                if self._resolution == "5s"
+                else self._aggregator.status(symbol)
+            )
+            feeds[symbol] = _feed_view(
+                classify_bar_line(
+                    status, last_error, last_bar_ms, resolution=self._resolution, now_ms=now_ms
+                )
+            )
+        return feeds
 
     async def _fetch_catalog(self) -> list[BotCatalogView]:
         """The account's bot catalog, cached for ``self._io_cache_ttl_ms``.
@@ -592,9 +673,9 @@ class GalleryHub:
                 self._fetch_resume_actions(shown, now_ms=as_of_ms),
             )
             open_ms, _close_ms = live_window(as_of_ms)
-            session_change_pcts = self._fetch_session_change_pcts(
-                sorted({row.symbol for row in shown}), open_ms=open_ms
-            )
+            symbols = sorted({row.symbol for row in shown})
+            session_change_pcts = self._fetch_session_change_pcts(symbols, open_ms=open_ms)
+            feeds = self._fetch_feeds(symbols, now_ms=as_of_ms)
             self._version += 1
             version = self._version
             return GalleryLiveSnapshot(
@@ -607,6 +688,7 @@ class GalleryHub:
                         row,
                         session_change_pcts=session_change_pcts,
                         resume_actions=resume_actions,
+                        feeds=feeds,
                     )
                     for row in shown
                 ],
@@ -664,9 +746,9 @@ class GalleryHub:
             )
             markers_delta = _markers_delta(markers, since_marker_keys)
             open_ms, _close_ms = live_window(as_of_ms)
-            session_change_pcts = self._fetch_session_change_pcts(
-                sorted({row.symbol for row in shown}), open_ms=open_ms
-            )
+            symbols = sorted({row.symbol for row in shown})
+            session_change_pcts = self._fetch_session_change_pcts(symbols, open_ms=open_ms)
+            feeds = self._fetch_feeds(symbols, now_ms=as_of_ms)
             self._version += 1
             version = self._version
             return GalleryLiveUpdate(
@@ -679,6 +761,7 @@ class GalleryHub:
                         row,
                         session_change_pcts=session_change_pcts,
                         resume_actions=resume_actions,
+                        feeds=feeds,
                         model=GalleryBotDelta,
                     )
                     for row in shown

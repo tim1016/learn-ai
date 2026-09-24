@@ -412,3 +412,50 @@ async def test_ensure_subscribed_is_idempotent_while_task_alive(
 
     assert call_count == 1
     await fresh_aggregator.shutdown()
+
+
+# ── classify_bar_line (#2330) ─────────────────────────────────────────────────
+
+# Wednesday 2026-09-23, a regular NYSE session: 09:30 ET == 13:30 UTC (EDT).
+_OPEN_MS = 1_790_170_200_000
+_PRIOR_BAR_MS = _OPEN_MS - 17 * 3_600_000
+_SATURDAY_MS = 1_700_319_600_000
+
+
+@pytest.mark.parametrize(
+    ("status", "last_bar_ms", "resolution", "now_ms", "expected"),
+    [
+        # Outside the session nothing is due, whatever the line says.
+        ("errored", _PRIOR_BAR_MS, "5s", _SATURDAY_MS, "NOT_EXPECTED"),
+        ("streaming", None, "5s", _OPEN_MS - 60_000, "NOT_EXPECTED"),
+        # At the open, a pre-open status is not trusted until the budget runs out.
+        ("errored", _PRIOR_BAR_MS, "5s", _OPEN_MS + 20_000, "STARTING"),
+        ("streaming", _PRIOR_BAR_MS, "1m", _OPEN_MS + 150_000, "STARTING"),
+        # After it, no bar since the open is a failing line.
+        ("errored", _PRIOR_BAR_MS, "5s", _OPEN_MS + 60_000, "ERRORED"),
+        ("streaming", _PRIOR_BAR_MS, "5s", _OPEN_MS + 60_000, "STALLED"),
+        ("idle", None, "1m", _OPEN_MS + 600_000, "STALLED"),
+        # A task still subscribing waits for its own stall watchdog.
+        ("subscribing", None, "5s", _OPEN_MS + 3_600_000, "STARTING"),
+        # With a bar this session the status is trusted.
+        ("errored", _OPEN_MS + 3_590_000, "5s", _OPEN_MS + 3_600_000, "ERRORED"),
+        ("resubscribing", _OPEN_MS + 3_590_000, "5s", _OPEN_MS + 3_600_000, "RECOVERING"),
+        ("streaming", _OPEN_MS + 3_590_000, "5s", _OPEN_MS + 3_600_000, "LIVE"),
+        ("streaming", _OPEN_MS + 3_500_000, "5s", _OPEN_MS + 3_600_000, "STALLED"),
+        ("streaming", _OPEN_MS + 3_480_000, "1m", _OPEN_MS + 3_600_000, "LIVE"),
+    ],
+)
+def test_classify_bar_line_states(
+    status: agg_mod.SubscriptionStatus,
+    last_bar_ms: int | None,
+    resolution: str,
+    now_ms: int,
+    expected: str,
+) -> None:
+    line = agg_mod.classify_bar_line(
+        status, "boom", last_bar_ms, resolution=resolution, now_ms=now_ms
+    )
+
+    assert line.state == expected
+    assert line.last_bar_ms == last_bar_ms
+    assert line.last_error == ("boom" if expected == "ERRORED" else None)

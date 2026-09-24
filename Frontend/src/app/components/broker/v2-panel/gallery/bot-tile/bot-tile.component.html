@@ -2,6 +2,13 @@
   <header class="bot-tile__header">
     <app-asset-identity class="bot-tile__identity" [symbol]="bot().symbol" size="xs" />
     <span class="bot-tile__strategy">{{ bot().label }}</span>
+    @if (feedBadge(); as badge) {
+      <span
+        class="bot-tile__feed"
+        [class.bot-tile__feed--alert]="badge.alert"
+        [attr.title]="badge.title"
+      >{{ badge.headline }}</span>
+    }
 
     <div class="bot-tile__action">
       <button

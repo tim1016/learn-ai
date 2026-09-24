@@ -229,6 +229,16 @@ class _FakeAggregator:
         self.subscribed_5s: list[str] = []
         self.bars_by_symbol: dict[str, list[object]] = bars_by_symbol or {}
         self.bars_5s_by_symbol: dict[str, list[object]] = {}
+        # (status, last_error, last_bar_ms) per symbol, as the real
+        # aggregator's ``status``/``status_5s`` report it (#2330).
+        self.status_by_symbol: dict[str, tuple[str, str | None, int | None]] = {}
+        self.status_5s_by_symbol: dict[str, tuple[str, str | None, int | None]] = {}
+
+    def status(self, symbol: str) -> tuple[str, str | None, int | None]:
+        return self.status_by_symbol.get(symbol, ("streaming", None, 1_700_000_000_000))
+
+    def status_5s(self, symbol: str) -> tuple[str, str | None, int | None]:
+        return self.status_5s_by_symbol.get(symbol, ("streaming", None, 1_700_000_000_000))
 
     async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
@@ -930,3 +940,111 @@ async def test_surface_versions_publish_after_async_collection_in_order() -> Non
 
     assert slow_result.surface_version == 1
     assert second_result.surface_version == 2
+
+
+# ── #2330: each tile carries its IBKR line's state, not just the transport's ──
+
+# Wednesday 2026-09-23, a regular NYSE session: 09:30 ET == 13:30 UTC (EDT).
+_RTH_OPEN_MS = 1_790_170_200_000
+_RTH_MIDDAY_MS = _RTH_OPEN_MS + 2 * 3_600_000
+_PRIOR_SESSION_BAR_MS = _RTH_OPEN_MS - 17 * 3_600_000
+
+
+def _five_second_hub(aggregator: _FakeAggregator) -> GalleryHub:
+    return GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]),
+        aggregator=aggregator,
+        resolution="5s",
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_shows_an_errored_feed_in_rth_as_attention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead IBKR line during RTH is on the tile, not hidden behind an open stream."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
+    aggregator = _FakeAggregator()
+    aggregator.status_5s_by_symbol["SPY"] = (
+        "errored",
+        "broker not connected: public broker session not connected",
+        _RTH_MIDDAY_MS - 600_000,
+    )
+
+    snapshot = await _five_second_hub(aggregator).build_snapshot()
+
+    feed = snapshot.bots[0].feed
+    assert feed.state == "ERRORED"
+    assert feed.attention_required is True
+    assert feed.last_error == "broker not connected: public broker session not connected"
+
+
+@pytest.mark.asyncio
+async def test_build_update_shows_a_frozen_streaming_feed_as_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The issue's repro: a buffer that stopped appending while its status still
+    reads ``streaming``. Every update frame now says the line is stalled."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
+    aggregator = _FakeAggregator()
+    aggregator.status_5s_by_symbol["SPY"] = ("streaming", None, _RTH_MIDDAY_MS - 600_000)
+    hub = _five_second_hub(aggregator)
+
+    first = await hub.build_update(since_bar_ms={}, known_sids=set())
+    second = await hub.build_update(since_bar_ms={}, known_sids=set())
+
+    for update in (first, second):
+        feed = update.bots_delta[0].feed
+        assert feed.state == "STALLED"
+        assert feed.attention_required is True
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_shows_a_fresh_streaming_feed_as_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
+    aggregator = _FakeAggregator()
+    aggregator.status_5s_by_symbol["SPY"] = ("streaming", None, _RTH_MIDDAY_MS - 10_000)
+
+    snapshot = await _five_second_hub(aggregator).build_snapshot()
+
+    assert snapshot.bots[0].feed.state == "LIVE"
+    assert snapshot.bots[0].feed.attention_required is False
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_does_not_alarm_at_the_open_on_a_pre_open_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At 09:30:10 the line's newest bar is yesterday's and its sticky status is
+    a pre-open error: that is a line starting, not a line that failed."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_OPEN_MS + 10_000)
+    aggregator = _FakeAggregator()
+    aggregator.status_5s_by_symbol["SPY"] = (
+        "errored",
+        "broker not connected: overnight gateway restart",
+        _PRIOR_SESSION_BAR_MS,
+    )
+
+    snapshot = await _five_second_hub(aggregator).build_snapshot()
+
+    assert snapshot.bots[0].feed.state == "STARTING"
+    assert snapshot.bots[0].feed.attention_required is False
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_says_no_bar_is_expected_when_the_market_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside the session the tile says so honestly, never "live"."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+
+    snapshot = await _five_second_hub(_FakeAggregator()).build_snapshot()
+
+    feed = snapshot.bots[0].feed
+    assert feed.state == "NOT_EXPECTED"
+    assert feed.attention_required is False
+    assert feed.headline == "Market closed"

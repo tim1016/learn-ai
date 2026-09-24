@@ -40,6 +40,13 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
       enabled: true,
       disabled_reason: null,
     },
+    feed: {
+      state: 'LIVE',
+      headline: 'Feed live',
+      detail: 'IBKR bars are arriving on schedule.',
+      attention_required: false,
+      last_error: null,
+    },
     ...overrides,
   };
 }
@@ -510,5 +517,39 @@ describe('BotTileComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
 
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // #2330: a tile over a dead IBKR line says so instead of drawing frozen candles silently.
+  it('shows its feed headline and the line error when its IBKR line is down', async () => {
+    await render(BotTileComponent, {
+      inputs: {
+        bot: bot({
+          feed: {
+            state: 'ERRORED',
+            headline: 'Feed interrupted',
+            detail: 'The IBKR bar line failed and is being retried.',
+            attention_required: true,
+            last_error: 'broker not connected',
+          },
+        }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    const badge = screen.getByText('Feed interrupted');
+    expect(badge.getAttribute('title')).toContain('broker not connected');
+    expect(screen.getByRole('button', { name: /Feed interrupted/ })).toBeTruthy();
+  });
+
+  it('shows no feed badge while its line is live', async () => {
+    await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      providers: [routerProvider()],
+    });
+
+    expect(screen.queryByText('Feed live')).toBeNull();
   });
 });
