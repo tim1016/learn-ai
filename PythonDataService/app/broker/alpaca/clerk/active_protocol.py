@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
+    from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
@@ -38,6 +39,7 @@ class RevisionBoundRunRegistrar(Protocol):
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot,
+        run_owner: RunOwner | None = None,
     ) -> None: ...
 
 
@@ -94,7 +96,14 @@ class ActiveAlpacaClerk(Protocol):
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot | None = None,
-    ) -> None: ...
+        run_owner: RunOwner | None = None,
+    ) -> None:
+        """Admit the run; ``run_owner`` is what holds it in this process (#2369).
+
+        The sweep retires an ACTIVE run whose owner is done, and one
+        registered with no owner after one pass's grace.
+        """
+        ...
 
     async def stop_strategy_run(
         self,
@@ -103,10 +112,6 @@ class ActiveAlpacaClerk(Protocol):
         run_id: str,
         reason: str | None = None,
     ) -> CommandSubmission | None: ...
-
-    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
-        """Renew the run's Clerk-clocked liveness lease; ``False`` once it is not ACTIVE (#2369)."""
-        ...
 
     async def execute_for_instance(
         self,

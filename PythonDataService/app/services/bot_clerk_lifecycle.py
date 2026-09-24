@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, NoReturn
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
@@ -17,15 +13,10 @@ from app.broker.alpaca.clerk.active_protocol import (
     RevisionBoundRunRegistrar,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.clerk.sqlite.run_liveness import RUN_LIVENESS_RENEW_INTERVAL_S
+from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import ActiveSqliteAlpacaLifecycleAuthority
-
-logger = logging.getLogger(__name__)
-
-# Read at call time so a test can shorten it through this module.
-RUN_LEASE_RENEW_INTERVAL_S = RUN_LIVENESS_RENEW_INTERVAL_S
 
 
 class ActiveClerkUnavailableError(RuntimeError):
@@ -38,10 +29,6 @@ class ClerkAdmissionTokenStaleError(RuntimeError):
 
 class ClerkRunAuthorityChangedError(RuntimeError):
     """The run is no longer SQLite-active at a boot mutation boundary."""
-
-
-class RunLeaseLostError(RuntimeError):
-    """The Clerk no longer holds this run ACTIVE, so its bot must stop (#2369)."""
 
 
 def _requires_duty_authority(binding: BrokerBotBinding) -> bool:
@@ -62,18 +49,26 @@ async def register_alpaca_duty_run(
     binding: BrokerBotBinding,
     *,
     admission_snapshot: ClerkCustodySnapshot | None = None,
+    run_owner: RunOwner,
 ) -> None:
-    """Persist SQLite duty identity before any Alpaca task can exist."""
+    """Persist SQLite duty identity before any Alpaca task can exist.
+
+    ``run_owner`` answers ``done()`` once the run's supervise task has ended;
+    the Clerk retires the run then, so a runner whose STOP commit failed
+    cannot leave its ENTERs working (#2369).
+    """
     if not _requires_duty_authority(binding):
         return
     clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     if admission_snapshot is None or not isinstance(clerk, RevisionBoundRunRegistrar):
-        await clerk.register_strategy_run(binding)
+        await clerk.register_strategy_run(binding, run_owner=run_owner)
         return
     try:
-        await clerk.register_strategy_run(binding, admission_snapshot=admission_snapshot)
+        await clerk.register_strategy_run(
+            binding, admission_snapshot=admission_snapshot, run_owner=run_owner
+        )
     except ClerkAdmissionSnapshotStaleError as exc:
         raise ClerkAdmissionTokenStaleError(str(exc)) from exc
 
@@ -94,101 +89,6 @@ async def commit_stop_before_task_cancel(
         run_id=binding.run_id,
         reason=reason,
     )
-
-
-async def hold_run_lease(binding: BrokerBotBinding) -> NoReturn:
-    """Renew the Clerk's liveness lease for this run until cancelled (#2369).
-
-    The Clerk retires an ACTIVE run whose lease lapses, so a runner that dies
-    without committing STOP cannot leave its ENTERs working. A renewal the
-    Clerk cannot answer is logged and retried on the next beat -- the Clerk's
-    own TTL, not this loop, decides when the run is gone. A ``False`` answer
-    means the run is no longer ACTIVE (the Clerk retired it, or it was
-    stopped): raises :class:`RunLeaseLostError` so the bot stops too.
-    """
-    while True:
-        await asyncio.sleep(RUN_LEASE_RENEW_INTERVAL_S)
-        clerk = _clerk_for_binding(binding)
-        if clerk is None:
-            logger.warning(
-                "could not renew a run's liveness lease: its Clerk is not installed",
-                extra={
-                    "action": "run_lease_renewal_unavailable",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                    "run_id": binding.run_id,
-                },
-            )
-            continue
-        try:
-            held = await clerk.renew_run_lease(
-                strategy_instance_id=binding.strategy_instance_id,
-                run_id=binding.run_id,
-            )
-        except Exception:
-            logger.warning(
-                "could not renew a run's liveness lease; retrying on the next beat",
-                extra={
-                    "action": "run_lease_renewal_failed",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                    "run_id": binding.run_id,
-                },
-                exc_info=True,
-            )
-            continue
-        if not held:
-            raise RunLeaseLostError(
-                f"The Clerk no longer holds run {binding.run_id!r} of "
-                f"{binding.strategy_instance_id!r} ACTIVE."
-            )
-
-
-async def run_holding_lease(
-    binding: BrokerBotBinding,
-    run: Coroutine[Any, Any, None],
-) -> None:
-    """Await one bot run while its runner holds the run's liveness lease.
-
-    The run's own outcome (return or exception) wins whenever it ends first.
-    A lost lease cancels the run and raises :class:`RunLeaseLostError`. A
-    cancellation of the caller cancels both, exactly as it cancelled the run
-    before the lease existed.
-    """
-    sid = binding.strategy_instance_id
-    run_task = asyncio.ensure_future(run)
-    lease_task = asyncio.create_task(hold_run_lease(binding), name=f"run-lease:{sid}")
-    try:
-        done, _pending = await asyncio.wait(
-            {run_task, lease_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-    except BaseException:
-        await _cancel_and_drain(run_task, binding)
-        await _cancel_and_drain(lease_task, binding)
-        raise
-    if run_task in done:
-        await _cancel_and_drain(lease_task, binding)
-        return run_task.result()
-    await _cancel_and_drain(run_task, binding)
-    lease_task.result()
-    raise RuntimeError(f"the liveness lease holder of run {binding.run_id!r} returned")
-
-
-async def _cancel_and_drain(task: asyncio.Future[None], binding: BrokerBotBinding) -> None:
-    """Cancel ``task`` and wait for it; an error it raised while unwinding is logged."""
-    task.cancel()
-    await asyncio.wait({task})
-    if task.cancelled():
-        return
-    error = task.exception()
-    if error is not None:
-        logger.error(
-            "a bot-run task failed while it was being cancelled",
-            extra={
-                "action": "bot_run_task_unwind_failed",
-                "strategy_instance_id": binding.strategy_instance_id,
-                "run_id": binding.run_id,
-            },
-            exc_info=error,
-        )
 
 
 async def stop_interrupted_alpaca_duty_run(
@@ -238,10 +138,7 @@ __all__ = [
     "ActiveClerkUnavailableError",
     "ClerkAdmissionTokenStaleError",
     "ClerkRunAuthorityChangedError",
-    "RunLeaseLostError",
     "commit_stop_before_task_cancel",
-    "hold_run_lease",
     "register_alpaca_duty_run",
-    "run_holding_lease",
     "stop_interrupted_alpaca_duty_run",
 ]

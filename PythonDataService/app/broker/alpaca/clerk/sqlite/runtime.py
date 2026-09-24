@@ -120,7 +120,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.run_liveness import renew_run_lease
+from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner, RunOwnership
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
@@ -302,6 +302,9 @@ class SqliteAlpacaClerkFacade:
         # also publish. A custody-guard pass during a mutating Start/Resume
         # must not read as evidence the background sweep is alive.
         self._last_sweep_pass_completed_at_ms: int | None = None
+        # #2369: which in-process runner holds each ACTIVE run this facade
+        # admitted. Read and written only under ``self._intake``.
+        self._run_ownership = RunOwnership()
 
     @property
     def account_id(self) -> str:
@@ -330,6 +333,11 @@ class SqliteAlpacaClerkFacade:
     @property
     def intake(self) -> ReentrantAsyncLock:
         return self._intake
+
+    @property
+    def run_ownership(self) -> RunOwnership:
+        """The book the reconciliation sweep retires runner-less runs from (#2369)."""
+        return self._run_ownership
 
     @property
     def recovery_pricing(self) -> RecoveryPricing:
@@ -570,8 +578,17 @@ class SqliteAlpacaClerkFacade:
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot | None = None,
+        run_owner: RunOwner | None = None,
     ) -> None:
-        """Durably register immutable strategy + run before order capability."""
+        """Durably register immutable strategy + run before order capability.
+
+        ``run_owner`` is what holds the run in this process -- its ``done()``
+        turns true once the runner has ended (#2369). It is recorded in the
+        same intake critical section that admits the run, so the sweep can
+        never see an owned run as unowned. A run registered without one is
+        unowned: the sweep retires it after one pass's grace (see
+        :mod:`app.broker.alpaca.clerk.sqlite.run_ownership`).
+        """
         from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
         async with self._intake:
@@ -618,7 +635,7 @@ class SqliteAlpacaClerkFacade:
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
-                    self._stamp_run_lease(binding)
+                    self._hold_run(binding, run_owner)
                     return
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} already has "
@@ -632,28 +649,14 @@ class SqliteAlpacaClerkFacade:
             )
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
-            self._stamp_run_lease(binding)
+            self._hold_run(binding, run_owner)
 
-    def _stamp_run_lease(self, binding: BrokerBotBinding) -> None:
-        """Admission is the run's first liveness stamp, on the Clerk's clock."""
-        renew_run_lease(
-            self._repo,
-            strategy_instance_id=binding.strategy_instance_id,
-            lifecycle_run_id=binding.run_id,
-        )
-
-    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
-        """The runner's heartbeat: keep its ACTIVE run's liveness lease (#2369).
-
-        ``False`` when ``run_id`` is not the instance's ACTIVE run -- the
-        sweep retired it, or it was stopped -- which tells a slow runner its
-        run is gone. The Clerk stamps its own clock; the runner sends no time.
-        """
-        async with self._intake:
-            return renew_run_lease(
-                self._repo,
-                strategy_instance_id=strategy_instance_id,
-                lifecycle_run_id=run_id,
+    def _hold_run(self, binding: BrokerBotBinding, run_owner: RunOwner | None) -> None:
+        if run_owner is not None:
+            self._run_ownership.hold(
+                strategy_instance_id=binding.strategy_instance_id,
+                lifecycle_run_id=binding.run_id,
+                owner=run_owner,
             )
 
     def _require_current_admission_snapshot(
@@ -1215,6 +1218,7 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger="AUTOMATIC",
                 intake=self._intake,
+                run_ownership=self._run_ownership,
             )
         )
 
@@ -1279,6 +1283,7 @@ class SqliteAlpacaClerkFacade:
                 # the same sealed policy and live quote the operator's
                 # flatten does (#2229).
                 pricing=self.recovery_pricing,
+                run_ownership=self._run_ownership,
             )
         )
 

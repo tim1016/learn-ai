@@ -103,9 +103,6 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="finite")
     registry = _registry(tmp_path, feed)
-    # The ended run's background replay receipt builds contexts of its own;
-    # this test counts only the live run's, so it must not race that replay.
-    monkeypatch.setattr(registry, "_schedule_run_replay_receipt", lambda _binding: None)
 
     await registry.deploy(
         broker="alpaca",

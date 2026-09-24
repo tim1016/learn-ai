@@ -231,13 +231,13 @@ class _CustodyClerk:
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+    async def register_strategy_run(
+        self, binding: BrokerBotBinding, *, run_owner: object = None
+    ) -> None:
+        del run_owner
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
-
-    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
-        return self.active_runs.get(strategy_instance_id) == run_id
 
     async def recover(self) -> None:
         return
@@ -457,7 +457,10 @@ class _FakeClerk:
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+    async def register_strategy_run(
+        self, binding: BrokerBotBinding, *, run_owner: object = None
+    ) -> None:
+        del run_owner
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
@@ -468,9 +471,6 @@ class _FakeClerk:
                 strategy_instance_id=binding.strategy_instance_id,
                 lifecycle_run_id=binding.run_id,
             )
-
-    async def renew_run_lease(self, *, strategy_instance_id: str, run_id: str) -> bool:
-        return self.active_runs.get(strategy_instance_id) == run_id
 
     async def stop_strategy_run(
         self,
