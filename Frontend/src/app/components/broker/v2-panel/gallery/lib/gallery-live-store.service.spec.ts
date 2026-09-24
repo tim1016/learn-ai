@@ -229,6 +229,8 @@ describe('GalleryLiveStore', () => {
       expect(source.url).toContain('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/stream');
 
       source.emit('open');
+      expect(store.status()).toBe('connecting');
+      source.emit('snapshot', JSON.stringify(snapshot()));
       expect(store.status()).toBe('live');
 
       source.emit(
@@ -258,6 +260,7 @@ describe('GalleryLiveStore', () => {
 
       const source = StubEventSource.instances[0];
       source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot()));
       expect(store.status()).toBe('live');
 
       // Invalid JSON.
@@ -286,7 +289,7 @@ describe('GalleryLiveStore', () => {
       expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([1_000, 2_000, 3_000]);
     });
 
-    it('falls back to 5s polling while the stream is erroring and stops once it reopens', async () => {
+    it('falls back to 5s polling while the stream is erroring and stops once it delivers a snapshot', async () => {
       vi.useFakeTimers();
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
@@ -303,11 +306,118 @@ describe('GalleryLiveStore', () => {
         .expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot')
         .flush(snapshot({ surface_version: 2 }));
 
-      StubEventSource.instances.at(-1)?.emit('open');
+      await vi.advanceTimersByTimeAsync(500);
+      const reopened = StubEventSource.instances.at(-1);
+      reopened?.emit('open');
+      reopened?.emit('snapshot', JSON.stringify(snapshot({ surface_version: 3 })));
       expect(store.status()).toBe('live');
 
       await vi.advanceTimersByTimeAsync(10_000);
       http.expectNone('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot');
+    });
+
+    it('never reports live while a relay opens then aborts the stream before its snapshot lands (#2328)', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+      const url = '/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot';
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne(url).flush(snapshot());
+      await starting;
+
+      // The coordinator sends the 200, then kills the stream on the
+      // oversized snapshot event; the browser reconnects every 500 ms.
+      let fallbackPolls = 0;
+      for (let elapsedMs = 0; elapsedMs < 30_000; elapsedMs += 500) {
+        const source = StubEventSource.instances.at(-1);
+        source?.emit('open');
+        expect(store.status()).not.toBe('live');
+        source?.emit('error');
+        expect(store.status()).toBe('stale');
+        await vi.advanceTimersByTimeAsync(500);
+        for (const request of http.match(url)) {
+          fallbackPolls += 1;
+          request.flush(snapshot({ surface_version: 1 + fallbackPolls }));
+        }
+      }
+
+      expect(fallbackPolls).toBeGreaterThanOrEqual(5);
+    });
+
+    it('folds staged bars pages into the snapshot and update frames they precede (#2328)', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+
+      source.emit('bars', JSON.stringify({ surface_version: 5, symbol: 'SPY', bars: [bar(10_000), bar(11_000)] }));
+      source.emit('bars', JSON.stringify({ surface_version: 5, symbol: 'SPY', bars: [bar(12_000)] }));
+      source.emit('bars', JSON.stringify({ surface_version: 5, symbol: 'QQQ', bars: [bar(10_000)] }));
+      expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([1_000, 2_000]);
+      source.emit(
+        'snapshot',
+        JSON.stringify(
+          snapshot({
+            surface_version: 5,
+            symbols: [
+              { symbol: 'SPY', bars: [] },
+              { symbol: 'QQQ', bars: [] },
+            ],
+          }),
+        ),
+      );
+      expect(store.status()).toBe('live');
+      expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([10_000, 11_000, 12_000]);
+      expect(store.barsBySymbol().get('QQQ')?.map((b) => b.start_ms)).toEqual([10_000]);
+
+      // A page staged for another version never leaks into this update.
+      source.emit('bars', JSON.stringify({ surface_version: 99, symbol: 'SPY', bars: [bar(50_000)] }));
+      source.emit('bars', JSON.stringify({ surface_version: 6, symbol: 'IWM', bars: [bar(20_000)] }));
+      source.emit(
+        'update',
+        JSON.stringify({
+          surface_version: 6,
+          as_of_ms: 1,
+          symbols: [{ symbol: 'IWM', bars: [] }],
+          markers_delta: {},
+          bots_delta: [],
+          removed_sids: [],
+        }),
+      );
+      expect(store.barsBySymbol().get('IWM')?.map((b) => b.start_ms)).toEqual([20_000]);
+      expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([10_000, 11_000, 12_000]);
+    });
+
+    it('stops reconnecting and polls instead when the lane refuses the stream (#2328)', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+      const url = '/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot';
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne(url).flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2 })));
+      expect(store.status()).toBe('live');
+
+      source.emit(
+        'refused',
+        JSON.stringify({ reason: 'frame_too_large', event: 'update', bytes: 1_200_000, max_bytes: 1_000_000 }),
+      );
+      expect(store.status()).toBe('stale');
+      // The server ends the stream after refusing; that must not reconnect.
+      source.emit('error');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(StubEventSource.instances).toHaveLength(1);
+      http.expectOne(url).flush(snapshot({ surface_version: 3 }));
+      expect(store.status()).toBe('stale');
     });
 
     it('clears prior state when starting against a different account, but not on a same-identity restart', async () => {

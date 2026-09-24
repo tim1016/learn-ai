@@ -82,6 +82,24 @@ class GallerySymbolBars(BaseModel):
     bars: list[ChartBar] = Field(default_factory=list)
 
 
+class GalleryBarsPage(BaseModel):
+    """One page of a symbol's bars, sent ahead of the stream frame it belongs to.
+
+    SSE-only (#2328). The fleet coordinator aborts a relayed stream on any
+    event over its per-event cap, so a ``snapshot``/``update`` whose inline
+    bars would exceed it ships them as ``bars`` pages first. The frame that
+    follows, with the same ``surface_version``, carries each of those
+    symbols with an empty ``bars`` list. A client concatenates the staged
+    pages (in arrival order) into that frame before applying it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    surface_version: int
+    symbol: str
+    bars: list[ChartBar] = Field(default_factory=list)
+
+
 class GalleryLiveSnapshot(BaseModel):
     """Versioned complete state document for the gallery's REST bootstrap and SSE."""
 

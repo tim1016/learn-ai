@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.schemas.broker_v2_gallery import (
+    GalleryBarsPage,
     GalleryBotDelta,
     GalleryBotView,
     GalleryLiveSnapshot,
@@ -141,8 +142,9 @@ def _expected_ts_type(annotation: object) -> str:
     raise AssertionError(f"no TS type mapping for {annotation!r} — extend this test")
 
 
-def test_live_update_fields_match_the_pinned_frontend_type() -> None:
-    """``GalleryLiveUpdate`` is SSE-only — it has no OpenAPI REST schema, so
+@pytest.mark.parametrize("model", [GalleryLiveUpdate, GalleryBarsPage], ids=lambda m: m.__name__)
+def test_live_update_fields_match_the_pinned_frontend_type(model: type[BaseModel]) -> None:
+    """``GalleryLiveUpdate`` (and the #2328 ``GalleryBarsPage``) is SSE-only — it has no OpenAPI REST schema, so
     ``Frontend/src/app/components/broker/v2-panel/gallery/lib/gallery.types.ts``
     hand-declares it and pins to this model's field set instead of a
     generated alias (#1667). Keep both edits in the same commit.
@@ -162,15 +164,15 @@ def test_live_update_fields_match_the_pinned_frontend_type() -> None:
         pytest.skip(f"Frontend/ not present in this checkout ({_GALLERY_TYPES_TS_PATH})")
     ts_source = _GALLERY_TYPES_TS_PATH.read_text(encoding="utf-8")
     interface_match = re.search(
-        r"export interface GalleryLiveUpdate \{(?P<body>.*?)\n\}", ts_source, re.DOTALL
+        rf"export interface {model.__name__} \{{(?P<body>.*?)\n\}}", ts_source, re.DOTALL
     )
-    assert interface_match is not None, "GalleryLiveUpdate interface not found in gallery.types.ts"
+    assert interface_match is not None, f"{model.__name__} interface not found in gallery.types.ts"
     declared_fields = dict(
         re.findall(r"readonly (\w+):\s*([^;]+);", interface_match.group("body"))
     )
 
-    assert set(GalleryLiveUpdate.model_fields.keys()) == set(declared_fields.keys())
-    for name, field in GalleryLiveUpdate.model_fields.items():
+    assert set(model.model_fields.keys()) == set(declared_fields.keys())
+    for name, field in model.model_fields.items():
         expected = _expected_ts_type(field.annotation)
         actual = " ".join(declared_fields[name].split())
         assert actual == expected, f"{name}: frontend declares `{actual}`, backend implies `{expected}`"
