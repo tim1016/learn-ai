@@ -44,6 +44,7 @@ from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
 from app.services.decision_clock import decision_timeframe_ms_for_binding
 from app.services.decision_session import RunDecisionSession
+from app.services.feed_continuity_policy import DECISION_LATE_REASON_CODE
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
     RetainedSourceBar,
@@ -351,6 +352,10 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
     {
         # bot_trade_strategy.py: the pause gate's blocked-receipt reason.
         "PAUSED_OBSERVE_ONLY",
+        # bot_trade_strategy._screen_late_decision: an ENTER decided after its
+        # delivery allowance (#2303/#2345). Wall-clock lateness is live-only;
+        # a replay cannot see it.
+        DECISION_LATE_REASON_CODE,
         # app/services/market_liveness.py — every liveness fact reason that can
         # block an ENTER at the pre-Clerk gate. MARKET_TRADABLE is deliberately
         # absent: it never blocks.

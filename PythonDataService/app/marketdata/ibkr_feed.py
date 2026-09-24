@@ -287,9 +287,7 @@ class IbkrMarketDataFeed:
                             yield self._deliver(resolved, liveness)
                 return
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as exc:
-                held = await loop.open_interruption(exc)
-                if held is not None:
-                    yield self._deliver(held, liveness)
+                await loop.open_interruption(exc)
                 liveness.first_bar_seen = False
                 await loop.await_recovery()
             except NotConnectedError as exc:

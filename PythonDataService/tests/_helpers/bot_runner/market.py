@@ -18,6 +18,8 @@ import pytest
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_runner as bot_runner
 import app.services.bot_trade_strategy as bot_trade_strategy
+import app.services.feed_continuity_policy as feed_continuity_policy
+from app.engine.data.trade_bar import TradeBar
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     SymbolTradingStatusEvidence,
@@ -82,3 +84,31 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
+
+
+def patch_wall_clock_to_the_fed_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the staleness gate's wall clock to the close of the bar just fed (#2303/#2345).
+
+    Runner suites replay fixed, historical bar timestamps as if they were live;
+    against the real wall clock every decision would be days late. This clock
+    reads "now" as the ``end_ms`` of the last bar the adapter drained -- the bar
+    that fired the bucket -- so the real gate (``feed_continuity_policy.late_decision``)
+    still runs on every decision and sees exactly what a promptly delivered live
+    bar would show it. Before any bar is fed it falls through to the real clock.
+    A test that needs a late decision pins ``feed_continuity_policy.now_ms_utc``
+    itself after this fixture ran.
+    """
+    fed_bar_end_ms: list[int] = []
+    real_drain_bar = bot_trade_strategy._drain_bar
+    real_now_ms_utc = feed_continuity_policy.now_ms_utc
+
+    def _drain_and_tick(strategy: object, context: object, bar: TradeBar) -> None:
+        fed_bar_end_ms[:] = [bar.end_ms]
+        real_drain_bar(strategy, context, bar)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(bot_trade_strategy, "_drain_bar", _drain_and_tick)
+    monkeypatch.setattr(
+        feed_continuity_policy,
+        "now_ms_utc",
+        lambda: fed_bar_end_ms[0] if fed_bar_end_ms else real_now_ms_utc(),
+    )

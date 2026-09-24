@@ -257,34 +257,12 @@ def _minute_bars_for_closes(symbol: str, resolution_minutes: int, closes: list[s
     return bars
 
 
-def _consolidator_fires_the_program(context: StrategyContext, runtime: _LiveSignalRuntime, symbol: str) -> bool:
-    """Whether a registered consolidator -- not the raw minute bar -- is what
-    reaches ``SignalProgram.on_consolidated_bar`` for this program.
-
-    Read off the actual wiring ``initialize()`` performed rather than off
-    ``timeframe_ms``: ``StrategyContext.register_consolidator`` retains the
-    raw handler it was given alongside the consolidator, and every
-    consolidator-driven program registers ``Strategy._signal_program_handler()``
-    there, which resolves to the bound ``program.on_consolidated_bar``.
-    ``deployment_validation`` registers a no-op chart-retention handler on
-    its one-minute consolidator and routes decisions through
-    ``on_minute_bar`` instead, so for it this is ``False``. A one-minute
-    ``timeframe_ms`` alone could not distinguish the two.
-    """
-    program = runtime.program
-    assert program is not None
-    # Private on purpose: the raw handler is retained nowhere else.
-    registered = context._consolidators.get(symbol.upper(), [])
-    return any(handler == program.on_consolidated_bar for _period, _consolidator, handler in registered)
-
-
 def _assert_decision_clock_is_contiguous(
     traces: list[EvaluationTrace],
     *,
     key: str,
     width_ms: int,
     minute_bars: list[MarketDataBar],
-    consolidator_driven: bool,
 ) -> None:
     """Every decision bucket the fed minute span closed was decided exactly once.
 
@@ -292,26 +270,22 @@ def _assert_decision_clock_is_contiguous(
     counts silently encoded a single 15-minute cadence: the same minute feed
     yields a different number of buckets for ``deployment_validation``,
     whose decision clock IS the raw minute bar. Deriving the invariant from
-    the program's own ``session.timeframe_ms``, the fed span, and the
-    program's actual bar wiring covers both cadences -- and is strictly
-    stronger than a count, which cannot see a gap, a duplicate, or a shifted
-    head at all.
+    the program's own ``session.timeframe_ms`` and the fed span covers both
+    cadences -- and is strictly stronger than a count, which cannot see a
+    gap, a duplicate, or a shifted head at all.
 
-    The trailing slack is pinned per program, not merely bounded: a
-    consolidator-driven program never decides the last complete bucket
-    (``TradeBarConsolidator.update``'s documented one-input lag), and a
-    program deciding straight off the minute bar decides all of them. Which
-    case applies is read from the wiring (``consolidator_driven``), so a
-    minute-driven program that silently dropped its final bucket cannot hide
-    behind "that's just consolidator lag" -- the one tail a merely-bounded
-    check could not tell apart. The derived bucket count is then asserted
-    too, as a second, independent signal over the same span.
+    There is no trailing slack for any program. The live adapter fires a
+    bucket on the bar that completes it (``bot_trade_strategy._drain_bar``),
+    so a replay decides the last complete bucket of its span too; the
+    consolidator's one-input lag used to leave that bucket working for the
+    first *live* bar to fire under the mode warmup captured for it (#2303).
+    The derived bucket count is then asserted too, as a second, independent
+    signal over the same span.
     """
     assert traces, f"'{key}' produced no traces at all -- nothing to prove deterministic"
     feed_start_ms = minute_bars[0].start_ms
     feed_end_ms = minute_bars[-1].end_ms
     closes = [trace.bar_close_ms for trace in traces]
-    expected_trailing_ms = width_ms if consolidator_driven else 0
 
     assert closes[0] == feed_start_ms + width_ms, (
         f"'{key}' did not decide the first complete decision bucket of the fed span: first "
@@ -323,12 +297,11 @@ def _assert_decision_clock_is_contiguous(
         f"timeframe -- a bucket was dropped, duplicated, or reordered at {gaps}"
     )
     trailing_ms = feed_end_ms - closes[-1]
-    assert trailing_ms == expected_trailing_ms, (
-        f"'{key}' stopped deciding {trailing_ms}ms before the end of the fed minute span; its "
-        f"wiring ({'consolidator-fired' if consolidator_driven else 'decides on the raw minute bar'}) "
-        f"explains exactly {expected_trailing_ms}ms, so the difference is a dropped bucket"
+    assert trailing_ms == 0, (
+        f"'{key}' stopped deciding {trailing_ms}ms before the end of the fed minute span; "
+        "a bucket the span completed was left for a later bar to fire"
     )
-    expected_count = (feed_end_ms - feed_start_ms - expected_trailing_ms) // width_ms
+    expected_count = (feed_end_ms - feed_start_ms) // width_ms
     assert len(traces) == expected_count, (
         f"'{key}' decided {len(traces)} buckets over a span that holds {expected_count} at {width_ms}ms"
     )
@@ -405,7 +378,6 @@ async def _reference_traces(key: str, symbol: str, resolution_minutes: int) -> l
         key=key,
         width_ms=resolution_minutes * _MINUTE_MS,
         minute_bars=minute_bars,
-        consolidator_driven=_consolidator_fires_the_program(context, runtime, symbol),
     )
     assert any(trace.staged_candidate is not None for trace in traces), (
         f"'{key}' never proposed a single intent within {len(traces)} synthetic buckets -- "
@@ -465,14 +437,12 @@ async def test_replay_warmup_bars_is_deterministic_across_two_fresh_instances(ke
         key=key,
         width_ms=width_ms,
         minute_bars=bars,
-        consolidator_driven=_consolidator_fires_the_program(context_a, runtime_a, symbol),
     )
     _assert_decision_clock_is_contiguous(
         traces_b,
         key=key,
         width_ms=width_ms,
         minute_bars=bars,
-        consolidator_driven=_consolidator_fires_the_program(context_b, runtime_b, symbol),
     )
     assert trace_root(traces_a) == trace_root(traces_b)
 
@@ -656,11 +626,10 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
         f"'{key}' silently dropped a staged candidate with no known disposition instead of "
         "naming it as the FR-016 crash window"
     )
-    # The first tuple element is the MINUTE bar whose arrival caused the
-    # consolidator to fire the staged bucket -- one minute AFTER the
-    # decision bucket's own close, per `TradeBarConsolidator`'s one-input
-    # lag (see the module docstring) -- so it is not itself asserted on
-    # here; the decision bucket's identity is `candidate_stage.trace`.
+    # The first tuple element is the MINUTE bar that completed the staged
+    # bucket (`bot_trade_strategy._drain_bar` fires a bucket on the bar that
+    # closes it), so it is not itself asserted on here; the decision bucket's
+    # identity is `candidate_stage.trace`.
     _triggering_minute_bar, candidate_stage = recovered
     assert not isinstance(candidate_stage, StageQuarantine)
     assert candidate_stage.trace.evaluation_id == target_trace.evaluation_id

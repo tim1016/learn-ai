@@ -200,10 +200,10 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
             flat_price=str(warmup_bars[-1].close),
             plunge_close="380.00",
         )
-        # One more bar so the consolidator's normal lazy fire closes the
-        # plunge bucket -- this test isolates warmup backfill (finding 3)
-        # from the session-close force-flush (finding 2), which is
-        # covered separately below.
+        # One more bar, inside the next bucket, so the stream carries on past
+        # the plunge bucket -- this test isolates warmup backfill (finding 3)
+        # from the session-close case (finding 2), which is covered
+        # separately below.
         live_bars.append(_trade_bar(_SESSION_OPEN_MS + 16 * 60_000, open_price="380.00", close_price="380.00"))
         feed = _WarmableFeed(live_bars, warmup_bars, mode="hold")
         registry = _registry(tmp_path, feed)
@@ -233,8 +233,9 @@ async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
     working bucket lazily, when a *later* bar arrives -- but an RTH-only
     stream never delivers one after the session closes. Before the fix,
     the final 15:45-16:00 bucket's decision would strand until the next
-    session's bars started arriving. With the session-close force-flush,
-    it decides immediately, from the same bar that closes the session.
+    session's bars started arriving. The runner fires every complete bucket
+    on the bar that closes it (#2303), so it decides immediately, from the
+    same bar that closes the session.
     """
     admit_canary_pairing(monkeypatch, "rsi_mean_reversion", "paper-account")
     clerk = _FakeClerk()

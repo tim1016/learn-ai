@@ -22,9 +22,11 @@ Two properties are deliberate and fail closed:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.marketdata.feed import (
+    DELIVERY_ALLOWANCE_MS,
     ContinuityEventRef,
     ContinuityPolicy,
     FeedContinuityEvent,
@@ -46,6 +48,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DECISION_LATE_REASON_CODE = "DECISION_LATE"
+"""Why a decision bar was refused for arriving after its delivery allowance --
+the continuity refusal's ``reason`` and the runner's ``blocked`` receipt code."""
+
 
 class FeedContinuityRefused(MarketDataFeedError):
     """A recovered bar this run cannot accept as a decision input.
@@ -61,6 +67,33 @@ class FeedContinuityRefused(MarketDataFeedError):
         super().__init__(message, reason=reason)
 
 
+@dataclass(frozen=True)
+class LateDecision:
+    """A decision bar observed further past its close than the delivery allowance."""
+
+    observed_at_ms: int
+    lateness_ms: int
+    allowance_ms: int
+
+
+def late_decision(policy: ContinuityPolicy | None, decision_bar_close_ms: int) -> LateDecision | None:
+    """Whether deciding on a bar that closed at ``decision_bar_close_ms`` *now* is too late.
+
+    The one lateness rule on the decision path, read against the one clock
+    (``now_ms_utc``) and the one allowance (the run's policy, or
+    ``DELIVERY_ALLOWANCE_MS`` when the run has none). Provenance plays no
+    part: a minute held by the assembler until the next print, or a bucket a
+    reconnect delivered late, is as stale as the wall clock says it is,
+    whichever connection produced it (#2303, #2345).
+    """
+    allowance_ms = DELIVERY_ALLOWANCE_MS if policy is None else policy.delivery_allowance_ms
+    observed_at_ms = now_ms_utc()
+    lateness_ms = observed_at_ms - decision_bar_close_ms
+    if lateness_ms <= allowance_ms:
+        return None
+    return LateDecision(observed_at_ms=observed_at_ms, lateness_ms=lateness_ms, allowance_ms=allowance_ms)
+
+
 async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar) -> None:
     """Refuse a recovered decision bar that arrived after its allowance.
 
@@ -70,14 +103,21 @@ async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar)
     this close is already past by more than the policy's allowance, deciding on
     it now would be deciding against a market that has since moved. The refusal
     is recorded before it is raised, so the run's own evidence explains the
-    outcome. Bars produced wholly inside one live connection are never late by
-    construction, and a bar the consumer does not decide on cannot be a late
-    decision.
+    outcome, and it is fatal because the reconnect that produced the bar broke
+    the continuity contract this run was promised.
+
+    A ``realtime`` bar is not judged here, but it is not exempt from
+    lateness: one connection can still hand over a late minute (the assembler
+    holds a minute until the next print arrives, #2345). It carries no
+    continuity fault to record, so its lateness is judged where every decision
+    is, at the runner's custody boundary, by :func:`late_decision` -- the same
+    rule this function applies. A bar the consumer does not decide on cannot
+    be a late decision.
     """
     if policy is None or bar.provenance == "realtime" or not policy.is_trigger_ms(bar.end_ms):
         return
-    observed_at_ms = now_ms_utc()
-    if observed_at_ms <= bar.end_ms + policy.delivery_allowance_ms:
+    late = late_decision(policy, bar.end_ms)
+    if late is None:
         return
     # Through the same typed wrapper the feed writes with: a sink that cannot
     # take this refusal is CONTINUITY_EVIDENCE_UNWRITABLE, not a bare OSError
@@ -88,8 +128,8 @@ async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar)
             kind="refused",
             feed_id=bar.feed_id,
             symbol=bar.symbol,
-            observed_at_ms=observed_at_ms,
-            reason="DECISION_LATE",
+            observed_at_ms=late.observed_at_ms,
+            reason=DECISION_LATE_REASON_CODE,
             window_start_ms=bar.start_ms,
             window_end_ms=bar.end_ms,
             bar_identity=f"{bar.feed_id}:{bar.symbol}:{bar.start_ms}:{bar.end_ms}",
@@ -97,7 +137,7 @@ async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar)
     )
     raise FeedContinuityRefused(
         f"trigger bar {bar.start_ms}..{bar.end_ms} delivered after the allowance",
-        reason="DECISION_LATE",
+        reason=DECISION_LATE_REASON_CODE,
     )
 
 

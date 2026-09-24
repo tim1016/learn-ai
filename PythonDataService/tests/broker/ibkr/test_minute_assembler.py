@@ -43,9 +43,9 @@ def test_contributions_from_two_generations_merge_into_one_complete_minute() -> 
     assembler = MinuteAssembler()
     for second in range(0, 45, 5):  # 9 bars under generation 1
         assert assembler.feed(_raw(second), symbol="SPY", generation=1, venue="ARCA", use_rth=True) is None
-    for second in range(45, 60, 5):  # 3 bars under generation 2
+    for second in (45, 50):  # 2 more under generation 2 -- 11/12, still open
         assert assembler.feed(_raw(second), symbol="SPY", generation=2, venue="ARCA", use_rth=True) is None
-    emitted = assembler.feed(_next_minute_raw(), symbol="SPY", generation=2, venue="ARCA", use_rth=True)
+    emitted = assembler.feed(_raw(55), symbol="SPY", generation=2, venue="ARCA", use_rth=True)
     assert emitted is not None
     assert emitted.contribution_count == RTH_CONTRIBUTIONS_PER_MINUTE == 12
     assert emitted.spans_interruption is True
@@ -73,37 +73,45 @@ def test_redelivered_bar_after_reconnect_is_absorbed_idempotently() -> None:
 
 def test_single_generation_minute_does_not_span_an_interruption() -> None:
     assembler = MinuteAssembler()
-    for second in range(0, 60, 5):
+    for second in range(0, 55, 5):
         assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True)
-    emitted = assembler.feed(_next_minute_raw(), symbol="SPY", generation=1, venue=None, use_rth=True)
+    emitted = assembler.feed(_raw(55), symbol="SPY", generation=1, venue=None, use_rth=True)
     assert emitted is not None
     assert emitted.spans_interruption is False
     assert emitted.contribution_count == 12
 
 
-def test_flush_if_complete_emits_only_a_full_open_minute() -> None:
+def test_a_complete_minute_is_emitted_by_its_twelfth_contribution() -> None:
+    """#2345: a minute complete by count is closed, so it is not held for the next print.
+
+    Before the fix the twelfth contribution returned ``None`` and the minute sat
+    in the accumulator until a bar from a later minute arrived.
+    """
     assembler = MinuteAssembler()
     for second in range(0, 55, 5):
-        assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True)
-    assert assembler.flush_if_complete() is None  # 11/12
-    assembler.feed(_raw(55), symbol="SPY", generation=1, venue=None, use_rth=True)
-    flushed = assembler.flush_if_complete()
-    assert flushed is not None and flushed.contribution_count == 12
+        assert assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True) is None
+    assert assembler.open_minute_start_ms is not None  # 11/12 is not complete: still open
+
+    emitted = assembler.feed(_raw(55), symbol="SPY", generation=1, venue=None, use_rth=True)
+
+    assert emitted is not None and emitted.contribution_count == RTH_CONTRIBUTIONS_PER_MINUTE
+    assert emitted.start_ms == int(_MINUTE.timestamp() * 1000)
     assert assembler.open_minute_start_ms is None
-    assert assembler.flush_if_complete() is None
 
 
 def _fill_and_flush(assembler: MinuteAssembler) -> None:
-    """Feed a full RTH minute and flush it, leaving the assembler with no open minute."""
-    for second in range(0, 60, 5):
+    """Feed a full RTH minute, which emits it, leaving the assembler with no open minute."""
+    emitted = [
         assembler.feed(_raw(second), symbol="SPY", generation=1, venue=None, use_rth=True)
-    flushed = assembler.flush_if_complete()
-    assert flushed is not None and flushed.contribution_count == RTH_CONTRIBUTIONS_PER_MINUTE
+        for second in range(0, 60, 5)
+    ]
+    assert emitted[:-1] == [None] * (RTH_CONTRIBUTIONS_PER_MINUTE - 1)
+    assert emitted[-1] is not None and emitted[-1].contribution_count == RTH_CONTRIBUTIONS_PER_MINUTE
 
 
 def test_exact_redelivery_after_a_flush_is_skipped_idempotently() -> None:
-    # After ``flush_if_complete`` the resubscribed socket may redeliver the
-    # most recent 5-second bar of the minute that was just emitted. An exact
+    # After a complete minute is emitted the (possibly resubscribed) socket may
+    # redeliver the most recent 5-second bar of the minute that was just emitted. An exact
     # redelivery of that one bar carries no new data, so it is absorbed rather
     # than fatal -- the live relaxation temporal-rigor grants, and no more.
     assembler = MinuteAssembler()
@@ -128,18 +136,32 @@ def test_an_older_print_of_a_flushed_minute_is_fatal_even_when_identical() -> No
     assert assembler.open_minute_start_ms is None
 
 
-def test_contribution_of_a_flushed_minute_is_refused_rather_than_rebuilt() -> None:
-    # A corrected value for an already-emitted minute cannot be applied, and a
-    # new timestamp inside it must not silently rebuild an accumulator for a
-    # minute the consumer has already decided on.
+def test_a_correction_to_the_last_print_of_an_emitted_minute_is_ignored_and_counted() -> None:
+    # IBKR may redeliver the latest 5-second bar with different OHLCV. Once its
+    # minute is emitted the correction cannot be applied -- downstream decided
+    # on the minute -- but it must not kill the run either (commit 241864a7:
+    # a real redelivery once crashed a live run). Ignored, never rebuilt,
+    # counted and logged.
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
+
+    assert assembler.feed(_raw(55, close="101"), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+
+    assert assembler.counters.ignored_post_emit_correction == 1
+    assert assembler.counters.skipped_duplicate == 0
+    assert assembler.open_minute_start_ms is None
+    # The minute is still closed: the next minute opens a fresh accumulator.
+    assert assembler.feed(_next_minute_raw(), symbol="SPY", generation=2, venue=None, use_rth=True) is None
+    assert assembler.open_minute_start_ms == int(_MINUTE.replace(minute=1).timestamp() * 1000)
+
+
+def test_a_new_timestamp_inside_an_emitted_minute_is_refused_rather_than_rebuilt() -> None:
+    # A timestamp the emitted minute never held must not silently rebuild an
+    # accumulator for a minute the consumer has already decided on.
     assembler = MinuteAssembler()
     _fill_and_flush(assembler)
 
     with pytest.raises(IBKRBarStreamError, match="already emitted"):
-        assembler.feed(_raw(55, close="101"), symbol="SPY", generation=2, venue=None, use_rth=True)
-    assert assembler.open_minute_start_ms is None
-
-    with pytest.raises(IBKRBarStreamError, match="already emitted"):  # a timestamp it never held
         assembler.feed(_raw(57), symbol="SPY", generation=2, venue=None, use_rth=True)
     assert assembler.open_minute_start_ms is None
 

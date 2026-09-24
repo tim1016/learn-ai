@@ -1,4 +1,4 @@
-"""One run's decision session: the minutes it decides on, and when it flushes.
+"""One run's decision session: the minutes it decides on, and when it closes.
 
 A run either decides on the calendar's regular session or on the executing
 broker's declared extended window (ADR 0059 D5.2). That is one fact, resolved
@@ -100,7 +100,7 @@ class RunDecisionSession:
         return bounds is not None and bounds.open_ms <= now_ms < bounds.close_ms
 
     def close_ms(self, session_date: date) -> int:
-        """The instant at which the run force-flushes ``session_date``'s last bucket."""
+        """The instant ``session_date``'s decision session closes, where its last bucket is decided."""
         if self.kind == "rth":
             return session_close_ms_utc(session_date)
         bounds = declared_session_bounds(session_date, self.window)

@@ -243,6 +243,16 @@ class SubstitutionRefusal(BaseModel):
     ]
 
 
+DELIVERY_ALLOWANCE_MS: int = 20_000
+"""How long after a decision bar's close a decision on it may still be taken.
+
+The one lateness threshold in the decision path: the continuity floor's
+reconnect deadline (``ContinuityPolicy.deadline_ms``), the recovered-bar
+refusal (``feed_continuity_policy.admit_on_delivery``) and the runner's
+stale-decision refusal (``feed_continuity_policy.decision_late_by_ms``) all
+read it, through a run's policy when it has one."""
+
+
 @dataclass(frozen=True)
 class ContinuityPolicy:
     """What one consumer needs the feed to do when delivery is interrupted.
@@ -268,7 +278,7 @@ class ContinuityPolicy:
     next_trigger_ms: Callable[[int], int]
     substitution_grant: Callable[[int, int], SubstitutionGrant | SubstitutionRefusal]
     record_event: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
-    delivery_allowance_ms: int = 20_000
+    delivery_allowance_ms: int = DELIVERY_ALLOWANCE_MS
 
     def deadline_ms(self, last_delivered_end_ms: int) -> int:
         """Wall-clock by which the next decision bar must have been delivered."""

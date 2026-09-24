@@ -77,8 +77,8 @@ def test_floor_to_period_ms_et_rejects_a_non_positive_period() -> None:
 
 def test_rth_trigger_instants_regular_session() -> None:
     triggers = rth_trigger_instants(_REGULAR, timeframe_ms=_TF)
-    assert triggers[0] == _et(_REGULAR, 9, 46)  # 09:30–09:45 bucket fires on the 09:45 minute's close
-    assert triggers[-1] == session_close_ms_utc(_REGULAR)  # last bucket: forced flush at the close
+    assert triggers[0] == _et(_REGULAR, 9, 45)  # 09:30–09:45 bucket fires on the minute closing it
+    assert triggers[-1] == session_close_ms_utc(_REGULAR)  # last bucket: at the close
     assert len(triggers) == 26
 
 
@@ -88,11 +88,11 @@ def test_rth_trigger_instants_early_close() -> None:
     assert len(triggers) == 14
 
 
-def test_rth_trigger_instants_repeats_the_close_at_a_one_minute_timeframe() -> None:
-    """The documented duplicate: the last two one-minute buckets both fire at the close."""
+def test_rth_trigger_instants_are_every_minute_close_at_a_one_minute_timeframe() -> None:
+    """Every bucket fires on the bar closing it, so the close appears once (#2303)."""
     triggers = rth_trigger_instants(_REGULAR, timeframe_ms=60_000)
-    close_ms = session_close_ms_utc(_REGULAR)
-    assert triggers[-2:] == [close_ms, close_ms]
+    open_ms, close_ms = session_open_ms_utc(_REGULAR), session_close_ms_utc(_REGULAR)
+    assert triggers == list(range(open_ms + 60_000, close_ms + 1, 60_000))
 
 
 def test_rth_trigger_instants_rejects_a_timeframe_off_the_source_bar_grid() -> None:
@@ -104,20 +104,20 @@ def test_rth_trigger_instants_rejects_a_timeframe_off_the_source_bar_grid() -> N
 
 
 def test_next_trigger_after_last_delivered_minute() -> None:
-    L = _et(_REGULAR, 15, 0)  # last delivered minute 14:59–15:00 -> the 14:45–15:00 decision is still pending
-    assert next_trigger_ms(L, timeframe_ms=_TF) == _et(_REGULAR, 15, 1)
-    L = _et(_REGULAR, 15, 1)  # the 15:00 minute delivered -> next pending is the 15:00–15:15 decision
-    assert next_trigger_ms(L, timeframe_ms=_TF) == _et(_REGULAR, 15, 16)
+    L = _et(_REGULAR, 14, 59)  # last delivered minute 14:58–14:59 -> the 14:45–15:00 decision is pending
+    assert next_trigger_ms(L, timeframe_ms=_TF) == _et(_REGULAR, 15, 0)
+    L = _et(_REGULAR, 15, 0)  # the 14:59 minute delivered, deciding 14:45–15:00 -> next is 15:00–15:15
+    assert next_trigger_ms(L, timeframe_ms=_TF) == _et(_REGULAR, 15, 15)
     L = _et(_REGULAR, 15, 59)
     assert next_trigger_ms(L, timeframe_ms=_TF) == session_close_ms_utc(_REGULAR)
 
 
 def test_next_trigger_rolls_to_the_next_session() -> None:
     after_close = session_close_ms_utc(_FRIDAY)
-    expected = session_open_ms_utc(date(2026, 9, 8)) + _TF + 60_000
+    expected = session_open_ms_utc(date(2026, 9, 8)) + _TF
     assert next_trigger_ms(after_close, timeframe_ms=_TF) == expected
     pre_market = _et(_REGULAR, 5, 10)
-    assert next_trigger_ms(pre_market, timeframe_ms=_TF) == _et(_REGULAR, 9, 46)
+    assert next_trigger_ms(pre_market, timeframe_ms=_TF) == _et(_REGULAR, 9, 45)
 
 
 def test_one_minute_timeframe() -> None:
@@ -129,21 +129,21 @@ def test_next_trigger_function_binds_the_timeframe() -> None:
     """The callable Tasks 7/8 schedule against must carry the timeframe it was built with.
 
     15:01 is chosen because it is an instant where the two timeframes must
-    disagree (15-minute buckets fire next at 15:16, one-minute at 15:02); an
+    disagree (15-minute buckets fire next at 15:15, one-minute at 15:02); an
     input where they agree would pass even against an unbound timeframe.
     """
     rth_15 = next_trigger_function(_TF)
     rth_1 = next_trigger_function(60_000)
-    assert rth_15(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 16)
+    assert rth_15(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 15)
     assert rth_1(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 2)
 
 
 def test_extended_trigger_instants_regular_day() -> None:
     triggers = extended_trigger_instants(_REGULAR, timeframe_ms=_TF, window=_WINDOW)
 
-    assert triggers[0] == _et(_REGULAR, 4, 16)  # bucket 04:00–04:15 closes on the 04:16 source minute
-    assert _et(_REGULAR, 16, 1) in triggers  # the 15:45–16:00 bucket is not force-flushed at the RTH close
-    assert triggers[-1] == _et(_REGULAR, 20, 0)  # the last bucket is force-flushed at the declared close
+    assert triggers[0] == _et(_REGULAR, 4, 15)  # bucket 04:00–04:15 fires on the minute closing it
+    assert _et(_REGULAR, 16, 0) in triggers  # the RTH close is an ordinary bucket boundary here
+    assert triggers[-1] == _et(_REGULAR, 20, 0)  # the last bucket fires at the declared close
     assert len(triggers) == 16 * 4
 
 
@@ -155,16 +155,16 @@ def test_extended_trigger_instants_early_close_is_unchanged() -> None:
     shift = _et(_EARLY, 4, 0) - _et(_REGULAR, 4, 0)
 
     assert early == [t + shift for t in regular]
-    assert _et(_EARLY, 13, 1) in early  # the 12:45–13:00 bucket fires on the next source minute, not at the early close
+    assert _et(_EARLY, 13, 0) in early  # an ordinary bucket boundary, not an early close, on this clock
 
 
 def test_extended_next_trigger_rolls_across_the_weekend() -> None:
     after_close = _et(_FRIDAY, 20, 0)
-    assert next_trigger_ms(after_close, timeframe_ms=_TF, window=_WINDOW) == _et(date(2026, 9, 8), 4, 16)
+    assert next_trigger_ms(after_close, timeframe_ms=_TF, window=_WINDOW) == _et(date(2026, 9, 8), 4, 15)
 
 
 def test_extended_next_trigger_before_the_declared_open_is_the_first_bucket() -> None:
-    assert next_trigger_ms(_et(_REGULAR, 3, 0), timeframe_ms=_TF, window=_WINDOW) == _et(_REGULAR, 4, 16)
+    assert next_trigger_ms(_et(_REGULAR, 3, 0), timeframe_ms=_TF, window=_WINDOW) == _et(_REGULAR, 4, 15)
 
 
 def test_next_trigger_function_binds_the_session() -> None:
@@ -172,13 +172,12 @@ def test_next_trigger_function_binds_the_session() -> None:
     extended = next_trigger_function(_TF, window=_WINDOW)
     at_1700 = _et(_REGULAR, 17, 0)
 
-    assert rth(at_1700) == _et(date(2026, 9, 3), 9, 46)
-    # 17:00 ET is itself a clean 15-minute boundary under the window's 04:00
-    # anchor (780 minutes since open, evenly divisible by 15), so the pending
-    # decision is for the bucket that just closed at 17:00 -- it fires on the
-    # first source minute of the next bucket, 17:01 (same pattern as
-    # ``test_next_trigger_after_last_delivered_minute``'s 15:00 -> 15:01).
-    assert extended(at_1700) == _et(_REGULAR, 17, 1)
+    assert rth(at_1700) == _et(date(2026, 9, 3), 9, 45)
+    # 17:00 ET is a clean 15-minute boundary under the window's 04:00 anchor
+    # (780 minutes since open), and the bucket closing there was decided on
+    # the minute that closed it -- so the next decision is the 17:00–17:15
+    # bucket's, at 17:15.
+    assert extended(at_1700) == _et(_REGULAR, 17, 15)
 
 
 def _binding() -> BrokerBotBinding:

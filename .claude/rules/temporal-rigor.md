@@ -72,6 +72,7 @@ The fail-fast rule above governs **finite** ingestion — a historical fetch is 
 
 - Exact redelivery (same timestamp, same payload) → skip; do not double-count.
 - Same timestamp, *different* payload, before the aggregate it feeds is emitted → treat as a correction; recompute the open aggregate from its stored parts (never fold-and-sum).
+- Same timestamp, *different* payload, after that aggregate was emitted → ignore it: the emitted aggregate is never corrected or rebuilt, and the run does not die. Log it (`action="post_emit_correction_ignored"`) and count it (`LiveBarCounters.ignored_post_emit_correction`).
 - Any timestamp belonging to an *already-emitted* aggregate (i.e. `< last_accepted`) → still **fatal**; downstream has already consumed a now-stale value. Non-monotonic-within-the-open-aggregate stays fatal too until a real feed demonstrates otherwise.
 
 Reference implementation: `app/broker/ibkr/bars.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder remains banned in both modes — absorbing a redelivery is not the same as repairing a feed.

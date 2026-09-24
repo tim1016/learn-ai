@@ -1,15 +1,18 @@
 """Decision clock for continuity: when the next decision is due (spec #1921 §4.4).
 
-A decision for bucket K fires when the consolidator receives the first source
-minute of K+1, which closes 60 s after K's end -- except a session's last
-bucket, which the runner force-flushes on the bar closing at the session
-close. Both sessions are supported: the canonical calendar proves RTH; the
+A decision for bucket K fires on the source minute that closes it: the live
+runner fires every complete bucket at once rather than waiting for the first
+minute of K+1 (``bot_trade_strategy._drain_bar``, #2303). When the timeframe
+divides the session, its last bucket therefore closes and is decided at the
+session close. When it does not, the close cuts the last bucket short: that
+bucket never completes, so nothing decides it at the close, and its trigger is
+the close only as the instant after which no decision for it can arrive.
+Both sessions are supported: the canonical calendar proves RTH; the
 extended session is the executing broker's declared window (ADR 0059 D5.2),
 resolved through ``session_authority`` -- broker capability data, not a
 session literal of this module's own. An absent window *is* the regular
 session here, so this module has no "extended without a window" state to
-guard; ``app/services/decision_session.py`` owns that invariant for a run,
-and the force-flush instant lives there too (``RunDecisionSession.close_ms``).
+guard; ``app/services/decision_session.py`` owns that invariant for a run.
 """
 
 from __future__ import annotations
@@ -109,7 +112,7 @@ def _trigger_instants(*, open_ms: int, close_ms: int, timeframe_ms: int) -> list
     bucket_start = floor_to_period_ms_et(open_ms, timeframe_ms)
     while bucket_start < close_ms:
         bucket_end = bucket_start + timeframe_ms
-        triggers.append(close_ms if bucket_end >= close_ms else bucket_end + SOURCE_BAR_MS)
+        triggers.append(min(bucket_end, close_ms))
         bucket_start = bucket_end
     return triggers
 
@@ -117,31 +120,26 @@ def _trigger_instants(*, open_ms: int, close_ms: int, timeframe_ms: int) -> list
 def rth_trigger_instants(session_date: date, *, timeframe_ms: int) -> list[int]:
     """Every instant on ``session_date`` at which a regular-session decision is due.
 
-    One entry per decision bucket, in ascending order: the close of the first
-    source minute of the following bucket, except the session's last bucket,
-    which is force-flushed at the session close.
-
-    At a one-minute timeframe the session-close instant appears **twice**: the
-    second-to-last bucket's follow-on minute closes exactly at the session
-    close, and the last bucket is force-flushed there too. Callers that treat
-    this as a schedule must tolerate the repeat (``next_trigger_ms`` does --
-    it returns the first entry strictly greater than its argument).
+    One entry per decision bucket, in ascending order: the bucket's end, or
+    the session close for a bucket the close cuts short (such a bucket never
+    completes, so no decision is actually taken at that instant; see the
+    module docstring).
 
     Formula:
         for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(open)`` while
-        ``b < close``: ``close`` if ``b + timeframe_ms >= close`` else
-        ``b + timeframe_ms + 60_000``.
+        ``b < close``: ``min(b + timeframe_ms, close)``.
     Reference:
         Spec ``docs/superpowers/specs/2026-09-02-feed-reconnect-continuity-design.md``
-        §4.4 -- ``app/engine/consolidators/trade_bar_consolidator.py`` emits
-        bucket K on the first source minute of K+1, which closes 60 s after
-        K's end; the live runner force-flushes the session's last bucket at
-        the calendar close. Session bounds come from the canonical calendar.
+        §4.4, amended by #2303: ``app/engine/consolidators/trade_bar_consolidator.py``
+        alone emits bucket K on the first source minute of K+1, but the live
+        runner ``scan``s each bar's close (``bot_trade_strategy._drain_bar``),
+        so K is decided on the minute that closes it. Session bounds come from
+        the canonical calendar.
     Canonical implementation: this file.
     Validated against:
         ``tests/services/test_decision_clock.py::test_rth_trigger_instants_regular_session``,
         ``::test_rth_trigger_instants_early_close``,
-        ``::test_rth_trigger_instants_repeats_the_close_at_a_one_minute_timeframe``
+        ``::test_rth_trigger_instants_are_every_minute_close_at_a_one_minute_timeframe``
     """
     _require_source_multiple(timeframe_ms)
     return _trigger_instants(
@@ -155,19 +153,12 @@ def extended_trigger_instants(session_date: date, *, timeframe_ms: int, window: 
     """Every instant on ``session_date`` at which an extended-session decision is due.
 
     Same bucket rule as the regular session, applied to the broker's declared
-    window: the run force-flushes the day's last bucket at the declared close,
-    and the regular close is an ordinary bucket boundary inside the day.
-
-    At a one-minute timeframe the declared-close instant appears **twice**,
-    for the same reason as ``rth_trigger_instants``: the second-to-last
-    bucket's follow-on minute closes exactly at the declared close, and the
-    last bucket is force-flushed there too. Callers that treat this as a
-    schedule must tolerate the repeat (``next_trigger_ms`` does).
+    window: the day's last trigger is the declared close, and the regular
+    close is an ordinary bucket boundary inside the day.
 
     Formula:
         for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(xh_open)`` while
-        ``b < xh_close``: ``xh_close`` if ``b + timeframe_ms >= xh_close`` else
-        ``b + timeframe_ms + 60_000``, where ``[xh_open, xh_close)`` =
+        ``b < xh_close``: ``min(b + timeframe_ms, xh_close)``, where ``[xh_open, xh_close)`` =
         ``extended_session_bounds_ms(session_date, window)``.
     Reference:
         ADR 0059 Decision 5.2 (the clock triggers on the timeframe within the

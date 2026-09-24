@@ -549,6 +549,7 @@ class _FakeClerk:
             # real path hands it over.
             "use_rth": use_rth,
             "retained_source_bar": retained_source_bar,
+            "decision_evidence": decision_evidence,
         }
         self.calls.append(call)
         if decision_evidence is not None and isinstance(
