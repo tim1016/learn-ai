@@ -434,6 +434,56 @@ describe('GalleryLiveStore', () => {
       http.expectOne(url).flush(snapshot({ surface_version: 6 }));
     });
 
+    it('reconnects for a fresh snapshot after dropping an incomplete paged update, then goes live again (#2388 review)', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+      const url = '/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot';
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne(url).flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2 })));
+      expect(store.status()).toBe('live');
+
+      // The update's head declares one paged IWM bar, but its page never arrived.
+      source.emit(
+        'update',
+        JSON.stringify({
+          surface_version: 3,
+          as_of_ms: 1,
+          symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }],
+          markers_delta: {},
+          bots_delta: [],
+          removed_sids: [],
+        }),
+      );
+      expect(store.status()).toBe('stale');
+
+      // The server sends a snapshot only once per connection, so a later
+      // valid update on this connection cannot restore live; the store
+      // must reopen the stream to be handed a fresh snapshot.
+      await vi.advanceTimersByTimeAsync(5_000);
+      for (const request of http.match(url)) request.flush(snapshot({ surface_version: 3 }));
+      expect(StubEventSource.instances).toHaveLength(2);
+      const reopened = StubEventSource.instances[1];
+      reopened.emit('open');
+      reopened.emit('bars', JSON.stringify({ surface_version: 4, symbol: 'IWM', bars: [bar(20_000)] }));
+      reopened.emit(
+        'snapshot',
+        JSON.stringify(
+          snapshot({ surface_version: 4, symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }] }),
+        ),
+      );
+      expect(store.status()).toBe('live');
+      expect(store.barsBySymbol().get('IWM')?.map((b) => b.start_ms)).toEqual([20_000]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      http.expectNone(url);
+      expect(StubEventSource.instances).toHaveLength(2);
+    });
+
     it('stops reconnecting and polls instead when the lane refuses the stream (#2328)', async () => {
       vi.useFakeTimers();
       const store = TestBed.inject(GalleryLiveStore);

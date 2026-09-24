@@ -171,6 +171,7 @@ export class GalleryLiveStore {
   private request: GalleryRequest | null = null;
   private connection: AuthenticatedSseConnection | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
+  private resyncTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   // Empty string == "no snapshot adopted yet"; also doubles as the
   // ``ingestUpdate``/``applyTransportStatus`` "do we have data" guard.
@@ -388,11 +389,23 @@ export class GalleryLiveStore {
   /**
    * A paged frame arrived without all of its pages. Applying it would blank
    * those symbols' charts, so drop it and treat the stream like a failing
-   * transport: not live, and the REST poll keeps the wall current.
+   * transport: not live, and the REST poll keeps the wall current. The lane
+   * sends a snapshot only once per connection, so this connection can never
+   * return to live; close it and reopen after one poll interval (not at
+   * once, so a lane that keeps sending incomplete frames cannot drive a hot
+   * reconnect loop) to be handed a fresh snapshot.
    */
   private dropIncompleteFrame(generation: number, request: GalleryRequest): void {
+    this.connection?.close();
+    this.connection = null;
     this.statusState.set(this.epoch === '' ? 'error' : 'stale');
     this.startFallback(generation, request);
+    if (this.resyncTimer !== null) return;
+    this.resyncTimer = setTimeout(() => {
+      this.resyncTimer = null;
+      if (generation !== this.generation) return;
+      this.openStream(generation, request);
+    }, FALLBACK_POLL_MS);
   }
 
   /**
@@ -479,6 +492,8 @@ export class GalleryLiveStore {
     this.connection = null;
     this.stagedPages = null;
     this.stopFallback();
+    if (this.resyncTimer !== null) clearTimeout(this.resyncTimer);
+    this.resyncTimer = null;
   }
 
   private snapshotUrl(request: GalleryRequest): string {
