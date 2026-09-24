@@ -102,6 +102,11 @@ class FakeClient:
         if not self.connected:
             raise agg_mod.NotConnectedError("IBKR client is not connected.")
 
+    def require_live(self) -> None:
+        self.require_connected()
+        if self.connection_lost:
+            raise agg_mod.NotConnectedError("IBKR connectivity lost (TWS error 1100).")
+
 
 def market_tick(world: World, client: FakeClient) -> None:
     """At each 5 s boundary, IBKR appends the bar that just closed to every live line."""
@@ -184,6 +189,7 @@ async def test_b_1100_gallery_does_not_burn_the_shared_pacer(rig, symbols) -> No
     hub = gallery_hub(agg, symbols)
     await run_seconds(world, client, 10, hub=hub)  # healthy: lines open once
     healthy_reqs = len(world.req_log)
+    assert healthy_reqs == len(symbols)  # the 1m and 5s streams share one line
     t0 = world.now_ms
     exhausted_at = None
 

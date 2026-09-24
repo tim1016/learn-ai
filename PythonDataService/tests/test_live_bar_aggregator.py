@@ -30,14 +30,11 @@ def _bar(symbol: str, start_ms: int, close: float) -> IbkrMinuteBar:
 
 
 class _FakeClient:
-    """Stand-in for IbkrClient — only ``is_connected`` and ``connection_lost``
-    are read in ``_resolve_client`` before tests inject bars through the
-    patched stream."""
+    """Stand-in for IbkrClient — only ``require_live`` is called in
+    ``_resolve_client`` before tests inject bars through the patched stream."""
 
-    connection_lost = False
-
-    def is_connected(self) -> bool:
-        return True
+    def require_live(self) -> None:
+        return None
 
 
 @pytest.fixture

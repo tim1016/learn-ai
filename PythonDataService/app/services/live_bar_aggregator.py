@@ -465,19 +465,18 @@ class LiveBarAggregator:
     def _resolve_client(self) -> IbkrClient:
         """Fetch the public broker client. ``get_client`` itself raises
         ``NotConnectedError`` if the lifespan event never installed one;
-        we add a connectivity check on top so a stale client also surfaces.
+        we add a liveness check on top so a stale client or a dead feed also
+        surfaces.
         """
         client = get_client()
-        if not client.is_connected():
-            raise NotConnectedError("public broker session not connected")
-        # A TWS 1100 leaves the socket up with the feed dead. Opening a line
-        # then would spend a slot of the process-wide real-time-bar pacer the
-        # bots share, only for the line's liveness gate to cancel it; a chart
-        # polled every second empties that budget in under a minute and
-        # starves the bots' own resubscribe after the 1102 (#2354). The next
-        # poll after the restore opens the line.
-        if client.connection_lost:
-            raise NotConnectedError("public broker feed lost (TWS 1100)")
+        # ``require_live``, not ``require_connected``: a TWS 1100 leaves the
+        # socket up with the feed dead. Opening a line then would spend a slot
+        # of the process-wide real-time-bar pacer the bots share, only for the
+        # line's liveness gate to cancel it; a chart polled every second
+        # empties that budget in under a minute and starves the bots' own
+        # resubscribe after the 1102 (#2354). The next poll after the restore
+        # opens the line.
+        client.require_live()
         return client
 
 

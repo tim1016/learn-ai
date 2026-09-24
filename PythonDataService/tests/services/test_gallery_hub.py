@@ -1090,10 +1090,8 @@ async def test_build_snapshot_reads_the_real_aggregator_line_status(
     from app.services import live_bar_aggregator as agg_mod
 
     class _ConnectedClient:
-        connection_lost = False
-
-        def is_connected(self) -> bool:
-            return True
+        def require_live(self) -> None:
+            return None
 
     async def failing_stream(_client, _symbol, **_kw):
         if False:
