@@ -688,8 +688,9 @@ class _RetiredPresence:
 
 
 class _UnknownClerkPresence:
-    """A coordinator whose refusal is NOT retirement: an unknown identity
-    over the wire (plain ``clerk_not_found``) arrives as unavailability."""
+    """A coordinator whose refusal is NOT retirement: unavailability on the
+    beat and on every re-registration, which starts at the volume identity
+    gate's expectation (#2320's one registration unit)."""
 
     def __init__(self) -> None:
         self.registrations = 0
@@ -697,9 +698,12 @@ class _UnknownClerkPresence:
     async def observe(self, **_kwargs) -> str:
         raise FleetPresenceError("The fleet coordinator refused: clerk_not_found")
 
-    async def register(self, **_kwargs) -> SessionInfo:
+    async def expectation(self, **_kwargs) -> dict[str, object]:
         self.registrations += 1
         raise FleetPresenceError("The fleet coordinator refused: clerk_not_found")
+
+    async def register(self, **_kwargs) -> SessionInfo:
+        raise AssertionError("registration never runs past a failed identity gate")
 
 
 def _stub_boot(tmp_path: Path, presence: object) -> FleetLaneBoot:

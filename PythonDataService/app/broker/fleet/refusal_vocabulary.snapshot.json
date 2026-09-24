@@ -155,11 +155,11 @@
     },
     "fleet_presence_refused": {
       "status_code": 409,
-      "meaning": "A reachable coordinator answered the agent's presence call with a refusal."
+      "meaning": "A reachable coordinator refused the agent's lane identity or admission."
     },
     "fleet_presence_unavailable": {
       "status_code": 503,
-      "meaning": "The coordinator could not be reached, or failed serving the agent's presence call."
+      "meaning": "The coordinator could not be reached, or gave no answer about the agent's lane."
     },
     "fleet_protocol_incompatible": {
       "status_code": 409,

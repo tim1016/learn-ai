@@ -2373,22 +2373,24 @@ async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
         service.close()
 
 
-async def test_a_reachable_coordinator_that_refuses_expectation_refuses_the_boot(
+async def test_a_reachable_coordinator_that_refuses_expectation_boots_offline_too(
     control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A refusal is the coordinator's answer, not its absence (#2320).
+    """FR-066 also covers a refusal that carries no fleet reason code.
 
     Distinct from ``test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple``
-    above: that test dials a dead port and never gets a response at all, and
-    FR-066 rides that out offline. Here the coordinator is a real, reachable
-    process that answers every boot-time ``expectation()`` call with a plain
-    403 — a wrong token or an unknown clerk, never a connection failure.
+    above: that test dials a dead port and never gets a response at all. Here
+    the coordinator is a real, reachable process that answers every
+    boot-time ``expectation()`` call with a plain 403 and no ``reason`` —
+    what a process serving no fleet router, or a proxy in front of one,
+    answers, never a connection failure.
 
-    This test once pinned the opposite (FR-066 covering refusal too). That
-    was the #2320 defect: a retired or unknown clerk, or a mixed build the
-    version fences refused, booted its last binding offline against the very
-    coordinator that had just refused it. Now the boot refuses, and the
-    evidence is left untouched — a refusal is not a lifecycle lesson.
+    Refusals are classified by reason code, not status class (#2320): only
+    the coordinator's typed word about this lane (``LANE_ADMISSION_REFUSALS``
+    — an unknown clerk, a version fence, a refused token) refuses the boot.
+    A 4xx that names no such code says nothing about this lane, so it stays
+    ``FleetPresenceError`` and the already-confirmed lane recovers its
+    evidence-vouched binding offline.
     """
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
@@ -2433,13 +2435,20 @@ async def test_a_reachable_coordinator_that_refuses_expectation_refuses_the_boot
             CLERK_ID=provisioned.clerk.clerk_id,
             WORKER_KEY=provisioned.clerk.worker_key,
         )
-        from app.broker.alpaca.clerk.fleet_boot import FleetBootRefused, open_fleet_lane
+        from app.broker.alpaca.clerk.fleet_boot import offline_boot_matches, open_fleet_lane
 
-        with pytest.raises(FleetBootRefused, match="refused"):
-            await open_fleet_lane(settings=settings, volume_root=root)
+        boot = await open_fleet_lane(settings=settings, volume_root=root)
 
-        evidence = read_confirmation_evidence(root)
-        assert evidence is not None and evidence.lifecycle_state == "provisioned"
+        assert boot is not None
+        assert not boot.online
+        assert boot.offline_reason is not None
+        assert "refused" in boot.offline_reason
+        assert offline_boot_matches(
+            boot,
+            canonical_account_id="abcdef01-1234-abcd-5678-ef0123456789",
+            effective_profile_id="prof_1",
+            effective_revision=2,
+        )
     finally:
         server.stop()
         service.close()

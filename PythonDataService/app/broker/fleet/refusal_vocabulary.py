@@ -207,10 +207,10 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
         503, "A lane's bounded request or stream budget could not admit the caller."
     ),
     "fleet_presence_refused": RefusalFamily(
-        409, "A reachable coordinator answered the agent's presence call with a refusal."
+        409, "A reachable coordinator refused the agent's lane identity or admission."
     ),
     "fleet_presence_unavailable": RefusalFamily(
-        503, "The coordinator could not be reached, or failed serving the agent's presence call."
+        503, "The coordinator could not be reached, or gave no answer about the agent's lane."
     ),
     "fleet_protocol_incompatible": RefusalFamily(
         409, "An agent and coordinator speak different fleet protocol versions."

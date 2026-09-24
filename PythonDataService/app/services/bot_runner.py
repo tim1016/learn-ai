@@ -193,9 +193,8 @@ __all__ = [
     "RestartIntensityRefusedError",
     "RunAdmissionRefusedError",
     "UnknownBotError",
-    "drained_lane_start_gate",
+    "fleet_lane_start_gate",
     "go_live_start_gate",
-    "refused_lane_start_gate",
 ]
 
 logger = logging.getLogger(__name__)
@@ -334,38 +333,52 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
 LaneStartGate = Callable[[str], None]
 
 
-def drained_lane_start_gate(is_draining: Callable[[], bool]) -> LaneStartGate:
-    """#2155: a lane that has learned it is drained starts no new runs."""
+#: What the operator reads when the fleet lane starts no new bot, keyed by
+#: the fleet refusal code ``FleetLaneBoot.start_refusal`` answers with — a
+#: closed map, so no coordinator-authored code reaches operator prose.
+_FLEET_LANE_START_REFUSAL: dict[str | None, tuple[str, str]] = {
+    "clerk_lane_draining": (
+        "This lane is drained; it starts no new bots.",
+        "The fleet coordinator marked this lane draining and its binding is "
+        "being handed over. Existing bots settle; new starts refuse for the "
+        "rest of this lane's life.",
+    ),
+    "clerk_lane_retired": (
+        "This lane is retired; it starts no new bots.",
+        "The fleet coordinator retired this lane's clerk. It never returns to "
+        "service; its bots are stopped.",
+    ),
+    "fleet_presence_refused": (
+        "The fleet coordinator refused this lane; it starts no new bots.",
+        "The coordinator answered this lane's registration with a refusal. "
+        "Running bots keep running; new starts refuse until the coordinator "
+        "admits the lane again.",
+    ),
+    None: (
+        "This lane starts no new bots.",
+        "The fleet lane reported a reason this runner does not recognise, so "
+        "it refuses the start rather than guess.",
+    ),
+}
 
-    def refuse_if_lane_drained(_strategy_instance_id: str) -> None:
-        if is_draining():
-            raise RunAdmissionRefusedError(
-                "This lane is drained; it starts no new bots.",
-                detail="The fleet coordinator marked this lane draining and its "
-                "binding is being handed over. Existing bots settle; new "
-                "starts refuse for the rest of this lane's life.",
-            )
 
-    return refuse_if_lane_drained
+def fleet_lane_start_gate(start_refusal: Callable[[], str | None]) -> LaneStartGate:
+    """#2155/#2351/#2320: a drained, retired or refused fleet lane starts no new runs.
 
-
-def refused_lane_start_gate(refusal: Callable[[], str | None]) -> LaneStartGate:
-    """#2320/#2321: an offline lane the coordinator refused starts no new runs.
-
-    ``refusal`` returns the coordinator's reason code while it refuses to
-    readmit this lane, ``None`` otherwise; a later admission reopens starts.
+    ``start_refusal`` is ``FleetLaneBoot.start_refusal``: the fleet refusal
+    code while the lane may start nothing, ``None`` otherwise. A lane the
+    coordinator admits again starts bots again; a drained or retired one
+    never does.
     """
 
-    def refuse_if_lane_refused(_strategy_instance_id: str) -> None:
-        reason = refusal()
-        if reason is not None:
-            raise RunAdmissionRefusedError(
-                "The fleet coordinator refused this lane; it starts no new bots.",
-                detail=f"The coordinator answered this lane's registration with "
-                f"{reason}. New starts refuse until it admits the lane again.",
-            )
+    def refuse_if_fleet_lane_refuses(_strategy_instance_id: str) -> None:
+        reason = start_refusal()
+        if reason is None:
+            return
+        message, detail = _FLEET_LANE_START_REFUSAL.get(reason, _FLEET_LANE_START_REFUSAL[None])
+        raise RunAdmissionRefusedError(message, detail=detail)
 
-    return refuse_if_lane_refused
+    return refuse_if_fleet_lane_refuses
 
 
 def go_live_start_gate(read_hold: Callable[[], GoLiveHoldState]) -> LaneStartGate:

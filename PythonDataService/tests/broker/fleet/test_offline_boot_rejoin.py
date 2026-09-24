@@ -18,6 +18,7 @@ that is up.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -36,13 +37,27 @@ from app.broker.alpaca.clerk.fleet_boot import (
     start_heartbeat,
 )
 from app.broker.fleet import presence as presence_module
+from app.broker.fleet import volume as volume_module
 from app.broker.fleet.confirmation import read_confirmation_evidence
 from app.broker.fleet.errors import FleetControlError
-from app.broker.fleet.presence import FleetPresenceError, FleetPresenceRefused, RemotePresence
+from app.broker.fleet.presence import (
+    FleetLaneDraining,
+    FleetLaneRetired,
+    FleetPresenceError,
+    FleetPresenceRefused,
+    RemotePresence,
+)
+from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
 from app.broker.fleet.records import StoredLifecycleState
 from app.broker.fleet.service import FleetControlService, ProvisionedClerk
 from app.config import FleetSettings
-from app.services.bot_runner import RunAdmissionRefusedError, refused_lane_start_gate
+from app.services.bot_runner import (
+    BotTaskRegistry,
+    MarketDataFeedUnavailableError,
+    RunAdmissionRefusedError,
+    fleet_lane_start_gate,
+)
+from tests._helpers.bot_runner.custody import _SID
 from tests.broker.fleet.conftest import FrozenClock
 
 from .test_a2_alpaca_lane import _enrolled_lane
@@ -59,22 +74,38 @@ COORDINATOR_URL = "http://127.0.0.1:1"
 
 
 class _Coordinator:
-    """The coordinator as the lane's transport sees it: down, or up."""
+    """The coordinator as the lane's transport sees it.
+
+    Down (a refused connection), up (the real ``internal_fleet`` router over
+    the service), up but answering every call with one canned ``refusal``
+    (status, body), or up with its heartbeat route failing (``fail_observe``,
+    a 503) so the lane's beat takes the repair path. ``requests`` counts the
+    calls that reached an up coordinator.
+    """
 
     def __init__(self, service: FleetControlService, clerk_id: str) -> None:
         self._app: FastAPI = _agent_app(clerk_id)
         self._app.state.fleet_service = service
+        self._asgi = httpx.ASGITransport(app=self._app)
         self.up = False
+        self.refusal: tuple[int, dict[str, str] | None] | None = None
+        self.fail_observe = False
+        self.requests = 0
+
+    async def _answer(self, request: httpx.Request) -> httpx.Response:
+        if not self.up:
+            raise httpx.ConnectError("connection refused", request=request)
+        self.requests += 1
+        if self.refusal is not None:
+            status, body = self.refusal
+            return httpx.Response(status) if body is None else httpx.Response(status, json=body)
+        if self.fail_observe and request.url.path.endswith("/sessions/observe"):
+            return httpx.Response(503)
+        return await self._asgi.handle_async_request(request)
 
     def client(self, **_: object) -> httpx.AsyncClient:
-        if not self.up:
-
-            def refuse(request: httpx.Request) -> httpx.Response:
-                raise httpx.ConnectError("connection refused", request=request)
-
-            return httpx.AsyncClient(transport=httpx.MockTransport(refuse))
         return httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self._app), base_url="http://coordinator"
+            transport=httpx.MockTransport(self._answer), base_url="http://coordinator"
         )
 
 
@@ -365,14 +396,280 @@ async def test_an_offline_lane_drained_while_it_was_down_learns_it_on_rejoin(
         service.close()
 
 
-async def test_an_offline_lane_refused_on_rejoin_stops_its_bots_until_admitted(
+# ---------------------------------------------------------------------------
+# A refusal gates new starts; only the lane's own retirement stops bots
+# ---------------------------------------------------------------------------
+
+
+class _StopCounter:
+    """The lane's bot-stop hook, counting the times it was asked to stop."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self) -> bool:
+        self.calls += 1
+        return True
+
+
+#: Refusals a coordinator can answer a presence call with that are about its
+#: own state as much as this lane's: a coordinator restarted with an empty
+#: token map, a registry mid-restore, a process serving no fleet router, a
+#: registry that holds no such clerk. ``typed`` is whether the reason code is
+#: the coordinator's word about this lane (``LANE_ADMISSION_REFUSALS``).
+_COORDINATOR_STATE_REFUSALS = [
+    pytest.param(
+        403,
+        {"reason": "fleet_agent_token_refused", "message": "agent token refused"},
+        True,
+        id="token_refused",
+    ),
+    pytest.param(
+        409,
+        {"reason": "fleet_registry_recovery_pending", "message": "restore in progress"},
+        False,
+        id="recovery_pending",
+    ),
+    pytest.param(404, None, False, id="bodyless_404"),
+    pytest.param(
+        404,
+        {"reason": "clerk_not_found", "message": "No clerk carries that identity."},
+        True,
+        id="clerk_not_found",
+    ),
+]
+
+
+@pytest.mark.parametrize(("status", "body", "typed"), _COORDINATOR_STATE_REFUSALS)
+async def test_a_coordinator_state_refusal_never_stops_an_offline_lanes_bots(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    body: dict[str, str] | None,
+    typed: bool,
+) -> None:
+    """A Stop is local and durable: it leaves the position unmanaged and the
+    bot stopped after readmission. So a refusal on rejoin never stops a bot;
+    a typed one gates new starts, an untyped one is still unavailability."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root = await _confirmed_then_closed(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        coordinator = _Coordinator(service, provisioned.clerk.clerk_id)
+        monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
+        boot = await _offline_lane(coordinator, provisioned, root)
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        start_heartbeat(boot, interval_s=0.01)
+
+        coordinator.refusal = (status, body)
+        coordinator.up = True
+        await _until(lambda: coordinator.requests >= 8, what="several refused rejoins")
+
+        assert stops.calls == 0
+        assert not boot.online and not boot.draining and not boot.retired
+        assert boot.start_refusal == ("fleet_presence_refused" if typed else None)
+        assert boot.heartbeat is not None and not boot.heartbeat.done()
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(("status", "body", "typed"), _COORDINATOR_STATE_REFUSALS)
+async def test_a_coordinator_state_refusal_never_stops_an_online_lanes_bots(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    body: dict[str, str] | None,
+    typed: bool,
+) -> None:
+    """The same answers reach a live lane through its beat and its repair,
+    and mean the same thing there: no bot stops, its session is kept."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root = await _confirmed_then_closed(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        coordinator = _Coordinator(service, provisioned.clerk.clerk_id)
+        coordinator.up = True
+        monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
+        boot = await open_fleet_lane(settings=_remote_settings(provisioned), volume_root=root)
+        assert boot is not None and boot.online
+        session = boot.session
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        start_heartbeat(boot, interval_s=0.01)
+
+        coordinator.refusal = (status, body)
+        await _until(lambda: coordinator.requests >= 8, what="several refused beats")
+
+        assert stops.calls == 0
+        assert boot.session == session
+        assert not boot.draining and not boot.retired
+        assert boot.start_refusal == ("fleet_presence_refused" if typed else None)
+        assert boot.heartbeat is not None and not boot.heartbeat.done()
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        pytest.param(
+            409,
+            {"reason": "fleet_registry_recovery_pending", "message": "restore in progress"},
+            id="recovery_pending",
+        ),
+        pytest.param(404, None, id="bodyless_404"),
+    ],
+)
+async def test_a_restore_or_a_bodyless_refusal_still_boots_offline(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    body: dict[str, str] | None,
+) -> None:
+    """Classified by reason code, not status class: neither answer is the
+    coordinator's word about this lane, so a restore ceremony (or a process
+    with no fleet router) never stops a live lane booting its custody."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root = await _confirmed_then_closed(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        coordinator = _Coordinator(service, provisioned.clerk.clerk_id)
+        coordinator.refusal = (status, body)
+        coordinator.up = True
+        monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
+
+        boot = await open_fleet_lane(settings=_remote_settings(provisioned), volume_root=root)
+
+        assert boot is not None and not boot.online
+        assert boot.start_refusal is None
+        assert offline_boot_matches(
+            boot,
+            canonical_account_id=ACCOUNT,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            binding_generation=1,
+        )
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "expected"),
+    [
+        (404, "clerk_not_found", FleetPresenceRefused),
+        (409, "fleet_protocol_incompatible", FleetPresenceRefused),
+        (409, "clerk_identity_mismatch", FleetPresenceRefused),
+        (409, "clerk_endpoint_not_approved", FleetPresenceRefused),
+        (403, "fleet_agent_token_refused", FleetPresenceRefused),
+        (409, "fleet_registry_recovery_pending", FleetPresenceError),
+        (400, "some_future_code", FleetPresenceError),
+        (404, None, FleetPresenceError),
+        (409, "clerk_lane_draining", FleetLaneDraining),
+        (404, "clerk_lane_retired", FleetLaneRetired),
+    ],
+)
+async def test_remote_presence_classifies_a_refusal_by_its_reason_code(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    reason: str | None,
+    expected: type[FleetControlError],
+) -> None:
+    """Only the typed lane-identity and admission codes are refusals; a
+    restore, an unknown code or no code at all is unavailability."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if reason is None:
+            return httpx.Response(status)
+        return httpx.Response(status, json={"reason": reason, "message": "refused"})
+
+    monkeypatch.setattr(
+        presence_module,
+        "build_internal_client",
+        lambda **_: httpx.AsyncClient(transport=httpx.MockTransport(answer)),
+    )
+    presence = RemotePresence(base_url=COORDINATOR_URL, agent_service_token=CLERK_TOKEN)
+    for call in (
+        presence.expectation(clerk_id="clrk_aaaaaaaaaaaaaaaaaaaaaaaa"),
+        presence.register(
+            clerk_id="clrk_aaaaaaaaaaaaaaaaaaaaaaaa",
+            worker_key="wk",
+            agent_instance_id="agnt_0000000000000000000000aa",
+            endpoint_ref=None,
+            adapter_version="alpaca-fleet.8",
+            fleet_protocol_version=2,
+        ),
+    ):
+        with pytest.raises(FleetControlError) as refused:
+            await call
+        assert type(refused.value) is expected
+        if expected is FleetPresenceRefused:
+            assert refused.value.coordinator_reason == reason
+
+
+async def test_a_live_lane_whose_repair_meets_a_version_fence_gates_new_starts(
     control_dir: Path,
     clock: FrozenClock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The coordinator came back as a build this lane may not join: it runs
-    no bot on a refusal, keeps asking, and reopens once it is admitted."""
+    """Repair is the same registration unit as boot and rejoin: a refused
+    beat's re-registration that meets the version fence gates new starts
+    (it used to be logged and forgotten), keeps the bots running, and a
+    later landed beat reopens starts."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root = await _confirmed_then_closed(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        coordinator = _Coordinator(service, provisioned.clerk.clerk_id)
+        coordinator.up = True
+        monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
+        boot = await open_fleet_lane(settings=_remote_settings(provisioned), volume_root=root)
+        assert boot is not None and boot.online
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        start_heartbeat(boot, interval_s=0.01)
+
+        coordinator.fail_observe = True
+        monkeypatch.setattr(fleet_boot, "FLEET_PROTOCOL_VERSION", 99)
+        await _until(
+            lambda: boot.start_refusal == "fleet_presence_refused",
+            what="the repair's version-fence refusal gated new starts",
+        )
+        assert boot.admission_refusal == "fleet_protocol_incompatible"
+        assert boot.online
+        assert stops.calls == 0
+
+        coordinator.fail_observe = False
+        await _until(lambda: boot.start_refusal is None, what="a landed beat readmitted the lane")
+        assert stops.calls == 0
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_rejoin_whose_volume_fails_the_identity_gate_is_refused(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR 0062 Decision 2 holds on rejoin too: the mounted root is proven
+    against the registry's expectation before any registration, and a root
+    that fails it is a refusal — starts gate, nothing registers."""
     service = _service(control_dir, clock)
     try:
         provisioned, root = await _confirmed_then_closed(
@@ -382,33 +679,79 @@ async def test_an_offline_lane_refused_on_rejoin_stops_its_bots_until_admitted(
         coordinator = _Coordinator(service, clerk_id)
         monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
         boot = await _offline_lane(coordinator, provisioned, root)
-        stops: list[int] = []
-
-        async def stop_bots() -> bool:
-            stops.append(1)
-            return True
-
-        boot.stop_bots = stop_bots
-        gate = refused_lane_start_gate(lambda: boot.admission_refusal)
-        gate("bot-1")  # an offline lane nobody has refused may start bots
-        monkeypatch.setattr(fleet_boot, "FLEET_PROTOCOL_VERSION", 99)
-        start_heartbeat(boot, interval_s=0.02)
+        stale_session = service._store.read_session(clerk_id)
+        marker_file = volume_module.marker_path(root)
+        marker = json.loads(marker_file.read_text(encoding="utf-8"))
+        marker["attestation_id"] = "attn_someone_else"
+        marker_file.write_text(json.dumps(marker), encoding="utf-8")
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        start_heartbeat(boot, interval_s=0.01)
 
         coordinator.up = True
-        await _until(lambda: stops == [1], what="the refused lane stopped its bots")
-        assert boot.admission_refusal == "fleet_protocol_incompatible"
+        await _until(
+            lambda: boot.start_refusal == "fleet_presence_refused",
+            what="the identity gate refused the rejoin",
+        )
+        assert boot.admission_refusal == "clerk_volume_identity_mismatch"
         assert not boot.online
-        with pytest.raises(RunAdmissionRefusedError):
-            gate("bot-1")
+        assert service._store.read_session(clerk_id) == stale_session
+        assert stops.calls == 0
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_refused_offline_lane_gates_a_real_runner_until_it_is_admitted(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end through a real ``BotTaskRegistry``: the fleet start gate
+    reads ``start_refusal``, so a refused lane's operator sees the refusal
+    before any admission work, running bots are never stopped, and the
+    same registry starts again once the coordinator admits the lane."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root = await _confirmed_then_closed(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        coordinator = _Coordinator(service, provisioned.clerk.clerk_id)
+        monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
+        boot = await _offline_lane(coordinator, provisioned, root)
+        runner_root = tmp_path / "runner"
+        runner_root.mkdir()
+        registry = BotTaskRegistry(
+            runner_root,
+            feed_resolver=lambda: None,
+            boot_recovery_required=False,
+            lane_start_gates=(fleet_lane_start_gate(lambda: boot.start_refusal),),
+        )
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        monkeypatch.setattr(fleet_boot, "FLEET_PROTOCOL_VERSION", 99)
+        start_heartbeat(boot, interval_s=0.01)
+
+        coordinator.up = True
+        await _until(lambda: boot.start_refusal is not None, what="the coordinator refused")
+        with pytest.raises(RunAdmissionRefusedError, match="refused this lane") as refused:
+            await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        assert "fleet_protocol_incompatible" not in str(refused.value.detail)
+        assert stops.calls == 0
         evidence = read_confirmation_evidence(root)
         assert evidence is not None
         assert evidence.lifecycle_state == StoredLifecycleState.PROVISIONED.value
 
-        monkeypatch.setattr(fleet_boot, "FLEET_PROTOCOL_VERSION", 2)
+        monkeypatch.setattr(fleet_boot, "FLEET_PROTOCOL_VERSION", FLEET_PROTOCOL_VERSION)
         await _until(lambda: boot.online, what="the lane rejoined once admitted")
-        assert boot.admission_refusal is None
-        gate("bot-1")
-        assert stops == [1]  # stopped once, not once per refused beat
+        assert boot.start_refusal is None
+        # Past the fleet gate: what refuses now is the runner's own admission
+        # (this test installs no clerk or feed), never the fleet refusal.
+        with pytest.raises((RunAdmissionRefusedError, MarketDataFeedUnavailableError)) as later:
+            await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        assert "refused this lane" not in str(later.value)
+        assert stops.calls == 0
         await close_fleet_lane(boot)
     finally:
         service.close()

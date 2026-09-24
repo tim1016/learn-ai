@@ -814,9 +814,8 @@ async def _service_lifespan(
     from app.marketdata.ibkr_feed import get_market_data_feed
     from app.services.bot_runner import (
         BotTaskRegistry,
-        drained_lane_start_gate,
+        fleet_lane_start_gate,
         go_live_start_gate,
-        refused_lane_start_gate,
         set_bot_task_registry,
     )
     from app.services.strategy_validation_admission import current_deployment_strategy_validation_fact
@@ -831,14 +830,13 @@ async def _service_lifespan(
             supported_broker_ids=frozenset({"alpaca"}),
             validation_fact=current_deployment_strategy_validation_fact,
             lane_start_gates=(
-                # #2155: once this lane's heartbeat learns it is drained, every
-                # new bot start refuses; existing bots settle undisturbed. Probed
-                # per request, so the drain lands on the next operator action.
-                drained_lane_start_gate(lambda: fleet_lane is not None and fleet_lane.draining),
-                # #2320/#2321: an offline lane the coordinator answered with a
-                # refusal starts nothing until it is admitted again.
-                refused_lane_start_gate(
-                    lambda: None if fleet_lane is None else fleet_lane.admission_refusal
+                # #2155/#2351/#2320: once this lane learns it is drained or
+                # retired, or the coordinator refuses its registration, every
+                # new bot start refuses; existing bots settle undisturbed.
+                # Probed per request, so the answer lands on the next operator
+                # action, and a readmitted lane starts bots again.
+                fleet_lane_start_gate(
+                    lambda: None if fleet_lane is None else fleet_lane.start_refusal
                 ),
                 # #2269: a lane restored by installation migration starts no bot
                 # until `migrate_installation go-live` removes the hold marker
@@ -918,22 +916,11 @@ async def _service_lifespan(
         retiring_registry = bot_task_registry
         retired_clerk_id = fleet_lane.clerk_id
 
-        stopping_lane = fleet_lane
-
         async def _stop_bots_on_retired_lane() -> bool:
-            # #2320/#2321: an offline lane the coordinator refused stops its
-            # bots through the same hook; the receipt names which it was.
-            if stopping_lane.retired:
-                operator = "fleet_lane_retired"
-                change_ref = f"clerk {retired_clerk_id} retired by the fleet coordinator"
-            else:
-                operator = "fleet_lane_admission_refused"
-                change_ref = (
-                    f"clerk {retired_clerk_id} refused by the fleet coordinator: "
-                    f"{stopping_lane.admission_refusal}"
-                )
             receipt = await stop_all_bots_on_lane(
-                retiring_registry, operator=operator, change_ref=change_ref
+                retiring_registry,
+                operator="fleet_lane_retired",
+                change_ref=f"clerk {retired_clerk_id} retired by the fleet coordinator",
             )
             return receipt.all_stopped
 

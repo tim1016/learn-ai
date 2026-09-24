@@ -17,7 +17,7 @@ from app.services.bot_runner import (
     BotTaskRegistry,
     MarketDataFeedUnavailableError,
     RunAdmissionRefusedError,
-    drained_lane_start_gate,
+    fleet_lane_start_gate,
 )
 from tests._helpers.bot_runner.custody import _SID
 
@@ -27,7 +27,9 @@ def _registry(tmp_path: Path, gate: Callable[[], bool] | None) -> BotTaskRegistr
         tmp_path,
         feed_resolver=lambda: None,
         boot_recovery_required=False,
-        lane_start_gates=() if gate is None else (drained_lane_start_gate(gate),),
+        lane_start_gates=()
+        if gate is None
+        else (fleet_lane_start_gate(lambda: "clerk_lane_draining" if gate() else None),),
     )
 
 
