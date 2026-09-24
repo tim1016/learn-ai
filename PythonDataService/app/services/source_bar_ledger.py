@@ -469,6 +469,24 @@ class SourceBarLedger:
         # ``extra="forbid"`` makes a schema drift a loud decode failure.
         return [RetainedContinuityEvent.model_validate(dict(row)) for row in rows]
 
+    def latest_refusal(self, *, provider: str, symbol: str) -> RetainedContinuityEvent | None:
+        """Return the newest ``refused`` continuity fact for one stream, across every run.
+
+        The ledger is instance-scoped while ``events`` reads one run; a new run
+        of the instance asks this to learn whether the observations it would
+        rebuild from end at a hole an earlier run's continuity floor refused.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"""
+                {_EVENTS_WITH_JOURNAL}
+                WHERE e.kind = 'refused' AND e.feed_id = ? AND e.symbol = ?
+                ORDER BY j.evidence_seq DESC LIMIT 1
+                """,
+                (provider, symbol),
+            ).fetchone()
+        return None if row is None else RetainedContinuityEvent.model_validate(dict(row))
+
     def evidence_end_seq(self) -> int | None:
         """Return the newest journal position in this ledger, or None when it holds none."""
         with self._lock:

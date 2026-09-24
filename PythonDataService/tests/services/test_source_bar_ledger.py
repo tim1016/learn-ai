@@ -451,6 +451,38 @@ def test_the_contribution_count_of_a_short_minute_survives_the_round_trip(tmp_pa
     assert counts == [9, None]
 
 
+def test_latest_refusal_reads_across_runs_for_one_stream_only(tmp_path: Path) -> None:
+    """#2314: a successor run must see its predecessor's refusal, and only its stream's.
+
+    A gap, another symbol's refusal, or another provider's refusal is not a
+    hole in this stream's retained series.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        assert ledger.latest_refusal(provider="ibkr", symbol="SPY") is None
+        ledger.append_event(_event(kind="refused", reason="DECISION_BAR_MISSED"), run_id="run-a")
+        ledger.append_event(_event(kind="gap", window_start_ms=1_700_000_000_000), run_id="run-b")
+        ledger.append_event(
+            FeedContinuityEvent(
+                kind="refused", feed_id="ibkr", symbol="QQQ", observed_at_ms=1, reason="DECISION_LATE"
+            ),
+            run_id="run-b",
+        )
+        ledger.append_event(
+            FeedContinuityEvent(
+                kind="refused", feed_id="other", symbol="SPY", observed_at_ms=1, reason="DECISION_LATE"
+            ),
+            run_id="run-b",
+        )
+
+        refusal = ledger.latest_refusal(provider="ibkr", symbol="SPY")
+
+        assert refusal is not None
+        assert (refusal.run_id, refusal.reason) == ("run-a", "DECISION_BAR_MISSED")
+    finally:
+        ledger.close()
+
+
 def test_provenance_and_continuity_columns_persist(tmp_path: Path) -> None:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:

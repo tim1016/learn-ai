@@ -52,6 +52,14 @@ DECISION_LATE_REASON_CODE = "DECISION_LATE"
 """Why a decision bar was refused for arriving after its delivery allowance --
 the continuity refusal's ``reason`` and the runner's ``blocked`` receipt code."""
 
+WARMUP_CROSSES_REFUSED_GAP_REASON_CODE = "WARMUP_CROSSES_REFUSED_GAP"
+"""Why a new run of an instance was refused before its first decision (#2314):
+its retained warmup ends at a gap an earlier run's continuity floor refused, and
+its live stream would resume on the far side of it. Resuming would decide on a
+series with the very hole the predecessor died refusing, so the instance
+continues only as a fresh instance or after a reviewed ledger rollover -- the
+run-boundary shape ADR 0053 D10 gives a replay that holds a substitute."""
+
 
 class FeedContinuityRefused(MarketDataFeedError):
     """A recovered bar this run cannot accept as a decision input.

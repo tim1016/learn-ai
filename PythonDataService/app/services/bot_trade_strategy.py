@@ -45,6 +45,7 @@ from app.engine.strategy.signal_program import (
 )
 from app.marketdata.feed import (
     ContinuityPolicy,
+    FeedContinuityEvent,
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
@@ -56,6 +57,8 @@ from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, r
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import (
     DECISION_LATE_REASON_CODE,
+    WARMUP_CROSSES_REFUSED_GAP_REASON_CODE,
+    FeedContinuityRefused,
     admit_on_delivery,
     continuity_policy_for,
     late_decision,
@@ -296,6 +299,7 @@ class _RetainedSourceBarFeed:
         session = self._require_own_session(use_rth)
         retained = self._ledger.bars(provider=self.feed_id, symbol=symbol)
         if retained:
+            self._refuse_replay_across_a_refused_gap(symbol, retained)
             # Recovery must rebuild the session from the precise observations
             # that drove its first run. A provider's corrected history is new
             # information, not safe warmup input for an already-running bot.
@@ -328,6 +332,60 @@ class _RetainedSourceBarFeed:
         for bar in bars:
             self._ledger.append_history(bar, run_id=self._run_id)
         return [bar for bar in bars if session.includes(bar)]
+
+    def _refuse_replay_across_a_refused_gap(
+        self, symbol: str, retained: list[RetainedSourceBar]
+    ) -> None:
+        """Refuse a rebuild whose retained observations end at a hole the evidence refused (#2314).
+
+        The retained replay is followed by a live stream that starts "now", and
+        this run's ``ContinuityLoop`` has no interruption open, so the hole
+        between them would be an ordinary gap -- unrecorded and non-fatal. An
+        earlier run of this instance already declared that hole unprovable
+        inside the decision session and died rather than decide across it; a
+        successor warming on the pre-gap bars would decide across it anyway.
+        Warming only from post-gap bars is not available either: no run follows
+        a refusal to retain any, and starting short of the sealed lookback is
+        a cold start. So the run is refused, and the refusal is journalled
+        under this run before it is raised (ADR 0053 D6).
+        """
+        refusal = self._ledger.latest_refusal(provider=self.feed_id, symbol=symbol)
+        if refusal is None:
+            return
+        gap_start_ms = (
+            refusal.window_start_ms
+            if refusal.window_start_ms is not None
+            else refusal.last_delivered_end_ms
+        )
+        self._ledger.append_event(
+            FeedContinuityEvent(
+                kind="refused",
+                feed_id=self.feed_id,
+                symbol=symbol,
+                observed_at_ms=now_ms_utc(),
+                reason=WARMUP_CROSSES_REFUSED_GAP_REASON_CODE,
+                window_start_ms=gap_start_ms,
+                last_delivered_end_ms=retained[-1].end_ms,
+            ),
+            run_id=self._run_id,
+        )
+        logger.error(
+            "Run refused: its retained warmup ends at a gap an earlier run refused",
+            extra={
+                "action": "marketdata_continuity_refused",
+                "symbol": symbol,
+                "run_id": self._run_id,
+                "reason": WARMUP_CROSSES_REFUSED_GAP_REASON_CODE,
+                "refused_run_id": refusal.run_id,
+                "refused_reason": refusal.reason,
+                "window_start_ms": gap_start_ms,
+            },
+        )
+        raise FeedContinuityRefused(
+            f"the retained {symbol} warmup ends at a gap run {refusal.run_id} refused "
+            f"({refusal.reason}) at {gap_start_ms}; this instance cannot decide across it",
+            reason=WARMUP_CROSSES_REFUSED_GAP_REASON_CODE,
+        )
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)

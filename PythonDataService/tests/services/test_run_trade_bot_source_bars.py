@@ -476,3 +476,110 @@ async def test_execute_bot_run_trade_mode_requires_source_bar_ledger(tmp_path: P
             instance_dir=tmp_path,
             source_bars=None,
         )
+
+
+def _ledger_policy(ledger: SourceBarLedger, *, run_id: str, trigger_ms: int) -> ContinuityPolicy:
+    """A policy whose sink is the instance ledger, journalled under ``run_id``.
+
+    The same sink ``continuity_policy_for`` authors, so the refusal the first
+    run records is durable evidence its successor reads back from SQLite.
+    """
+
+    async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:
+        return ledger.append_event(event, run_id=run_id)
+
+    return ContinuityPolicy(
+        session=_RTH_SESSION,
+        next_trigger_ms=lambda last_end_ms: trigger_ms,
+        substitution_grant=lambda start_ms, end_ms: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
+        record_event=_sink,
+    )
+
+
+@pytest.mark.asyncio
+async def test_successor_run_refuses_to_warm_across_a_gap_its_predecessor_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2314: a new run of the instance must not decide across a refused hole.
+
+    Run 1 retains five minutes, then its continuity floor refuses the next
+    decision bar (``DECISION_LATE``) and the run dies. Run 2 -- a Resume, same
+    instance ledger, new ``run_id`` -- would warm on those five pre-gap minutes
+    and then stream live from three hours later: its own ``ContinuityLoop``
+    has no interruption open, so nothing would record or refuse the hole the
+    predecessor died refusing. The retained replay ends at a gap the evidence
+    declared unprovable, so the successor is refused with a typed reason,
+    journalled under its own run, before any live bar reaches the strategy.
+    """
+    from app.services.bot_trade_strategy import strategy_evaluations
+    from app.services.feed_continuity_policy import (
+        WARMUP_CROSSES_REFUSED_GAP_REASON_CODE,
+        FeedContinuityRefused,
+    )
+
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    pre_gap = [_bar(_T0 + minute * 60_000) for minute in range(5)]
+    late_start_ms = _T0 + 5 * 60_000
+    late = _bar(late_start_ms).model_copy(update={"provenance": "realtime_across_reconnect"})
+    monkeypatch.setattr(
+        "app.services.feed_continuity_policy.now_ms_utc", lambda: late_start_ms + 60_000 + 20_001
+    )
+    try:
+        first_run = _RetainedSourceBarFeed(
+            _FakeFeed([*pre_gap, late], mode="finite"),
+            ledger,
+            run_id="run-1",
+            session=_RTH_SESSION,
+            continuity=_ledger_policy(ledger, run_id="run-1", trigger_ms=late_start_ms + 60_000),
+        )
+        with pytest.raises(FeedContinuityRefused):
+            async for _ in first_run.stream_bars("SPY", use_rth=True):
+                pass
+        assert [event.reason for event in ledger.events(run_id="run-1")] == ["DECISION_LATE"]
+
+        post_gap_start_ms = late_start_ms + 3 * 60 * 60_000
+        live = _FakeFeed([_bar(post_gap_start_ms + minute * 60_000) for minute in range(30)], mode="finite")
+        successor = _RetainedSourceBarFeed(
+            live,
+            ledger,
+            run_id="run-2",
+            session=_RTH_SESSION,
+            continuity=_ledger_policy(ledger, run_id="run-2", trigger_ms=post_gap_start_ms + 15 * 60_000),
+        )
+
+        with pytest.raises(FeedContinuityRefused) as refused:
+            async for _ in strategy_evaluations(_binding(run_id="run-2"), successor):
+                pass
+
+        assert refused.value.reason == WARMUP_CROSSES_REFUSED_GAP_REASON_CODE
+        assert live.bars_consumed == 0, "no live bar may follow a replay that ends at a refused gap"
+        [evidence] = ledger.events(run_id="run-2")
+        assert evidence.kind == "refused"
+        assert evidence.reason == WARMUP_CROSSES_REFUSED_GAP_REASON_CODE
+        assert evidence.window_start_ms == late_start_ms
+        assert evidence.last_delivered_end_ms == pre_gap[-1].end_ms
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_successor_run_warms_on_retained_bars_when_no_gap_was_refused(tmp_path: Path) -> None:
+    """The refusal is keyed to refusal evidence, not to every Resume (#2314).
+
+    An instance whose ledger records no refused continuity fact keeps
+    rebuilding from its own retained observations, exactly as before.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
+    try:
+        for minute in range(3):
+            ledger.append(_bar(_T0 + minute * 60_000), run_id="run-1")
+        successor = _RetainedSourceBarFeed(
+            _FakeFeed([], mode="finite"), ledger, run_id="run-2", session=_RTH_SESSION
+        )
+
+        warmup = await successor.recent_closed_bars("SPY", use_rth=True)
+
+        assert [bar.start_ms for bar in warmup] == [_T0 + minute * 60_000 for minute in range(3)]
+        assert ledger.events(run_id="run-2") == []
+    finally:
+        ledger.close()
