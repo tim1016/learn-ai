@@ -422,8 +422,8 @@ class MinuteAssembler:
     sparse extended-hours minute, when the wall clock passes its close by
     ``SPARSE_MINUTE_EMIT_GRACE_MS`` (``emit_if_elapsed``, #2376).
 
-    ``_flushed`` remembers the minute emitted early by count, until a later
-    minute arrives. Without it, the resubscribed socket's first
+    ``_flushed`` remembers the minute emitted early (by count, or by the
+    sparse-minute timer), until a later minute arrives. Without it, the resubscribed socket's first
     5-second bars — which may still belong to that minute — would either crash
     the run ("not found in open minute", because ``current`` is now ``None``)
     or rebuild an accumulator for a minute the consumer has already decided on.
@@ -438,8 +438,9 @@ class MinuteAssembler:
     #: says so -- only its count can prove it whole (#2364).
     join_minute_start_ms: int | None = field(default=None, init=False)
     _flushed: _MinuteAccumulator | None = field(default=None, init=False, repr=False)
-    #: Whether ``_flushed`` was emitted short by the sparse-minute timer (#2376).
-    _flushed_sparse: bool = field(default=False, init=False, repr=False)
+    #: How ``_flushed`` was closed: by its twelfth print, or short by the
+    #: sparse-minute timer (#2376). Meaningful only while ``_flushed`` is set.
+    _flushed_by: Literal["count", "timer"] = field(default="count", init=False, repr=False)
 
     @property
     def open_minute_start_ms(self) -> int | None:
@@ -514,7 +515,7 @@ class MinuteAssembler:
             )
             return True
         if (
-            self._flushed_sparse
+            self._flushed_by == "timer"
             and self.last_source_ms is not None
             and source_ms > self.last_source_ms
         ):
@@ -530,6 +531,9 @@ class MinuteAssembler:
                     "symbol": symbol,
                     "source_ms": source_ms,
                     "minute_start_ms": flushed.start_ms,
+                    # How far past the print's own time it arrived, so the
+                    # grace can be tuned from real deliveries.
+                    "delivery_lag_ms": now_ms_utc() - source_ms,
                     "action": "late_print_after_emit_ignored",
                 },
             )
@@ -574,23 +578,23 @@ class MinuteAssembler:
         late twelfth print is what lets it be proven complete.
         """
         current = self.current
-        if current is None or _session_phase_for_ms(current.start_ms) == "RTH":
+        if current is None or now_ms < current.start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS:
             return None
-        if now_ms < current.start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS:
+        if _session_phase_for_ms(current.start_ms) == "RTH":
             return None
-        return self._flush_current(sparse=True)
+        return self._flush_current(by="timer")
 
     def _emit_if_complete(self) -> IbkrMinuteBar | None:
         """Emit the open minute now iff it already holds every RTH contribution."""
         if self.current is None or len(self.current.contributions) < RTH_CONTRIBUTIONS_PER_MINUTE:
             return None
-        return self._flush_current(sparse=False)
+        return self._flush_current(by="count")
 
-    def _flush_current(self, *, sparse: bool) -> IbkrMinuteBar:
+    def _flush_current(self, *, by: Literal["count", "timer"]) -> IbkrMinuteBar:
         """Close the open minute early and remember it for post-emit arrivals."""
         assert self.current is not None
         emitted = self.current.to_model()
         self._flushed = self.current
-        self._flushed_sparse = sparse
+        self._flushed_by = by
         self.current = None
         return emitted
