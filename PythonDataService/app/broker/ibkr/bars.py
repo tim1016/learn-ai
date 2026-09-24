@@ -50,12 +50,24 @@ from app.broker.ibkr.minute_assembler import (
     _contribution,
     _session_phase_for_ms,
 )
-from app.utils.timestamps import now_ms_utc
+from app.utils.timestamps import now_ms_utc, ny_datetime
 
 logger = logging.getLogger(__name__)
 
 NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
+# How long a line may go without a new 5 s bar once its stall timer is armed
+# (#2299, #2313). It measures the line's 5-second cadence, not trading
+# activity: IBKR sends a volume-0 bar when nothing traded. In RTH the timer is
+# always armed. Outside RTH it arms only after the line has delivered a bar in
+# the current scheduled PRE/POST phase (see ``_stall_timer_armed``): recorded
+# evidence -- 1,445 live IBKR POST minutes (SPY/QQQ/AAPL/TSLA, 2026-08-31..09-10
+# source-bar ledgers), no missing minute, next minute's first 5 s bar at p99
+# 6.3 s past the close, including 193 minutes with no trade -- proves a line
+# that is printing keeps printing, so 60 s (twelve missed bars) catches one
+# that prints and then dies. There is no live evidence that IBKR starts a
+# line at 04:00 before the symbol's first print, so a line silent since the
+# phase opened is not a stall and cannot kill the run or re-request the line.
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
@@ -501,12 +513,28 @@ class _BarDeliveryLogger:
         self.first_bar_logged = True
 
 
-def _bars_expected_now(use_rth: bool) -> bool:
-    """Return whether a real-time stock bar should be arriving now."""
-    phase = _session_phase_for_ms(now_ms_utc())
-    if use_rth:
-        return phase == "RTH"
-    return phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
+def _stall_timer_armed(use_rth: bool, last_source_ms: int | None) -> bool:
+    """Whether silence on this line now counts toward a stall.
+
+    In the calendar's regular session a line must print every 5 s, so the
+    timer is always armed. Outside it, a ``useRTH=0`` line is armed only once
+    it has delivered a bar in the *current* scheduled PRE or POST phase: a line
+    that prints and then dies is caught, but one IBKR has not started yet (no
+    evidence it prints before a symbol's first extended-hours trade) cannot
+    stall the run. The scheduled phase never answers OVERNIGHT, so nothing
+    outside PRE/RTH/POST arms the timer.
+    """
+    now_ms = now_ms_utc()
+    phase = _session_phase_for_ms(now_ms)
+    if phase == "RTH":
+        return True
+    if use_rth or phase == "CLOSED" or last_source_ms is None:
+        return False
+    # Same phase on the same ET date: phases are contiguous within one session
+    # day, so this is exactly "delivered since this phase opened".
+    return _session_phase_for_ms(last_source_ms) == phase and (
+        ny_datetime(last_source_ms).date() == ny_datetime(now_ms).date()
+    )
 
 
 def _check_realtime_subscription_liveness(
@@ -517,6 +545,7 @@ def _check_realtime_subscription_liveness(
     use_rth: bool,
     stall_timeout_s: float,
     last_progress_at: float,
+    last_source_ms: int | None,
 ) -> tuple[float, bool, bool]:
     """Fail closed on a stale-generation, disconnected, invalidated, or stalled line."""
     if lease.generation != _client_generation(client):
@@ -545,7 +574,7 @@ def _check_realtime_subscription_liveness(
             "after another consumer observed it stalled."
         )
     now_monotonic = time.monotonic()
-    if not _bars_expected_now(use_rth):
+    if not _stall_timer_armed(use_rth, last_source_ms):
         last_progress_at = now_monotonic
     elif now_monotonic - last_progress_at >= stall_timeout_s:
         lease.invalidate()
@@ -778,6 +807,7 @@ async def _iter_leased_raw_bars(
                     use_rth=use_rth,
                     stall_timeout_s=stall_timeout_s,
                     last_progress_at=last_progress_at,
+                    last_source_ms=last_source_ms,
                 )
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as interruption:
                 # Ruling P10: the queue holds real pre-disconnect prints, and

@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -102,7 +103,129 @@ def test_extended_hours_liveness_respects_weekend_calendar(
     monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: sunday_overnight_ms)
 
     assert bars_mod._session_phase_for_ms(sunday_overnight_ms) == "CLOSED"
-    assert bars_mod._bars_expected_now(use_rth=False) is False
+    assert bars_mod._stall_timer_armed(False, sunday_overnight_ms) is False
+
+
+def _et_ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
+    return int(datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York")).timestamp() * 1000)
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "phase", "extended_line_armed", "regular_line_armed"),
+    [
+        pytest.param(_et_ms(2026, 9, 22, 4, 0), "PRE", True, False, id="pre-open"),
+        pytest.param(_et_ms(2026, 9, 22, 8, 0), "PRE", True, False, id="pre-market"),
+        pytest.param(_et_ms(2026, 9, 22, 9, 45), "RTH", True, True, id="regular"),
+        pytest.param(_et_ms(2026, 9, 22, 17, 0), "POST", True, False, id="after-hours"),
+        pytest.param(_et_ms(2026, 9, 22, 3, 59), "CLOSED", False, False, id="before-pre"),
+        pytest.param(_et_ms(2026, 9, 22, 20, 0), "CLOSED", False, False, id="post-closed"),
+        # 2025-11-28 is a half day: the regular session closes at 13:00 ET and
+        # the calendar's after-hours session at 17:00 ET, not 20:00.
+        pytest.param(_et_ms(2025, 11, 28, 13, 30), "POST", True, False, id="half-day-post"),
+        pytest.param(_et_ms(2025, 11, 28, 17, 0), "CLOSED", False, False, id="half-day-post-closed"),
+    ],
+)
+def test_extended_hours_liveness_is_armed_in_scheduled_pre_and_post(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ms: int,
+    phase: str,
+    extended_line_armed: bool,
+    regular_line_armed: bool,
+) -> None:
+    """#2299: the stall watchdog of a ``use_rth=False`` line must see PRE and POST.
+
+    The phase came from a calendar-only authority that answers RTH or CLOSED,
+    so the extended line was held to the regular line's hours and the stall
+    timer was reset through every PRE and POST minute. Outside RTH the timer
+    arms only once the line has printed in the current phase (#2299 review).
+    """
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now_ms)
+
+    assert bars_mod._session_phase_for_ms(now_ms) == phase
+    assert bars_mod._stall_timer_armed(False, now_ms) is extended_line_armed
+    assert bars_mod._stall_timer_armed(False, None) is (phase == "RTH")
+    assert bars_mod._stall_timer_armed(True, now_ms) is regular_line_armed
+
+
+def _raw_print(source_ms: int) -> SimpleNamespace:
+    price = Decimal("100")
+    return SimpleNamespace(
+        time=datetime.fromtimestamp(source_ms / 1000, tz=UTC),
+        open=price, high=price, low=price, close=price, volume=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "now_ms",
+    [
+        pytest.param(_et_ms(2026, 9, 22, 4, 0), id="pre-open"),
+        pytest.param(_et_ms(2026, 9, 22, 16, 0), id="post-open"),
+    ],
+)
+async def test_extended_line_silent_since_phase_open_does_not_stall(
+    monkeypatch: pytest.MonkeyPatch, now_ms: int
+) -> None:
+    """#2299 review: a line IBKR never started outside RTH cannot kill the run.
+
+    There is no live evidence that IBKR prints a symbol's 5 s bars from the
+    first second of PRE, so a line silent since the phase opened proves
+    nothing. Many stall timeouts pass and the line is neither invalidated nor
+    cancelled.
+    """
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now_ms)
+    client = _FakeClient()
+    client.ib.bars = []
+
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=False, stall_timeout_s=0.01)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(stream.__anext__(), timeout=0.3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("now_ms", "last_print_ms"),
+    [
+        pytest.param(_et_ms(2026, 9, 22, 7, 30), _et_ms(2026, 9, 22, 7, 29), id="pre-market"),
+        pytest.param(_et_ms(2026, 9, 22, 17, 30), _et_ms(2026, 9, 22, 17, 29), id="after-hours"),
+    ],
+)
+async def test_extended_line_that_printed_in_phase_then_went_silent_stalls(
+    monkeypatch: pytest.MonkeyPatch, now_ms: int, last_print_ms: int
+) -> None:
+    """#2299: a ``use_rth=False`` line that printed in PRE/POST and then died is invalidated.
+
+    Real calendar, real liveness gate: only the IBKR transport is faked.
+    """
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now_ms)
+    client = _FakeClient()
+    client.ib.bars = [_raw_print(last_print_ms)]
+
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=False, stall_timeout_s=0.05)
+    await asyncio.wait_for(stream.__anext__(), timeout=2)
+
+    with pytest.raises(IBKRBarSubscriptionStalled, match="stalled"):
+        await asyncio.wait_for(stream.__anext__(), timeout=2)
+
+    assert client.ib.use_rth_seen is False
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_extended_line_last_print_in_an_earlier_phase_does_not_arm_the_timer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A POST print does not arm the next morning's PRE: the line must print in *this* phase."""
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: _et_ms(2026, 9, 23, 4, 30))
+    client = _FakeClient()
+    client.ib.bars = [_raw_print(_et_ms(2026, 9, 22, 19, 59))]
+
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=False, stall_timeout_s=0.01)
+    await asyncio.wait_for(stream.__anext__(), timeout=2)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(stream.__anext__(), timeout=0.3)
 
 
 def test_new_minute_fires_previous_closed_bar() -> None:
@@ -413,7 +536,7 @@ async def test_raw_stream_invalidates_a_bounded_stalled_subscription(
     """#1411: a connected one-print/zero-print line cannot hang forever."""
     client = _FakeClient()
     client.ib.bars = []
-    monkeypatch.setattr(bars_mod, "_bars_expected_now", lambda _use_rth: True)
+    monkeypatch.setattr(bars_mod, "_stall_timer_armed", lambda _use_rth, _last_source_ms: True)
 
     stream = stream_raw_5s_bars(
         client,
@@ -436,7 +559,7 @@ async def test_minute_stream_one_print_then_silence_invalidates_without_a_closed
     client = _FakeClient()
     client.ib.bars = [_bar(0, "100", "101", "99", "100.5", 10)]
     source_ms: list[int] = []
-    monkeypatch.setattr(bars_mod, "_bars_expected_now", lambda _use_rth: True)
+    monkeypatch.setattr(bars_mod, "_stall_timer_armed", lambda _use_rth, _last_source_ms: True)
 
     stream = stream_minute_bars(
         client,
