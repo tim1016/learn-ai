@@ -578,6 +578,41 @@ def test_feed_continuity_reports_compromised_when_the_deadline_miss_never_recove
     assert view.state_label == "Continuity refused"
 
 
+def test_feed_continuity_gives_the_join_minute_gap_its_own_copy() -> None:
+    """#2364: the join-minute gap can fall inside the decision session.
+
+    The generic gap copy says the omitted window was outside the strategy's
+    decision session -- false for a regular-hours run that starts mid-RTH.
+    A ``stream_joined`` gap says what actually happened; an untagged gap keeps
+    the generic copy.
+    """
+    view = build_feed_continuity(
+        [
+            _continuity_event(evidence_seq=1, kind="gap", observed_at_ms=_NOW - 60_000, cause="stream_joined"),
+            _continuity_event(evidence_seq=2, kind="gap", observed_at_ms=_NOW),
+        ],
+        run_id="r1",
+        latest_bar_at_ms=_NOW - 5_000,
+        now_ms=_NOW,
+    )
+
+    joined, outside = view.events
+    assert (joined.label, joined.explanation, joined.cause) == (
+        "Partial first minute omitted",
+        "The stream joined partway through this minute; it was omitted, not decided on.",
+        "stream_joined",
+    )
+    assert "decision session" not in joined.explanation
+    assert (outside.label, outside.explanation) == (
+        "Non-decision gap recorded",
+        "An unprovable data window outside the strategy's decision session was omitted.",
+    )
+    assert view.state == "continuous"
+    # The state-level explanation must survive per-event copy assignment, not
+    # be overwritten by the last event's explanation (#2387 review).
+    assert view.explanation == "No IBKR delivery interruptions have been recorded in this run."
+
+
 def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_ledger(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

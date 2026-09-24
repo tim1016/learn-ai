@@ -35,6 +35,15 @@ _CONTINUITY_EVENT_COPY: dict[str, tuple[str, str]] = {
     ),
 }
 
+_GAP_CAUSE_COPY: dict[str, tuple[str, str]] = {
+    # The join minute can fall inside the decision session, so the generic
+    # "outside the strategy's decision session" gap copy would be false (#2364).
+    "stream_joined": (
+        "Partial first minute omitted",
+        "The stream joined partway through this minute; it was omitted, not decided on.",
+    ),
+}
+
 _CONTINUITY_CAUSE_COPY: dict[str, str] = {
     "socket_down": "The IBKR socket disconnected.",
     "soft_loss_1100": "IBKR reported connectivity loss while the socket remained open.",
@@ -42,6 +51,17 @@ _CONTINUITY_CAUSE_COPY: dict[str, str] = {
     "stall": "The IBKR real-time bar subscription stopped advancing.",
     "generation_changed": "The IBKR connection was replaced while this stream was active.",
 }
+
+
+def _event_copy(event: RetainedContinuityEvent) -> tuple[str, str]:
+    """The backend-authored label and explanation for one continuity fact."""
+    if event.kind == "gap" and event.cause in _GAP_CAUSE_COPY:
+        return _GAP_CAUSE_COPY[event.cause]
+    label, explanation = _CONTINUITY_EVENT_COPY[event.kind]
+    cause_copy = _CONTINUITY_CAUSE_COPY.get(event.cause or "")
+    if event.kind == "interruption" and cause_copy is not None:
+        return label, f"{cause_copy} Same-run recovery began."
+    return label, explanation
 
 
 def _duration_label(duration_ms: int) -> str:
@@ -127,19 +147,14 @@ def build_feed_continuity(
             pending_interruptions.append(event.observed_at_ms)
         elif event.kind == "recovered" and pending_interruptions:
             duration_ms = max(0, event.observed_at_ms - pending_interruptions.pop())
-        label, base_explanation = _CONTINUITY_EVENT_COPY[event.kind]
-        cause_copy = _CONTINUITY_CAUSE_COPY.get(event.cause or "")
+        event_label, event_explanation = _event_copy(event)
         event_views.append(
             FeedContinuityEventView(
                 evidence_seq=event.evidence_seq,
                 kind=event.kind,
                 occurred_at_ms=event.observed_at_ms,
-                label=label,
-                explanation=(
-                    f"{cause_copy} Same-run recovery began."
-                    if event.kind == "interruption" and cause_copy is not None
-                    else base_explanation
-                ),
+                label=event_label,
+                explanation=event_explanation,
                 cause=event.cause,
                 duration_ms=duration_ms,
                 duration_label=(_duration_label(duration_ms) if duration_ms is not None else None),

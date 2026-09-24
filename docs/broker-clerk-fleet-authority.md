@@ -429,7 +429,8 @@ The vocabulary is closed:
 | Reason | Meaning |
 |---|---|
 | `DECISION_BAR_MISSED` | The socket did not return before the deadline for the run's next decision bar (its trigger instant plus a 20-second delivery allowance). The run stopped rather than decide late; the `interruption` event records the deadline it was held to. |
-| `SUBSTITUTION_NOT_AUTHORIZED` | A minute the interruption touched could not be proven complete from live data, and nothing authorizes standing a historical bar in its place. Nothing authorizes it in this build, for any instrument or program — this is the expected reason for a lost print inside regular trading hours. |
+| `SUBSTITUTION_NOT_AUTHORIZED` | A minute an interruption touched could not be proven complete from live data, and nothing authorizes standing a historical bar in its place. Nothing authorizes it in this build, for any instrument or program — this is the expected reason for a print an interruption lost inside regular trading hours. A short minute with no interruption behind it is `MINUTE_INCOMPLETE` instead. |
+| `MINUTE_INCOMPLETE` | A regular-session minute no interruption touched held fewer than the twelve 5-second prints the calendar says it owes — the line went quiet for under 60 s with no connectivity notice (#2364). No interruption episode exists, so no substitution is asked about; the run stops rather than decide on a possibly truncated bar. A half-day's early close ends the owed count where the session ends. |
 | `SUBSTITUTION_PATH_UNAVAILABLE` | An authorization was granted but no substitution path exists to honour it. No producer of such a grant is deployed, so this means one appeared without its delivery half — **escalate rather than retry**. |
 | `CONTINUITY_EVIDENCE_UNWRITABLE` | A continuity fact could not be written to the run's ledger. The run stops rather than continue without the evidence it promised. Check the account's storage and the ledger file before redeploying. |
 | `DECISION_LATE` | A bar assembled across the reconnect *was* delivered, but past the allowance for the decision it would have driven. Deciding on it would price a trade against a market that had already moved. |
@@ -437,7 +438,8 @@ The vocabulary is closed:
 A run **without** a policy — unsealed or compatibility-mode strategy, an all-session binding, a
 program with no decision clock, or any run while the switch is off — keeps the pre-#1921 behaviour:
 the first interruption ends it with a plain `FEED_DEATH`, no typed reason and no `refused` row. The
-notice's message tells the two apart.
+notice's message tells the two apart. The one typed reason such a run can carry is
+`MINUTE_INCOMPLETE`, with no `refused` row because it has no journal.
 
 None of these is an operator action. Each is a completed, evidence-backed stop: read the notice,
 then redeploy through the panel's normal admitted action once the feed is healthy.

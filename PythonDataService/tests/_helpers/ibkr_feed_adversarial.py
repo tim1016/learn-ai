@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     import pytest
 
 _RTH_START = datetime(2026, 5, 4, 14, 30, tzinfo=UTC)
+#: 10:30 ET on Monday 2026-05-04: a calendar regular-session minute.
+RTH_MINUTE = _RTH_START
 
 
 class AcceleratedFeedClock:
@@ -43,8 +45,9 @@ class AcceleratedFeedClock:
 class _AdversarialRealtimeBarTransport:
     """IBKR-shaped transport that returns one deterministic plan per request."""
 
-    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...]) -> None:
+    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...], *, use_rth: bool = True) -> None:
         self._plans = plans
+        self._use_rth = use_rth
         self._subscriptions: list[list[SimpleNamespace]] = []
         self._subscription_opened = asyncio.Event()
         self.cancel_count = 0
@@ -68,8 +71,8 @@ class _AdversarialRealtimeBarTransport:
     ) -> list[SimpleNamespace]:
         if getattr(contract, "symbol", None) != "SPY":
             raise ValueError("adversarial feed fixture supports only SPY")
-        if bar_size != 5 or what_to_show != "TRADES" or not useRTH:
-            raise ValueError("adversarial feed fixture requires RTH 5-second trades")
+        if bar_size != 5 or what_to_show != "TRADES" or useRTH != self._use_rth:
+            raise ValueError(f"adversarial feed fixture requires 5-second trades with useRTH={self._use_rth}")
         plan_index = len(self._subscriptions)
         if plan_index >= len(self._plans):
             raise RuntimeError("adversarial feed fixture exhausted its subscription plans")
@@ -109,10 +112,10 @@ class _AdversarialIbkrClient:
 
 
 class _AdversarialFeedFixture:
-    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...]) -> None:
+    def __init__(self, plans: tuple[tuple[SimpleNamespace, ...], ...], *, use_rth: bool = True) -> None:
         wall_ms = int((_RTH_START + timedelta(minutes=1)).timestamp() * 1_000)
         self.clock = AcceleratedFeedClock(wall_ms=wall_ms)
-        self._transport = _AdversarialRealtimeBarTransport(plans)
+        self._transport = _AdversarialRealtimeBarTransport(plans, use_rth=use_rth)
         self.client = _AdversarialIbkrClient(self._transport)
 
     @property
@@ -164,6 +167,22 @@ class OnePrintThenSilenceFeedFixture(_AdversarialFeedFixture):
         )
 
 
+class ScriptedLinesFeedFixture(_AdversarialFeedFixture):
+    """One scripted list of raw 5-second bars per ``reqRealTimeBars`` request.
+
+    The line stays connected throughout: a plan that simply omits some
+    5-second bars is a connected line that went quiet (a data-farm blip with
+    no 1100), and a plan that runs out mid-minute is a line the stall timer
+    will replace with the next plan (#2364). ``use_rth=False`` is the
+    extended-hours subscription a regular-hours run streams on, which is how
+    PRE/POST prints reach it.
+    """
+
+    def __init__(self, *plans: tuple[SimpleNamespace, ...], use_rth: bool = True) -> None:
+        super().__init__(plans, use_rth=use_rth)
+        self.client.settings = SimpleNamespace(feed_continuity_enabled=True)
+
+
 class NeverFirstBarFeedFixture(_AdversarialFeedFixture):
     """An active subscription that never receives its first source print."""
 
@@ -182,6 +201,11 @@ def _closed_minute_with_one_tail_print(
     return (*bars, _raw_bar(minute_start + timedelta(minutes=1)))
 
 
+def raw_minute(minute_start: datetime, seconds: range | tuple[int, ...]) -> tuple[SimpleNamespace, ...]:
+    """The raw 5-second bars IBKR printed at ``seconds`` past ``minute_start``."""
+    return tuple(_raw_bar(minute_start + timedelta(seconds=second)) for second in seconds)
+
+
 def _raw_bar(timestamp: datetime) -> SimpleNamespace:
     return SimpleNamespace(
         time=timestamp,
@@ -194,7 +218,10 @@ def _raw_bar(timestamp: datetime) -> SimpleNamespace:
 
 
 __all__ = (
+    "RTH_MINUTE",
     "AcceleratedFeedClock",
     "NeverFirstBarFeedFixture",
     "OnePrintThenSilenceFeedFixture",
+    "ScriptedLinesFeedFixture",
+    "raw_minute",
 )

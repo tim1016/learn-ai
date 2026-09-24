@@ -332,6 +332,21 @@ class FleetRegistryRecoveryPending(FleetControlError):
     status_code: ClassVar[int] = 409
 
 
+class FleetRegistryBackupPredatesDrain(FleetRegistryRecoveryPending):
+    """A restored registry predates the drain its lane's own volume records (#2350).
+
+    ``reconcile-registry`` found the lane's confirmation evidence in its
+    drained tombstone while the restored registry still records the lane as
+    provisioned: the backup was captured before the lane was drained, so it
+    cannot know who (if anyone) took the account over afterwards. The
+    tombstone is proof the lane is out, never a reason to re-seat it, so the
+    lane stays unreconciled and the hold stays closed. A recovery-pending
+    refusal by family, reason and status -- every caller that treats an open
+    hold as an open hold still does -- typed so the ceremony can name the one
+    resolution: restore a newer backup that records the drain and successor.
+    """
+
+
 class DataPlaneControlSecretRefused(FleetControlError):
     """The presented data-plane control secret does not match the configured one.
 
@@ -402,6 +417,7 @@ __all__ = [
     "FleetControlError",
     "FleetControlPlaneNotInstalled",
     "FleetProtocolIncompatible",
+    "FleetRegistryBackupPredatesDrain",
     "FleetRegistryRecoveryPending",
     "FleetRegistryUnavailable",
     "flat_refusal_body",

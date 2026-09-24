@@ -1,8 +1,9 @@
 """The fleet control plane's closed refusal vocabulary (#2067).
 
-Forty-three distinct reason codes exist on the fleet surface: the 38-class
+Forty-three distinct reason codes exist on the fleet surface: the 39-class
 ``FleetControlError`` subclass closure (``FleetControlError`` itself plus
-every subclass, wherever in ``app/`` it is declared) and 5 codes minted
+every subclass, wherever in ``app/`` it is declared; 38 reasons, since
+``FleetRegistryBackupPredatesDrain`` keeps its parent's) and 5 codes minted
 without a ``FleetControlError`` at all -- a Pydantic-typed literal
 (``qualification_market_status_unavailable``), a plain ``Exception`` used on
 a raw-ASGI capacity-limiting path (``fleet_lane_capacity_exhausted``), a
@@ -92,8 +93,8 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The complete fleet refusal vocabulary: the 38-class FleetControlError
-#: subclass closure plus the 5 codes minted outside it. Sorted by code.
+#: The complete fleet refusal vocabulary: the 39-class FleetControlError
+#: subclass closure (38 reasons) plus the 5 codes minted outside it. Sorted by code.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
         400, "A clerk-scoped request arrived without both a broker and a clerk identity."
