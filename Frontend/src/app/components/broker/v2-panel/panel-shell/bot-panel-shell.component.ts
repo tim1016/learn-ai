@@ -110,7 +110,9 @@ interface PreparedSafeFlatten {
 const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
 
 /** The market-tape header re-reads its delayed Polygon snapshot this often, so
- * an empty read around the open heals without a page reload (#2407). */
+ * an empty read around the open heals without a page reload (#2407). A failed
+ * re-read hides the quote until the next one succeeds: no price beats a price
+ * the tape can no longer vouch for. */
 const MARKET_SNAPSHOT_REFRESH_MS = 60_000;
 
 /** The snapshot's latest price, or null when it has none. Polygon reports an

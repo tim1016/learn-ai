@@ -1480,14 +1480,14 @@ describe('BotPanelShellComponent', () => {
     const tapePrices = () =>
       [...document.querySelectorAll('.ticker-quote__price')].map((el) => el.textContent?.trim());
 
-    afterEach(() => marketDataMock.getStockSnapshot.mockClear());
+    beforeEach(() => marketDataMock.getStockSnapshot.mockClear());
 
     it('does not render a zero day bar as a $0.00 price', async () => {
       marketDataMock.getStockSnapshot.mockReturnValueOnce(tapeSnapshot(0, 0));
 
       await renderTape();
 
-      expect(tapePrices()).not.toContain('$0.00');
+      expect(tapePrices()).toEqual([]);
       expect(screen.queryByText('-0.40%')).toBeNull();
     });
 
@@ -1508,7 +1508,7 @@ describe('BotPanelShellComponent', () => {
           .mockReturnValueOnce(tapeSnapshot(0, 0))
           .mockReturnValueOnce(tapeSnapshot(513.21, 513.1));
         const fixture = await renderTape();
-        expect(tapePrices()).not.toContain('$513.21');
+        expect(tapePrices()).toEqual([]);
         const refresh = setIntervalSpy.mock.calls.find(([, ms]) => ms === 60_000)?.[0];
         if (typeof refresh !== 'function') throw new Error('Expected a 60 s snapshot refresh.');
 
