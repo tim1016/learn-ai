@@ -57,6 +57,7 @@ async def _ws_fill(
     cumulative: float,
     avg: float,
     status: str,
+    occurred_at_ms: int = 1_700_000_001_000,
 ) -> None:
     await SqliteTradeUpdateEvidenceSink(
         repo=clerk, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
@@ -64,7 +65,7 @@ async def _ws_fill(
         client_order_id=order_ref,
         event=BrokerOrderEvent(
             event_type="fill" if status == "filled" else "partial_fill",
-            occurred_at_ms=1_700_000_001_000,
+            occurred_at_ms=occurred_at_ms,
             price=price,
             quantity=qty,
             execution_id=execution_id,
@@ -150,6 +151,39 @@ async def test_rest_recorded_fill_then_live_exact_lets_the_exit_reduce(
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
 
     assert [(str(leg.side), leg.quantity) for leg, _ in trade.submit_calls] == [("sell", 10.0)]
+
+
+async def test_retained_exact_redelivery_matches_on_economics_not_frame_fields(
+    repo: ClerkSqliteRepository,  # noqa: F811
+) -> None:
+    """A redelivered retained exact with a new event time is a duplicate; changed qty still raises (#2346 review).
+
+    After the order-total proof closes exec-B's episode, exec-B stays
+    quarantined. A redelivery whose frame differs only in a non-economic
+    field (the vendor event time) must not open a new episode; one that
+    changes the slice quantity is a genuine conflict.
+    """
+    order_ref = await _make_entry(repo, filled_quantity=3.0, status="partially_filled")
+    await _ws_fill(
+        repo, order_ref, execution_id="exec-B", qty=7.0, price=101.0,
+        cumulative=10.0, avg=100.7, status="filled",
+    )
+    _rest(repo, order_ref, cumulative=10.0, avg=100.7, status="filled")
+    assert _conflicts(repo) == []
+
+    await _ws_fill(
+        repo, order_ref, execution_id="exec-B", qty=7.0, price=101.0,
+        cumulative=10.0, avg=100.7, status="filled", occurred_at_ms=1_700_000_009_000,
+    )
+    assert _conflicts(repo) == []
+    assert _reduce_allowed(repo, 10.0)
+
+    await _ws_fill(
+        repo, order_ref, execution_id="exec-B", qty=6.0, price=101.0,
+        cumulative=10.0, avg=100.7, status="filled", occurred_at_ms=1_700_000_009_000,
+    )
+    assert len(_conflicts(repo)) == 1
+    assert not _reduce_allowed(repo, 10.0)
 
 
 async def test_late_exact_between_exit_passes_does_not_block_the_reduction(
