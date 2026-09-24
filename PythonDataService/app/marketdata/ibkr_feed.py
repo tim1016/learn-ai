@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import (
     IBKRBarInterrupted,
+    IBKRBarRequestDeadlineExceeded,
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
     MinuteAssembler,
@@ -279,6 +280,7 @@ class IbkrMarketDataFeed:
                         use_rth=use_rth,
                         on_source_bar=_on_source_bar,
                         assembler=loop.assembler,
+                        request_deadline_ms=loop.request_deadline_ms,
                     )
                 ) as minute_bars:
                     async for ibkr_bar in minute_bars:
@@ -292,6 +294,8 @@ class IbkrMarketDataFeed:
                 await loop.await_recovery()
             except NotConnectedError as exc:
                 await loop.await_recovery_after_race(exc)
+            except IBKRBarRequestDeadlineExceeded as exc:
+                await loop.refuse_request_past_deadline(exc)
             except IBKRBarStreamError as exc:
                 raise MarketDataFeedError(str(exc)) from exc
 

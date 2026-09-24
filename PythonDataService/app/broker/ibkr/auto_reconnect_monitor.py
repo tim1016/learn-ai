@@ -621,11 +621,24 @@ class AutoReconnectMonitor:
                 extra={"action": "auto_reconnect_recovery_fail"},
             )
             return False
+        self._recovered_data_loss_epoch = data_loss_epoch
+        self._end_recovery(success=True)
+        if self._data_loss_unrecovered():
+            # A 1101 landed while the callbacks ran and dropped what they
+            # just subscribed: the feed stays stale, and ``_advance_recovery``
+            # keeps it out of HEALTHY, until that loss's own run (#2397 review).
+            logger.warning(
+                "IBKR 1101 landed during recovery; subscriptions stay stale",
+                extra={
+                    "action": "auto_reconnect_recovery_superseded",
+                    "recovered_data_loss_epoch": data_loss_epoch,
+                    "data_loss_epoch": self._client.data_loss_epoch,
+                },
+            )
+            return True
         mark_succeeded = getattr(self._client, "mark_recovery_succeeded", None)
         if mark_succeeded is not None:
             mark_succeeded()
-        self._recovered_data_loss_epoch = data_loss_epoch
-        self._end_recovery(success=True)
         return True
 
     def _begin_attempt(self, attempt: int) -> None:
@@ -636,6 +649,11 @@ class AutoReconnectMonitor:
     def _advance_recovery(self, signal: RecoverySignal) -> None:
         previous = self._recovery_state
         self._recovery_state = transition_recovery_state(previous, signal)
+        if self._recovery_state == "HEALTHY" and self._data_loss_unrecovered():
+            # The socket is up but a 1101 the callbacks have not run for --
+            # e.g. one that landed while they ran -- still has the data down.
+            # It stays RESTORING until that loss's own run (#2397 review).
+            self._recovery_state = transition_recovery_state(previous, "restored_data_lost")
         if self._recovery_state != previous:
             self._last_transition_ms = self._now_ms()
         # Single chokepoint (#2080): every path that lands on HEALTHY —

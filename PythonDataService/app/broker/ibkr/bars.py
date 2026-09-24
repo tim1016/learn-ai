@@ -122,9 +122,37 @@ class IBKRBarInterrupted(IBKRBarStreamError):
         self.cause = cause
 
 
+class IBKRBarRequestDeadlineExceeded(IBKRBarStreamError):
+    """A line could not be requested before the consumer's continuity deadline.
+
+    Raised instead of waiting past it on the shared pacer (or on a peer that is
+    opening the same line), so the continuity loop can record ADR 0053's
+    ``refused`` at the deadline rather than sit blocked for minutes after it.
+    """
+
+
 def _client_generation(client: RealtimeBarClient) -> int:
     """Read the connection generation every lease and registry key is fenced by."""
     return client.connection_generation
+
+
+def _seconds_until(deadline_ms: int | None) -> float | None:
+    """How long a wait may last before ``deadline_ms``; ``None`` is unbounded."""
+    return None if deadline_ms is None else (deadline_ms - now_ms_utc()) / 1_000
+
+
+def _request_deadline_exceeded(deadline_ms: int | None, con_id: int) -> IBKRBarRequestDeadlineExceeded:
+    logger.warning(
+        "Real-time-bar request cannot be issued before the consumer's deadline",
+        extra={
+            "action": "ibkr_realtime_bar_request_deadline_exceeded",
+            "deadline_ms": deadline_ms,
+            "con_id": con_id,
+        },
+    )
+    return IBKRBarRequestDeadlineExceeded(
+        f"A real-time-bar line for conId {con_id} cannot be requested before {deadline_ms}."
+    )
 
 
 class _RealtimeBarRequestPacer:
@@ -161,7 +189,14 @@ class _RealtimeBarRequestPacer:
         self._sleep = sleep
         self._request_times: deque[float] = deque()
 
-    async def acquire(self) -> None:
+    async def acquire(self, *, max_wait_s: float | None = None) -> None:
+        """Take one request slot, waiting for the window to free one.
+
+        With ``max_wait_s``, raise ``TimeoutError`` -- without sleeping and
+        without spending budget -- as soon as the next slot cannot free up
+        within it: a caller whose deadline falls first gains nothing by waiting.
+        """
+        give_up_at = None if max_wait_s is None else self._clock() + max_wait_s
         delayed = False
         while True:
             now = self._clock()
@@ -173,6 +208,8 @@ class _RealtimeBarRequestPacer:
                 return
 
             wait_s = max(0.0, self._request_times[0] + self._window_s - now)
+            if give_up_at is not None and now + wait_s >= give_up_at:
+                raise TimeoutError(f"no real-time-bar request slot frees within {max_wait_s:.1f}s")
             if not delayed:
                 logger.warning(
                     "Pacing new IBKR real-time-bar subscription",
@@ -311,7 +348,14 @@ class _RealtimeBarSubscriptionRegistry:
         bar_size: int,
         what_to_show: str,
         use_rth: bool,
+        request_deadline_ms: int | None = None,
     ) -> _RealtimeBarLease:
+        """Lease a shared line for ``contract``, requesting it if none is live.
+
+        ``request_deadline_ms`` is a continuity consumer's deadline: every wait
+        here -- on the pacer, or on a peer opening the same line -- ends in
+        ``IBKRBarRequestDeadlineExceeded`` rather than outlasting it.
+        """
         con_id = int(getattr(contract, "conId", 0))
         if con_id <= 0:
             raise IBKRBarStreamError(
@@ -358,8 +402,12 @@ class _RealtimeBarSubscriptionRegistry:
                 # Another consumer is opening this exact line. Restart rather
                 # than resuming with this pass's key: the socket may have been
                 # replaced while we waited, and a woken waiter that trusts the
-                # old key becomes the leader for a dead one.
-                await asyncio.shield(pending)
+                # old key becomes the leader for a dead one. The leader may be
+                # pacing under a later deadline than ours, so ours bounds the wait.
+                try:
+                    await asyncio.wait_for(asyncio.shield(pending), _seconds_until(request_deadline_ms))
+                except TimeoutError:
+                    raise _request_deadline_exceeded(request_deadline_ms, con_id) from None
                 continue
 
             max_active = self._max_active_for_client(client)
@@ -383,7 +431,12 @@ class _RealtimeBarSubscriptionRegistry:
                 # so the pacer is only ever entered under a live generation and
                 # never spends budget on a dead key. It can still move during a
                 # real pacing sleep, which is what the check below catches.
-                await self._pacer.acquire()
+                # A pacing wait never outlasts the consumer's continuity
+                # deadline: past it the bar is missed anyway (#2397 review).
+                try:
+                    await self._pacer.acquire(max_wait_s=_seconds_until(request_deadline_ms))
+                except TimeoutError:
+                    raise _request_deadline_exceeded(request_deadline_ms, con_id) from None
                 if _client_generation(client) != generation:
                     # The socket was replaced while we waited on the pacer:
                     # requesting bars now would file them under a dead key.
@@ -836,6 +889,7 @@ async def _iter_leased_raw_bars(
     first_bar_message: str,
     last_source_ms: int | None = None,
     on_source_bar: Callable[[int], None] | None = None,
+    request_deadline_ms: int | None = None,
 ) -> AsyncIterator[_LeasedBar]:
     """Yield raw 5-second bars off one leased ``reqRealTimeBars`` line.
 
@@ -850,7 +904,8 @@ async def _iter_leased_raw_bars(
     before. A redelivery absorbed as a duplicate, or skipped because its
     minute was already flushed, carries none and leaves ``last_source_ms``
     where it was. Pass ``last_source_ms`` when an earlier generation of this
-    stream already advanced it.
+    stream already advanced it, and ``request_deadline_ms`` when a continuity
+    deadline bounds how long acquiring the line may wait.
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
@@ -860,6 +915,7 @@ async def _iter_leased_raw_bars(
         bar_size=5,
         what_to_show="TRADES",
         use_rth=use_rth,
+        request_deadline_ms=request_deadline_ms,
     )
     bars = lease.bars
     index = _resume_index(bars, lease.start_index, last_source_ms)
@@ -1037,6 +1093,7 @@ async def stream_minute_bars(
     on_source_bar: Callable[[int], None] | None = None,
     stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
     assembler: MinuteAssembler,
+    request_deadline_ms: int | None = None,
 ) -> AsyncIterator[IbkrMinuteBar]:
     """Yield closed 1-minute bars built from IBKR 5-second TRADES bars.
 
@@ -1053,6 +1110,10 @@ async def stream_minute_bars(
     a minute emits with ``spans_interruption=True`` by construction. A caller
     that does not want to survive an interruption places a fresh
     ``MinuteAssembler()`` per call, which is the pre-#1921 behaviour.
+
+    ``request_deadline_ms`` is that caller's continuity deadline: acquiring
+    the resubscribed line raises ``IBKRBarRequestDeadlineExceeded`` rather
+    than wait past it (#2397 review).
     """
     sym = symbol.upper()
     try:
@@ -1068,6 +1129,7 @@ async def stream_minute_bars(
                 first_bar_message="IBKR reqRealTimeBars delivered first 5-second bar",
                 last_source_ms=assembler.last_source_ms,
                 on_source_bar=on_source_bar,
+                request_deadline_ms=request_deadline_ms,
             )
         ) as leased_bars:
             async for leased in leased_bars:

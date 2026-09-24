@@ -41,6 +41,7 @@ from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
     FeedContinuityEvent,
+    MarketDataFeedError,
     SubstitutionRefusal,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
@@ -276,6 +277,58 @@ async def test_1101_in_pre_market_resubscribes_a_fresh_line_under_continuity(
 
 
 @pytest.mark.asyncio
+async def test_1101_re_request_paced_past_the_deadline_is_refused_at_the_deadline(
+    clock: AcceleratedFeedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spent 60-per-600 s budget cannot hold a run past its decision deadline.
+
+    After ``recovered`` the fresh line waits on the shared pacer, which can
+    sleep for most of ten minutes. Before the #2397 review nothing enforced the
+    consumer's deadline there: the run sat blocked long past it with no
+    ``refused`` event. The wait is bounded by the deadline the interruption
+    recorded, and the run ends with ADR 0053's ``DECISION_BAR_MISSED``.
+    """
+    never = asyncio.Event()
+
+    async def _pacing_sleep(_seconds: float) -> None:
+        await never.wait()  # a real pacing wait: nothing frees the slot in time
+
+    pacer = bars_mod._RealtimeBarRequestPacer(max_requests=1, clock=clock.monotonic, sleep=_pacing_sleep)
+    monkeypatch.setattr(bars_mod, "_REALTIME_BAR_SUBSCRIPTIONS", bars_mod._RealtimeBarSubscriptionRegistry(pacer))
+    transport = _Transport()
+    client = _client(transport)
+    monitor = _monitor(client, _ChartResubscribe())
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.get_monitor", lambda: monitor)
+    sink = _RecordingSink()
+    feed = IbkrMarketDataFeed(client)
+
+    async with aclosing(feed.stream_bars("SPY", use_rth=False, continuity=_extended_policy(sink))) as bars:
+        first = asyncio.ensure_future(anext(bars))
+        assert await _until(lambda: len(transport.lines) == 1)
+        transport.print_minute(_PRE_MINUTE)
+        await asyncio.wait_for(first, timeout=2)
+        pending = asyncio.ensure_future(anext(bars))
+        try:
+            await asyncio.sleep(0.05)
+            _data_lost(client, transport)
+            await monitor._tick()
+            with pytest.raises(MarketDataFeedError) as refused:
+                await asyncio.wait_for(pending, timeout=2)
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+
+    assert refused.value.reason == "DECISION_BAR_MISSED"
+    assert [(event.kind, event.reason) for event in sink.events] == [
+        ("interruption", None),
+        ("recovered", None),
+        ("refused", "DECISION_BAR_MISSED"),
+    ]
+    assert sink.events[2].deadline_ms == sink.events[0].deadline_ms
+    assert len(transport.lines) == 1  # no request was spent past the deadline
+
+
+@pytest.mark.asyncio
 async def test_reacquire_after_1101_never_multiplexes_onto_the_dead_line(
     clock: AcceleratedFeedClock,
 ) -> None:
@@ -367,6 +420,53 @@ async def test_monitor_runs_chart_recovery_once_per_1101(
         first.cancel()
         await asyncio.gather(first, return_exceptions=True)
         await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_1101_landing_during_recovery_keeps_the_feed_stale(
+    clock: AcceleratedFeedClock,
+) -> None:
+    """A 1101 that lands while the callbacks run drops what they just resubscribed.
+
+    Before the #2397 review the run still cleared ``subscriptions_stale`` and
+    reported HEALTHY for the older epoch, so health and the quote source saw a
+    recovered feed until the next recovery interval. The later loss stays
+    stale until its own recovery runs.
+    """
+    transport = _Transport()
+    client = _client(transport)
+
+    class _FlappingResubscribe(_ChartResubscribe):
+        async def __call__(self) -> None:
+            await super().__call__()
+            if self.calls == 1:
+                _data_lost(client, transport)
+
+    callback = _FlappingResubscribe()
+    monitor = AutoReconnectMonitor(
+        client,
+        recovery_callbacks=[callback],
+        probe_interval_s=3600,
+        subscription_recovery_interval_s=10.0,  # the production default
+        now_ms=clock.now_ms,
+    )
+    _data_lost(client, transport)
+
+    await monitor._tick()
+    clock.advance_ms(5_000)
+    await monitor._tick()  # inside the recovery interval: nothing re-runs yet
+
+    assert callback.calls == 1
+    assert client.subscriptions_stale is True
+    assert monitor.recovery_state == "RESTORING"
+    assert build_broker_health(client, monitor).connection_state != "connected"
+
+    clock.advance_ms(5_000)
+    await monitor._tick()
+
+    assert callback.calls == 2
+    assert client.subscriptions_stale is False
+    assert monitor.recovery_state == "HEALTHY"
 
 
 @pytest.mark.asyncio

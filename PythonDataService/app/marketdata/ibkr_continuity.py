@@ -19,7 +19,11 @@ from dataclasses import dataclass, field
 
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.bar_models import IbkrMinuteBar
-from app.broker.ibkr.bars import IBKRBarStreamError, IBKRBarSubscriptionStalled
+from app.broker.ibkr.bars import (
+    IBKRBarRequestDeadlineExceeded,
+    IBKRBarStreamError,
+    IBKRBarSubscriptionStalled,
+)
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE, MinuteAssembler
 from app.marketdata.feed import (
@@ -267,6 +271,24 @@ class ContinuityLoop:
         await self._record_interruption(interruption, "socket_down")
         await self.await_recovery()
 
+    @property
+    def request_deadline_ms(self) -> int | None:
+        """The deadline a resubscribe's line request must not outwait, if one is open.
+
+        The socket being healthy is not the line being back: the fresh request
+        still waits on the shared 60-per-600 s pacer, and that wait counts
+        against the same consumer deadline (#2397 review). ``None`` with no
+        interruption open -- a first subscribe keeps today's unbounded wait.
+        """
+        return None if self.interruption is None else self.interruption.deadline_ms
+
+    async def refuse_request_past_deadline(self, exc: IBKRBarRequestDeadlineExceeded) -> None:
+        """End the run with ``refused`` when the resubscribe could not be requested in time."""
+        interruption = self.interruption
+        if interruption is None:
+            raise MarketDataFeedError(str(exc)) from exc
+        await self._refuse_decision_bar_missed(interruption.deadline_ms)
+
     def observe_source_bar(self, source_ms: int) -> None:
         """Note where the resubscribed line landed (spec §4.2 rule 4).
 
@@ -340,29 +362,33 @@ class ContinuityLoop:
         """
         while True:
             if now_ms_utc() >= deadline_ms:
-                await self._record(
-                    self._event(
-                        "refused",
-                        reason="DECISION_BAR_MISSED",
-                        last_delivered_end_ms=self.last_delivered_end_ms,
-                        deadline_ms=deadline_ms,
-                    )
-                )
-                logger.error(
-                    "Feed continuity refused: decision bar missed",
-                    extra={
-                        "action": "marketdata_continuity_refused",
-                        "symbol": self.symbol,
-                        "reason": "DECISION_BAR_MISSED",
-                        "deadline_ms": deadline_ms,
-                    },
-                )
-                raise MarketDataFeedError(
-                    f"{self.symbol} was not recovered before {deadline_ms}", reason="DECISION_BAR_MISSED"
-                )
+                await self._refuse_decision_bar_missed(deadline_ms)
             if _healthy(self.client):
                 return
             await asyncio.sleep(WAIT_POLL_S)
+
+    async def _refuse_decision_bar_missed(self, deadline_ms: int) -> None:
+        """Record ADR 0053's ``refused`` for a missed deadline, then end the run."""
+        await self._record(
+            self._event(
+                "refused",
+                reason="DECISION_BAR_MISSED",
+                last_delivered_end_ms=self.last_delivered_end_ms,
+                deadline_ms=deadline_ms,
+            )
+        )
+        logger.error(
+            "Feed continuity refused: decision bar missed",
+            extra={
+                "action": "marketdata_continuity_refused",
+                "symbol": self.symbol,
+                "reason": "DECISION_BAR_MISSED",
+                "deadline_ms": deadline_ms,
+            },
+        )
+        raise MarketDataFeedError(
+            f"{self.symbol} was not recovered before {deadline_ms}", reason="DECISION_BAR_MISSED"
+        )
 
     # -- resolving what the interruption cost -------------------------------
 
