@@ -375,6 +375,25 @@ def _safe_flatten_blocking_uncertainties(
     )
 
 
+def _admitted_uncertainties_newer_than(
+    ctx: RecoveryPolicyContext, reconciliation: ProjectedReconciliation
+) -> tuple[ProjectedUncertainty, ...]:
+    """Admitted broker-side episodes raised or updated after ``reconciliation``.
+
+    A safe flatten admitted under such an episode must not reuse broker truth
+    that predates it (#2363 review); the registry's
+    ``safe_flatten_requires_later_reconciliation`` names which causes are
+    that kind of evidence.
+    """
+    return tuple(
+        uncertainty
+        for uncertainty in _relevant_uncertainties(ctx)
+        if (policy := reason_policy(uncertainty.reason_code)) is not None
+        and policy.safe_flatten_requires_later_reconciliation
+        and uncertainty.observed_at_ms > reconciliation.attempted_at_ms
+    )
+
+
 def _timeline_evidence(ctx: RecoveryPolicyContext) -> tuple[RecoveryEvidence, ...]:
     """Carry the exact evidence scope when the timeline action is presented."""
     candidates: list[tuple[str, str, int | None]] = [
@@ -570,6 +589,12 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif not _is_successful_account_reconciliation(reconciliation):
         reason_code = "CLEAN_RECONCILIATION_REQUIRED"
         reason = "A successful account reconciliation is required before preparing reduction."
+    elif _admitted_uncertainties_newer_than(ctx, reconciliation):
+        reason_code = "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
+        reason = (
+            "Broker evidence the Clerk could not record arrived after the account "
+            "reconciliation."
+        )
     elif any(
         position.updated_at_ms > reconciliation.attempted_at_ms
         for position in positions

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import NamedTuple
 
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import (
@@ -388,61 +389,87 @@ UNFOLDABLE_ACK_ORDER_REF_PREFIX = "broker_order:"
 UNFOLDABLE_ACK_OPERATOR_REF_PREFIX = "operator:"
 
 
+class UnfoldableBrokerOrderReview(NamedTuple):
+    """One operator review of an unfoldable broker order, and what it covered.
+
+    ``broker_state`` is the order's state inside the episode the review
+    resolved: a later observation in a *different* state is new broker
+    evidence the review never saw, so it is fenced again (#2363 review).
+    """
+
+    operator: str
+    acknowledged_at_ms: int
+    broker_state: str
+
+
 def unfoldable_broker_order_acknowledgements(
     conn: sqlite3.Connection,
-) -> dict[str, tuple[str, int]]:
-    """Every operator-acknowledged unfoldable broker order (#2363).
+) -> dict[str, UnfoldableBrokerOrderReview]:
+    """The latest operator review of each unfoldable broker order (#2363).
 
-    ``broker_order_id -> (operator, recorded_at_ms)``, first acknowledgement
-    wins. The hash-chained resolution transition is the durable record: an
-    unfoldable order has no ``external_orders`` row to carry the review.
+    The hash-chained resolution transition is the durable record: an
+    unfoldable order has no ``external_orders`` row to carry the review. The
+    read probes ``custody_transitions`` through the v16 partial
+    ``summary_code`` index and joins each resolution to the episode it closed
+    by primary key, so a resting order re-seen by every sweep never scans the
+    append-only journal.
     """
-    acknowledged: dict[str, tuple[str, int]] = {}
+    reviewed: dict[str, UnfoldableBrokerOrderReview] = {}
     for row in conn.execute(
-        "SELECT facts_json, recorded_at_ms FROM custody_transitions "
-        "WHERE transition_kind = 'UNCERTAINTY_RESOLVED' AND summary_code = ? "
-        "ORDER BY sequence",
+        "SELECT t.facts_json AS resolution_json, t.recorded_at_ms, u.facts_json AS episode_json "
+        "FROM custody_transitions t JOIN uncertainties u "
+        "ON u.uncertainty_id = json_extract(t.facts_json, '$.uncertainty_id') "
+        "WHERE t.transition_kind = 'UNCERTAINTY_RESOLVED' AND t.summary_code = ? "
+        "ORDER BY t.sequence",
         (UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE,),
     ):
-        refs = json.loads(row["facts_json"])["evidence_refs"]
+        refs = json.loads(row["resolution_json"])["evidence_refs"]
         operator = next(
             ref.removeprefix(UNFOLDABLE_ACK_OPERATOR_REF_PREFIX)
             for ref in refs
             if ref.startswith(UNFOLDABLE_ACK_OPERATOR_REF_PREFIX)
         )
+        states = {
+            order["broker_order_id"]: order["broker_state"]
+            for order in json.loads(row["episode_json"])["cause_facts"]["orders"]
+        }
         for ref in refs:
             if ref.startswith(UNFOLDABLE_ACK_ORDER_REF_PREFIX):
-                acknowledged.setdefault(
-                    ref.removeprefix(UNFOLDABLE_ACK_ORDER_REF_PREFIX),
-                    (operator, row["recorded_at_ms"]),
+                broker_order_id = ref.removeprefix(UNFOLDABLE_ACK_ORDER_REF_PREFIX)
+                reviewed[broker_order_id] = UnfoldableBrokerOrderReview(
+                    operator=operator,
+                    acknowledged_at_ms=row["recorded_at_ms"],
+                    broker_state=states[broker_order_id],
                 )
-    return acknowledged
+    return reviewed
 
 
-def unfoldable_broker_orders_observed_since(
+def unfoldable_broker_orders_active_since(
     conn: sqlite3.Connection, *, reason_code: str, since_ms: int
 ) -> int:
-    """How many distinct unfoldable broker orders were first observed at or after ``since_ms``.
+    """How many distinct unfoldable broker orders showed activity at or after ``since_ms``.
 
     The day-P&L fact's companion to :func:`external_orders_observed_since`:
-    an order the Clerk could not record has no journaled fills either. Read
-    from every raise/refresh of the episode, so an acknowledged (released)
-    order still counts for the day it was seen.
+    an order the Clerk could not record has no journaled fills either.
+    Activity is the first observation or any later change of the order's
+    broker state, so an order first seen yesterday that fills today counts
+    today. Every episode row is read, resolved or not, so an acknowledged
+    (released) order still counts for the day it was active; each row holds
+    its episode's final cause, and the latest activity only ever grows. The
+    v16 ``reason_code`` index keeps this off a full ``uncertainties`` scan.
     """
-    first_seen: dict[str, int] = {}
+    latest_activity: dict[str, int] = {}
     for row in conn.execute(
-        "SELECT facts_json FROM custody_transitions "
-        "WHERE transition_kind IN ('UNCERTAINTY_RAISED', 'UNCERTAINTY_REFRESHED') "
-        "AND json_extract(facts_json, '$.reason_code') = ?",
+        "SELECT facts_json FROM uncertainties WHERE reason_code = ?",
         (reason_code,),
     ):
         for order in json.loads(row["facts_json"])["cause_facts"]["orders"]:
             broker_order_id = order["broker_order_id"]
-            observed_at_ms = order["observed_at_ms"]
-            first_seen[broker_order_id] = min(
-                observed_at_ms, first_seen.get(broker_order_id, observed_at_ms)
+            latest_activity[broker_order_id] = max(
+                order["last_activity_at_ms"],
+                latest_activity.get(broker_order_id, order["last_activity_at_ms"]),
             )
-    return sum(1 for observed_at_ms in first_seen.values() if observed_at_ms >= since_ms)
+    return sum(1 for active_at_ms in latest_activity.values() if active_at_ms >= since_ms)
 
 
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:

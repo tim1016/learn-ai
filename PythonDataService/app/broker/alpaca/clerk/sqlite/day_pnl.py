@@ -9,8 +9,10 @@ Validated against: ``tests/broker/alpaca/clerk/sqlite/test_day_pnl.py``.
 
 The fact is *unknown*, never zero, when an external order was observed
 today: its realized P&L is not journaled (plan R5). The same holds for a
-foreign order the Clerk could not record at all (#2363), acknowledged or not. Unrealized P&L is the
-broker's own figure per position, so no marks are needed here.
+foreign order the Clerk could not record at all (#2363), acknowledged or not,
+first seen today or first seen earlier and active (a changed broker state,
+e.g. a fill) today. Unrealized P&L is the broker's own figure per position,
+so no marks are needed here.
 
 ``execution_coverage`` is the projection's own verdict on the evidence the
 realized number rests on; it is carried for consumers (the sync's log line,
@@ -27,7 +29,7 @@ from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import ExecutionCoverage
-from app.broker.alpaca.clerk.sqlite.external_orders import unfoldable_broker_orders_observed_since
+from app.broker.alpaca.clerk.sqlite.external_orders import unfoldable_broker_orders_active_since
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 
@@ -72,7 +74,7 @@ def day_pnl_at(
         execution_coverage=attribution.execution_coverage,
         unrealized_usd=observation.unrealized_pl_usd,
         external_orders_today=repo.external_orders_observed_since(since_ms=day_start_ms),
-        unfoldable_orders_today=unfoldable_broker_orders_observed_since(
+        unfoldable_orders_today=unfoldable_broker_orders_active_since(
             repo, since_ms=day_start_ms
         ),
     )

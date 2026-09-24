@@ -261,6 +261,91 @@ async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_
     assert calls == [("PA-TEST", "external-1", "operator-1")]
 
 
+def _mleg_parent(*, side: str, status: str = "new") -> BrokerOrder:
+    return BrokerOrder(
+        broker="alpaca",
+        order_id="mleg-parent-1",
+        client_order_id="alpaca-console:mleg-1",
+        symbol="AAPL",
+        asset_class="us_option",
+        side=side,
+        order_type="limit",
+        time_in_force="day",
+        quantity=1.0,
+        filled_quantity=0.0,
+        limit_price=1.25,
+        stop_price=None,
+        filled_avg_price=None,
+        status=status,
+        submitted_at_ms=1_700_000_000_000,
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_000_000,
+        filled_at_ms=None,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        events=[],
+        observed_at_ms=1_700_000_000_000,
+    )
+
+
+async def _acknowledge_through_route(
+    repo: ClerkSqliteRepository, broker_order_id: str, operator: str
+) -> Response:
+    broker = object()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            return await client.post(
+                f"/api/accounts/{_ACCOUNT_NUMBER}/transactions/external-orders/"
+                f"{broker_order_id}/acknowledge",
+                json={"operator": operator},
+            )
+    finally:
+        set_active_clerk_runtime(None)
+
+
+async def test_acknowledgement_releases_an_unfoldable_fence_even_when_the_id_has_an_external_row(
+    tmp_path: Path,
+) -> None:
+    """#2363 review: one broker id can carry both records.
+
+    It folded once as an external row, then a later observation of it could
+    not be folded. Before the fix the route saw the row and only ever
+    acknowledged it, so the unfoldable entry pause for that id could never
+    be released. Now one review releases the fence and acknowledges the row.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=_ACCOUNT_NUMBER, artifacts_root=tmp_path)
+    try:
+        observe_external_order(repo, order=_mleg_parent(side="buy"))
+        record_unfoldable_broker_order(
+            repo,
+            order=_mleg_parent(side="None", status="partially_filled"),
+            reason="external order side must be buy or sell",
+        )
+        assert {row["reason_code"] for row in repo.active_uncertainties()} == {
+            "UNEXPLAINED_ORDER_HOLD",
+            "UNFOLDABLE_BROKER_ORDER",
+        }
+
+        first = await _acknowledge_through_route(repo, "mleg-parent-1", "operator-1")
+        remaining = repo.active_uncertainties()
+        row = repo.external_order("mleg-parent-1")
+    finally:
+        repo.close()
+
+    assert first.status_code == 200, first.text
+    assert first.json()["ack_operator"] == "operator-1"
+    assert remaining == []
+    assert row is not None and row.ack_operator == "operator-1"
+
+
 async def test_external_order_acknowledgement_route_releases_an_unfoldable_order(
     tmp_path: Path,
 ) -> None:
@@ -273,30 +358,7 @@ async def test_external_order_acknowledgement_route_releases_an_unfoldable_order
     broker = object()
     record_unfoldable_broker_order(
         repo,
-        order=BrokerOrder(
-            broker="alpaca",
-            order_id="mleg-parent-1",
-            client_order_id="alpaca-console:mleg-1",
-            symbol="AAPL",
-            asset_class="us_option",
-            side="None",
-            order_type="limit",
-            time_in_force="day",
-            quantity=1.0,
-            filled_quantity=0.0,
-            limit_price=1.25,
-            stop_price=None,
-            filled_avg_price=None,
-            status="new",
-            submitted_at_ms=1_700_000_000_000,
-            created_at_ms=1_700_000_000_000,
-            updated_at_ms=1_700_000_000_000,
-            filled_at_ms=None,
-            canceled_at_ms=None,
-            expired_at_ms=None,
-            events=[],
-            observed_at_ms=1_700_000_000_000,
-        ),
+        order=_mleg_parent(side="None"),
         reason="external order side must be buy or sell",
     )
     set_active_clerk_runtime(

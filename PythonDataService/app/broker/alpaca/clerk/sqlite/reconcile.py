@@ -99,6 +99,10 @@ AccountVerdict = Literal["clean", "unexplained_order", "position_drift", "stale"
 class ReconcilePlan:
     verdict: AccountVerdict
     foreign_orders: tuple[BrokerOrder, ...] = field(default_factory=tuple)
+    # The foreign orders the verdict and the unexplained-order hold judge:
+    # every foreign order until ``_contain_unfoldable_orders`` removes the
+    # ones contained under their own fence (#2363).
+    unexplained_orders: tuple[BrokerOrder, ...] = field(default_factory=tuple)
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
     indeterminate_symbols: tuple[str, ...] = field(default_factory=tuple)
 
@@ -238,22 +242,64 @@ def plan_account_reconciliation(
     indeterminate = tuple(
         sorted(symbol for symbol in mismatched_symbols if symbol in in_flight_symbols)
     )
-    verdict: AccountVerdict
-    if foreign:
-        verdict = "unexplained_order"
-    elif drifted or indeterminate:
+    return ReconcilePlan(
+        verdict=_account_verdict(
+            unexplained_orders=foreign, drifted=drifted, indeterminate=indeterminate
+        ),
+        foreign_orders=foreign,
+        unexplained_orders=foreign,
+        drifted_symbols=drifted,
+        indeterminate_symbols=indeterminate,
+    )
+
+
+def _account_verdict(
+    *,
+    unexplained_orders: tuple[BrokerOrder, ...],
+    drifted: tuple[str, ...],
+    indeterminate: tuple[str, ...],
+) -> AccountVerdict:
+    if unexplained_orders:
+        return "unexplained_order"
+    if drifted or indeterminate:
         # #1655: a symbol whose broker/attributed mismatch is only explained
         # by a still-working captured order is not proven equal — it is
         # unproven, not clean. Treat it the same as a confirmed drift for
         # admission purposes until a later pass proves exact equality.
-        verdict = "position_drift"
-    else:
-        verdict = "clean"
-    return ReconcilePlan(
-        verdict=verdict,
-        foreign_orders=foreign,
-        drifted_symbols=drifted,
-        indeterminate_symbols=indeterminate,
+        return "position_drift"
+    return "clean"
+
+
+def _contain_unfoldable_orders(repo: ClerkSqliteRepository, plan: ReconcilePlan) -> ReconcilePlan:
+    """Take custody of every foreign order and re-judge the verdict without the contained ones.
+
+    An order no external row can state is contained under its own entry
+    fence (#2363) and so is not *unexplained*: it is named, durable, and
+    reviewed on its own route. Leaving it in the verdict would record every
+    operator reconciliation as ``STILL_UNKNOWN`` while it rests, refusing the
+    safe flatten and the flat-exit proofs the containment exists to keep
+    open. Position drift is judged exactly as before: the contained order's
+    symbol still counts as in flight, so any position it moved is fenced
+    per symbol.
+    """
+    contained = {
+        foreign_order.order_id
+        for foreign_order in plan.foreign_orders
+        if observe_or_record_unfoldable(repo, order=foreign_order) == "unfoldable"
+    }
+    unexplained = tuple(
+        foreign_order
+        for foreign_order in plan.foreign_orders
+        if foreign_order.order_id not in contained
+    )
+    return replace(
+        plan,
+        verdict=_account_verdict(
+            unexplained_orders=unexplained,
+            drifted=plan.drifted_symbols,
+            indeterminate=plan.indeterminate_symbols,
+        ),
+        unexplained_orders=unexplained,
     )
 
 
@@ -962,22 +1008,8 @@ def _finalize_reconciliation_verdict(
         attributed_positions=repo.attributed_positions_by_symbol(),
         known_order_refs=frozenset(repo.all_order_refs()),
     )
-    # An order no external row can state is contained under its own entry
-    # fence (#2363) and kept out of the unexplained-order hold: that hold is
-    # released by acknowledging an external row this order can never have.
-    unfoldable_order_ids = {
-        foreign_order.order_id
-        for foreign_order in plan.foreign_orders
-        if observe_or_record_unfoldable(repo, order=foreign_order) == "unfoldable"
-    }
-    _sync_unexplained_order_hold(
-        repo,
-        tuple(
-            foreign_order
-            for foreign_order in plan.foreign_orders
-            if foreign_order.order_id not in unfoldable_order_ids
-        ),
-    )
+    plan = _contain_unfoldable_orders(repo, plan)
+    _sync_unexplained_order_hold(repo, plan.unexplained_orders)
     _sync_position_drift(
         repo,
         drifted_symbols=plan.drifted_symbols,

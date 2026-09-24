@@ -132,7 +132,9 @@ def test_unreported_fees_net_nothing_and_say_so(
     assert pnl.fee_usd == 0.0 and pnl.fee_fidelity == "not_reported"
 
 
-def _unfoldable_foreign_order(*, observed_at_ms: int) -> BrokerOrder:
+def _unfoldable_foreign_order(
+    *, observed_at_ms: int, status: str = "filled", filled_quantity: float = 1.0
+) -> BrokerOrder:
     """A multi-leg parent with a null side: no external row can state it (#2363)."""
     return BrokerOrder(
         broker="alpaca",
@@ -144,11 +146,11 @@ def _unfoldable_foreign_order(*, observed_at_ms: int) -> BrokerOrder:
         order_type="limit",
         time_in_force="day",
         quantity=1.0,
-        filled_quantity=1.0,
+        filled_quantity=filled_quantity,
         limit_price=1.25,
         stop_price=None,
-        filled_avg_price=1.20,
-        status="filled",
+        filled_avg_price=1.20 if filled_quantity else None,
+        status=status,
         submitted_at_ms=observed_at_ms,
         created_at_ms=observed_at_ms,
         updated_at_ms=observed_at_ms,
@@ -199,5 +201,60 @@ def test_an_unfoldable_order_seen_yesterday_does_not(
         order=_unfoldable_foreign_order(observed_at_ms=YESTERDAY_NOON),
         reason="external order side must be buy or sell",
     )
+    pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert pnl.unfoldable_orders_today == 0 and pnl.known
+
+
+@pytest.mark.parametrize("acknowledged_yesterday", [False, True])
+def test_an_unfoldable_order_seen_yesterday_that_fills_today_makes_today_unknown(
+    day_pnl_repo: ClerkSqliteRepository,
+    reader: SqliteEconomicProjectionReader,
+    acknowledged_yesterday: bool,
+) -> None:
+    """#2363 review: first-seen alone missed today's activity on an old order.
+
+    The order rested unfilled yesterday -- today's fact was known -- and
+    fills this morning. Its fill is not journaled, so today is unknown
+    whether or not the operator reviewed the resting order yesterday: the
+    review covered an unfilled order, and the fill is new broker activity.
+    """
+    record_unfoldable_broker_order(
+        day_pnl_repo,
+        order=_unfoldable_foreign_order(
+            observed_at_ms=YESTERDAY_NOON, status="new", filled_quantity=0.0
+        ),
+        reason="external order side must be buy or sell",
+    )
+    if acknowledged_yesterday:
+        acknowledge_unfoldable_broker_order(
+            day_pnl_repo, broker_order_id="mleg-parent-1", operator="operator-1"
+        )
+    resting = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert resting.unfoldable_orders_today == 0 and resting.known
+
+    record_unfoldable_broker_order(
+        day_pnl_repo,
+        order=_unfoldable_foreign_order(observed_at_ms=TODAY_OPEN),
+        reason="external order side must be buy or sell",
+    )
+
+    filled = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert filled.unfoldable_orders_today == 1 and not filled.known
+
+
+def test_an_unfoldable_order_resting_unchanged_since_yesterday_keeps_today_known(
+    day_pnl_repo: ClerkSqliteRepository,
+    reader: SqliteEconomicProjectionReader,
+) -> None:
+    """A sweep re-seeing the same resting state today is not activity."""
+    for observed_at_ms in (YESTERDAY_NOON, TODAY_OPEN):
+        record_unfoldable_broker_order(
+            day_pnl_repo,
+            order=_unfoldable_foreign_order(
+                observed_at_ms=observed_at_ms, status="new", filled_quantity=0.0
+            ),
+            reason="external order side must be buy or sell",
+        )
+
     pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
     assert pnl.unfoldable_orders_today == 0 and pnl.known

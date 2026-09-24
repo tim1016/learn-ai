@@ -380,6 +380,126 @@ async def test_execute_safe_flatten_presented_for_stopped_bot_with_exposure(
     assert [leg.symbol for leg in execute.reduction_plan.legs] == ["SPY"]
 
 
+def _unfoldable_open_order() -> BrokerOrder:
+    """A resting multi-leg parent (``side`` null) on a symbol no bot holds (#2363)."""
+    return _broker_order(
+        "alpaca-console:mleg-1", order_id="mleg-open-1", symbol="MSFT", status="new"
+    ).model_copy(update={"side": "None"})
+
+
+def _flatten_catalog(repo: ClerkSqliteRepository) -> dict[str, Any]:
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        context = reader.recovery_context(strategy_instance_id=SID)
+    finally:
+        reader.close()
+    assert context is not None
+    return {item.action_id: item for item in build_recovery_catalog(context)}
+
+
+async def test_reconcile_now_with_only_a_contained_unfoldable_order_offers_safe_flatten(
+    crashed_with_exposure,
+) -> None:
+    """#2363 review: "Reconcile now" must not re-block the flatten it recommends.
+
+    Before the fix a contained unfoldable order still made the verdict
+    ``unexplained_order``, so the operator receipt was ``STILL_UNKNOWN`` and
+    the flatten refused with CLEAN_RECONCILIATION_REQUIRED while positions
+    matched exactly and the contained order was the only residual fact.
+    """
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(
+            orders=[_unfoldable_open_order()], positions=[_position("SPY", quantity=10.0)]
+        ),
+        trade=_FakeTrade(),
+        trigger="OPERATOR_RECONCILE_NOW",
+    )
+
+    assert result.verdict == "clean" and result.foreign_order_count == 1
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
+    assert {row["reason_code"] for row in repo.active_uncertainties()} == {
+        "UNFOLDABLE_BROKER_ORDER"
+    }
+    catalog = _flatten_catalog(repo)
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        assert catalog[action_id].available, catalog[action_id].unavailable_reason
+
+
+async def test_contained_unfoldable_order_keeps_position_drift_protection(
+    crashed_with_exposure,
+) -> None:
+    """Containment removes the order from the *unexplained* verdict only: a
+    broker position that disagrees with custody still judges as drift."""
+    repo, _clock = crashed_with_exposure
+    await _held_position(repo)
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(
+            orders=[_unfoldable_open_order()], positions=[_position("SPY", quantity=12.0)]
+        ),
+        trade=_FakeTrade(),
+        trigger="OPERATOR_RECONCILE_NOW",
+    )
+
+    assert result.verdict == "position_drift"
+    assert result.drifted_symbols == ("SPY",)
+
+
+async def test_safe_flatten_refuses_a_reconciliation_that_predates_an_unfoldable_order(
+    crashed_with_exposure,
+) -> None:
+    """#2363 review: the flatten must not reuse broker truth older than the order.
+
+    The trade-update stream raises the unfoldable episode after the last
+    successful reconciliation; before the fix the admitted episode was simply
+    ignored and the stale reconciliation authorized the flatten.
+    """
+    repo, clock = crashed_with_exposure
+    await _held_position(repo)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+    )
+    await _reconciled_flatten_plan(repo)
+    _walk_clock_to(repo, clock.value + 5_000)
+    await SqliteTradeUpdateEvidenceSink(
+        repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler()
+    ).record_lifecycle_event(
+        client_order_id="alpaca-console:mleg-1",
+        event=BrokerOrderEvent(
+            event_type="new", occurred_at_ms=clock.value, price=None, quantity=None
+        ),
+        event_key="mleg-open-1|new",
+        order=_unfoldable_open_order(),
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    stale = _flatten_catalog(repo)
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        assert stale[action_id].available is False, action_id
+        assert stale[action_id].unavailable_reason_code == "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(
+            orders=[_unfoldable_open_order()], positions=[_position("SPY", quantity=10.0)]
+        ),
+        trade=_FakeTrade(),
+        trigger="OPERATOR_RECONCILE_NOW",
+    )
+    assert _flatten_catalog(repo)["prepare_safe_flatten"].available
+
+
 async def test_execute_safe_flatten_blocked_while_a_run_is_active(
     crashed_with_exposure,
 ) -> None:

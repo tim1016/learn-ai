@@ -11,9 +11,15 @@ from typing import Any, cast
 import pytest
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
-from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_unfoldable_broker_order
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    UNIDENTIFIED_BROKER_ORDER_ID,
+    acknowledge_unfoldable_broker_order,
+    record_unfoldable_broker_order,
+    unfoldable_broker_orders_active_since,
+)
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
@@ -865,11 +871,14 @@ async def test_gap_replay_contains_an_unfoldable_closed_order_and_keeps_folding_
         (recorded,) = json.loads(episode["facts_json"])["cause_facts"]["orders"]
         # The replay re-maps the REST snapshot, so its observation instant is
         # the consumer's clock; only its presence is pinned here.
-        assert isinstance(recorded.pop("observed_at_ms"), int)
+        observed_at_ms = recorded.pop("observed_at_ms")
+        assert isinstance(observed_at_ms, int)
+        assert recorded.pop("last_activity_at_ms") == observed_at_ms
         assert recorded == {
             "broker_order_id": "mleg-parent-1",
             "client_order_id": "alpaca-console:mleg-1",
             "reason": "external order side must be buy or sell",
+            "broker_state": "filled filled=1.0",
         }
         assert json.loads(episode["evidence_refs_json"]) == ["mleg-parent-1"]
         # A repeated replay of the same poison does not grow the hash chain.
@@ -1007,5 +1016,147 @@ async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
         acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-1", operator="op-1")
 
         assert posture_condition() == baseline
+    finally:
+        repo.close()
+
+
+def _unfoldable(order_id: str, **update: Any) -> BrokerOrder:
+    return _owned_order("alpaca-console:x").model_copy(
+        update={"order_id": order_id, "side": "None", **update}
+    )
+
+
+def _unfoldable_evidence_refs(repo: ClerkSqliteRepository) -> list[str] | None:
+    episode = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
+    )
+    return None if episode is None else json.loads(episode["evidence_refs_json"])
+
+
+def test_an_acknowledged_unidentified_order_never_whitelists_the_next_one(
+    tmp_path: Path,
+) -> None:
+    """#2363 review: every id-less order collapses to one sentinel identity.
+
+    Before the fix, reviewing the first anonymous order recorded the sentinel
+    as reviewed, so every later id-less order -- a different order the
+    operator never saw -- appended nothing, left entries open, and dropped
+    out of the day-P&L unknown count.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        record_unfoldable_broker_order(
+            repo,
+            order=_unfoldable("", client_order_id="anon-1", observed_at_ms=1_000),
+            reason="broker order id must be non-empty",
+        )
+        assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
+        acknowledge_unfoldable_broker_order(
+            repo, broker_order_id=UNIDENTIFIED_BROKER_ORDER_ID, operator="op-1"
+        )
+        assert repo.active_uncertainties() == []
+
+        outcome = record_unfoldable_broker_order(
+            repo,
+            order=_unfoldable("", client_order_id="anon-2", observed_at_ms=2_000),
+            reason="broker order id must be non-empty",
+        )
+
+        assert outcome == "raised"
+        assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
+        entry = decide_capability(repo, capability=Capability.NEW_EXPOSURE, subject_id="s")
+        assert entry.allowed is False and entry.reason_code == "UNFOLDABLE_BROKER_ORDER"
+        assert unfoldable_broker_orders_active_since(repo, since_ms=2_000) == 1
+    finally:
+        repo.close()
+
+
+def test_new_activity_on_a_reviewed_order_fences_entries_again(tmp_path: Path) -> None:
+    """A review covers the order's state the operator saw; a later fill is new evidence.
+
+    An unchanged re-observation (a replay, a sweep of a resting order) stays
+    reviewed and appends nothing -- mirroring an acknowledged external row.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        resting = _unfoldable("mleg-1", status="new", filled_quantity=0.0, observed_at_ms=1_000)
+        record_unfoldable_broker_order(repo, order=resting, reason="side must be buy or sell")
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-1", operator="op-1")
+        before = len(repo.custody_transitions())
+
+        again = record_unfoldable_broker_order(
+            repo, order=resting.model_copy(update={"observed_at_ms": 2_000}), reason="side"
+        )
+        assert again == "acknowledged" and len(repo.custody_transitions()) == before
+
+        filled = record_unfoldable_broker_order(
+            repo,
+            order=resting.model_copy(
+                update={"status": "filled", "filled_quantity": 1.0, "observed_at_ms": 3_000}
+            ),
+            reason="side must be buy or sell",
+        )
+
+        assert filled == "raised" and _unfoldable_evidence_refs(repo) == ["mleg-1"]
+        # A second review of the new state releases it again.
+        review = acknowledge_unfoldable_broker_order(
+            repo, broker_order_id="mleg-1", operator="op-2"
+        )
+        assert review.ack_operator == "op-2" and repo.active_uncertainties() == []
+    finally:
+        repo.close()
+
+
+_UNFOLDABLE_INDEXES = frozenset(
+    {"ix_custody_transitions_resolution_summary", "ix_uncertainties_reason_code"}
+)
+
+
+def test_v16_migration_adds_the_unfoldable_order_indexes(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    conn = repo._conn
+    try:
+        for index in sorted(_UNFOLDABLE_INDEXES):
+            conn.execute(f"DROP INDEX {index}")
+        conn.execute("UPDATE control_meta SET schema_version = 15 WHERE id = 1")
+        conn.commit()
+
+        schema.migrate_schema(conn, from_version=15)
+
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 16
+        names = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+        assert names >= _UNFOLDABLE_INDEXES
+    finally:
+        repo.close()
+
+
+def test_unfoldable_order_reads_probe_their_indexes_never_scan(tmp_path: Path) -> None:
+    """#2363 review perf guard: a resting unfoldable order is re-seen every sweep
+    under the write coordinator, so its review read must not scan the journal."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    conn = repo._conn
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        reads.unfoldable_broker_order_acknowledgements(conn)
+        reads.unfoldable_broker_orders_active_since(
+            conn, reason_code="UNFOLDABLE_BROKER_ORDER", since_ms=0
+        )
+    finally:
+        conn.set_trace_callback(None)
+    try:
+        (review_read,) = [sql for sql in statements if "FROM custody_transitions t" in sql]
+        (activity_read,) = [sql for sql in statements if "FROM uncertainties WHERE" in sql]
+        for statement, index in (
+            (review_read, "ix_custody_transitions_resolution_summary"),
+            (activity_read, "ix_uncertainties_reason_code"),
+        ):
+            plan = " | ".join(
+                row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + statement)
+            )
+            assert index in plan, plan
+            assert "SCAN t" not in plan and "SCAN uncertainties" not in plan, plan
     finally:
         repo.close()

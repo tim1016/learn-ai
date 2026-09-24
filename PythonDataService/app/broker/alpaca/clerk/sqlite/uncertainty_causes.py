@@ -318,14 +318,20 @@ class UnexplainedOrderCause:
 class UnfoldableBrokerOrder:
     """One broker order the fold refused, the fold's own reason, and when.
 
-    ``observed_at_ms`` is the first observation, never advanced by a replay:
-    the day-P&L fact reads it to know the day holds P&L it cannot journal.
+    ``observed_at_ms`` is the first observation, never advanced by a replay.
+    ``broker_state`` is the order's broker status and cumulative fill
+    (``"<status> filled=<qty>"``); ``last_activity_at_ms`` is when that state
+    was last seen to change. The day-P&L fact reads the activity stamp, so an
+    order first seen yesterday that fills today still marks today unknown,
+    exactly as an external order's changed observation does.
     """
 
     broker_order_id: str
     client_order_id: str | None
     reason: str
     observed_at_ms: int
+    broker_state: str
+    last_activity_at_ms: int
 
     def to_mapping(self) -> dict[str, Any]:
         return {
@@ -333,6 +339,8 @@ class UnfoldableBrokerOrder:
             "client_order_id": self.client_order_id,
             "reason": self.reason,
             "observed_at_ms": self.observed_at_ms,
+            "broker_state": self.broker_state,
+            "last_activity_at_ms": self.last_activity_at_ms,
         }
 
     @classmethod
@@ -340,25 +348,45 @@ class UnfoldableBrokerOrder:
         if not isinstance(value, dict):
             raise ValueError("unfoldable broker order must be an object")
         _require_exact_keys(
-            value, {"broker_order_id", "client_order_id", "reason", "observed_at_ms"}
+            value,
+            {
+                "broker_order_id",
+                "client_order_id",
+                "reason",
+                "observed_at_ms",
+                "broker_state",
+                "last_activity_at_ms",
+            },
         )
         broker_order_id = value["broker_order_id"]
         client_order_id = value["client_order_id"]
         reason = value["reason"]
         observed_at_ms = value["observed_at_ms"]
+        broker_state = value["broker_state"]
+        last_activity_at_ms = value["last_activity_at_ms"]
         if not isinstance(broker_order_id, str) or not broker_order_id:
             raise ValueError("unfoldable broker_order_id must be a non-empty string")
         if client_order_id is not None and (not isinstance(client_order_id, str) or not client_order_id):
             raise ValueError("unfoldable client_order_id must be null or a non-empty string")
         if not isinstance(reason, str) or not reason:
             raise ValueError("unfoldable reason must be a non-empty string")
-        if isinstance(observed_at_ms, bool) or not isinstance(observed_at_ms, int) or observed_at_ms < 0:
-            raise ValueError("unfoldable observed_at_ms must be a non-negative int64 ms")
+        if not isinstance(broker_state, str) or not broker_state:
+            raise ValueError("unfoldable broker_state must be a non-empty string")
+        for name, stamp in (
+            ("observed_at_ms", observed_at_ms),
+            ("last_activity_at_ms", last_activity_at_ms),
+        ):
+            if isinstance(stamp, bool) or not isinstance(stamp, int) or stamp < 0:
+                raise ValueError(f"unfoldable {name} must be a non-negative int64 ms")
+        if last_activity_at_ms < observed_at_ms:
+            raise ValueError("unfoldable last_activity_at_ms must not precede observed_at_ms")
         return cls(
             broker_order_id=broker_order_id,
             client_order_id=client_order_id,
             reason=reason,
             observed_at_ms=observed_at_ms,
+            broker_state=broker_state,
+            last_activity_at_ms=last_activity_at_ms,
         )
 
 

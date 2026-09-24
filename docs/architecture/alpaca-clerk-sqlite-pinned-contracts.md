@@ -102,6 +102,15 @@
   historical ENTER stays nonterminal, so without them that read scanned
   `fills` once per order and again per fill. The registered v14 → v15
   migration is the same two `CREATE INDEX IF NOT EXISTS` statements.
+- Schema-v16 is index-only (#2363): `ix_custody_transitions_resolution_summary`
+  (partial, `UNCERTAINTY_RESOLVED` rows only) lets the unfoldable-broker-order
+  fence read its operator reviews
+  (`UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED` resolutions) without scanning the
+  append-only journal on every sweep of a resting order, and
+  `ix_uncertainties_reason_code` lets the day-P&L fact read every
+  `UNFOLDABLE_BROKER_ORDER` episode without scanning `uncertainties`. The
+  registered v15 → v16 migration is the same two `CREATE INDEX IF NOT EXISTS`
+  statements.
 - Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
   captured *every* same-strategy/symbol sibling entry; it now captures every
   sibling that is still **cancel-provable**, excluding one already carrying
@@ -1167,6 +1176,9 @@ CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id) WHERE execution
 
 CREATE INDEX IF NOT EXISTS ix_fills_order_ref ON fills(order_ref);
 CREATE INDEX IF NOT EXISTS ix_fills_superseded_execution_ref ON fills(superseded_execution_ref);
+
+CREATE INDEX IF NOT EXISTS ix_custody_transitions_resolution_summary ON custody_transitions(summary_code) WHERE transition_kind = 'UNCERTAINTY_RESOLVED';
+CREATE INDEX IF NOT EXISTS ix_uncertainties_reason_code ON uncertainties(reason_code);
 ```
 
 The `holds` view appears **twice** on purpose: v12 creates it, and the v13

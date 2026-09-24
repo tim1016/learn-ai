@@ -43,15 +43,15 @@ class ClerkSqliteRepositoryExternalOrderApi:
 
     def unfoldable_broker_order_acknowledgements(
         self: ClerkSqliteRepository,
-    ) -> dict[str, tuple[str, int]]:
+    ) -> dict[str, reads.UnfoldableBrokerOrderReview]:
         with self._write_lock:
             return reads.unfoldable_broker_order_acknowledgements(self._conn)
 
-    def unfoldable_broker_orders_observed_since(
+    def unfoldable_broker_orders_active_since(
         self: ClerkSqliteRepository, *, reason_code: str, since_ms: int
     ) -> int:
         with self._write_lock:
-            return reads.unfoldable_broker_orders_observed_since(
+            return reads.unfoldable_broker_orders_active_since(
                 self._conn, reason_code=reason_code, since_ms=since_ms
             )
 

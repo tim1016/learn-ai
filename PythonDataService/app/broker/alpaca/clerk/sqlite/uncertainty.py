@@ -787,13 +787,18 @@ class RefusalClass(StrEnum):
 # fact, so an envelope refusal retries on the next decision clock. Every
 # arming refusal joins them too (slice 7): a lost arming refuses that
 # instance's next ENTER, is warned about once per transition and is named in
-# the live verdict — nothing pauses, and nothing halts from admission.
+# the live verdict — nothing pauses, and nothing halts from admission. The
+# unfoldable-broker-order entry pause (#2363) joins them for the same ADR 0059
+# reason: it is an account-scoped fact an operator review ends, so a bot's
+# refused ENTER is a ``blocked`` receipt retried on the next decision clock,
+# never a crash that leaves the bot dead after the review.
 TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
     frozenset(
         {
             BROKER_SNAPSHOT_STALE_REASON_CODE,
             RECONCILIATION_INCOMPLETE_REASON_CODE,
             "RECONCILIATION_IN_PROGRESS",
+            UNFOLDABLE_BROKER_ORDER_REASON_CODE,
         }
     )
     | ENVELOPE_ADMISSION_REASON_CODES

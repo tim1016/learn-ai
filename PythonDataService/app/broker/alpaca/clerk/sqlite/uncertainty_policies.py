@@ -102,6 +102,17 @@ class ReasonPolicy:
     # exists to clear (a stuck/not-flat EXIT) or that say nothing about any
     # attributed quantity (an unfoldable foreign order, #2363).
     admits_safe_flatten: bool = False
+    # Whether an admitted episode is *broker-side* evidence the latest
+    # successful account reconciliation must postdate before a safe flatten
+    # may rely on it. Set for an unfoldable foreign order (#2363 review): it
+    # can be raised by the trade-update stream after the reconciliation, and
+    # the flatten must not reuse broker truth that predates it. Not set for
+    # EXIT_NOT_FLAT / EXIT_STUCK: those are the Clerk's own EXIT bookkeeping,
+    # refreshed by every automatic re-drive, and requiring a newer
+    # reconciliation after each would refuse the very flatten that clears
+    # them; their attributed quantities are already pinned by the
+    # position-evidence freshness gate.
+    safe_flatten_requires_later_reconciliation: bool = False
 
 
 def _position_drift_cause_is_valid(value: Any) -> bool:
@@ -266,6 +277,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=True,
         admits_safe_flatten=True,
+        safe_flatten_requires_later_reconciliation=True,
         cause_is_valid=_unfoldable_broker_order_cause_is_valid,
         age=CauseCleared(),
     ),

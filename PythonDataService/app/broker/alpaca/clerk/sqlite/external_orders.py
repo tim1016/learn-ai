@@ -17,7 +17,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -140,8 +140,21 @@ def observe_or_record_unfoldable(
 
 
 # Every order the broker supplied no id for collapses into one entry, so a
-# stream of anonymous poison cannot grow the episode without bound.
+# stream of anonymous poison cannot grow the episode without bound. Because
+# the sentinel names no particular order, a review of it is never remembered
+# as a review of whatever anonymous order arrives next: each later anonymous
+# observation fences entries again (#2363 review).
 UNIDENTIFIED_BROKER_ORDER_ID = "unidentified-broker-order"
+
+
+def _broker_state(order: BrokerOrder) -> str:
+    """The order's broker lifecycle state and cumulative fill, as one token.
+
+    A change in it is *activity* -- a fill, a cancel, an expiry -- which is
+    new broker evidence an earlier review never saw. A replay or a sweep
+    re-seeing the same state is not.
+    """
+    return f"{order.status.strip().lower()} filled={order.filled_quantity!r}"
 
 
 def record_unfoldable_broker_order(
@@ -156,23 +169,42 @@ def record_unfoldable_broker_order(
     The order joins the one account-scoped ``UNFOLDABLE_BROKER_ORDER``
     episode, keyed by broker order id: new exposure is fenced account-wide
     until an operator acknowledges it, reductions stay admitted. An order
-    already in the episode keeps its first entry, so a replay appends
-    nothing. An acknowledged order is never re-fenced, mirroring an
-    acknowledged external-order row. Returns ``"acknowledged"`` for that
-    case, else :func:`raise_uncertainty`'s outcome.
+    already in the episode in the same broker state appends nothing, so a
+    replay or a sweep re-seeing a resting order is free. A change of state
+    re-states the entry with a new ``last_activity_at_ms`` (its first
+    observation is kept). An acknowledged order is not re-fenced while its
+    broker state is the one the operator reviewed -- mirroring an
+    acknowledged external-order row -- but new activity on it is new
+    evidence and fences again. Returns ``"acknowledged"`` for a reviewed,
+    unchanged order, else :func:`raise_uncertainty`'s outcome.
     """
     entry = UnfoldableBrokerOrder(
         broker_order_id=order.order_id.strip() or UNIDENTIFIED_BROKER_ORDER_ID,
         client_order_id=order.client_order_id or None,
         reason=reason,
         observed_at_ms=order.observed_at_ms,
+        broker_state=_broker_state(order),
+        last_activity_at_ms=order.observed_at_ms,
     )
     with repo.unfoldable_order_write_serialized():
-        if entry.broker_order_id in repo.unfoldable_broker_order_acknowledgements():
+        review = (
+            None
+            if entry.broker_order_id == UNIDENTIFIED_BROKER_ORDER_ID
+            else repo.unfoldable_broker_order_acknowledgements().get(entry.broker_order_id)
+        )
+        if review is not None and review.broker_state == entry.broker_state:
             outcome = "acknowledged"
         else:
             known = _active_unfoldable_orders(repo)
-            known.setdefault(entry.broker_order_id, entry)
+            prior = known.get(entry.broker_order_id)
+            if prior is None:
+                known[entry.broker_order_id] = entry
+            elif prior.broker_state != entry.broker_state:
+                known[entry.broker_order_id] = replace(
+                    entry,
+                    observed_at_ms=prior.observed_at_ms,
+                    last_activity_at_ms=max(entry.observed_at_ms, prior.observed_at_ms),
+                )
             outcome = _state_unfoldable_episode(
                 repo,
                 orders=known,
@@ -192,6 +224,7 @@ def record_unfoldable_broker_order(
             "broker_order_id": entry.broker_order_id,
             "client_order_id": entry.client_order_id,
             "symbol": order.symbol,
+            "broker_state": entry.broker_state,
             "reason": reason,
             "proof_reference": proof_reference,
             "uncertainty_outcome": outcome,
@@ -213,6 +246,13 @@ class UnfoldableBrokerOrderAcknowledgement:
     ack_operator: str
 
 
+def unfoldable_broker_order_is_unreviewed(
+    repo: ClerkSqliteRepository, *, broker_order_id: str
+) -> bool:
+    """Whether the active entry fence still names this broker order."""
+    return broker_order_id in _active_unfoldable_orders(repo)
+
+
 def acknowledge_unfoldable_broker_order(
     repo: ClerkSqliteRepository,
     *,
@@ -224,27 +264,23 @@ def acknowledge_unfoldable_broker_order(
     The review is recorded as the episode's resolution (hash-chained, naming
     the order and the operator); any other orders still unreviewed are
     re-stated as a fresh episode, so the fence stays up until each is
-    reviewed. Acknowledging an already-reviewed order returns that review.
-    Raises :class:`ExternalOrderNotFoundError` for an order the episode
-    never named.
+    reviewed. An order the active fence no longer names returns its latest
+    review. Raises :class:`ExternalOrderNotFoundError` for an order no
+    episode ever named.
     """
     if not broker_order_id:
         raise ValueError("broker_order_id must be non-empty")
     if not operator or len(operator) > 64:
         raise ValueError("operator must be between 1 and 64 characters")
     with repo.unfoldable_order_write_serialized():
-        prior = repo.unfoldable_broker_order_acknowledgements().get(broker_order_id)
-        if prior is not None:
-            return UnfoldableBrokerOrderAcknowledgement(
-                external_order_id=broker_order_id,
-                acknowledged_at_ms=prior[1],
-                ack_operator=prior[0],
-            )
         remaining = _active_unfoldable_orders(repo)
         if remaining.pop(broker_order_id, None) is None:
-            raise ExternalOrderNotFoundError(
-                f"unfoldable broker order {broker_order_id!r} was not found"
-            )
+            prior = repo.unfoldable_broker_order_acknowledgements().get(broker_order_id)
+            if prior is None:
+                raise ExternalOrderNotFoundError(
+                    f"unfoldable broker order {broker_order_id!r} was not found"
+                )
+            return _acknowledgement(broker_order_id, prior)
         resolve_operator_acknowledged_uncertainty(
             repo,
             reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE,
@@ -256,19 +292,23 @@ def acknowledge_unfoldable_broker_order(
         )
         if remaining:
             _state_unfoldable_episode(repo, orders=remaining, provenance=TransitionProvenance())
-        operator_name, acknowledged_at_ms = repo.unfoldable_broker_order_acknowledgements()[
-            broker_order_id
-        ]
+        review = repo.unfoldable_broker_order_acknowledgements()[broker_order_id]
+    return _acknowledgement(broker_order_id, review)
+
+
+def _acknowledgement(
+    broker_order_id: str, review: reads.UnfoldableBrokerOrderReview
+) -> UnfoldableBrokerOrderAcknowledgement:
     return UnfoldableBrokerOrderAcknowledgement(
         external_order_id=broker_order_id,
-        acknowledged_at_ms=acknowledged_at_ms,
-        ack_operator=operator_name,
+        acknowledged_at_ms=review.acknowledged_at_ms,
+        ack_operator=review.operator,
     )
 
 
-def unfoldable_broker_orders_observed_since(repo: ClerkSqliteRepository, *, since_ms: int) -> int:
-    """Distinct unfoldable orders first observed at or after ``since_ms``, released or not."""
-    return repo.unfoldable_broker_orders_observed_since(
+def unfoldable_broker_orders_active_since(repo: ClerkSqliteRepository, *, since_ms: int) -> int:
+    """Distinct unfoldable orders first seen or active at or after ``since_ms``, released or not."""
+    return repo.unfoldable_broker_orders_active_since(
         reason_code=UNFOLDABLE_BROKER_ORDER_REASON_CODE, since_ms=since_ms
     )
 
@@ -566,5 +606,6 @@ __all__ = [
     "observe_external_order",
     "observe_or_record_unfoldable",
     "record_unfoldable_broker_order",
-    "unfoldable_broker_orders_observed_since",
+    "unfoldable_broker_order_is_unreviewed",
+    "unfoldable_broker_orders_active_since",
 ]

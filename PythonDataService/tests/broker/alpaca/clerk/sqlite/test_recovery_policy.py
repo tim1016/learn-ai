@@ -735,7 +735,9 @@ def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:
     assert guidance.next_step == "The Clerk is reconciling automatically."
 
 
-def _account_uncertainty(reason_code: str) -> ProjectedUncertainty:
+def _account_uncertainty(
+    reason_code: str, *, observed_at_ms: int = 1_700_000_009_000
+) -> ProjectedUncertainty:
     return ProjectedUncertainty(
         uncertainty_id=f"episode:{reason_code}",
         scope="ACCOUNT_CLERK",
@@ -749,7 +751,7 @@ def _account_uncertainty(reason_code: str) -> ProjectedUncertainty:
         explanation="Account episode.",
         operator_impact="New entries are paused account-wide.",
         next_step="Review it.",
-        observed_at_ms=1_700_000_009_000,
+        observed_at_ms=observed_at_ms,
         evidence_age_ms=1_000,
         evidence_refs=("evidence",),
     )
@@ -811,3 +813,28 @@ def test_safe_flatten_still_refuses_a_cause_that_does_not_admit_it(reason_code: 
     for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
         assert actions[action_id].available is False, action_id
         assert actions[action_id].unavailable_reason_code == "EXPOSURE_NOT_PROVEN"
+
+
+def test_safe_flatten_refuses_an_unfoldable_order_newer_than_the_reconciliation() -> None:
+    """#2363 review: an unfoldable order is broker-side evidence the flatten's
+    reconciliation must postdate; admitting it is not ignoring it."""
+    actions = _flatten_actions(
+        _account_uncertainty("UNFOLDABLE_BROKER_ORDER", observed_at_ms=1_700_000_009_001)
+    )
+
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        assert actions[action_id].available is False, action_id
+        assert actions[action_id].unavailable_reason_code == "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
+
+
+@pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK"])
+def test_safe_flatten_admits_an_exit_episode_refreshed_after_the_reconciliation(
+    reason_code: str,
+) -> None:
+    """EXIT_NOT_FLAT / EXIT_STUCK are the Clerk's own EXIT bookkeeping, refreshed
+    by every automatic re-drive; the flatten that clears them must not demand a
+    newer reconciliation after each refresh (behaviour unchanged by #2363)."""
+    actions = _flatten_actions(_account_uncertainty(reason_code, observed_at_ms=1_700_000_009_500))
+
+    assert actions["prepare_safe_flatten"].available is True
+    assert actions["execute_safe_flatten"].available is True

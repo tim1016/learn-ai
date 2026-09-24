@@ -233,6 +233,7 @@ export class AlpacaSqliteCustodyComponent {
   ): Promise<void> {
     if (this.acknowledgingOrderId() !== null || this.busyActionId() !== null) return;
     if (this.refuseIfLaneUnenforceable()) return;
+    const provenance = this.currentProvenance();
     this.acknowledgingOrderId.set(request.brokerOrderId);
     this.actionNotice.set(null);
     this.actionProblem.set(null);
@@ -242,11 +243,17 @@ export class AlpacaSqliteCustodyComponent {
         request.brokerOrderId,
         request.operator,
       );
-      this.actionNotice.set('The order was acknowledged and released from the entry pause.');
+      // Only this order's review is claimed: other unreviewed orders keep the
+      // entry pause, which the refreshed custody snapshot below reports.
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionNotice.set(`Broker order ${request.brokerOrderId} was reviewed.`);
+      }
     } catch (error) {
-      this.actionProblem.set(
-        actionProblem(error, 'The Account Clerk could not acknowledge this order.'),
-      );
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionProblem.set(
+          actionProblem(error, 'The Account Clerk could not acknowledge this order.'),
+        );
+      }
     } finally {
       this.refreshVisibleProjection();
       this.acknowledgingOrderId.set(null);
