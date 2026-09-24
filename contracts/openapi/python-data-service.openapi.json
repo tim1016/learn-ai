@@ -19723,6 +19723,11 @@
             "title": "Port",
             "type": "integer"
           },
+          "realtime_bar_lines_unreplaced": {
+            "default": false,
+            "title": "Realtime Bar Lines Unreplaced",
+            "type": "boolean"
+          },
           "reason": {
             "anyOf": [
               {

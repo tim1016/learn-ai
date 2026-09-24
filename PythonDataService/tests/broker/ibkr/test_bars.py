@@ -482,6 +482,8 @@ class _FakeClient:
         # The generation fence is unconditional on the real client, so every
         # fake that reaches it carries one too.
         self.connection_generation = 1
+        # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.
+        self.data_loss_epoch = 0
 
     def require_connected(self) -> None:
         return
@@ -664,6 +666,27 @@ async def test_realtime_bar_request_pacer_waits_at_sliding_window_limit() -> Non
     await pacer.acquire()
     await pacer.acquire()
 
+    assert waits == [10.0]
+
+
+@pytest.mark.asyncio
+async def test_realtime_bar_pacer_refuses_a_wait_longer_than_the_caller_allows() -> None:
+    """A bounded caller is told at once, without sleeping or spending budget (#2397 review)."""
+    now = 0.0
+    waits: list[float] = []
+
+    async def fake_sleep(delay_s: float) -> None:
+        nonlocal now
+        waits.append(delay_s)
+        now += delay_s
+
+    pacer = bars_mod._RealtimeBarRequestPacer(max_requests=1, window_s=10.0, clock=lambda: now, sleep=fake_sleep)
+    await pacer.acquire()
+
+    with pytest.raises(TimeoutError):
+        await pacer.acquire(max_wait_s=9.0)
+    assert waits == []
+    await pacer.acquire(max_wait_s=11.0)  # the slot the refusal left unspent
     assert waits == [10.0]
 
 
@@ -1247,7 +1270,7 @@ async def test_acquire_restarts_when_generation_moves_during_pacing(
     contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
     registry = bars_mod._REALTIME_BAR_SUBSCRIPTIONS
 
-    async def _bump_generation() -> None:
+    async def _bump_generation(**_kw: object) -> None:
         client.connection_generation = 2
 
     monkeypatch.setattr(registry._pacer, "acquire", _bump_generation)
@@ -1284,7 +1307,7 @@ async def test_active_line_cap_ignores_a_pending_line_from_a_previous_generation
     reached_pacer = asyncio.Event()
     unblock_pacer = asyncio.Event()
 
-    async def _gated_acquire() -> None:
+    async def _gated_acquire(**_kw: object) -> None:
         if reached_pacer.is_set():
             return
         reached_pacer.set()

@@ -98,6 +98,8 @@ class _AdversarialIbkrClient:
         # The real client's generation fence is unconditional; this fixture
         # drives the production bar stream, so it carries one too.
         self.connection_generation = 1
+        # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.
+        self.data_loss_epoch = 0
 
     def require_connected(self) -> None:
         return
