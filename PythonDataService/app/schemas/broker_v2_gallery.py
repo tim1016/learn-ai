@@ -80,6 +80,12 @@ class GallerySymbolBars(BaseModel):
 
     symbol: str
     bars: list[ChartBar] = Field(default_factory=list)
+    # SSE-only (#2328). ``None``: every bar is inline in ``bars``. A count:
+    # this symbol's bars were sent as that many bars across the ``bars``
+    # pages ahead of this frame, and ``bars`` is empty. The client checks
+    # the staged total against it, so a missing page is detectable rather
+    # than indistinguishable from a symbol with no bars.
+    paged_bar_count: int | None = None
 
 
 class GalleryBarsPage(BaseModel):
@@ -89,8 +95,9 @@ class GalleryBarsPage(BaseModel):
     event over its per-event cap, so a ``snapshot``/``update`` whose inline
     bars would exceed it ships them as ``bars`` pages first. The frame that
     follows, with the same ``surface_version``, carries each of those
-    symbols with an empty ``bars`` list. A client concatenates the staged
-    pages (in arrival order) into that frame before applying it.
+    symbols with an empty ``bars`` list and its ``paged_bar_count``. A
+    client concatenates the staged pages (in arrival order) into that frame
+    before applying it, and drops the frame if a count does not match.
     """
 
     model_config = ConfigDict(frozen=True)

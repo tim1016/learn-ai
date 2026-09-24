@@ -20,6 +20,7 @@ import {
 } from '../../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../../fleet/open-lane-fence';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
+import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
 
@@ -55,7 +56,7 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
 @Component({
   selector: 'app-bot-gallery-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BotGalleryDockComponent],
+  imports: [BotGalleryDockComponent, ReceiptLabelPipe],
   providers: [GalleryLiveStore],
   templateUrl: './bot-gallery-page.component.html',
   styleUrl: './bot-gallery-page.component.scss',

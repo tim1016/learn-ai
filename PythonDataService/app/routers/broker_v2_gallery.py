@@ -86,6 +86,12 @@ _GALLERY_IO_CACHE_TTL_MS = 800
 # over its per-event cap, after the 200 has gone out (#2328). No frame this
 # lane emits may exceed it.
 _MAX_EVENT_BYTES = DEFAULT_MAX_EVENT_BYTES
+# Bytes held back from that cap for framing added after this router: the
+# lane's ``FleetIdentityMiddleware`` (``agent_identity._FrameInjector``)
+# appends ``x-fleet-*`` provenance lines to every event (~115 B for a
+# typical clerk id, epoch and generation). 8 KB covers any realistic
+# identity with a wide margin, so a frame that fits here still fits there.
+_FLEET_FRAMING_RESERVE_BYTES = 8_192
 # Bars per ``bars`` page. A serialized 5 s ``ChartBar`` is ~145 B, so a page
 # is ~145 KB: far under the cap, whatever the ring-buffer depth.
 _BARS_PER_PAGE = 1_000
@@ -212,13 +218,20 @@ def _marker_event_keys(markers: dict[str, list[ChartFillMarker]]) -> dict[str, s
     return {sid: {marker.event_key for marker in sid_markers} for sid, sid_markers in markers.items() if sid_markers}
 
 
-class _OversizedFrameError(Exception):
-    """A frame is over ``_MAX_EVENT_BYTES`` even with its bars paged out."""
+def _frame_budget_bytes() -> int:
+    """The most bytes one frame may carry when it leaves this router: the
+    coordinator's cap less the lane's framing reserve."""
+    return _MAX_EVENT_BYTES - _FLEET_FRAMING_RESERVE_BYTES
 
-    def __init__(self, event: str, size: int) -> None:
-        super().__init__(f"gallery {event} frame is {size} bytes; the cap is {_MAX_EVENT_BYTES}")
+
+class _OversizedFrameError(Exception):
+    """A frame is over the frame budget even with its bars paged out."""
+
+    def __init__(self, event: str, size: int, budget: int) -> None:
+        super().__init__(f"gallery {event} frame is {size} bytes; the budget is {budget}")
         self.event = event
         self.size = size
+        self.budget = budget
 
 
 def _sse_frame(event: str, data: str, *, event_id: str | None = None) -> str:
@@ -229,16 +242,18 @@ def _sse_frame(event: str, data: str, *, event_id: str | None = None) -> str:
 def _capped_frames(
     event: str, event_id: str, payload: GalleryLiveSnapshot | GalleryLiveUpdate
 ) -> list[str]:
-    """``payload`` as SSE frames that each fit ``_MAX_EVENT_BYTES`` (#2328).
+    """``payload`` as SSE frames that each fit ``_frame_budget_bytes`` (#2328).
 
     A frame that already fits goes out whole. Otherwise every symbol's bars
     move into ``bars`` pages (``GalleryBarsPage``) sent first, and the frame
-    itself follows with each symbol's ``bars`` empty. A frame still over the
-    cap after that raises ``_OversizedFrameError``: it is never handed to the
-    coordinator to be cut off mid-stream.
+    itself follows with each symbol's ``bars`` empty and its
+    ``paged_bar_count`` set, so the client can prove it staged every page.
+    A frame still over the budget after that raises ``_OversizedFrameError``:
+    it is never handed to the coordinator to be cut off mid-stream.
     """
+    budget = _frame_budget_bytes()
     whole = _sse_frame(event, payload.model_dump_json(), event_id=event_id)
-    if len(whole.encode()) <= _MAX_EVENT_BYTES:
+    if len(whole.encode()) <= budget:
         return [whole]
     pages = [
         _sse_frame(
@@ -253,13 +268,18 @@ def _capped_frames(
         for start in range(0, len(entry.bars), _BARS_PER_PAGE)
     ]
     head = payload.model_copy(
-        update={"symbols": [GallerySymbolBars(symbol=entry.symbol) for entry in payload.symbols]}
+        update={
+            "symbols": [
+                GallerySymbolBars(symbol=entry.symbol, paged_bar_count=len(entry.bars))
+                for entry in payload.symbols
+            ]
+        }
     )
     frames = [*pages, _sse_frame(event, head.model_dump_json(), event_id=event_id)]
     for frame in frames:
         size = len(frame.encode())
-        if size > _MAX_EVENT_BYTES:
-            raise _OversizedFrameError(event, size)
+        if size > budget:
+            raise _OversizedFrameError(event, size, budget)
     return frames
 
 
@@ -274,14 +294,14 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     except _OversizedFrameError as exc:
         logger.error(
             "[GALLERY] stream frame exceeds the fleet event cap; refusing the stream",
-            extra={"event": exc.event, "bytes": exc.size, "max_bytes": _MAX_EVENT_BYTES},
+            extra={"event": exc.event, "bytes": exc.size, "max_bytes": exc.budget},
         )
         payload = json.dumps(
             {
                 "reason": "frame_too_large",
                 "event": exc.event,
                 "bytes": exc.size,
-                "max_bytes": _MAX_EVENT_BYTES,
+                "max_bytes": exc.budget,
             }
         )
         yield _sse_frame("refused", payload)

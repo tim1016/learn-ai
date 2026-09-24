@@ -15,6 +15,7 @@ import type {
   GalleryLiveSnapshot,
   GalleryLiveStatus,
   GalleryLiveUpdate,
+  GalleryRefusedEvent,
   GalleryResolution,
   GallerySymbolBars,
 } from './gallery.types';
@@ -70,6 +71,16 @@ function isGalleryBarsPage(value: unknown): value is GalleryBarsPage {
     && Array.isArray(candidate.bars);
 }
 
+function isGalleryRefusedEvent(value: unknown): value is GalleryRefusedEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<GalleryRefusedEvent>;
+  return typeof candidate.reason === 'string'
+    && candidate.reason.length > 0
+    && typeof candidate.event === 'string'
+    && typeof candidate.bytes === 'number'
+    && typeof candidate.max_bytes === 'number';
+}
+
 /** ``bars`` pages staged for the stream frame with the same ``surface_version`` (#2328). */
 interface StagedBarsPages {
   readonly version: number;
@@ -122,11 +133,15 @@ function dropRemoved(bots: readonly GalleryBotView[], removedSids: readonly stri
  * EventSource lifecycle is modeled on ``AccountDeskHoldingsStore``
  * (auto-close on host destroy via ``DestroyRef``) using the lower-level
  * ``openAuthenticatedSseConnection`` primitive directly — the gallery
- * stream has two named event types (``snapshot`` primary, ``update`` and
- * ``reset`` as control events), which that primitive already supports,
- * rather than the single-event ``openVersionedSnapshotStream`` wrapper
- * ``BotPanelLiveStore`` uses. The 5s poll-fallback-on-error behavior is
- * mirrored from ``BotPanelLiveStore``.
+ * stream has several named event types (``snapshot`` primary; ``update``,
+ * ``bars``, ``reset`` and ``refused`` as control events), which that
+ * primitive already supports, rather than the single-event
+ * ``openVersionedSnapshotStream`` wrapper ``BotPanelLiveStore`` uses.
+ * ``bars`` pages are staged and folded into the ``snapshot``/``update``
+ * with the same ``surface_version`` (checked against its
+ * ``paged_bar_count``); ``refused`` means the lane cannot fit a frame under
+ * the coordinator's event cap, so the store stops reconnecting (#2328). The
+ * 5s poll-fallback-on-error behavior is mirrored from ``BotPanelLiveStore``.
  *
  * The wire-frame parsing/merge logic is exposed as ``ingestSnapshot`` /
  * ``ingestUpdate`` so it is directly unit-testable without a live
@@ -143,12 +158,15 @@ export class GalleryLiveStore {
   private readonly markersState = signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map());
   private readonly resolutionState = signal<GalleryResolution>('1m');
   private readonly statusState = signal<GalleryLiveStatus>('connecting');
+  private readonly refusalReasonState = signal<string | null>(null);
 
   readonly bots = this.botsState.asReadonly();
   readonly barsBySymbol = this.barsState.asReadonly();
   readonly markersBySid = this.markersState.asReadonly();
   readonly resolution = this.resolutionState.asReadonly();
   readonly status = this.statusState.asReadonly();
+  /** The lane's reason code when it refused the stream (#2328); `null` otherwise. */
+  readonly refusalReason = this.refusalReasonState.asReadonly();
 
   private request: GalleryRequest | null = null;
   private connection: AuthenticatedSseConnection | null = null;
@@ -198,6 +216,7 @@ export class GalleryLiveStore {
       this.barsState.set(new Map());
       this.markersState.set(new Map());
     }
+    this.refusalReasonState.set(null);
     this.statusState.set('connecting');
     await this.bootstrap(generation, request);
     if (generation !== this.generation) return;
@@ -293,10 +312,16 @@ export class GalleryLiveStore {
         onEvent: (event) => {
           if (generation !== this.generation) return;
           this.parseAndIngest(event.data, isGalleryLiveSnapshot, (snapshot) => {
-            this.ingestSnapshot(this.withStagedBars(snapshot));
+            const complete = this.withStagedBars(snapshot);
+            if (complete === null) {
+              this.dropIncompleteFrame(generation, request);
+              return;
+            }
+            this.ingestSnapshot(complete);
             // The stream is live once it has delivered a snapshot, not when
             // the transport opens: a relay can send the 200 and then abort
             // the stream before any frame arrives (#2328).
+            this.refusalReasonState.set(null);
             this.statusState.set('live');
             this.stopFallback();
           });
@@ -304,13 +329,21 @@ export class GalleryLiveStore {
         onControlEvent: (name, event) => {
           if (generation !== this.generation) return;
           if (name === 'update') {
-            this.parseAndIngest(event.data, isGalleryLiveUpdate, (update) => this.ingestUpdate(this.withStagedBars(update)));
+            this.parseAndIngest(event.data, isGalleryLiveUpdate, (update) => {
+              const complete = this.withStagedBars(update);
+              if (complete === null) {
+                this.dropIncompleteFrame(generation, request);
+                return;
+              }
+              this.ingestUpdate(complete);
+            });
           } else if (name === 'bars') {
             this.parseAndIngest(event.data, isGalleryBarsPage, (page) => this.stageBarsPage(page));
           } else if (name === 'reset') {
             void this.bootstrap(generation, request);
           } else if (name === 'refused') {
-            this.refuseStream(generation, request);
+            this.parseAndIngest(event.data, isGalleryRefusedEvent, (refusal) =>
+              this.refuseStream(refusal, generation, request));
           }
         },
       },
@@ -327,32 +360,52 @@ export class GalleryLiveStore {
     this.stagedPages.bySymbol.set(page.symbol, staged);
   }
 
-  /** Fold the staged ``bars`` pages into the frame they precede, then drop them. */
+  /**
+   * Fold the staged ``bars`` pages into the frame they precede, then drop
+   * them. Returns ``null`` when a symbol's staged total differs from the
+   * ``paged_bar_count`` the frame declares: a page went missing, and an
+   * empty ``bars`` list must not be applied as if the symbol had none.
+   */
   private withStagedBars<T extends { readonly surface_version: number; readonly symbols: readonly GallerySymbolBars[] }>(
     frame: T,
-  ): T {
+  ): T | null {
     const staged = this.stagedPages;
     this.stagedPages = null;
-    if (staged === null || staged.version !== frame.surface_version) return frame;
+    const pages = staged !== null && staged.version === frame.surface_version ? staged.bySymbol : new Map<string, ChartBar[]>();
+    const incomplete = frame.symbols.some((entry) =>
+      entry.paged_bar_count != null && (pages.get(entry.symbol)?.length ?? 0) !== entry.paged_bar_count);
+    if (incomplete) return null;
+    if (pages.size === 0) return frame;
     return {
       ...frame,
       symbols: frame.symbols.map((entry) => ({
         ...entry,
-        bars: [...(staged.bySymbol.get(entry.symbol) ?? []), ...(entry.bars ?? [])],
+        bars: [...(pages.get(entry.symbol) ?? []), ...(entry.bars ?? [])],
       })),
     };
   }
 
   /**
+   * A paged frame arrived without all of its pages. Applying it would blank
+   * those symbols' charts, so drop it and treat the stream like a failing
+   * transport: not live, and the REST poll keeps the wall current.
+   */
+  private dropIncompleteFrame(generation: number, request: GalleryRequest): void {
+    this.statusState.set(this.epoch === '' ? 'error' : 'stale');
+    this.startFallback(generation, request);
+  }
+
+  /**
    * The lane cannot send a frame under the coordinator's per-event cap and
    * has ended the stream (#2328). Reconnecting would only be refused again,
-   * so stop the transport, say the wall is not live, and keep it current
-   * through the REST poll.
+   * so stop the transport, say the wall is not live, keep the lane's reason
+   * for the page to show, and keep the wall current through the REST poll.
    */
-  private refuseStream(generation: number, request: GalleryRequest): void {
+  private refuseStream(refusal: GalleryRefusedEvent, generation: number, request: GalleryRequest): void {
     this.connection?.close();
     this.connection = null;
     this.stagedPages = null;
+    this.refusalReasonState.set(refusal.reason);
     this.statusState.set(this.epoch === '' ? 'error' : 'stale');
     this.startFallback(generation, request);
   }

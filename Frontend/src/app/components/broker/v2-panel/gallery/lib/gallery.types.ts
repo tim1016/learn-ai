@@ -75,7 +75,8 @@ export interface GalleryBarsPage {
 /**
  * The SSE `refused` event payload: the lane cannot send a frame under the
  * coordinator's cap and has ended the stream (#2328). The store stops
- * reconnecting and never reports the wall as live.
+ * reconnecting, never reports the wall as live, and exposes `reason` (a
+ * backend reason code, rendered through the `receiptLabel` pipe).
  *
  * No Pydantic model backs it; `broker_v2_gallery.py` builds it inline, pinned
  * by `tests/routers/test_broker_v2_gallery.py::test_gallery_stream_refuses_loudly_when_a_frame_cannot_fit_the_cap`.

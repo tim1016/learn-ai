@@ -365,8 +365,8 @@ describe('GalleryLiveStore', () => {
           snapshot({
             surface_version: 5,
             symbols: [
-              { symbol: 'SPY', bars: [] },
-              { symbol: 'QQQ', bars: [] },
+              { symbol: 'SPY', bars: [], paged_bar_count: 3 },
+              { symbol: 'QQQ', bars: [], paged_bar_count: 1 },
             ],
           }),
         ),
@@ -383,7 +383,7 @@ describe('GalleryLiveStore', () => {
         JSON.stringify({
           surface_version: 6,
           as_of_ms: 1,
-          symbols: [{ symbol: 'IWM', bars: [] }],
+          symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }],
           markers_delta: {},
           bots_delta: [],
           removed_sids: [],
@@ -391,6 +391,40 @@ describe('GalleryLiveStore', () => {
       );
       expect(store.barsBySymbol().get('IWM')?.map((b) => b.start_ms)).toEqual([20_000]);
       expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([10_000, 11_000, 12_000]);
+    });
+
+    it('drops a paged frame missing a page and goes stale instead of blanking the chart (#2328)', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+      const url = '/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot';
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne(url).flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+
+      // The head declares 3 paged SPY bars, but only one page (2 bars) arrived.
+      source.emit('bars', JSON.stringify({ surface_version: 5, symbol: 'SPY', bars: [bar(10_000), bar(11_000)] }));
+      source.emit(
+        'snapshot',
+        JSON.stringify(
+          snapshot({
+            surface_version: 5,
+            symbols: [
+              { symbol: 'SPY', bars: [], paged_bar_count: 3 },
+              { symbol: 'QQQ', bars: [], paged_bar_count: 0 },
+            ],
+          }),
+        ),
+      );
+
+      expect(store.status()).toBe('stale');
+      // The incomplete frame was not applied: the bootstrap's bars remain.
+      expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([1_000, 2_000]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      http.expectOne(url).flush(snapshot({ surface_version: 6 }));
     });
 
     it('stops reconnecting and polls instead when the lane refuses the stream (#2328)', async () => {
@@ -412,6 +446,7 @@ describe('GalleryLiveStore', () => {
         JSON.stringify({ reason: 'frame_too_large', event: 'update', bytes: 1_200_000, max_bytes: 1_000_000 }),
       );
       expect(store.status()).toBe('stale');
+      expect(store.refusalReason()).toBe('frame_too_large');
       // The server ends the stream after refusing; that must not reconnect.
       source.emit('error');
       await vi.advanceTimersByTimeAsync(5_000);

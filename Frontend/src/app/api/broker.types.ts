@@ -14897,6 +14897,8 @@ export interface components {
         GallerySymbolBars: {
             /** Bars */
             bars?: components["schemas"]["ChartBar"][];
+            /** Paged Bar Count */
+            paged_bar_count?: number | null;
             /** Symbol */
             symbol: string;
         };
