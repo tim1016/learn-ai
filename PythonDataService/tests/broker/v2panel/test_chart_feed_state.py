@@ -99,6 +99,7 @@ class _Client:
         self.ib = transport
         self.connection_lost = False
         self.connection_generation = 1
+        self.data_loss_epoch = 0
         self.connected_account = "DU000"
         self.settings = SimpleNamespace(
             realtime_bar_max_active=max_active, feed_continuity_enabled=True
