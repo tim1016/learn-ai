@@ -30,6 +30,7 @@ from app.broker.fleet.confirmation import (
 from app.broker.fleet.errors import (
     ClerkAssignmentConflict,
     ClerkIdentityMismatch,
+    FleetRegistryBackupPredatesDrain,
     FleetRegistryRecoveryPending,
     FleetRegistryUnavailable,
 )
@@ -525,6 +526,25 @@ def reconcile_restored_lane(
         raise ClerkIdentityMismatch(
             f"Clerk {clerk_id}'s durable evidence does not match the restored registry and volume.",
             next_step="Keep routing closed; use the original registry and lane-volume backup pair.",
+        )
+    # #2350: the drained tombstone is proof the lane is out, never a voucher,
+    # whatever the restored row says. A backup older than the drain cannot
+    # know who took the account over, and neither can one captured mid-drain:
+    # the lane's volume reads the same whether the lane is still draining or
+    # was released and succeeded after the capture. Re-seating the lane from
+    # its tombstone could route the account to a retired lane while its real
+    # holder is unknown, so the lane stays unreconciled and the hold stays
+    # closed until a backup captured after the release is restored.
+    if evidence.is_drained:
+        raise FleetRegistryBackupPredatesDrain(
+            f"Clerk {clerk_id}'s own volume records it {evidence.lifecycle_state}: the "
+            "restored registry backup was captured before this drained lane's account was "
+            "released and cannot know who holds that account now. The lane stays "
+            "unreconciled and the recovery hold stays closed; run restore-registry with a "
+            "newer backup captured after the release.",
+            next_step="Run restore-registry with a backup captured after this lane's account "
+            "was released (and after any successor confirmed it), then reconcile-registry "
+            "again. Never rewrite the drained evidence to force this reconciliation.",
         )
     canonical = service._adapter(clerk.broker).canonical_account_id(evidence.canonical_account_id)
     if canonical != evidence.canonical_account_id:

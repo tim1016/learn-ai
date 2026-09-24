@@ -97,6 +97,16 @@ class ConfirmationEvidence:
     routing_epoch: int
     lifecycle_state: str = StoredLifecycleState.PROVISIONED.value
 
+    @property
+    def is_drained(self) -> bool:
+        """Whether this evidence is a tombstone: any lifecycle but ``provisioned``.
+
+        The one encoding of the drained rule. A tombstone vouches for no
+        binding at boot (``evidence_vouches_for``) and re-seats no lane in a
+        registry restore (``recovery.reconcile_restored_lane``, #2350).
+        """
+        return self.lifecycle_state != StoredLifecycleState.PROVISIONED.value
+
     def tuple_key(self) -> tuple[str | None, int | None, str]:
         """The effective tuple this evidence vouches for."""
         return (self.effective_profile_id, self.effective_revision, self.canonical_account_id)
@@ -297,7 +307,7 @@ def evidence_vouches_for(
     """
     if evidence is None:
         return False
-    if evidence.lifecycle_state != StoredLifecycleState.PROVISIONED.value:
+    if evidence.is_drained:
         return False
     if evidence.tuple_key() != (
         effective_profile_id,
