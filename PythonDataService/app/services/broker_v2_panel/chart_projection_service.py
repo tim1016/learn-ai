@@ -51,6 +51,7 @@ from app.lean_sidecar.trading_calendar import (
 )
 from app.schemas.broker_v2_panel import (
     ChartBar,
+    ChartFeedView,
     ChartFillMarker,
     ChartHistoryResponse,
     ChartHistoryTimeframe,
@@ -60,7 +61,7 @@ from app.schemas.broker_v2_panel import (
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.dataset_service import INDICATOR_CONFIGS
 from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
-from app.services.live_chart_window import ChartWindowResult
+from app.services.live_chart_window import ChartFeedState, ChartFeedStatus, ChartWindowResult
 
 MS_PER_DAY = 86_400_000
 
@@ -216,6 +217,92 @@ def live_window(now_ms: int) -> tuple[int, int]:
     return open_ms, open_ms + MS_PER_DAY
 
 
+@dataclass(frozen=True)
+class _ChartFeedPolicy:
+    """How one chart-line state reads (#2355): its copy, and whether it speaks.
+
+    ``show_notice`` puts the chart's notice on screen; ``attention_required``
+    makes that notice an alarm. The client reads both and keeps no state list
+    of its own.
+    """
+
+    headline: str
+    explanation: str
+    next_step: str | None
+    show_notice: bool
+    attention_required: bool
+
+
+# The chart line is separate from the bot's feed, so a chart that stopped
+# drawing says what froze: the chart's own view, not necessarily the bot.
+_CHART_FEED_POLICY: dict[ChartFeedState, _ChartFeedPolicy] = {
+    "LIVE": _ChartFeedPolicy(
+        "Chart feed live",
+        "The chart's IBKR bar line is delivering bars within its expected cadence.",
+        None,
+        show_notice=False,
+        attention_required=False,
+    ),
+    "NOT_EXPECTED": _ChartFeedPolicy(
+        "No live chart bar expected",
+        "The chart draws regular-session IBKR bars; none is due now.",
+        None,
+        show_notice=False,
+        attention_required=False,
+    ),
+    "STARTING": _ChartFeedPolicy(
+        "Chart feed starting",
+        "The chart's IBKR bar line is waiting for its first bar of the session.",
+        None,
+        show_notice=True,
+        attention_required=False,
+    ),
+    "STALLED": _ChartFeedPolicy(
+        "Chart feed stalled",
+        "The chart's IBKR bar line has not delivered a bar within its expected "
+        "cadence, so the chart has stopped at its last candle. The bot's feed "
+        "is a separate line.",
+        "Do not read the chart as current. The service restarts the line on its "
+        "own; if it stays stalled, check the Gateway connection and the IBKR "
+        "real-time bar line capacity.",
+        show_notice=True,
+        attention_required=True,
+    ),
+    "ERRORED": _ChartFeedPolicy(
+        "Chart feed interrupted",
+        "The chart's IBKR bar line failed and is being retried, so the chart has "
+        "stopped at its last candle. The bot's feed is a separate line.",
+        "Do not read the chart as current. If the error persists, check the "
+        "Gateway connection and the IBKR real-time bar line capacity.",
+        show_notice=True,
+        attention_required=True,
+    ),
+    "RECOVERING": _ChartFeedPolicy(
+        "Chart feed recovering",
+        "The chart's IBKR bar line is being resubscribed after a broker "
+        "reconnect; candles missed meanwhile are not backfilled.",
+        "Do not read the chart as current until it draws a new candle.",
+        show_notice=True,
+        attention_required=True,
+    ),
+}
+
+
+def chart_feed_view(feed: ChartFeedStatus) -> ChartFeedView:
+    """Present the chart line's own state with backend-authored copy (#2355)."""
+    policy = _CHART_FEED_POLICY[feed.state]
+    return ChartFeedView(
+        state=feed.state,
+        headline=policy.headline,
+        explanation=policy.explanation,
+        next_step=policy.next_step,
+        show_notice=policy.show_notice,
+        attention_required=policy.attention_required,
+        last_bar_at_ms=feed.last_bar_ms,
+        last_error=feed.last_error,
+    )
+
+
 def build_live_chart(
     chart_window: ChartWindowResult,
     fills: Sequence[FillRecord],
@@ -246,6 +333,7 @@ def build_live_chart(
         bars=bars,
         fill_markers=markers,
         overlay_notices=notices,
+        feed=chart_feed_view(chart_window.feed),
         as_of_ms=now_ms,
     )
 

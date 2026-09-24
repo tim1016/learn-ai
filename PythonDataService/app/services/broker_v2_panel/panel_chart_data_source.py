@@ -38,6 +38,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_panel_evidence,
 )
 from app.services.live_chart_window import (
+    CHART_FEED_NOT_EXPECTED,
     ChartWindowError,
     ChartWindowResult,
     coerce_chart_timeframe,
@@ -65,7 +66,7 @@ async def _build_live_chart_from_fills(
             bars=[],
             timeframe=resolution,
             resolution=resolution,
-            is_streaming=False,
+            feed=CHART_FEED_NOT_EXPECTED,
         )
     else:
         try:

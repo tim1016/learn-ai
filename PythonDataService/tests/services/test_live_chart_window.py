@@ -14,6 +14,7 @@ from app.data_lake.polygon_fetcher import PolygonAuthError
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services import live_chart_window as chart_mod
 from app.services.bar_persistence import BarPersistence
+from app.services.live_bar_aggregator import LiveLineStatus
 from app.services.live_chart_window import (
     ChartOverlayNotice,
     ChartWindowError,
@@ -49,11 +50,11 @@ class _FakeAggregator:
     def snapshot_5s(self, _symbol: str) -> list[IbkrMinuteBar]:
         return []
 
-    def status(self, _symbol: str) -> tuple[str, None, None]:
-        return "idle", None, None
+    def status(self, _symbol: str) -> LiveLineStatus:
+        return LiveLineStatus(status="idle")
 
-    def status_5s(self, _symbol: str) -> tuple[str, None, None]:
-        return "idle", None, None
+    def status_5s(self, _symbol: str) -> LiveLineStatus:
+        return LiveLineStatus(status="idle")
 
 
 def _polygon_aggs_pattern(session: date) -> re.Pattern:

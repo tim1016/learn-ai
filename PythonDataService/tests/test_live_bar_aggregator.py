@@ -12,7 +12,7 @@ import pytest
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.services import live_bar_aggregator as agg_mod
 from app.services.bar_persistence import BarPersistence
-from app.services.live_bar_aggregator import LiveBarAggregator
+from app.services.live_bar_aggregator import LiveBarAggregator, LiveLineStatus
 
 
 def _bar(symbol: str, start_ms: int, close: float) -> IbkrMinuteBar:
@@ -104,8 +104,7 @@ async def test_snapshot_unknown_symbol_returns_empty(
     fresh_aggregator: LiveBarAggregator,
 ) -> None:
     assert fresh_aggregator.snapshot("AAPL") == []
-    status, last_error, last_bar_ms = fresh_aggregator.status("AAPL")
-    assert (status, last_error, last_bar_ms) == ("idle", None, None)
+    assert fresh_aggregator.status("AAPL") == LiveLineStatus(status="idle")
 
 
 async def test_stream_error_survives_across_resubscribe_polls(
@@ -269,8 +268,8 @@ async def test_resubscribe_all_restarts_existing_streams(
 
     assert starts.count("1m:SPY") == 2
     assert starts.count("5s:QQQ") == 2
-    assert fresh_aggregator.status("SPY")[0] == "streaming"
-    assert fresh_aggregator.status_5s("QQQ")[0] == "streaming"
+    assert fresh_aggregator.status("SPY").status == "streaming"
+    assert fresh_aggregator.status_5s("QQQ").status == "streaming"
 
     await fresh_aggregator.shutdown()
 
@@ -411,4 +410,63 @@ async def test_ensure_subscribed_is_idempotent_while_task_alive(
     await fresh_aggregator.ensure_subscribed("SPY")
 
     assert call_count == 1
+    await fresh_aggregator.shutdown()
+
+
+async def test_status_writes_are_stamped_with_the_wall_clock(
+    fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2355: a reader tells a current failure from one left over from overnight."""
+    clock = {"ms": 1_777_870_800_000}
+    monkeypatch.setattr(agg_mod, "now_ms_utc", lambda: clock["ms"])
+
+    async def failing_stream(_client, _symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
+        if False:
+            yield  # pragma: no cover
+        raise RuntimeError("IBKR connection lost")
+
+    monkeypatch.setattr(agg_mod, "stream_minute_bars", failing_stream)
+    state = await fresh_aggregator.ensure_subscribed("SPY")
+    for _ in range(20):
+        if state.status == "errored":
+            break
+        await asyncio.sleep(0.01)
+    assert fresh_aggregator.status("SPY").status_changed_at_ms == 1_777_870_800_000
+
+    clock["ms"] += 60_000
+    await fresh_aggregator.resubscribe_all()
+    assert fresh_aggregator.status("SPY").status_changed_at_ms == 1_777_870_860_000
+
+    await fresh_aggregator.shutdown()
+
+
+async def test_partial_first_bar_leaves_the_line_subscribing(
+    fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2355: a dropped partial first bar is not a drawn bar, so no ``streaming``."""
+    partial = IbkrMinuteBar(
+        symbol="SPY",
+        start_ms=1_775_001_600_000,
+        end_ms=1_775_001_630_000,
+        open=Decimal("100.0"),
+        high=Decimal("100.0"),
+        low=Decimal("100.0"),
+        close=Decimal("100.0"),
+        volume=10,
+        fetched_at_ms=1_775_001_630_000,
+    )
+    seen = asyncio.Event()
+
+    async def fake_stream(_client, _symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
+        yield partial
+        seen.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(agg_mod, "stream_minute_bars", fake_stream)
+    await fresh_aggregator.ensure_subscribed("SPY")
+    await asyncio.wait_for(seen.wait(), 1)
+
+    line = fresh_aggregator.status("SPY")
+    assert line.status == "subscribing"
+    assert line.last_bar_ms is None
     await fresh_aggregator.shutdown()

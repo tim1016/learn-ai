@@ -55,6 +55,8 @@ from app.services.broker_v2_panel import (
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
+from app.services.broker_v2_panel.chart_projection_service import chart_feed_view
+from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED
 from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
 
@@ -729,6 +731,7 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
             bars=[],
             fill_markers=[],
             overlay_notices=[],
+            feed=chart_feed_view(CHART_FEED_NOT_EXPECTED),
             as_of_ms=_T0,
         ),
     )
@@ -811,6 +814,7 @@ async def test_stalled_live_projection_producer_is_served_stale_never_live(
             bars=[],
             fill_markers=[],
             overlay_notices=[],
+            feed=chart_feed_view(CHART_FEED_NOT_EXPECTED),
             as_of_ms=now_ms,
         )
 
@@ -918,6 +922,7 @@ async def test_live_stream_announces_a_stall_whose_deadline_passed_mid_yield(
                 bars=[],
                 fill_markers=[],
                 overlay_notices=[],
+                feed=chart_feed_view(CHART_FEED_NOT_EXPECTED),
                 as_of_ms=_T0,
             ),
         )
@@ -1017,6 +1022,7 @@ async def test_live_chart_accepts_five_second_resolution(
             "bars": [],
             "fill_markers": [],
             "overlay_notices": [],
+            "feed": chart_feed_view(CHART_FEED_NOT_EXPECTED).model_dump(),
             "as_of_ms": _T0,
         }
 
