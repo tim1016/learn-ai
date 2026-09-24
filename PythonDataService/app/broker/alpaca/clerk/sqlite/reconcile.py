@@ -87,6 +87,10 @@ logger = logging.getLogger(__name__)
 MAX_OPEN_ORDER_SNAPSHOT = 500
 #: Exact lookups one pass spends on failed ENTERs in drifted symbols (#2348).
 MAX_TERMINAL_ENTER_LOOKUPS = 5
+#: Clerk-clock wait before a failed ENTER the broker answered is looked up
+#: again. Not "never": an absence answer does not prove the abandoned POST
+#: (#2342) cannot still land, so the order rotates back onto the worklist.
+TERMINAL_ENTER_LOOKUP_RECHECK_MS = 30_000
 
 _RECONCILIATION_LOCKS: WeakKeyDictionary[ClerkSqliteRepository, asyncio.Lock] = WeakKeyDictionary()
 _DIRECT_RECONCILIATION_INTAKES: WeakKeyDictionary[ClerkSqliteRepository, ReentrantAsyncLock] = (
@@ -640,6 +644,7 @@ async def _recover_fills_on_terminal_enters(
     broker_positions: list[BrokerPosition],
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
+    trigger: Trigger,
     simulated_authority: bool,
 ) -> None:
     """Exact-look-up failed ENTERs that may have filled where the snapshot cannot see (#2348).
@@ -649,24 +654,35 @@ async def _recover_fills_on_terminal_enters(
     ``trade_updates`` was down is invisible to it: its fill is never folded,
     the symbol reads as drift, and :func:`fence_fills_on_terminal_enters` has
     nothing to find. Only a drifted symbol can hide such a fill, so only the
-    ENTERs in one are asked about, newest first and at most
-    :data:`MAX_TERMINAL_ENTER_LOOKUPS` per pass; each answer is folded like a
-    snapshot row, and the verdict's detector then fences the fill. A lookup
-    failure leaves the drift standing for the next pass.
+    ENTERs in one are asked about, at most :data:`MAX_TERMINAL_ENTER_LOOKUPS`
+    per pass; each answer is folded like a snapshot row, and the verdict's
+    detector then fences the fill. A lookup failure leaves the drift standing
+    for the next pass.
+
+    Every answered lookup -- including "no such order", which leaves the
+    order's broker state unknown -- records a per-order reconciliation
+    attempt on the Clerk clock. The worklist rotates on it (least recently
+    looked up first, each answered order rested for
+    :data:`TERMINAL_ENTER_LOOKUP_RECHECK_MS`), so voids that never reached
+    the broker cannot hold every slot and starve an older one that filled.
     """
     attributed = await to_thread(repo.attributed_positions_by_symbol)
     drifted = _mismatched_symbols(broker_positions, attributed)
     if not drifted:
         return
+    in_snapshot = frozenset(
+        order.client_order_id for order in broker_orders if order.client_order_id is not None
+    )
+    rested_since_ms = repo.clock() - TERMINAL_ENTER_LOOKUP_RECHECK_MS
     candidates = await to_thread(
         lambda: repo.terminal_entry_orders_unproven_at_broker(
-            symbols=drifted, limit=MAX_TERMINAL_ENTER_LOOKUPS
+            symbols=drifted,
+            exclude_client_order_ids=in_snapshot,
+            rested_since_ms=rested_since_ms,
+            limit=MAX_TERMINAL_ENTER_LOOKUPS,
         )
     )
-    in_snapshot = frozenset(order.client_order_id for order in broker_orders)
     for order_ref in candidates:
-        if order_ref in in_snapshot:
-            continue
         try:
             observed = await trade.get_order_by_client_order_id(order_ref)
         except BrokerError as exc:
@@ -680,14 +696,40 @@ async def _recover_fills_on_terminal_enters(
                 },
             )
             continue
-        if observed is None or observed.client_order_id != order_ref:
-            continue
-        await _fold_snapshot_evidence_under_intake(
-            repo,
-            broker_orders=[observed],
-            intake=intake,
-            simulated_authority=simulated_authority,
+        if observed is not None and observed.client_order_id == order_ref:
+            await _fold_snapshot_evidence_under_intake(
+                repo,
+                broker_orders=[observed],
+                intake=intake,
+                simulated_authority=simulated_authority,
+            )
+        await _under_intake(
+            intake, _record_terminal_enter_lookup, repo, order_ref=order_ref, trigger=trigger
         )
+
+
+def _record_terminal_enter_lookup(
+    repo: ClerkSqliteRepository, *, order_ref: str, trigger: Trigger
+) -> None:
+    """Durably date one answered exact lookup of a failed ENTER (#2348).
+
+    The ENTER stays ``failed``/``rejected`` whatever the answer (no fold
+    reopens it), so the attempt records ``RESOLVED_FAILURE`` -- the same
+    outcome :func:`_reconcile_effect` records for a terminally failed effect.
+    """
+    order = repo.order(order_ref)
+    effect = None if order is None else repo.effect_operation(order.effect_operation_id)
+    if order is None or effect is None:
+        raise ReconciliationInvariantError(
+            f"looked-up failed ENTER {order_ref!r} has no order or owning effect"
+        )
+    _record_reconciliation_attempt(
+        repo,
+        effect=effect,
+        order_ref=order_ref,
+        trigger=trigger,
+        outcome="RESOLVED_FAILURE",
+    )
 
 
 @dataclass(frozen=True)
@@ -1034,6 +1076,7 @@ async def _reconcile_account_serialized(
         broker_positions=broker_positions,
         trade=trade,
         intake=intake,
+        trigger=trigger,
         simulated_authority=simulated_authority,
     )
 

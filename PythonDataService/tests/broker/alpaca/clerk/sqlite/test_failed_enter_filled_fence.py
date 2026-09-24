@@ -21,7 +21,11 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.order_evidence import fence_fills_on_terminal_enters
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
-from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.reconcile import (
+    MAX_TERMINAL_ENTER_LOOKUPS,
+    TERMINAL_ENTER_LOOKUP_RECHECK_MS,
+    reconcile_account,
+)
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
@@ -493,3 +497,104 @@ async def test_the_fenced_bot_alone_is_frozen_with_its_exposure_still_proven(
     )
     assert not decision.allowed
     assert decision.explanation == proof.freeze.explanation
+
+
+class _LookupTrade(_FakeTrade):
+    """Exact lookups answer from ``landed``; every other ref never reached the broker."""
+
+    def __init__(self, landed: dict[str, BrokerOrder]) -> None:
+        super().__init__()
+        self._landed = landed
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        self.lookup_calls.append(client_order_id)
+        return self._landed.get(client_order_id)
+
+
+async def _failed_enter_never_filled(
+    repo: ClerkSqliteRepository, clock, *, decision_id: str
+) -> str:
+    """A duplicate-id-refused ENTER (#2304) whose fill is never delivered."""
+    clock.advance(1_000)
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id=decision_id,
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=10),
+        trade=_DuplicateIdTrade(repo, fill_first=False),
+    )
+    assert submission.order_ref is not None
+    return submission.order_ref
+
+
+async def test_never_landed_voids_cannot_starve_the_lookup_of_an_older_filled_one(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """CodeRabbit #2378 review: a "not found" answer leaves ``broker_state``
+    NULL, so newest-first lookups spent every slot on the same never-landed
+    voids and an older void that did land and fill was never looked up."""
+    repo, clock = crashed_with_exposure
+    filled_ref = await _failed_enter_never_filled(repo, clock, decision_id="enter-old")
+    for index in range(MAX_TERMINAL_ENTER_LOOKUPS + 1):
+        await _failed_enter_never_filled(repo, clock, decision_id=f"enter-new-{index}")
+    trade = _LookupTrade({filled_ref: _late_filled_entry(filled_ref)})
+    read = _FakeRead(positions=[_position("SPY", quantity=10.0)])
+
+    for _ in range(2):
+        clock.advance(15_000)
+        await reconcile_account(repo, read=read, trade=trade)
+        if _fence(repo) is not None:
+            break
+
+    assert filled_ref in trade.lookup_calls
+    assert repo.position(SID, "SPY") == pytest.approx(10.0, abs=QTY_ATOL, rel=0)
+    episode = _fence(repo)
+    assert episode is not None
+    assert _cause_orders(episode) == [
+        {"order_ref": filled_ref, "symbol": "SPY", "filled_qty": 10.0}
+    ]
+
+
+async def test_an_answered_lookup_rests_until_the_recheck_window_passes(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A void the broker said it never saw is not asked about every pass, and
+    not dropped for good either: the abandoned POST (#2342) can still land."""
+    repo, clock = crashed_with_exposure
+    order_ref = await _failed_enter_never_filled(repo, clock, decision_id="enter-1")
+    trade = _LookupTrade({})
+    read = _FakeRead(positions=[_position("SPY", quantity=10.0)])
+
+    await reconcile_account(repo, read=read, trade=trade)
+    clock.advance(TERMINAL_ENTER_LOOKUP_RECHECK_MS - 1)
+    await reconcile_account(repo, read=read, trade=trade)
+    assert trade.lookup_calls == [order_ref]
+
+    clock.advance(1)
+    await reconcile_account(repo, read=read, trade=trade)
+    assert trade.lookup_calls == [order_ref, order_ref]
+
+
+async def test_an_order_in_the_open_snapshot_spends_no_lookup_slot(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Snapshot refs are dropped before the budget, not after it."""
+    repo, clock = crashed_with_exposure
+    filled_ref = await _failed_enter_never_filled(repo, clock, decision_id="enter-old")
+    open_refs = [
+        await _failed_enter_never_filled(repo, clock, decision_id=f"enter-open-{index}")
+        for index in range(MAX_TERMINAL_ENTER_LOOKUPS)
+    ]
+    trade = _LookupTrade({filled_ref: _late_filled_entry(filled_ref)})
+    read = _FakeRead(
+        orders=[
+            _broker_order(ref).model_copy(update={"order_id": f"bo-{ref}"}) for ref in open_refs
+        ],
+        positions=[_position("SPY", quantity=10.0)],
+    )
+
+    await reconcile_account(repo, read=read, trade=trade)
+
+    assert trade.lookup_calls == [filled_ref]

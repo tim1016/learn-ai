@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence_module
+import app.broker.alpaca.clerk.sqlite.reconcile as reconcile_module
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -245,6 +246,9 @@ async def _run_late_fill_case(
         # The 30 s submit-absence grace has elapsed.
         monkeypatch.setattr(order_evidence_module, "submit_absence_grace_ms", lambda: 0)
         await clerk.reconcile_account(trigger="AUTOMATIC")
+        # The void above was an answered lookup, and the late order lands
+        # tens of seconds later in real time: the lookup's rest has elapsed.
+        monkeypatch.setattr(reconcile_module, "TERMINAL_ENTER_LOOKUP_RECHECK_MS", 0)
 
         async def land_late_order() -> None:
             order = broker.land()

@@ -53,10 +53,15 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
     Capability,
+    ReductionIntent,
     decide_capability,
+    raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
@@ -1752,3 +1757,90 @@ async def test_ticket_cancel_does_not_reclassify_a_completed_ticket_as_canceled(
     assert ticket is not None
     assert ticket.state == "COMPLETED"
     assert ticket.legs[0].state == "SUCCEEDED"
+
+
+_BOT_REDUCTION_FENCES = {
+    EXIT_NOT_FLAT_REASON_CODE: {"symbol": "SPY", "attributed_qty": 1.0},
+    EXIT_STUCK_REASON_CODE: {
+        "symbol": "SPY",
+        "attributed_qty": 1.0,
+        "redrive_count": 3,
+        "first_observed_at_ms": 1_700_000_000_000,
+    },
+    FAILED_ENTER_FILLED_REASON_CODE: {
+        "orders": [{"order_ref": "bot-1-entry", "symbol": "SPY", "filled_qty": 1.0}]
+    },
+}
+
+
+@pytest.mark.parametrize("reason_code", sorted(_BOT_REDUCTION_FENCES))
+async def test_a_bot_scoped_reduction_fence_does_not_refuse_a_manual_sell(
+    repo: ClerkSqliteRepository, reason_code: str
+) -> None:
+    """CodeRabbit #2378 review claimed ``require_manual_reduction`` hands these
+    instance-scoped proofs ``strategy_instance_id=None`` and so refuses every
+    manual sell. It cannot: they are CUSTODY_SUBJECT episodes of a bot's own
+    subject, and a manual subject's admission read never returns them."""
+    trade = FakeTrade(repo=repo)
+    bought = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(quantity=2),
+        trade=trade,
+    )
+    assert bought.leg.effect_operation_id is not None and bought.leg.order_ref is not None
+    exact = ExecutionSliceFilledFacts(
+        execution_id="manual-owned-long",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=2,
+        slice_price=500,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=1_700_000_000_200,
+    )
+    repo.append_transition(
+        TransitionInput(
+            command_id=bought.command.command_id,
+            effect_operation_id=bought.leg.effect_operation_id,
+            order_ref=bought.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=exact.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=exact.to_facts_json(),
+        )
+    )
+    raise_uncertainty(
+        repo,
+        strategy_instance_id="bot-1",
+        reason_code=reason_code,
+        headline="bot fence",
+        explanation="bot fence",
+        operator_impact="bot fence",
+        next_step="bot fence",
+        cause_facts=_BOT_REDUCTION_FENCES[reason_code],
+    )
+    sell = ReductionIntent(symbol="SPY", side="SELL", quantity=1)
+    # The fence is live for its own bot: flat bot-1 has nothing to reduce.
+    assert not decide_capability(
+        repo, capability=Capability.REDUCE, strategy_instance_id="bot-1", reduction_intent=sell
+    ).allowed
+
+    reduced = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id="b5d667d3-6820-4c60-927a-2130f3c02aaf",
+        leg_id="91cd2b42-12b1-4c04-9caa-ffdfc346fbc2",
+        leg=market_sell(quantity=1),
+    )
+
+    assert reduced.created is True

@@ -653,23 +653,45 @@ def terminal_entry_orders_with_fills(
 
 
 def terminal_entry_orders_unproven_at_broker(
-    conn: sqlite3.Connection, *, symbols: frozenset[str], limit: int
+    conn: sqlite3.Connection,
+    *,
+    symbols: frozenset[str],
+    exclude_client_order_ids: frozenset[str],
+    rested_since_ms: int,
+    limit: int,
 ) -> list[str]:
-    """Newest ENTRY orders folded ``failed``/``rejected`` that no broker state ended (#2348).
+    """ENTRY orders folded ``failed``/``rejected`` that no broker state ended (#2348).
 
     The sweep's exact-lookup worklist for a late fill the open-order snapshot
     cannot show: an ENTER voided on absence (#2342) or refused on a
     duplicate-id reply (#2304) never recorded a broker-terminal state, so the
     order may be live -- or already ``filled`` and closed -- at the broker.
     One the broker itself ended is proven and excluded. Narrowed to
-    ``symbols`` (matched on the immutable ``ENTER_ACCEPTED`` leg), newest
-    first, capped at ``limit``.
+    ``symbols`` (matched on the immutable ``ENTER_ACCEPTED`` leg).
+
+    A lookup that finds nothing leaves ``broker_state`` NULL, so without a
+    rotation the same never-landed voids would take every slot on every pass
+    and starve an older void that did land. So each order's latest per-order
+    reconciliation attempt (a Clerk-clock ``reconciliations`` row, recorded by
+    every exact lookup) orders the list, never-looked-up first; an order
+    last looked up after ``rested_since_ms`` is excluded until it has rested.
+    Orders already in the open-order snapshot are dropped before ``limit``,
+    so they cannot spend a slot either.
     """
     if not symbols:
         return []
     symbol_marks = ", ".join("?" for _ in symbols)
+    excluded = sorted(exclude_client_order_ids)
+    exclude_clause = (
+        f"AND o.client_order_id NOT IN ({', '.join('?' for _ in excluded)}) " if excluded else ""
+    )
     rows = conn.execute(
-        "SELECT o.order_ref FROM orders o "
+        "SELECT order_ref FROM ("
+        "SELECT o.order_ref, e.updated_at_ms, "
+        "(SELECT MAX(r.attempted_at_ms) FROM reconciliations r "
+        "WHERE r.effect_operation_id = o.effect_operation_id "
+        "AND r.order_ref = o.order_ref) AS last_lookup_ms "
+        "FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "JOIN custody_transitions t ON t.order_ref = o.order_ref "
         "AND t.transition_kind = 'ENTER_ACCEPTED' "
@@ -678,8 +700,11 @@ def terminal_entry_orders_unproven_at_broker(
         "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
         "('filled','canceled','expired','rejected','replaced')) "
         f"AND UPPER(json_extract(t.facts_json, '$.leg.symbol')) IN ({symbol_marks}) "
-        "ORDER BY e.updated_at_ms DESC, o.order_ref DESC LIMIT ?",
-        (*sorted(symbols), limit),
+        f"{exclude_clause}"
+        ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
+        "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
+        "updated_at_ms DESC, order_ref DESC LIMIT ?",
+        (*sorted(symbols), *excluded, rested_since_ms, limit),
     ).fetchall()
     return [row["order_ref"] for row in rows]
 
