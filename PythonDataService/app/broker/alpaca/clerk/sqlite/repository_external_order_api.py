@@ -8,7 +8,8 @@ the repository spine with another product-specific concern.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite import reads
@@ -24,6 +25,35 @@ class ExternalOrderNotFoundError(ValueError):
 
 class ClerkSqliteRepositoryExternalOrderApi:
     """Focused atomic mutations mixed into ``ClerkSqliteRepository``."""
+
+    @contextmanager
+    def unfoldable_order_write_serialized(self: ClerkSqliteRepository) -> Iterator[None]:
+        """Hold the write coordinator across one unfoldable-order read-merge-append.
+
+        The ``UNFOLDABLE_BROKER_ORDER`` episode is one account-wide list that
+        three writers edit (the trade-update sink, the reconciliation verdict,
+        and the operator acknowledgement). Each reads the active cause, merges,
+        and appends; without one lock across all three steps a concurrent
+        writer's order could be dropped from the fence (#2363). The lock is
+        reentrant, so the appends inside reacquire it safely.
+        """
+        with self._write_lock:
+            self._assert_not_poisoned()
+            yield
+
+    def unfoldable_broker_order_acknowledgements(
+        self: ClerkSqliteRepository,
+    ) -> dict[str, reads.UnfoldableBrokerOrderReview]:
+        with self._write_lock:
+            return reads.unfoldable_broker_order_acknowledgements(self._conn)
+
+    def unfoldable_broker_orders_active_since(
+        self: ClerkSqliteRepository, *, reason_code: str, since_ms: int
+    ) -> int:
+        with self._write_lock:
+            return reads.unfoldable_broker_orders_active_since(
+                self._conn, reason_code=reason_code, since_ms=since_ms
+            )
 
     def append_external_order_observation_if_changed(
         self: ClerkSqliteRepository,

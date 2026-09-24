@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
@@ -39,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     PositionDriftCause,
     StreamHealthHoldCause,
     UnexplainedOrderCause,
+    UnfoldableBrokerOrderCause,
     broker_snapshot_stale_cause_is_valid,
     reconciliation_incomplete_cause_is_valid,
 )
@@ -95,6 +97,29 @@ class ReasonPolicy:
     cause_is_valid: Callable[[Any], bool]
     age: AgePolicy
     facts_schema_version: int = FACTS_SCHEMA_VERSION
+    # Whether an active episode leaves the safe-flatten recovery available.
+    # Distinct from ``allows_reduction``: POSITION_DRIFT and the loss hold
+    # admit a proven REDUCE, yet a flatten plan built from attributed
+    # quantities must still refuse under them. Set only for causes a flatten
+    # exists to clear (a stuck/not-flat EXIT, a fill on a failed ENTER #2348)
+    # or that say nothing about any attributed quantity (an unfoldable foreign
+    # order, #2363).
+    admits_safe_flatten: bool = False
+    # Whether an admitted episode is *broker-side* evidence the latest
+    # successful account reconciliation must postdate before a safe flatten
+    # may rely on it. Set for an unfoldable foreign order (#2363 review): it
+    # can be raised by the trade-update stream after the reconciliation, and
+    # the flatten must not reuse broker truth that predates it. Not set for
+    # EXIT_NOT_FLAT / EXIT_STUCK: those are the Clerk's own EXIT bookkeeping,
+    # refreshed by every automatic re-drive, and requiring a newer
+    # reconciliation after each would refuse the very flatten that clears
+    # them; their attributed quantities are already pinned by the
+    # position-evidence freshness gate. Not set for FAILED_ENTER_FILLED
+    # (#2348) either: it is derived from a folded fill, so every raise moves
+    # the fenced symbol's attributed position with it (pinned by the same
+    # freshness gate), and a sweep's re-derive raises from fills that sweep's
+    # broker snapshot already contains.
+    safe_flatten_requires_later_reconciliation: bool = False
 
 
 def _position_drift_cause_is_valid(value: Any) -> bool:
@@ -146,6 +171,14 @@ def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
 def _unexplained_order_cause_is_valid(value: Any) -> bool:
     try:
         UnexplainedOrderCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _unfoldable_broker_order_cause_is_valid(value: Any) -> bool:
+    try:
+        UnfoldableBrokerOrderCause.from_mapping(value)
     except ValueError:
         return False
     return True
@@ -204,6 +237,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
         # Byte-identical replacement of the former
         # EXIT_NOT_FLAT_REDRIVE_AFTER_MS = 120_000 / EXIT_NOT_FLAT_MAX_REDRIVES
@@ -214,6 +248,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_exit_stuck_cause_is_valid,
         # A durable escalation must not carry a clock: only an
         # attributed-flat proof or an operator may end it. VoidAfter here
@@ -230,6 +265,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        admits_safe_flatten=True,
         cause_is_valid=_failed_enter_filled_cause_is_valid,
         age=CauseCleared(),
     ),
@@ -255,6 +291,22 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_unexplained_order_cause_is_valid,
+        age=CauseCleared(),
+    ),
+    # #2363: a broker order the Clerk cannot state truthfully (e.g. a
+    # multi-leg parent with a null side). Like the unexplained-order hold it
+    # fences new exposure account-wide until an operator acknowledges each
+    # named order (``acknowledge_unfoldable_broker_order``). Unlike that hold
+    # it admits reductions: refusing them is the account-wide exit freeze the
+    # containment exists to end, and any position effect the order had is
+    # still fenced per symbol by the reconciliation sweep's POSITION_DRIFT.
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        safe_flatten_requires_later_reconciliation=True,
+        cause_is_valid=_unfoldable_broker_order_cause_is_valid,
         age=CauseCleared(),
     ),
     STREAM_HEALTH_HOLD_REASON_CODE: ReasonPolicy(

@@ -37,11 +37,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SafeFlattenPlanLeg,
 )
 from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXIT_NOT_FLAT_REASON_CODE,
-    EXIT_STUCK_REASON_CODE,
-    FAILED_ENTER_FILLED_REASON_CODE,
-)
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
 
 RecoveryActionId = Literal[
     "reconcile_now",
@@ -361,6 +357,43 @@ def _relevant_uncertainties(
     )
 
 
+def _safe_flatten_blocking_uncertainties(
+    ctx: RecoveryPolicyContext,
+) -> tuple[ProjectedUncertainty, ...]:
+    """In-scope uncertainties whose registered policy refuses a safe flatten.
+
+    Read from the policy registry's ``admits_safe_flatten``, never from a
+    hand list and never from ``allows_reduction`` (POSITION_DRIFT and the
+    loss hold admit a proven REDUCE yet must still refuse a flatten plan).
+    An unregistered code has no policy and refuses.
+    """
+    return tuple(
+        uncertainty
+        for uncertainty in _relevant_uncertainties(ctx)
+        if (policy := reason_policy(uncertainty.reason_code)) is None
+        or not policy.admits_safe_flatten
+    )
+
+
+def _admitted_uncertainties_newer_than(
+    ctx: RecoveryPolicyContext, reconciliation: ProjectedReconciliation
+) -> tuple[ProjectedUncertainty, ...]:
+    """Admitted broker-side episodes raised or updated after ``reconciliation``.
+
+    A safe flatten admitted under such an episode must not reuse broker truth
+    that predates it (#2363 review); the registry's
+    ``safe_flatten_requires_later_reconciliation`` names which causes are
+    that kind of evidence.
+    """
+    return tuple(
+        uncertainty
+        for uncertainty in _relevant_uncertainties(ctx)
+        if (policy := reason_policy(uncertainty.reason_code)) is not None
+        and policy.safe_flatten_requires_later_reconciliation
+        and uncertainty.observed_at_ms > reconciliation.attempted_at_ms
+    )
+
+
 def _timeline_evidence(ctx: RecoveryPolicyContext) -> tuple[RecoveryEvidence, ...]:
     """Carry the exact evidence scope when the timeline action is presented."""
     candidates: list[tuple[str, str, int | None]] = [
@@ -536,7 +569,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         observed_at_ms=(reconciliation.attempted_at_ms if reconciliation is not None else None),
         required_fresh=True,
     )
-    relevant_uncertainties = _relevant_uncertainties(ctx)
+    relevant_uncertainties = _safe_flatten_blocking_uncertainties(ctx)
     reason_code: str | None = None
     reason: str | None = None
     if non_finite_positions:
@@ -556,6 +589,12 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif not _is_successful_account_reconciliation(reconciliation):
         reason_code = "CLEAN_RECONCILIATION_REQUIRED"
         reason = "A successful account reconciliation is required before preparing reduction."
+    elif _admitted_uncertainties_newer_than(ctx, reconciliation):
+        reason_code = "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
+        reason = (
+            "Broker evidence the Clerk could not record arrived after the account "
+            "reconciliation."
+        )
     elif any(
         position.updated_at_ms > reconciliation.attempted_at_ms
         for position in positions
@@ -624,37 +663,23 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     )
 
 
-_REDUCTION_CLEARED_REASON_CODES = frozenset(
-    {EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE, FAILED_ENTER_FILLED_REASON_CODE}
-)
-"""Episodes a safe-flatten execution exists to clear, so they never gate it."""
-
-
 def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
-    """Executor gates = prepare gates, two deltas.
+    """Executor gates = prepare gates, plus two.
 
-    (1) EXIT_NOT_FLAT / EXIT_STUCK / FAILED_ENTER_FILLED episodes do not
-    block: each declares ``allows_reduction=True`` over a proven attributed
-    quantity — they are the exact states this executor exists to clear
-    (#2348: a fill on a failed ENTER is closed by this flatten), and the downstream
-    ``require_capability(REDUCE, …)`` still enforces movement toward zero
-    per leg. (2) No run may be ACTIVE: a running strategy could re-enter
+    Episodes whose policy declares ``admits_safe_flatten`` (EXIT_NOT_FLAT /
+    EXIT_STUCK / FAILED_ENTER_FILLED -- the exact states this executor exists
+    to clear -- and an unfoldable foreign order) are already admitted by the shared prepare
+    gate; the downstream ``require_capability(REDUCE, …)`` still enforces
+    movement toward zero per leg. (1) Execution is single-strategy, one
+    leg. (2) No run may be ACTIVE: a running strategy could re-enter
     right after the flatten; the operator stops decisions first
     (``stop_bot_decisions`` is presented alongside). This gate is
     presentation/recheck-time only — the same fact is re-asserted inside the
     capture transaction by ``accept_recovery_exit(forbid_active_run=True)``,
     closing the recheck→capture Resume race (Task 4/Task 8).
     """
-    reduction_safe_ctx = replace(
-        ctx,
-        uncertainties=tuple(
-            item
-            for item in ctx.uncertainties
-            if item.reason_code not in _REDUCTION_CLEARED_REASON_CODES
-        ),
-    )
-    base = _safe_flatten_decision(reduction_safe_ctx)
-    legs = _relevant_positions(reduction_safe_ctx)
+    base = _safe_flatten_decision(ctx)
+    legs = _relevant_positions(ctx)
     # The executor drives one strategy-owned recovery EXIT to flat. An
     # account-scoped context spans strategies and manual (NULL-strategy)
     # custody the executor cannot reduce, so presenting execute there would be

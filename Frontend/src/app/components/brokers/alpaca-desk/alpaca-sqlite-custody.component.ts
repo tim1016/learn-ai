@@ -37,6 +37,11 @@ import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
 } from '../../broker/v2-panel/panel-shell/panel-action-receipt.component';
+import {
+  UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+  type UnfoldableOrderAcknowledgementRequest,
+  UnfoldableOrderReviewComponent,
+} from './unfoldable-order-review.component';
 
 interface ActionProblem {
   readonly reason: string | null;
@@ -91,6 +96,7 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
     SafeFlattenPlanComponent,
     TimestampDisplayComponent,
     TypedHaltConfirmComponent,
+    UnfoldableOrderReviewComponent,
   ],
   templateUrl: './alpaca-sqlite-custody.component.html',
   styleUrl: './alpaca-sqlite-custody.component.scss',
@@ -142,6 +148,8 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
   protected readonly receipt = signal<ActionReceiptView | null>(null);
   protected readonly selectedTimelineEntry = signal<SqliteTimelineEntry | null>(null);
+  protected readonly unfoldableReasonCode = UNFOLDABLE_BROKER_ORDER_REASON_CODE;
+  protected readonly acknowledgingOrderId = signal<string | null>(null);
 
   constructor() {
     effect(() => {
@@ -217,6 +225,39 @@ export class AlpacaSqliteCustodyComponent {
     this.confirmationAction.set(null);
     this.confirmationTarget.set(null);
     if (action !== null && target !== null) void this.executeAction(action, target);
+  }
+
+  /** Reviews one order the Clerk could not record, on the external-order route (#2363). */
+  protected async acknowledgeUnfoldableOrder(
+    request: UnfoldableOrderAcknowledgementRequest,
+  ): Promise<void> {
+    if (this.acknowledgingOrderId() !== null || this.busyActionId() !== null) return;
+    if (this.refuseIfLaneUnenforceable()) return;
+    const provenance = this.currentProvenance();
+    this.acknowledgingOrderId.set(request.brokerOrderId);
+    this.actionNotice.set(null);
+    this.actionProblem.set(null);
+    try {
+      await this.brokers.acknowledgeExternalOrder(
+        this.newCommandTarget(),
+        request.brokerOrderId,
+        request.operator,
+      );
+      // Only this order's review is claimed: other unreviewed orders keep the
+      // entry pause, which the refreshed custody snapshot below reports.
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionNotice.set(`Broker order ${request.brokerOrderId} was reviewed.`);
+      }
+    } catch (error) {
+      if (this.isCurrentProvenance(provenance)) {
+        this.actionProblem.set(
+          actionProblem(error, 'The Account Clerk could not acknowledge this order.'),
+        );
+      }
+    } finally {
+      this.refreshVisibleProjection();
+      this.acknowledgingOrderId.set(null);
+    }
   }
 
   protected dismissReceipt(): void {

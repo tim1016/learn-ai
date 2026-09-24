@@ -21,6 +21,10 @@ EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
 # A fill recorded on an ENTER the Clerk had already folded terminal (#2348):
 # contradicting evidence, never absorbed silently.
 FAILED_ENTER_FILLED_REASON_CODE = "FAILED_ENTER_FILLED"
+# A broker order the trade-update fold cannot state truthfully (#2363), e.g. a
+# multi-leg parent whose ``side`` is null. Contained to that order: recorded
+# and surfaced, never folded, never allowed to wedge the execution stream.
+UNFOLDABLE_BROKER_ORDER_REASON_CODE = "UNFOLDABLE_BROKER_ORDER"
 # The two former ``holds`` causes, folded into this registry by the v12
 # migration (ADR 0048 Decision 2). Both are stored under the wire spelling the
 # panel already publishes, so ``HOLD_REASON_BY_STORED_CODE``'s translation row
@@ -394,6 +398,116 @@ class UnexplainedOrderCause:
 
 
 @dataclass(frozen=True)
+class UnfoldableBrokerOrder:
+    """One broker order the fold refused, the fold's own reason, and when.
+
+    ``observed_at_ms`` is the first observation, never advanced by a replay.
+    ``broker_state`` is the order's broker status and cumulative fill
+    (``"<status> filled=<qty>"``); ``last_activity_at_ms`` is when that state
+    was last seen to change. The day-P&L fact reads the activity stamp, so an
+    order first seen yesterday that fills today still marks today unknown,
+    exactly as an external order's changed observation does.
+    """
+
+    broker_order_id: str
+    client_order_id: str | None
+    reason: str
+    observed_at_ms: int
+    broker_state: str
+    last_activity_at_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "broker_order_id": self.broker_order_id,
+            "client_order_id": self.client_order_id,
+            "reason": self.reason,
+            "observed_at_ms": self.observed_at_ms,
+            "broker_state": self.broker_state,
+            "last_activity_at_ms": self.last_activity_at_ms,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> UnfoldableBrokerOrder:
+        if not isinstance(value, dict):
+            raise ValueError("unfoldable broker order must be an object")
+        _require_exact_keys(
+            value,
+            {
+                "broker_order_id",
+                "client_order_id",
+                "reason",
+                "observed_at_ms",
+                "broker_state",
+                "last_activity_at_ms",
+            },
+        )
+        broker_order_id = value["broker_order_id"]
+        client_order_id = value["client_order_id"]
+        reason = value["reason"]
+        observed_at_ms = value["observed_at_ms"]
+        broker_state = value["broker_state"]
+        last_activity_at_ms = value["last_activity_at_ms"]
+        if not isinstance(broker_order_id, str) or not broker_order_id:
+            raise ValueError("unfoldable broker_order_id must be a non-empty string")
+        if client_order_id is not None and (not isinstance(client_order_id, str) or not client_order_id):
+            raise ValueError("unfoldable client_order_id must be null or a non-empty string")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("unfoldable reason must be a non-empty string")
+        if not isinstance(broker_state, str) or not broker_state:
+            raise ValueError("unfoldable broker_state must be a non-empty string")
+        for name, stamp in (
+            ("observed_at_ms", observed_at_ms),
+            ("last_activity_at_ms", last_activity_at_ms),
+        ):
+            if isinstance(stamp, bool) or not isinstance(stamp, int) or stamp < 0:
+                raise ValueError(f"unfoldable {name} must be a non-negative int64 ms")
+        if last_activity_at_ms < observed_at_ms:
+            raise ValueError("unfoldable last_activity_at_ms must not precede observed_at_ms")
+        return cls(
+            broker_order_id=broker_order_id,
+            client_order_id=client_order_id,
+            reason=reason,
+            observed_at_ms=observed_at_ms,
+            broker_state=broker_state,
+            last_activity_at_ms=last_activity_at_ms,
+        )
+
+
+@dataclass(frozen=True)
+class UnfoldableBrokerOrderCause:
+    """Every broker order the trade-update fold could not state truthfully.
+
+    Keyed by broker order id, sorted and unique, so a replay of the same
+    poisoned order re-states an identical cause and the append-on-change-only
+    gate appends nothing.
+    """
+
+    orders: tuple[UnfoldableBrokerOrder, ...]
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "orders": [
+                order.to_mapping()
+                for order in sorted(self.orders, key=lambda order: order.broker_order_id)
+            ]
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> UnfoldableBrokerOrderCause:
+        if not isinstance(value, dict):
+            raise ValueError("unfoldable broker order cause must be an object")
+        _require_exact_keys(value, {"orders"})
+        raw = value["orders"]
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("unfoldable broker orders must be a non-empty list")
+        orders = tuple(UnfoldableBrokerOrder.from_mapping(entry) for entry in raw)
+        ids = [order.broker_order_id for order in orders]
+        if ids != sorted(set(ids)):
+            raise ValueError("unfoldable broker orders must be unique and sorted")
+        return cls(orders=orders)
+
+
+@dataclass(frozen=True)
 class StreamHealthHoldCause:
     """The unhealthy channels that froze the account.
 
@@ -514,6 +628,7 @@ __all__ = [
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
     "STREAM_HEALTH_HOLD_REASON_CODE",
     "UNEXPLAINED_ORDER_HOLD_REASON_CODE",
+    "UNFOLDABLE_BROKER_ORDER_REASON_CODE",
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "ExitStuckCause",
@@ -525,6 +640,8 @@ __all__ = [
     "PositionDriftObservation",
     "StreamHealthHoldCause",
     "UnexplainedOrderCause",
+    "UnfoldableBrokerOrder",
+    "UnfoldableBrokerOrderCause",
     "UnknownOrderIdentity",
     "broker_snapshot_stale_cause_is_valid",
     "normalized_hold_reason_code",

@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
     FailedEnterFilledCause,
@@ -273,6 +274,30 @@ def _resolve_account_uncertainty(
         reason_code=reason_code,
         strategy_instance_id=None,
         build_transition=build_transition,
+    )
+
+
+# Causes an operator review ends. Each is a condition no broker proof can
+# clear (the order itself can never fold), so the review is its only exit.
+_OPERATOR_ACKNOWLEDGEABLE_REASONS = frozenset({UNFOLDABLE_BROKER_ORDER_REASON_CODE})
+
+
+def resolve_operator_acknowledged_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    reason_code: str,
+    summary_code: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Resolve an account episode whose registered exit is an operator review."""
+    if reason_code not in _OPERATOR_ACKNOWLEDGEABLE_REASONS:
+        raise ValueError(f"{reason_code!r} is not resolved by operator acknowledgement")
+    return _resolve_account_uncertainty(
+        repo,
+        reason_code=reason_code,
+        resolution_kind="OPERATOR_ACKNOWLEDGED",
+        summary_code=summary_code,
+        evidence_refs=evidence_refs,
     )
 
 
@@ -754,6 +779,7 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
     FAILED_ENTER_FILLED_REASON_CODE: _failed_enter_filled_proof,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
+    UNFOLDABLE_BROKER_ORDER_REASON_CODE: _no_per_symbol_proof,
 }
 
 
@@ -926,13 +952,18 @@ class RefusalClass(StrEnum):
 # fact, so an envelope refusal retries on the next decision clock. Every
 # arming refusal joins them too (slice 7): a lost arming refuses that
 # instance's next ENTER, is warned about once per transition and is named in
-# the live verdict — nothing pauses, and nothing halts from admission.
+# the live verdict — nothing pauses, and nothing halts from admission. The
+# unfoldable-broker-order entry pause (#2363) joins them for the same ADR 0059
+# reason: it is an account-scoped fact an operator review ends, so a bot's
+# refused ENTER is a ``blocked`` receipt retried on the next decision clock,
+# never a crash that leaves the bot dead after the review.
 TRANSIENT_ADMISSION_REASON_CODES: frozenset[str] = (
     frozenset(
         {
             BROKER_SNAPSHOT_STALE_REASON_CODE,
             RECONCILIATION_INCOMPLETE_REASON_CODE,
             "RECONCILIATION_IN_PROGRESS",
+            UNFOLDABLE_BROKER_ORDER_REASON_CODE,
         }
     )
     | ENVELOPE_ADMISSION_REASON_CODES
