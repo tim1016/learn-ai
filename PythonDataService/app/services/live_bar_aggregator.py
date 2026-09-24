@@ -470,6 +470,14 @@ class LiveBarAggregator:
         client = get_client()
         if not client.is_connected():
             raise NotConnectedError("public broker session not connected")
+        # A TWS 1100 leaves the socket up with the feed dead. Opening a line
+        # then would spend a slot of the process-wide real-time-bar pacer the
+        # bots share, only for the line's liveness gate to cancel it; a chart
+        # polled every second empties that budget in under a minute and
+        # starves the bots' own resubscribe after the 1102 (#2354). The next
+        # poll after the restore opens the line.
+        if client.connection_lost:
+            raise NotConnectedError("public broker feed lost (TWS 1100)")
         return client
 
 
