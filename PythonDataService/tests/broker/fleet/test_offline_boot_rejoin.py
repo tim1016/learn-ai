@@ -39,12 +39,17 @@ from app.broker.alpaca.clerk.fleet_boot import (
 from app.broker.fleet import presence as presence_module
 from app.broker.fleet import volume as volume_module
 from app.broker.fleet.confirmation import read_confirmation_evidence
-from app.broker.fleet.errors import FleetControlError
+from app.broker.fleet.errors import (
+    FleetControlError,
+    FleetRegistryRecoveryPending,
+    FleetRegistryUnavailable,
+)
 from app.broker.fleet.presence import (
     FleetLaneDraining,
     FleetLaneRetired,
     FleetPresenceError,
     FleetPresenceRefused,
+    LocalPresence,
     RemotePresence,
 )
 from app.broker.fleet.provider import FLEET_PROTOCOL_VERSION
@@ -751,6 +756,116 @@ async def test_a_refused_offline_lane_gates_a_real_runner_until_it_is_admitted(
         with pytest.raises((RunAdmissionRefusedError, MarketDataFeedUnavailableError)) as later:
             await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
         assert "refused this lane" not in str(later.value)
+        assert stops.calls == 0
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    "unavailable",
+    [
+        pytest.param(
+            FleetRegistryRecoveryPending("restore in progress"), id="recovery_pending"
+        ),
+        pytest.param(FleetRegistryUnavailable("registry unreadable"), id="registry_unavailable"),
+    ],
+)
+async def test_a_combined_lanes_registry_unavailability_is_not_a_refusal(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unavailable: FleetControlError,
+) -> None:
+    """``LocalPresence`` raises the registry's own availability types, not the
+    wire's ``FleetPresenceError``. A remote lane reads a restore as
+    unavailability and keeps its starts open; a combined lane mid-restore
+    must too, rather than record an admission refusal and gate every start
+    (#2398 review)."""
+    service = _service(control_dir, clock)
+    try:
+        _provisioned, _root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        assert isinstance(boot.presence, LocalPresence)
+        lane_service = boot.owned_service
+        assert lane_service is not None
+        calls = 0
+
+        def registry_unavailable(*_: object, **__: object) -> None:
+            nonlocal calls
+            calls += 1
+            raise unavailable
+
+        monkeypatch.setattr(lane_service, "observe_session", registry_unavailable)
+        monkeypatch.setattr(lane_service, "clerk_volume_expectation", registry_unavailable)
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        start_heartbeat(boot, interval_s=0.01)
+
+        await _until(lambda: calls >= 8, what="several beats met the unavailable registry")
+
+        assert boot.admission_refusal is None
+        assert boot.start_refusal is None
+        assert boot.online
+        assert stops.calls == 0
+        assert boot.heartbeat is not None and not boot.heartbeat.done()
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_volume_gate_refusal_outlives_beats_under_the_old_session(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live lane's repair that fails the volume identity gate keeps its old
+    session, and that session's beats still land. A landed beat is not the
+    gate passing: starts stay gated, every beat re-runs the gate, and only a
+    registration that passes it reopens starts (#2398 review)."""
+    service = _service(control_dir, clock)
+    try:
+        provisioned, root = await _confirmed_then_closed(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        coordinator = _Coordinator(service, provisioned.clerk.clerk_id)
+        coordinator.up = True
+        monkeypatch.setattr(presence_module, "build_internal_client", coordinator.client)
+        boot = await open_fleet_lane(settings=_remote_settings(provisioned), volume_root=root)
+        assert boot is not None and boot.online
+        old_session = boot.session
+        stops = _StopCounter()
+        boot.stop_bots = stops
+        start_heartbeat(boot, interval_s=0.01)
+
+        marker_file = volume_module.marker_path(root)
+        original_marker = marker_file.read_text(encoding="utf-8")
+        marker = json.loads(original_marker)
+        marker["attestation_id"] = "attn_someone_else"
+        marker_file.write_text(json.dumps(marker), encoding="utf-8")
+        coordinator.fail_observe = True
+        await _until(
+            lambda: boot.admission_refusal == "clerk_volume_identity_mismatch",
+            what="the repair's volume gate refused",
+        )
+        assert boot.session == old_session
+
+        coordinator.fail_observe = False
+        landed_from = coordinator.requests
+        await _until(
+            lambda: coordinator.requests >= landed_from + 12,
+            what="several beats landed under the old session",
+        )
+        assert boot.start_refusal == "fleet_presence_refused"
+        assert boot.admission_refusal == "clerk_volume_identity_mismatch"
+        assert stops.calls == 0
+
+        marker_file.write_text(original_marker, encoding="utf-8")
+        await _until(lambda: boot.start_refusal is None, what="a registration passed the gate")
+        assert boot.session is not None and boot.session != old_session
         assert stops.calls == 0
         await close_fleet_lane(boot)
     finally:

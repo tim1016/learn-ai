@@ -100,7 +100,13 @@ from app.broker.fleet.confirmation import (
     read_confirmation_evidence,
     write_confirmation_evidence,
 )
-from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired, FleetControlError
+from app.broker.fleet.errors import (
+    ClerkLaneDraining,
+    ClerkLaneRetired,
+    FleetControlError,
+    FleetRegistryRecoveryPending,
+    FleetRegistryUnavailable,
+)
 from app.broker.fleet.identity import new_agent_instance_id
 from app.broker.fleet.internal_http import FleetTransportRefused
 from app.broker.fleet.presence import (
@@ -341,6 +347,12 @@ class FleetLaneBoot:
     #: or a beat that lands (``_learn_admitted``). Log vocabulary only:
     #: operator prose reads ``start_refusal``.
     admission_refusal: str | None = None
+    #: Whether ``admission_refusal`` is the volume identity gate's. A beat
+    #: landing under the session the lane already held says nothing about
+    #: the mounted root, so this refusal is lifted only by a registration
+    #: that passes the gate; while it stands every landed beat re-runs the
+    #: registration unit instead of readmitting the lane.
+    admission_refused_by_volume_gate: bool = False
     #: How a retired lane stops its bots. Installed by the composition root
     #: beside ``lane_quiet_probe``; ``None`` on a lane with no bot runner,
     #: which has nothing to stop.
@@ -587,6 +599,18 @@ def _raise_boot_refusal(answer: FleetControlError) -> NoReturn:
     raise answer
 
 
+#: The answers that mean the coordinator could not answer about this lane, on
+#: either transport. ``RemotePresence`` folds a registry restore or an
+#: unreadable registry into ``FleetPresenceError``; ``LocalPresence`` raises
+#: the registry's own types. A combined lane mid-restore must learn what a
+#: remote lane learns from the same state: nothing (#2398 review).
+_COORDINATOR_UNAVAILABLE = (
+    FleetPresenceError,
+    FleetRegistryUnavailable,
+    FleetRegistryRecoveryPending,
+)
+
+
 async def _register_and_learn(boot: FleetLaneBoot) -> FleetControlError | None:
     """Register this lane and act on the coordinator's answer: boot, repair, rejoin.
 
@@ -606,7 +630,8 @@ async def _register_and_learn(boot: FleetLaneBoot) -> FleetControlError | None:
     - any other refusal, the identity gate's own included: recorded
       (``_learn_admission_refused``). That gates new bot starts and leaves
       the running bots and the current session as they are;
-    - an unreachable coordinator: nothing changes.
+    - an unreachable coordinator, or a registry that cannot answer
+      (``_COORDINATOR_UNAVAILABLE``): nothing changes.
 
     Returns ``None`` once a session is adopted, otherwise the answer; only a
     booting lane has anything left to decide with it. Only a
@@ -615,14 +640,17 @@ async def _register_and_learn(boot: FleetLaneBoot) -> FleetControlError | None:
     fails and a beat dies at its one log site.
     """
     rejoining = boot.session is None and boot.heartbeat is not None
+    proving_volume = False
     try:
         expectation = await boot.presence.expectation(clerk_id=boot.clerk_id)
+        proving_volume = True
         _verify_root_against_expectation(boot.volume_root, expectation, clerk_id=boot.clerk_id)
         if isinstance(boot.presence, LocalPresence):
             # `register` re-proves the volume itself, so this is redundant —
             # deliberately: it is an earlier-failure belt. A wrong volume
             # fails here, before any registry transaction is opened.
             await boot.presence.verify_volume(clerk_id=boot.clerk_id, volume_root=boot.volume_root)
+        proving_volume = False
         session = await boot.presence.register(
             clerk_id=boot.clerk_id,
             worker_key=boot.worker_key,
@@ -639,10 +667,10 @@ async def _register_and_learn(boot: FleetLaneBoot) -> FleetControlError | None:
         # follows a drain it cannot answer lane quiet for arrives the same way.
         _learn_drain(boot)
         return exc
-    except FleetPresenceError as exc:
+    except _COORDINATOR_UNAVAILABLE as exc:
         return exc
     except FleetControlError as exc:
-        _learn_admission_refused(boot, exc)
+        _learn_admission_refused(boot, exc, by_volume_gate=proving_volume)
         return exc
     boot.session = session
     boot.registry_id = str(expectation["registry_id"])
@@ -1016,7 +1044,9 @@ async def _stop_bots_after_retirement(boot: FleetLaneBoot, progress: RetirementP
     )
 
 
-def _learn_admission_refused(boot: FleetLaneBoot, exc: FleetControlError) -> None:
+def _learn_admission_refused(
+    boot: FleetLaneBoot, exc: FleetControlError, *, by_volume_gate: bool
+) -> None:
     """The coordinator refused this lane's registration, or its volume failed the gate.
 
     Not a lifecycle lesson, so nothing is tombstoned and no bot is stopped:
@@ -1026,7 +1056,9 @@ def _learn_admission_refused(boot: FleetLaneBoot, exc: FleetControlError) -> Non
     their positions unmanaged and keep them stopped after it is readmitted.
     Only retirement stops bots. The refusal gates new starts
     (``FleetLaneBoot.start_refusal``), is logged loudly once per change of
-    reason, and the next beat asks again.
+    reason, and the next beat asks again. ``by_volume_gate`` marks a refusal
+    only a registration that passes the gate may lift
+    (``FleetLaneBoot.admission_refused_by_volume_gate``).
     """
     reason = exc.coordinator_reason if isinstance(exc, FleetPresenceRefused) else exc.reason
     if boot.admission_refusal != reason:
@@ -1042,6 +1074,7 @@ def _learn_admission_refused(boot: FleetLaneBoot, exc: FleetControlError) -> Non
             },
         )
     boot.admission_refusal = reason
+    boot.admission_refused_by_volume_gate = by_volume_gate
 
 
 def _learn_admitted(boot: FleetLaneBoot) -> None:
@@ -1053,6 +1086,7 @@ def _learn_admitted(boot: FleetLaneBoot) -> None:
         extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_admission_restored"},
     )
     boot.admission_refusal = None
+    boot.admission_refused_by_volume_gate = False
 
 
 async def _advance_retirement(boot: FleetLaneBoot) -> bool:
@@ -1158,10 +1192,16 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     )
                     await _register_and_learn(boot)
                 else:
-                    # A landed beat is the coordinator admitting this lane
-                    # under its current session, whatever an earlier
-                    # re-registration was refused with.
-                    _learn_admitted(boot)
+                    if boot.admission_refused_by_volume_gate:
+                        # A landed beat proves the session, never the mounted
+                        # root: only a registration that passes the volume
+                        # gate lifts that refusal, so ask for one.
+                        await _register_and_learn(boot)
+                    else:
+                        # A landed beat is the coordinator admitting this
+                        # lane under its current session, whatever an earlier
+                        # re-registration was refused with.
+                        _learn_admitted(boot)
                     if learned_lifecycle == StoredLifecycleState.DRAINING.value:
                         _learn_drain(boot)
                     # The common case is a no-op: `confirmed_grant_session`

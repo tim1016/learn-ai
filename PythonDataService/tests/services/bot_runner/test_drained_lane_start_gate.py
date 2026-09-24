@@ -56,3 +56,26 @@ async def test_the_gate_stays_silent_until_the_lane_learns_its_drain(
     drained = True
     with pytest.raises(RunAdmissionRefusedError, match="drained"):
         await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+
+@pytest.mark.parametrize(
+    "reason", ["clerk_lane_draining", "clerk_lane_retired", "fleet_presence_refused"]
+)
+async def test_the_fleet_refusal_code_reaches_the_start_error(
+    tmp_path: Path, reason: str
+) -> None:
+    """The routers propagate ``BotRunnerError.reason_code``: the start error
+    carries the lane's fleet refusal code, as the go-live gate beside it does,
+    so a caller can name the refusal without parsing prose."""
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: None,
+        boot_recovery_required=False,
+        lane_start_gates=(fleet_lane_start_gate(lambda: reason),),
+    )
+    with pytest.raises(RunAdmissionRefusedError) as refused:
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    assert refused.value.reason_code == reason
+    with pytest.raises(RunAdmissionRefusedError) as resumed:
+        await registry.resume_existing_with_admission("alpaca", _SID)
+    assert resumed.value.reason_code == reason

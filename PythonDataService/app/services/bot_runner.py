@@ -376,7 +376,7 @@ def fleet_lane_start_gate(start_refusal: Callable[[], str | None]) -> LaneStartG
         if reason is None:
             return
         message, detail = _FLEET_LANE_START_REFUSAL.get(reason, _FLEET_LANE_START_REFUSAL[None])
-        raise RunAdmissionRefusedError(message, detail=detail)
+        raise RunAdmissionRefusedError(message, detail=detail, reason_code=reason)
 
     return refuse_if_fleet_lane_refuses
 
