@@ -623,6 +623,42 @@ async def confirm_binding(
             next_step="A retired lane confirms nothing; decommission this "
             "volume or provision a new clerk.",
         ) from exc
+    existing = read_confirmation_evidence(boot.volume_root)
+    if (
+        not boot.draining
+        and existing is not None
+        and existing.lifecycle_state != StoredLifecycleState.PROVISIONED.value
+    ):
+        # This volume recorded a drain (or retirement) the coordinator no
+        # longer knows: the registry is stale. Overwriting the tombstone would
+        # resurrect the binding for the next offline boot, so refuse loudly;
+        # nothing below runs, and the lane records no confirmed grant.
+        logger.error(
+            "The coordinator confirmed a binding this volume records as drained; "
+            "refusing to overwrite the tombstone.",
+            extra={
+                "clerk_id": boot.clerk_id,
+                "action": "confirm_over_tombstone_refused",
+                "evidence_lifecycle_state": existing.lifecycle_state,
+            },
+        )
+        raise FleetBootRefused(
+            "The coordinator confirmed a binding this volume records as "
+            "drained; the registry is stale, so restore a newer backup (#2350).",
+            next_step="Restore the fleet registry from a backup that records "
+            "this clerk's drain; this volume's tombstone stays in place and "
+            "boots nothing.",
+        )
+    # The reply can land after the beat already learned a drain the
+    # coordinator committed after this confirmation (#2349). With no evidence
+    # on the volume yet, that lesson marked nothing, and its latch stops any
+    # later re-mark — so this write carries it, never a stale ``provisioned``.
+    # A retirement tombstone is written as ``draining`` too, deliberately:
+    # ``_learn_retirement`` sets ``boot.draining``, and any non-provisioned
+    # lifecycle refuses the offline boot alike.
+    learned_lifecycle = (
+        StoredLifecycleState.DRAINING if boot.draining else StoredLifecycleState.PROVISIONED
+    )
     write_confirmation_evidence(
         boot.volume_root,
         ConfirmationEvidence(
@@ -637,6 +673,7 @@ async def confirm_binding(
             confirmed_at_ms=now_ms_utc(),
             agent_instance_id=session.agent_instance_id,
             routing_epoch=session.routing_epoch,
+            lifecycle_state=learned_lifecycle.value,
         ),
     )
     boot.confirmed_grant = ConfirmedGrant(

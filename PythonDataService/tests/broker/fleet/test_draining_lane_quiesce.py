@@ -621,10 +621,8 @@ async def test_an_unwritable_volume_still_stops_the_bots_and_retries_the_tombsto
         clock.advance(drained.drain_deadline_at_ms - clock() + 1)
         # Force-retire a lane whose drain mark never landed: the tombstone is
         # still owed, and the disk now refuses it.
-        write_confirmation_evidence(
-            root,
-            replace(read_confirmation_evidence(root), lifecycle_state="provisioned"),
-        )
+        unmarked = replace(read_confirmation_evidence(root), lifecycle_state="provisioned")
+        write_confirmation_evidence(root, unmarked)
         evidence_dir.chmod(0o555)
         service.force_retire_clerk(
             clerk_id=boot.clerk_id, operator=OPERATOR, change_ref=CHANGE_REF
