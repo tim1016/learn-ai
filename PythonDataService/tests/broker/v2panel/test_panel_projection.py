@@ -608,6 +608,9 @@ def test_feed_continuity_gives_the_join_minute_gap_its_own_copy() -> None:
         "An unprovable data window outside the strategy's decision session was omitted.",
     )
     assert view.state == "continuous"
+    # The state-level explanation must survive per-event copy assignment, not
+    # be overwritten by the last event's explanation (#2387 review).
+    assert view.explanation == "No IBKR delivery interruptions have been recorded in this run."
 
 
 def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_ledger(

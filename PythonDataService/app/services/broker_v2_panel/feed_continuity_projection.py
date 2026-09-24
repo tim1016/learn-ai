@@ -146,14 +146,14 @@ def build_feed_continuity(
             pending_interruptions.append(event.observed_at_ms)
         elif event.kind == "recovered" and pending_interruptions:
             duration_ms = max(0, event.observed_at_ms - pending_interruptions.pop())
-        label, explanation = _event_copy(event)
+        event_label, event_explanation = _event_copy(event)
         event_views.append(
             FeedContinuityEventView(
                 evidence_seq=event.evidence_seq,
                 kind=event.kind,
                 occurred_at_ms=event.observed_at_ms,
-                label=label,
-                explanation=explanation,
+                label=event_label,
+                explanation=event_explanation,
                 cause=event.cause,
                 duration_ms=duration_ms,
                 duration_label=(_duration_label(duration_ms) if duration_ms is not None else None),
