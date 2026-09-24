@@ -620,11 +620,11 @@ async def test_an_unwritable_volume_still_stops_the_bots_and_retries_the_tombsto
         assert drained.drain_deadline_at_ms is not None
         clock.advance(drained.drain_deadline_at_ms - clock() + 1)
         # Force-retire a lane whose drain mark never landed: the tombstone is
-        # still owed, and the disk now refuses it.
-        write_confirmation_evidence(
-            root,
-            replace(read_confirmation_evidence(root), lifecycle_state="provisioned"),
-        )
+        # still owed, and the disk now refuses it. The writer never steps a
+        # tombstone back (#2349), so the never-landed file is staged afresh.
+        unmarked = replace(read_confirmation_evidence(root), lifecycle_state="provisioned")
+        confirmation_evidence_path(root).unlink()
+        write_confirmation_evidence(root, unmarked)
         evidence_dir.chmod(0o555)
         service.force_retire_clerk(
             clerk_id=boot.clerk_id, operator=OPERATOR, change_ref=CHANGE_REF

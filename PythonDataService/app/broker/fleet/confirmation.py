@@ -58,6 +58,10 @@ _V1_FIELDS = frozenset(
 )
 _V2_FIELDS = _V1_FIELDS | {"lifecycle_state"}
 _EVIDENCE_LIFECYCLES = frozenset(state.value for state in StoredLifecycleState)
+#: The registry's irreversible lifecycle order (provisioned -> draining ->
+#: retired; ``drain_clerk`` has no inverse). It, not arrival order, sequences
+#: two writes to the evidence's lifecycle (#2349).
+_LIFECYCLE_RANK = {state.value: rank for rank, state in enumerate(StoredLifecycleState)}
 
 
 class ConfirmationEvidenceError(FleetControlError):
@@ -205,6 +209,11 @@ def write_confirmation_evidence(clerk_root: Path, evidence: ConfirmationEvidence
     later file naming a different clerk or volume is a mis-mounted root, not
     an update. The grant fields (generation, tuple, session) move forward
     with each re-confirmation.
+
+    The lifecycle never steps back (#2349). A confirmation is committed
+    fenced on ``provisioned``, so a tombstone already on the volume records a
+    drain the coordinator committed after it, however late the confirm reply
+    arrived: the write keeps the later lifecycle in the registry's order.
     """
     target = confirmation_evidence_path(clerk_root)
     existing = read_confirmation_evidence(clerk_root)
@@ -218,6 +227,10 @@ def write_confirmation_evidence(clerk_root: Path, evidence: ConfirmationEvidence
             next_step="Mount this clerk's own volume; an evidence file never "
             "migrates onto another lane.",
         )
+    if existing is not None and (
+        _LIFECYCLE_RANK[existing.lifecycle_state] > _LIFECYCLE_RANK[evidence.lifecycle_state]
+    ):
+        evidence = replace(evidence, lifecycle_state=existing.lifecycle_state)
     payload = {
         "schema_version": _SCHEMA_VERSION,
         "clerk_id": evidence.clerk_id,

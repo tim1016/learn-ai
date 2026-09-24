@@ -623,6 +623,13 @@ async def confirm_binding(
             next_step="A retired lane confirms nothing; decommission this "
             "volume or provision a new clerk.",
         ) from exc
+    # The reply can land after the beat already learned a drain the
+    # coordinator committed after this confirmation (#2349). With no evidence
+    # on the volume yet, that lesson marked nothing, and its latch stops any
+    # later re-mark — so this write carries it, never a stale ``provisioned``.
+    learned_lifecycle = (
+        StoredLifecycleState.DRAINING if boot.draining else StoredLifecycleState.PROVISIONED
+    )
     write_confirmation_evidence(
         boot.volume_root,
         ConfirmationEvidence(
@@ -637,6 +644,7 @@ async def confirm_binding(
             confirmed_at_ms=now_ms_utc(),
             agent_instance_id=session.agent_instance_id,
             routing_epoch=session.routing_epoch,
+            lifecycle_state=learned_lifecycle.value,
         ),
     )
     boot.confirmed_grant = ConfirmedGrant(
