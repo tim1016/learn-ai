@@ -155,6 +155,77 @@ describe('BotPanelLiveStore', () => {
     expect(store.stall()).toBeNull();
   });
 
+  it('loads the frozen panel under the stall when opened mid-stall (#2353 review)', async () => {
+    service.getLiveSnapshot.mockRejectedValueOnce(
+      new HttpErrorResponse({ status: 503, error: { detail: STALL } }),
+    );
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    expect(store.snapshot()).toBeNull();
+
+    // The stream's explicitly stale bootstrap: the frozen frame, then the stall.
+    const source = StubEventSource.instances[0];
+    source.emit('snapshot', JSON.stringify(snapshot(2)));
+    source.emit('stale', JSON.stringify(STALL));
+
+    expect(store.snapshot()?.surface_version).toBe(2);
+    expect(store.stall()).toEqual(STALL);
+  });
+
+  it('does not reinstate a stall from a REST 503 that resolves after the recovery frame (#2353 review)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    const source = StubEventSource.instances[0];
+    source.emit('stale', JSON.stringify(STALL));
+    let reject!: (error: unknown) => void;
+    service.getLiveSnapshot.mockReturnValueOnce(
+      new Promise<BotPanelLiveSnapshot>((_resolve, promiseReject) => {
+        reject = promiseReject;
+      }),
+    );
+    const refreshing = store.refresh();
+
+    // Recovery arrives on the stream before the in-flight 503 resolves.
+    source.emit('snapshot', JSON.stringify(snapshot(2)));
+    reject(new HttpErrorResponse({ status: 503, error: { detail: STALL } }));
+    await refreshing;
+
+    expect(store.stall()).toBeNull();
+  });
+
+  it('does not clear a stall with a pre-stall REST 200 that resolves after the stale frame (#2353 review)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    const source = StubEventSource.instances[0];
+    const late = deferred<BotPanelLiveSnapshot>();
+    service.getLiveSnapshot.mockReturnValueOnce(late.promise);
+    const refreshing = store.refresh();
+
+    source.emit('stale', JSON.stringify(STALL));
+    late.resolve(snapshot(2));
+    await refreshing;
+
+    expect(store.stall()).toEqual(STALL);
+  });
+
   it('reports a malformed stale event instead of ignoring it', async () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({

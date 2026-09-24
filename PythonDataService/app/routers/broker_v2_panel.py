@@ -553,7 +553,8 @@ async def stream_live_snapshot_scoped(
     cursor: str | None = Query(default=None, max_length=128),
 ) -> StreamingResponse:
     # A stalled producer still opens the stream: the stream itself reports the
-    # stall as a typed ``stale`` event instead of re-priming the frozen frame.
+    # stall as a typed ``stale`` event. A client that does not hold the frozen
+    # frame gets it first, so a cold load still mounts the panel's controls.
     hub = await _live_hub(broker, account_id, sid, resolution)
     if not hub.is_available:
         raise _snapshot_unavailable(SnapshotUnavailableError(hub.strategy_instance_id))
@@ -573,19 +574,23 @@ async def stream_live_snapshot_scoped(
             if cursor is not None and requested_epoch != stream_epoch:
                 payload = json.dumps({"reason": "epoch_changed", "cursor": current_id})
                 yield f"event: reset\ndata: {payload}\n\n"
+            stale_announced = False
             while True:
-                # Wake no later than the stall deadline, so staleness is judged
-                # by the producer's own stamp, never by transport keepalives.
+                # Wake no later than the stall deadline (at once if it already
+                # passed unannounced), so staleness is judged by the producer's
+                # own stamp, never by transport keepalives.
                 until_stall = hub.seconds_until_stall()
                 timeout = (
                     _LIVE_STREAM_KEEPALIVE_S
-                    if until_stall is None
+                    if until_stall is None or stale_announced
                     else min(_LIVE_STREAM_KEEPALIVE_S, until_stall)
                 )
                 try:
                     snapshot = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except TimeoutError:
-                    yield _live_stream_frame(hub, None)
+                    stall = hub.stall()
+                    stale_announced = stall is not None
+                    yield _live_stream_frame(stall, None)
                     continue
                 if snapshot is None:
                     yield "event: end\ndata: {}\n\n"
@@ -594,7 +599,14 @@ async def stream_live_snapshot_scoped(
                     payload = json.dumps({"error": snapshot.message})
                     yield f"event: error\ndata: {payload}\n\n"
                     return
-                yield _live_stream_frame(hub, snapshot)
+                stall = hub.stall()
+                stale_announced = stall is not None
+                if stall is not None and _live_frame_id(snapshot) != cursor:
+                    # The frozen frame a stalled hub primed this subscriber
+                    # with: an explicitly stale bootstrap, followed at once by
+                    # the stall, so a cold client mounts the controls (#2353).
+                    yield _live_stream_frame(None, snapshot)
+                yield _live_stream_frame(stall, snapshot)
         finally:
             hub.unsubscribe(queue)
             release_live_projection_hub(
@@ -612,18 +624,23 @@ async def stream_live_snapshot_scoped(
     )
 
 
+def _live_frame_id(snapshot: BotPanelLiveSnapshot) -> str:
+    return f"{snapshot.stream_epoch}:{snapshot.surface_version}"
+
+
 def _live_stream_frame(
-    hub: SurfaceHub[BotPanelLiveSnapshot],
+    stall: SurfaceHubStall | None,
     snapshot: BotPanelLiveSnapshot | None,
 ) -> str:
     """The next live-stream frame; a stall outranks the snapshot and the keepalive."""
-    stall = hub.stall()
     if stall is not None:
         return f"event: stale\ndata: {_stall_detail(stall).model_dump_json()}\n\n"
     if snapshot is None:
         return ": keepalive\n\n"
-    event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
-    return f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+    return (
+        f"id: {_live_frame_id(snapshot)}\nevent: snapshot\n"
+        f"data: {snapshot.model_dump_json()}\n\n"
+    )
 
 
 # ── §11 Presented-action execution (account-scoped + unscoped alias) ─────────
