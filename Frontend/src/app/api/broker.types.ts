@@ -17776,13 +17776,29 @@ export interface components {
         };
         /**
          * LiveSnapshotUnavailableDetail
-         * @description Retry guidance when a producer has not published its first snapshot.
+         * @description Why the live panel snapshot is withheld, with retry guidance.
+         *
+         *     ``SNAPSHOT_UNAVAILABLE``: the producer has not published a complete
+         *     snapshot yet, or its latest refresh failed. ``PRODUCER_STALLED`` (#2353):
+         *     the producer has not completed an assembly within its liveness budget, so
+         *     its last snapshot is frozen and is withheld rather than served as live.
+         *     The stall instants come from the data plane's own clock; this model is
+         *     also the payload of the live stream's ``stale`` event.
          */
         LiveSnapshotUnavailableDetail: {
+            /** Last Produced At Ms */
+            last_produced_at_ms: number | null;
             /** Message */
             message: string;
             /** Next Action */
             next_action: string;
+            /** Observed At Ms */
+            observed_at_ms: number | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "SNAPSHOT_UNAVAILABLE" | "PRODUCER_STALLED";
             /** Why */
             why: string;
         };
@@ -30142,7 +30158,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description The producer has not published its first complete snapshot. */
+            /** @description The producer has not published a complete snapshot, its last refresh failed, or it stalled (reason PRODUCER_STALLED). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -30189,7 +30205,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description The producer has not published its first complete snapshot. */
+            /** @description The producer has not published a complete snapshot, or its last refresh failed. A stalled producer still opens the stream, which reports the stall as a typed `stale` event. */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -185,6 +185,8 @@ export type ChartLiveResponse = components['schemas']['ChartLiveResponse'];
 export type ChartHistoryResponse = components['schemas']['ChartHistoryResponse'];
 
 export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot'];
+/** Why the live snapshot is withheld; `PRODUCER_STALLED` is the typed stale state (#2353). */
+export type LiveSnapshotUnavailableDetail = components['schemas']['LiveSnapshotUnavailableDetail'];
 
 // ── §14 Operator-gated evidence ──────────────────────────────────────────────
 

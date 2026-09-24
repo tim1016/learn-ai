@@ -48,6 +48,7 @@ from app.schemas.broker_v2_panel import (
     CohortArchiveView,
     CohortFlattenRequest,
     CohortFlattenView,
+    LiveSnapshotUnavailableDetail,
     LiveSnapshotUnavailableResponse,
     PanelAction,
     PanelActionErrorResponse,
@@ -98,7 +99,13 @@ from app.services.broker_v2_panel.paper_access_service import (
     prepare_paper_access,
 )
 from app.services.canary_admission import CanaryActivationRefused, CanaryAdmissionLedgerError
-from app.services.surface_hub import SnapshotUnavailableError, SurfaceHubRefreshFailure
+from app.services.surface_hub import (
+    SnapshotStalledError,
+    SnapshotUnavailableError,
+    SurfaceHub,
+    SurfaceHubRefreshFailure,
+    SurfaceHubStall,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -428,32 +435,77 @@ async def get_panel_unscoped(
     return await _panel(broker, account_id, sid, transaction_ref)
 
 
+_LIVE_STREAM_KEEPALIVE_S = 15.0
+
+
+def _stall_detail(stall: SurfaceHubStall) -> LiveSnapshotUnavailableDetail:
+    """Operator copy for a producer that stopped completing refreshes (#2353)."""
+    return LiveSnapshotUnavailableDetail(
+        reason="PRODUCER_STALLED",
+        message="The live panel stopped updating.",
+        why=(
+            "The data plane has not completed a panel refresh in over "
+            f"{stall.stall_after_ms // 1_000} seconds, so the last snapshot may no "
+            "longer match the bot, its orders or the market."
+        ),
+        next_action=(
+            "The values shown are frozen; the controls still work and each action "
+            "is checked by the server. The panel resumes on its own when the "
+            "producer recovers; if it does not, check the data plane."
+        ),
+        last_produced_at_ms=stall.last_produced_at_ms,
+        observed_at_ms=stall.observed_at_ms,
+    )
+
+
+def _snapshot_unavailable(error: SnapshotUnavailableError) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=LiveSnapshotUnavailableDetail(
+            reason="SNAPSHOT_UNAVAILABLE",
+            message="The live panel snapshot is not available yet.",
+            why=str(error),
+            next_action="Keep the current screen visible while the producer retries.",
+            last_produced_at_ms=None,
+            observed_at_ms=None,
+        ).model_dump(mode="json"),
+    )
+
+
+async def _live_hub(
+    broker: str,
+    account_id: str,
+    sid: str,
+    resolution: Literal["5s", "1m"],
+) -> SurfaceHub[BotPanelLiveSnapshot]:
+    try:
+        await panel_scope.validate_account_scope(broker, account_id, sid)
+        return await get_or_start_live_projection_hub(
+            broker,
+            account_id,
+            sid,
+            resolution=resolution,
+        )
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
+
+
 async def _live_snapshot(
     broker: str,
     account_id: str,
     sid: str,
     resolution: Literal["5s", "1m"],
 ) -> BotPanelLiveSnapshot:
+    hub = await _live_hub(broker, account_id, sid, resolution)
     try:
-        await panel_scope.validate_account_scope(broker, account_id, sid)
-        hub = await get_or_start_live_projection_hub(
-            broker,
-            account_id,
-            sid,
-            resolution=resolution,
-        )
         return await hub.snapshot()
-    except panel_errors.PanelDataError as error:
-        _raise_panel_error(error)
-    except SnapshotUnavailableError as error:
+    except SnapshotStalledError as error:
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "The live panel snapshot is not available yet.",
-                "why": str(error),
-                "next_action": "Keep the current screen visible while the producer retries.",
-            },
+            detail=_stall_detail(error.stall).model_dump(mode="json"),
         ) from error
+    except SnapshotUnavailableError as error:
+        raise _snapshot_unavailable(error) from error
 
 
 @router.get(
@@ -463,7 +515,10 @@ async def _live_snapshot(
     responses={
         503: {
             "model": LiveSnapshotUnavailableResponse,
-            "description": "The producer has not published its first complete snapshot.",
+            "description": (
+                "The producer has not published a complete snapshot, its last "
+                "refresh failed, or it stalled (reason PRODUCER_STALLED)."
+            ),
         },
     },
 )
@@ -482,7 +537,11 @@ async def get_live_snapshot_scoped(
     responses={
         503: {
             "model": LiveSnapshotUnavailableResponse,
-            "description": "The producer has not published its first complete snapshot.",
+            "description": (
+                "The producer has not published a complete snapshot, or its last "
+                "refresh failed. A stalled producer still opens the stream, which "
+                "reports the stall as a typed `stale` event."
+            ),
         },
     },
 )
@@ -493,15 +552,14 @@ async def stream_live_snapshot_scoped(
     resolution: Literal["5s", "1m"] = Query("5s"),
     cursor: str | None = Query(default=None, max_length=128),
 ) -> StreamingResponse:
-    current = await _live_snapshot(broker, account_id, sid, resolution)
-    hub = await get_or_start_live_projection_hub(
-        broker,
-        account_id,
-        sid,
-        resolution=resolution,
-    )
-
-    current_id = f"{current.stream_epoch}:{current.surface_version}"
+    # A stalled producer still opens the stream: the stream itself reports the
+    # stall as a typed ``stale`` event. A client that does not hold the frozen
+    # frame gets it first, so a cold load still mounts the panel's controls.
+    hub = await _live_hub(broker, account_id, sid, resolution)
+    if not hub.is_available:
+        raise _snapshot_unavailable(SnapshotUnavailableError(hub.strategy_instance_id))
+    stream_epoch = hub.stream_epoch
+    current_id = f"{stream_epoch}:{hub.surface_version}"
     requested_epoch = cursor.rsplit(":", 1)[0] if cursor and ":" in cursor else None
 
     async def event_source() -> AsyncIterator[str]:
@@ -513,14 +571,26 @@ async def stream_live_snapshot_scoped(
             resolution=resolution,
         )
         try:
-            if cursor is not None and requested_epoch != current.stream_epoch:
+            if cursor is not None and requested_epoch != stream_epoch:
                 payload = json.dumps({"reason": "epoch_changed", "cursor": current_id})
                 yield f"event: reset\ndata: {payload}\n\n"
+            stale_announced = False
             while True:
+                # Wake no later than the stall deadline (at once if it already
+                # passed unannounced), so staleness is judged by the producer's
+                # own stamp, never by transport keepalives.
+                until_stall = hub.seconds_until_stall()
+                timeout = (
+                    _LIVE_STREAM_KEEPALIVE_S
+                    if until_stall is None or stale_announced
+                    else min(_LIVE_STREAM_KEEPALIVE_S, until_stall)
+                )
                 try:
-                    snapshot = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    snapshot = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except TimeoutError:
-                    yield ": keepalive\n\n"
+                    stall = hub.stall()
+                    stale_announced = stall is not None
+                    yield _live_stream_frame(stall, None)
                     continue
                 if snapshot is None:
                     yield "event: end\ndata: {}\n\n"
@@ -529,8 +599,14 @@ async def stream_live_snapshot_scoped(
                     payload = json.dumps({"error": snapshot.message})
                     yield f"event: error\ndata: {payload}\n\n"
                     return
-                event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
-                yield f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+                stall = hub.stall()
+                stale_announced = stall is not None
+                if stall is not None and _live_frame_id(snapshot) != cursor:
+                    # The frozen frame a stalled hub primed this subscriber
+                    # with: an explicitly stale bootstrap, followed at once by
+                    # the stall, so a cold client mounts the controls (#2353).
+                    yield _live_stream_frame(None, snapshot)
+                yield _live_stream_frame(stall, snapshot)
         finally:
             hub.unsubscribe(queue)
             release_live_projection_hub(
@@ -545,6 +621,25 @@ async def stream_live_snapshot_scoped(
         event_source(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _live_frame_id(snapshot: BotPanelLiveSnapshot) -> str:
+    return f"{snapshot.stream_epoch}:{snapshot.surface_version}"
+
+
+def _live_stream_frame(
+    stall: SurfaceHubStall | None,
+    snapshot: BotPanelLiveSnapshot | None,
+) -> str:
+    """The next live-stream frame; a stall outranks the snapshot and the keepalive."""
+    if stall is not None:
+        return f"event: stale\ndata: {_stall_detail(stall).model_dump_json()}\n\n"
+    if snapshot is None:
+        return ": keepalive\n\n"
+    return (
+        f"id: {_live_frame_id(snapshot)}\nevent: snapshot\n"
+        f"data: {snapshot.model_dump_json()}\n\n"
     )
 
 

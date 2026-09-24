@@ -43,6 +43,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
+import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
   ORIGIN_TAB_QUERY_PARAM,
@@ -138,12 +139,14 @@ const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
     TraderLensComponent,
     OperatorLensComponent,
     BotBannerComponent,
+    TimestampDisplayComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
   providers: [BotPanelLiveStore],
   host: {
     '[class.bot-panel-shell--trader]': "activeLens() === 'trader'",
+    '[class.is-stale]': 'liveStall() !== null',
   },
 })
 export class BotPanelShellComponent {
@@ -314,6 +317,10 @@ export class BotPanelShellComponent {
     return chart?.resolution === this.liveResolution() ? chart : null;
   });
   protected readonly liveStreamStatus = this.liveStore.status;
+  /** The server's typed stale notice while the panel producer is stalled
+   * (#2353). The frozen snapshot stays visible, dimmed and under the notice,
+   * so its controls keep working: every action is re-checked by the server. */
+  protected readonly liveStall = this.liveStore.stall;
 
   private readonly runLifecycle = computed(() => {
     const health = this.panel()?.health;
@@ -723,7 +730,8 @@ export class BotPanelShellComponent {
     try {
       await this.liveStore.refresh();
       if (requestIdentity !== this.routeIdentity()) return;
-      const execute = this.presentedAction('execute_safe_flatten');
+      const execute = await this.currentExecuteSafeFlatten(prepared.target, prepared.sid);
+      if (requestIdentity !== this.routeIdentity()) return;
       if (execute === undefined) {
         throw new Error('This bot no longer presents a safe flatten; refresh and prepare again.');
       }
@@ -782,6 +790,18 @@ export class BotPanelShellComponent {
   /** The named action as the panel presents it right now, with its current token. */
   private presentedAction(actionId: PanelAction['action_id']): PanelAction | undefined {
     return this.panel()?.actions.find((candidate) => candidate.action_id === actionId);
+  }
+
+  /** The execute token comes from a live read: while the live projection is
+   * stalled (#2353) the snapshot's token is frozen, so it is read from the
+   * panel endpoint, which does not go through the stalled producer. */
+  private async currentExecuteSafeFlatten(
+    target: ResourceTarget,
+    sid: string,
+  ): Promise<PanelAction | undefined> {
+    if (this.liveStore.stall() === null) return this.presentedAction('execute_safe_flatten');
+    const panel = await this.panelSvc.getPanel(target, sid);
+    return panel.actions.find((candidate) => candidate.action_id === 'execute_safe_flatten');
   }
 
   private commandTarget(target: ResourceTarget): ResourceTarget {

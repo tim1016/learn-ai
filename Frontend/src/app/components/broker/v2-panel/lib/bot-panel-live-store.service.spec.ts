@@ -1,6 +1,10 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BotPanelLiveSnapshot } from './broker-v2-panel.types';
+import type {
+  BotPanelLiveSnapshot,
+  LiveSnapshotUnavailableDetail,
+} from './broker-v2-panel.types';
 import { BrokerV2PanelService } from './broker-v2-panel.service';
 import { BotPanelLiveStore } from './bot-panel-live-store.service';
 
@@ -38,6 +42,15 @@ function snapshot(version: number, epoch = 'epoch-a'): BotPanelLiveSnapshot {
     live_chart: { resolution: '5s' } as BotPanelLiveSnapshot['live_chart'],
   };
 }
+
+const STALL: LiveSnapshotUnavailableDetail = {
+  reason: 'PRODUCER_STALLED',
+  message: 'The live panel stopped updating.',
+  why: 'The data plane has not completed a panel refresh in over 20 seconds.',
+  next_action: 'Do not act on the last values shown.',
+  last_produced_at_ms: 1_700_000_000_000,
+  observed_at_ms: 1_700_000_060_000,
+};
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -97,6 +110,135 @@ describe('BotPanelLiveStore', () => {
     source.emit('error');
     expect(store.status()).toBe('error');
     expect(store.snapshot()?.surface_version).toBe(3);
+  });
+
+  it('marks the snapshot stale on a stream stale event and clears it on the next frame (#2353)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    const source = StubEventSource.instances[0];
+    source.emit('open');
+    expect(store.stall()).toBeNull();
+
+    source.emit('stale', JSON.stringify(STALL));
+    expect(store.stall()).toEqual(STALL);
+    expect(store.status()).toBe('open');
+
+    // The recovered producer republishes the same version; it still ends the stall.
+    source.emit('snapshot', JSON.stringify(snapshot(2)));
+    expect(store.stall()).toBeNull();
+    expect(store.snapshot()?.surface_version).toBe(2);
+  });
+
+  it('adopts a typed stalled-producer refusal from REST instead of the frozen snapshot (#2353)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    service.getLiveSnapshot.mockRejectedValueOnce(
+      new HttpErrorResponse({ status: 503, error: { detail: STALL } }),
+    );
+
+    await store.refresh();
+
+    expect(store.stall()).toEqual(STALL);
+    await store.refresh();
+    expect(store.stall()).toBeNull();
+  });
+
+  it('loads the frozen panel under the stall when opened mid-stall (#2353 review)', async () => {
+    service.getLiveSnapshot.mockRejectedValueOnce(
+      new HttpErrorResponse({ status: 503, error: { detail: STALL } }),
+    );
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    expect(store.snapshot()).toBeNull();
+
+    // The stream's explicitly stale bootstrap: the frozen frame, then the stall.
+    const source = StubEventSource.instances[0];
+    source.emit('snapshot', JSON.stringify(snapshot(2)));
+    source.emit('stale', JSON.stringify(STALL));
+
+    expect(store.snapshot()?.surface_version).toBe(2);
+    expect(store.stall()).toEqual(STALL);
+  });
+
+  it('does not reinstate a stall from a REST 503 that resolves after the recovery frame (#2353 review)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    const source = StubEventSource.instances[0];
+    source.emit('stale', JSON.stringify(STALL));
+    let reject!: (error: unknown) => void;
+    service.getLiveSnapshot.mockReturnValueOnce(
+      new Promise<BotPanelLiveSnapshot>((_resolve, promiseReject) => {
+        reject = promiseReject;
+      }),
+    );
+    const refreshing = store.refresh();
+
+    // Recovery arrives on the stream before the in-flight 503 resolves.
+    source.emit('snapshot', JSON.stringify(snapshot(2)));
+    reject(new HttpErrorResponse({ status: 503, error: { detail: STALL } }));
+    await refreshing;
+
+    expect(store.stall()).toBeNull();
+  });
+
+  it('does not clear a stall with a pre-stall REST 200 that resolves after the stale frame (#2353 review)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    const source = StubEventSource.instances[0];
+    const late = deferred<BotPanelLiveSnapshot>();
+    service.getLiveSnapshot.mockReturnValueOnce(late.promise);
+    const refreshing = store.refresh();
+
+    source.emit('stale', JSON.stringify(STALL));
+    late.resolve(snapshot(2));
+    await refreshing;
+
+    expect(store.stall()).toEqual(STALL);
+  });
+
+  it('reports a malformed stale event instead of ignoring it', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      clerkId: 'clrk_spec',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+
+    StubEventSource.instances[0].emit('stale', '{"reason":"PRODUCER_STALLED"}');
+
+    expect(store.error()).toBe('Bot panel stream returned an invalid stale notice.');
   });
 
   it('re-bootstraps snapshots after an epoch reset event', async () => {

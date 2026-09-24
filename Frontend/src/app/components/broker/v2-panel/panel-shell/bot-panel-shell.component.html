@@ -2,6 +2,18 @@
   <div class="load-error" role="alert" aria-live="assertive">{{ loadError() }}</div>
 }
 
+@if (liveStall(); as stall) {
+  <section class="live-stall" role="alert" aria-live="assertive" aria-labelledby="live-stall-title">
+    <h2 id="live-stall-title" class="live-stall__title">{{ stall.message }}</h2>
+    <p>{{ stall.why }}</p>
+    <p>{{ stall.next_action }}</p>
+    <p class="live-stall__meta">
+      Last complete refresh
+      <app-timestamp-display [value]="stall.last_produced_at_ms" mode="local" />
+    </p>
+  </section>
+}
+
 @if (!isLoaded()) {
   <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
     <span class="loading-text">Loading bot control…</span>
