@@ -374,7 +374,7 @@ class MarketDataFeed(Protocol):
         Used to warm up a consumer's indicator state before it starts
         making decisions from ``stream_bars`` -- never itself a decision
         input. A live history source whose fetch fails, or returns history
-        that does not reach the ``lookback_days`` window, raises
+        that does not cover every session the ``lookback_days`` window owes, raises
         ``MarketDataFeedError`` (reason ``WARMUP_HISTORY_UNAVAILABLE``)
         rather than returning a short list: a short list silently read as
         "that is all the history there is" would start the run cold on a

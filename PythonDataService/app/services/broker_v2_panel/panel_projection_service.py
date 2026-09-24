@@ -91,8 +91,10 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     ),
     WARMUP_HISTORY_UNAVAILABLE: (
         "Refused: warmup history unavailable",
-        "The run's sealed warmup lookback could not be fetched from IB Gateway, so it was "
-        "refused rather than started cold. Start again once the Gateway is logged in.",
+        "The run's sealed warmup lookback could not be fetched in full from IB Gateway, so it "
+        "was refused rather than started cold. Before starting again, check that the Gateway "
+        "is logged in, its historical-data farm is connected (not paced or down), and the "
+        "symbol qualifies as a contract.",
     ),
 }
 

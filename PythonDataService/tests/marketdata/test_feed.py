@@ -682,6 +682,14 @@ def test_translate_produces_int64_ms_utc_timestamps() -> None:
     assert bar.end_ms - bar.start_ms == 60_000
 
 
+def _skip_warmup_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the forming-bar cutoff from the per-session coverage refusal
+    (#2365), which ``test_bot_trade_strategy_warmup`` pins on its own."""
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.require_warmup_coverage", lambda *_args, **_kwargs: None
+    )
+
+
 @pytest.mark.asyncio
 async def test_recent_closed_bars_drops_the_forming_bar(
     monkeypatch: pytest.MonkeyPatch,
@@ -696,14 +704,11 @@ async def test_recent_closed_bars_drops_the_forming_bar(
     from app.utils.timestamps import now_ms_utc
 
     now = now_ms_utc()
-    # Reaches past the 5-day window, so the sealed-coverage check (#2365) is met.
-    window_start = (now // 60_000 - 8 * 24 * 60) * 60_000
     closed_start = (now // 60_000 - 2) * 60_000
     forming_start = (now // 60_000) * 60_000  # end_ms lands in the future
 
     async def _fake_history(*_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
         return [
-            _make_ibkr_bar("SPY", start_ms=window_start),
             _make_ibkr_bar("SPY", start_ms=closed_start),
             _make_ibkr_bar("SPY", start_ms=forming_start, volume=42),
         ]
@@ -711,11 +716,12 @@ async def test_recent_closed_bars_drops_the_forming_bar(
     monkeypatch.setattr(
         "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _fake_history
     )
+    _skip_warmup_coverage(monkeypatch)
 
     feed = IbkrMarketDataFeed(_fake_connected_client())
     bars = await feed.recent_closed_bars("SPY", use_rth=False)
 
-    assert [bar.start_ms for bar in bars] == [window_start, closed_start]
+    assert [bar.start_ms for bar in bars] == [closed_start]
     assert all(bar.end_ms <= now_ms_utc() for bar in bars)
 
 
@@ -734,11 +740,7 @@ async def test_recent_closed_bars_anchors_cutoff_before_history_request(
     ) -> list[SimpleNamespace]:
         nonlocal clock_ms
         clock_ms = request_finished_ms
-        return [
-            # 2023-11-09, before the 5-day window's earliest owed session (#2365).
-            _make_ibkr_bar("SPY", start_ms=1_699_540_000_000),
-            _make_ibkr_bar("SPY", start_ms=1_700_000_000_000, volume=42),
-        ]
+        return [_make_ibkr_bar("SPY", start_ms=1_700_000_000_000, volume=42)]
 
     monkeypatch.setattr(
         "app.marketdata.ibkr_feed.now_ms_utc",
@@ -748,12 +750,11 @@ async def test_recent_closed_bars_anchors_cutoff_before_history_request(
         "app.marketdata.ibkr_feed.fetch_historical_minute_bars",
         _history_crossing_minute_boundary,
     )
+    _skip_warmup_coverage(monkeypatch)
 
     feed = IbkrMarketDataFeed(_fake_connected_client())
 
-    bars = await feed.recent_closed_bars("SPY", use_rth=False)
-
-    assert [bar.start_ms for bar in bars] == [1_699_540_000_000]
+    assert await feed.recent_closed_bars("SPY", use_rth=False) == []
 
 
 def _warmup_history_failures() -> list[Exception]:

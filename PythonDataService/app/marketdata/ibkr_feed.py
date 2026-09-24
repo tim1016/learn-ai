@@ -34,10 +34,10 @@ without utc.
 from __future__ import annotations
 
 import logging
+from bisect import bisect_left
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
-from datetime import timedelta
 
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import (
@@ -83,33 +83,45 @@ class _SymbolLiveness:
     active_count: int = 0
 
 
-def _earliest_owed_warmup_session_close_ms(lookback_days: int, *, now_ms: int) -> int | None:
-    """Close of the oldest session a ``lookback_days`` warmup must reach, or ``None``.
+_DAY_MS: int = 86_400_000
+
+
+def _owed_warmup_sessions(lookback_days: int, *, now_ms: int) -> list[tuple[int, int]]:
+    """The regular sessions a ``lookback_days`` warmup must cover, as ``(open_ms, close_ms)``.
 
     The window is the ``lookback_days`` calendar days ending at ``now_ms``.
-    The ET date the window starts on is excluded, because a calendar-day
-    duration can begin partway through it (after that day's close, even).
-    The owed sessions are the NYSE sessions strictly after that date that
-    have already opened by ``now_ms``, from the canonical calendar. ``None``
-    means the window owes no session -- e.g. a one-day lookback before the
-    open -- so an empty history is then a true "nothing to warm on".
+    Every NYSE session it touches is a candidate, from the canonical
+    calendar (half-days keep their early close). A session is **owed** when
+    the window holds at least half of it -- measured on the part that has
+    already happened, so today's session is owed only once half of it has
+    elapsed:
+
+    * a session wholly inside the window is always owed, including one on
+      the window's first ET date (a one-day warmup at 08:30 owes all of the
+      previous session);
+    * at the window's two edges, a session the window holds most of is
+      owed, and a thin sliver is not. A sliver can legitimately come back
+      bar-free -- the few minutes before a close the window starts in, or
+      the first minutes of a session that just opened -- while a response
+      holding no bar of a session the window mostly spans is truncated, not
+      sparse. For a one-day warmup the two edge sessions together span one
+      session, so one of them is always owed while the market is open.
     """
-    now_date = et_date_at_ms(now_ms)
-    first_day = et_date_at_ms(now_ms - lookback_days * 86_400_000) + timedelta(days=1)
-    if first_day > now_date:
-        return None
-    owed = [
-        session
-        for session in expected_sessions(first_day, now_date)
-        if session_open_ms_utc(session) <= now_ms
-    ]
-    return session_close_ms_utc(owed[0]) if owed else None
+    window_start_ms = now_ms - lookback_days * _DAY_MS
+    owed: list[tuple[int, int]] = []
+    for session in expected_sessions(et_date_at_ms(window_start_ms), et_date_at_ms(now_ms)):
+        open_ms = session_open_ms_utc(session)
+        close_ms = session_close_ms_utc(session)
+        held_ms = min(close_ms, now_ms) - max(open_ms, window_start_ms)
+        if 2 * held_ms >= close_ms - open_ms:
+            owed.append((open_ms, close_ms))
+    return owed
 
 
 def require_warmup_coverage(
     bars: Sequence[MarketDataBar], *, lookback_days: int, now_ms: int
 ) -> None:
-    """Refuse fetched warmup history that does not reach its lookback window (#2365).
+    """Refuse fetched warmup history that does not cover its lookback window (#2365).
 
     ``ib_async`` does not raise request errors by default
     (``RaiseRequestErrors`` is False): an error such as 162 (pacing, data
@@ -118,11 +130,20 @@ def require_warmup_coverage(
     this check that short history would start the run on the bare
     indicator minimum instead of its sealed lookback.
 
-    Coverage rule: when the window owes at least one session, some bar must
-    start before the close of the *earliest* owed session -- the history
-    reaches into (or past) it. The exact first minute is not required, so a
-    vendor window that opens a few minutes late is not refused. Empty
-    history, or history covering only later sessions, is refused.
+    Coverage rule, per session: every owed session (see
+    :func:`_owed_warmup_sessions`) must hold at least one regular-hours bar.
+    Checking each session, not just the oldest bar, refuses a response that
+    reaches the window's start but is missing sessions after it. The rule is
+    session-level on purpose: a traded symbol prints somewhere in a regular
+    session, but it may skip individual minutes, so demanding every minute
+    would refuse ordinary history.
+
+    Only ``RTH``-labelled bars count. The run fetches with ``use_rth=False``
+    and filters by its own decision session afterwards; a regular-hours bar
+    survives every run's filter (a declared extended window must enclose the
+    regular session), while a pre- or post-market bar is dropped by a
+    regular-hours run. Counting those would let the check pass on bars the
+    strategy never replays.
 
     Applied to a fresh IBKR fetch only. A resumed run warms from its
     retained source-bar ledger (``_RetainedSourceBarFeed``), which replays
@@ -130,15 +151,18 @@ def require_warmup_coverage(
     and the offline replay/qualification harnesses serve their pinned warmup
     by design; neither reaches this method.
     """
-    owed_close_ms = _earliest_owed_warmup_session_close_ms(lookback_days, now_ms=now_ms)
-    if owed_close_ms is None:
-        return
-    oldest_start_ms = min((bar.start_ms for bar in bars), default=None)
-    if oldest_start_ms is not None and oldest_start_ms < owed_close_ms:
+    rth_starts = sorted(bar.start_ms for bar in bars if bar.session_phase == "RTH")
+    uncovered = [
+        (open_ms, close_ms)
+        for open_ms, close_ms in _owed_warmup_sessions(lookback_days, now_ms=now_ms)
+        if bisect_left(rth_starts, open_ms) == bisect_left(rth_starts, close_ms)
+    ]
+    if not uncovered:
         return
     raise MarketDataFeedError(
-        f"the {lookback_days}-day warmup history does not reach the session closing at "
-        f"{owed_close_ms} (oldest bar start: {oldest_start_ms}, bars: {len(bars)})",
+        f"the {lookback_days}-day warmup history holds no regular-hours bar for "
+        f"{len(uncovered)} owed session(s), the earliest opening at {uncovered[0][0]} "
+        f"(regular-hours bars: {len(rth_starts)}, bars: {len(bars)})",
         reason=WARMUP_HISTORY_UNAVAILABLE,
     )
 
@@ -397,8 +421,9 @@ class IbkrMarketDataFeed:
         ADX/EMA-class indicators with multi-day lookback periods) -- never
         itself treated as a decision.
 
-        A fetch failure -- or a fetch that ends without reaching the
-        ``lookback_days`` window (see :func:`require_warmup_coverage`) --
+        A fetch failure -- or a fetch that leaves a session the
+        ``lookback_days`` window owes without a regular-hours bar (see
+        :func:`require_warmup_coverage`) --
         raises ``MarketDataFeedError`` with reason
         ``WARMUP_HISTORY_UNAVAILABLE`` (#2365). Both used to let the run
         start cold, which silently replaced the sealed warmup lookback with
@@ -458,7 +483,7 @@ class IbkrMarketDataFeed:
             require_warmup_coverage(closed, lookback_days=lookback_days, now_ms=requested_at_ms)
         except MarketDataFeedError as exc:
             logger.error(
-                "Historical warmup bars do not reach the sealed lookback; refusing to start the run cold",
+                "Historical warmup bars do not cover the sealed lookback; refusing to start the run cold",
                 extra={
                     "action": "warmup_bars_short",
                     "feed_id": self.feed_id,

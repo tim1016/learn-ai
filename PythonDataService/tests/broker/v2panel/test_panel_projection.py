@@ -2055,8 +2055,15 @@ def test_refused_warmup_crash_carries_its_own_backend_copy() -> None:
     assert panel.health.duty_outcome is not None
     assert panel.health.duty_outcome.reason_code == "WARMUP_HISTORY_UNAVAILABLE"
     assert panel.health.duty_outcome.label == "Refused: warmup history unavailable"
-    assert "IB Gateway" in panel.health.duty_outcome.explanation
-    assert "started cold" in panel.health.duty_outcome.explanation
+    explanation = panel.health.duty_outcome.explanation
+    assert "IB Gateway" in explanation
+    assert "started cold" in explanation
+    # Every failure folded into this reason has its own cure; the copy must not
+    # promise "log in and retry" when the Gateway is up but paced or the
+    # symbol does not qualify.
+    assert "logged in" in explanation
+    assert "historical-data farm" in explanation
+    assert "qualifies as a contract" in explanation
 
 
 def test_stop_enabled_only_when_running() -> None:
