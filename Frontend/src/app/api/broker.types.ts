@@ -14865,6 +14865,7 @@ export interface components {
             day_pnl: number | null;
             /** Desired State */
             desired_state: string;
+            feed: components["schemas"]["GalleryFeedView"];
             /** Fills Today */
             fills_today: number | null;
             /** Label */
@@ -14888,6 +14889,33 @@ export interface components {
             sid: string;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * GalleryFeedView
+         * @description The IBKR bar line a tile charts, with backend-authored copy (#2330).
+         *
+         *     An open stream proves only that the transport works; this says whether
+         *     market data is arriving. ``LIVE`` and ``NOT_EXPECTED`` (no regular-session
+         *     bar is due now) are quiet; ``STARTING`` is a line that has not delivered
+         *     its first bar of the session yet; ``STALLED``, ``ERRORED`` and
+         *     ``RECOVERING`` are a line that is not delivering, so the tile's candles
+         *     are frozen (``attention_required``). ``last_error`` is the aggregator's
+         *     diagnostic, shown verbatim.
+         */
+        GalleryFeedView: {
+            /** Attention Required */
+            attention_required: boolean;
+            /** Detail */
+            detail: string;
+            /** Headline */
+            headline: string;
+            /** Last Error */
+            last_error: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "LIVE" | "STARTING" | "STALLED" | "ERRORED" | "RECOVERING" | "NOT_EXPECTED";
         };
         /**
          * GalleryLiveSnapshot

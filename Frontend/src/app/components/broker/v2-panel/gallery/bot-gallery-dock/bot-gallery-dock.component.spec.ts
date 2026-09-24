@@ -8,6 +8,7 @@ import type {
   ChartBar,
   ChartFillMarker,
   GalleryBotView,
+  GalleryFeedView,
   GalleryLiveStatus,
   GalleryResolution,
 } from '../lib/gallery.types';
@@ -32,7 +33,19 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
     fills_today: 0,
     last_bar_at_ms: null,
     primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
+    feed: feed('LIVE'),
     ...overrides,
+  };
+}
+
+function feed(state: GalleryFeedView['state']): GalleryFeedView {
+  const attention = state === 'STALLED' || state === 'ERRORED' || state === 'RECOVERING';
+  return {
+    state,
+    headline: `headline ${state}`,
+    detail: `detail ${state}`,
+    attention_required: attention,
+    last_error: null,
   };
 }
 
@@ -335,6 +348,46 @@ describe('BotGalleryDockComponent', () => {
       await renderDock({ bots: bots(1), status });
 
       expect(screen.getByText(label)).toBeTruthy();
+    });
+
+    // #2330: an open stream over a dead IBKR line must not read "Live".
+    it('says the feed is down, not Live, when a tile line is not delivering over a live stream', async () => {
+      await renderDock({
+        bots: [
+          bot({ sid: 'a', symbol: 'SPY', feed: feed('ERRORED') }),
+          bot({ sid: 'b', symbol: 'QQQ', feed: feed('LIVE') }),
+        ],
+        status: 'live',
+      });
+
+      expect(screen.getByText('Feed down · 1')).toBeTruthy();
+      expect(screen.queryByText('Live')).toBeNull();
+    });
+
+    it('reads the tiles’ own headline, not Live, when no bar is expected on any tile', async () => {
+      const outside = { ...feed('NOT_EXPECTED'), headline: 'Outside regular hours' };
+      const { container } = await renderDock({ bots: [bot({ feed: outside })], status: 'live' });
+
+      expect(container.querySelector('.gallery-dock__live')?.textContent?.trim()).toBe('Outside regular hours');
+      expect(screen.queryByText('Live')).toBeNull();
+    });
+
+    it('reads a starting tile’s own headline while no line is delivering yet', async () => {
+      const { container } = await renderDock({
+        bots: [
+          bot({ sid: 'a', symbol: 'SPY', feed: feed('NOT_EXPECTED') }),
+          bot({ sid: 'b', symbol: 'QQQ', feed: feed('STARTING') }),
+        ],
+        status: 'live',
+      });
+
+      expect(container.querySelector('.gallery-dock__live')?.textContent?.trim()).toBe('headline STARTING');
+    });
+
+    it('keeps the transport state when the stream itself is delayed', async () => {
+      await renderDock({ bots: [bot({ feed: feed('ERRORED') })], status: 'stale' });
+
+      expect(screen.getByText('Delayed')).toBeTruthy();
     });
   });
 });

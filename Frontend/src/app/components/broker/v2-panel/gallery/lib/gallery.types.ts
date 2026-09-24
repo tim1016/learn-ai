@@ -28,6 +28,9 @@ export type GalleryResolution = components['schemas']['GalleryLiveSnapshot']['re
 // asserting a stronger type than the wire contract actually promises.
 export type GalleryPrimaryAction = components['schemas']['GalleryPrimaryAction'];
 
+/** The IBKR bar line a tile charts (#2330): whether market data is arriving, not just the stream. */
+export type GalleryFeedView = components['schemas']['GalleryFeedView'];
+
 /** One bot's tile state in the gallery wall. */
 export type GalleryBotView = components['schemas']['GalleryBotView'];
 

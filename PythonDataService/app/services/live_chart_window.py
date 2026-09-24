@@ -87,6 +87,10 @@ class ChartOverlayNotice:
 
 ChartFeedState = Literal["LIVE", "STARTING", "STALLED", "ERRORED", "RECOVERING", "NOT_EXPECTED"]
 
+# How old a streaming line's newest bar may be before it reads ``STALLED``:
+# several bar windows, so ordinary delivery jitter never alarms.
+LIVE_LINE_FRESHNESS_MS: dict[Literal["5s", "1m"], int] = {"5s": 30_000, "1m": 180_000}
+
 
 @dataclass(frozen=True)
 class ChartFeedStatus:
@@ -482,13 +486,40 @@ def _chart_feed_status(
     now_ms: int,
     live_aggregator: LiveChartAggregator,
 ) -> ChartFeedStatus:
-    """Classify the chart's own bar line from the aggregator's status (#2355).
+    """Classify the chart's own bar line for this window (#2355).
 
-    Only what happened since today's session open counts. An ``errored`` or
-    ``resubscribing`` status written before the open (the Gateway's nightly
-    restart, an overnight reconnect) and a last bar from yesterday are
-    leftovers, not current faults, so at the open the line reads ``STARTING``
-    rather than an alarm.
+    ``NOT_EXPECTED`` when the window does not reach now (no live bar is due
+    for it); otherwise the line's state from ``classify_live_line``.
+    """
+    if from_ms > now_ms or to_ms < now_ms - LIVE_LINE_FRESHNESS_MS[resolution]:
+        return CHART_FEED_NOT_EXPECTED
+    line = (
+        live_aggregator.status_5s(symbol)
+        if resolution == "5s"
+        else live_aggregator.status(symbol)
+    )
+    return classify_live_line(line, resolution=resolution, now_ms=now_ms)
+
+
+def classify_live_line(
+    line: LiveLineStatus,
+    *,
+    resolution: Literal["5s", "1m"],
+    now_ms: int,
+) -> ChartFeedStatus:
+    """What one IBKR bar line is doing at ``now_ms`` (#2355, #2330).
+
+    The one classifier for a surface that draws a live line: the bot panel's
+    chart and the gallery's tiles both call it. Pure: ``line`` is the
+    aggregator's ``status``/``status_5s`` read, and session structure comes
+    from the canonical calendar.
+
+    Outside the regular session no live bar is due: ``NOT_EXPECTED``. Inside
+    it, only what happened since today's session open counts. An ``errored``
+    or ``resubscribing`` status written before the open (the Gateway's
+    nightly restart, an overnight reconnect) and a last bar from yesterday
+    are leftovers, not current faults, so at the open the line reads
+    ``STARTING`` rather than an alarm.
 
     * A failure written since the open: ``ERRORED`` (the pump error is sticky
       until the next bar) or ``RECOVERING`` (resubscribing after a reconnect).
@@ -500,17 +531,10 @@ def _chart_feed_status(
       a line whose contract qualification never returns is otherwise never
       errored by the stall watchdog, which only starts once the request is sent.
     """
-    threshold_ms = 30_000 if resolution == "5s" else 180_000
-    if from_ms > now_ms or to_ms < now_ms - threshold_ms:
-        return CHART_FEED_NOT_EXPECTED
     session = current_trading_session_window(now_ms)
     if session is None or session_state_at_ms(now_ms) != "RTH_OPEN":
         return CHART_FEED_NOT_EXPECTED
-    line = (
-        live_aggregator.status_5s(symbol)
-        if resolution == "5s"
-        else live_aggregator.status(symbol)
-    )
+    threshold_ms = LIVE_LINE_FRESHNESS_MS[resolution]
     open_ms = session.open_ms_utc
     # Only a status written, or a bar drawn, since the open is today's fact.
     changed_since_open_ms = _since(line.status_changed_at_ms, open_ms)

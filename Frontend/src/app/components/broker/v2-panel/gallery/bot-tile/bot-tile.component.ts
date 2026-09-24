@@ -153,11 +153,33 @@ export class BotTileComponent {
     const view = this.bot();
     return `${view.primary_action.label} ${view.symbol} · ${view.sid}?`;
   });
-  /** Keeps `needs_attention` available as text on an existing interactive element. */
+  /**
+   * The tile's own IBKR line (#2330). Hidden only while it is `LIVE`: every
+   * other state (market closed, starting, or a line that is not delivering)
+   * is shown, so frozen candles never read as current. Copy is backend-authored.
+   * `description` (the detail and the line's error) is the badge's hover
+   * title and, for keyboard and screen-reader users, the description of the
+   * focusable chart (`aria-describedby`).
+   */
+  protected readonly feedBadge = computed(() => {
+    const view = this.bot();
+    const feed = view.feed;
+    if (feed.state === 'LIVE') return null;
+    const description = feed.last_error ? `${feed.detail} (${feed.last_error})` : feed.detail;
+    return {
+      headline: feed.headline,
+      description,
+      descriptionId: `bot-tile-feed-${view.sid}`,
+      alert: feed.attention_required,
+    };
+  });
+
+  /** Keeps `needs_attention` and a down feed available as text on an existing interactive element. */
   protected readonly chartAriaLabel = computed(() => {
     const view = this.bot();
     const attentionSuffix = view.needs_attention ? ' — needs attention' : '';
-    return `Open ${view.symbol} · ${view.sid} detail${attentionSuffix}`;
+    const feedSuffix = view.feed.attention_required ? ` — ${view.feed.headline}` : '';
+    return `Open ${view.symbol} · ${view.sid} detail${attentionSuffix}${feedSuffix}`;
   });
 
   /**

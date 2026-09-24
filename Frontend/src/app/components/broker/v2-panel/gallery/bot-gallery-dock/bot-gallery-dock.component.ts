@@ -60,6 +60,44 @@ const STATUS_LABEL: Record<GalleryLiveStatus, string> = {
   error: 'Feed error',
 };
 
+type IndicatorTone = 'live' | 'stale' | 'muted';
+
+interface WallIndicator {
+  readonly label: string;
+  readonly tone: IndicatorTone;
+}
+
+const TRANSPORT_TONE: Record<GalleryLiveStatus, IndicatorTone> = {
+  connecting: 'muted',
+  live: 'live',
+  stale: 'stale',
+  error: 'muted',
+};
+
+/**
+ * The footer indicator (#2330). An open stream only proves the transport, so
+ * over a live stream the label follows the tiles' IBKR lines: any line not
+ * delivering wins, then a wall where no bar is due, then a line still
+ * starting. Only a wall whose every line is delivering (or starting beside
+ * delivering ones) reads `Live`. A non-live transport keeps its own label.
+ * A wall-wide line state reads the tiles' own backend-authored headline, so
+ * the footer and the tiles never word one state two ways.
+ */
+function wallIndicator(status: GalleryLiveStatus, bots: readonly GalleryBotView[]): WallIndicator {
+  if (status !== 'live') return { label: STATUS_LABEL[status], tone: TRANSPORT_TONE[status] };
+  const down = bots.filter((bot) => bot.feed.attention_required).length;
+  if (down > 0) return { label: `Feed down · ${down}`, tone: 'stale' };
+  const [first] = bots;
+  if (first !== undefined && bots.every((bot) => bot.feed.state === 'NOT_EXPECTED')) {
+    return { label: first.feed.headline, tone: 'muted' };
+  }
+  const starting = bots.find((bot) => bot.feed.state === 'STARTING');
+  if (starting !== undefined && bots.every((bot) => bot.feed.state !== 'LIVE')) {
+    return { label: starting.feed.headline, tone: 'muted' };
+  }
+  return { label: STATUS_LABEL.live, tone: 'live' };
+}
+
 /** Single-select status predicate for the footer filter (design spec §5, D7). */
 function matchesStatusFilter(bot: GalleryBotView, filter: GalleryStatusFilter): boolean {
   switch (filter) {
@@ -98,9 +136,9 @@ function matchesStatusFilter(bot: GalleryBotView, filter: GalleryStatusFilter): 
  * invisible, and reordering the visible subset splices back into
  * `fullOrder` (`spliceVisibleIntoFullOrder`) rather than overwriting it, so
  * a drag-drop while filtered can't silently destroy a hidden bot's position
- * (see `onDropped`). It also renders the connection-status `●Live`
- * indicator, driven by the `status` input the page forwards from
- * `GalleryLiveStore`.
+ * (see `onDropped`). It also renders the `●Live` indicator from the
+ * `status` input the page forwards from `GalleryLiveStore` together with the
+ * tiles' IBKR line states (`wallIndicator`, #2330).
  *
  * Order persists per account via `gallery-layout.ts` as a flat sid array
  * (no per-tile spans — resize was removed, design spec §4/D5). A roster
@@ -155,7 +193,7 @@ export class BotGalleryDockComponent {
     height: DEFAULT_GRID_HEIGHT_PX,
   });
 
-  protected readonly statusLabel = computed(() => STATUS_LABEL[this.status()]);
+  protected readonly indicator = computed(() => wallIndicator(this.status(), this.bots()));
 
   /** Live per-bucket counts against the *unfiltered* roster, so switching filters doesn't make the other segments' counts move. */
   protected readonly filterCounts = computed<Record<GalleryStatusFilter, number>>(() => {

@@ -75,6 +75,13 @@ function bot(sid: string, overrides: Partial<GalleryBotView> = {}): GalleryBotVi
     fills_today: 0,
     last_bar_at_ms: null,
     primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
+    feed: {
+      state: 'LIVE',
+      headline: 'Feed live',
+      detail: 'IBKR bars are arriving on schedule.',
+      attention_required: false,
+      last_error: null,
+    },
     ...overrides,
   };
 }
@@ -83,7 +90,7 @@ function snapshot(overrides: Partial<GalleryLiveSnapshot> = {}): GalleryLiveSnap
   return {
     stream_epoch: 'epoch-a',
     surface_version: 1,
-    as_of_ms: 1_700_000_000_000,
+    as_of_ms: Date.now(),
     resolution: '5s',
     bots: [bot('sid-1'), bot('sid-2', { symbol: 'QQQ' })],
     symbols: [
@@ -115,6 +122,30 @@ describe('GalleryLiveStore', () => {
   });
 
   describe('ingest merge semantics (the jsdom-free testability seam)', () => {
+    // #2403 review: a lane on a pre-#2330 build sends no `feed`; the fleet
+    // protocol does not refuse it, and a tile must not dereference nothing.
+    it('gives a bot from a lane that reports no feed an attention-required unknown feed, on snapshot and update', () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const { feed: _dropped, ...preFeed } = bot('sid-old');
+      const legacy = preFeed as GalleryBotView;
+
+      store.ingestSnapshot(snapshot({ bots: [legacy, bot('sid-1')] }));
+      store.ingestUpdate({
+        surface_version: 2,
+        as_of_ms: Date.now(),
+        symbols: [],
+        markers_delta: {},
+        bots_delta: [{ ...legacy, sid: 'sid-old-2' }],
+        removed_sids: [],
+      });
+
+      const bySid = new Map(store.bots().map((b) => [b.sid, b.feed]));
+      for (const sid of ['sid-old', 'sid-old-2']) {
+        expect(bySid.get(sid)).toMatchObject({ headline: 'Feed state unknown', attention_required: true });
+      }
+      expect(bySid.get('sid-1')?.state).toBe('LIVE');
+    });
+
     it('merges snapshot then update: bots upsert by sid, removed_sids drop, bars replace the forming bar and append', () => {
       const store = TestBed.inject(GalleryLiveStore);
 
@@ -125,7 +156,7 @@ describe('GalleryLiveStore', () => {
 
       const update: GalleryLiveUpdate = {
         surface_version: 2,
-        as_of_ms: 1_700_000_060_000,
+        as_of_ms: Date.now(),
         symbols: [{ symbol: 'SPY', bars: [bar(2_000, '101.00'), bar(3_000)] }],
         markers_delta: {},
         bots_delta: [bot('sid-1', { fills_today: 1 }), bot('sid-3', { symbol: 'IWM' })],
@@ -153,7 +184,7 @@ describe('GalleryLiveStore', () => {
       // in place, not duplicates.
       store.ingestUpdate({
         surface_version: 2,
-        as_of_ms: 2,
+        as_of_ms: Date.now(),
         symbols: [],
         markers_delta: { 'sid-1': [marker('order-1', 99, 'exec-1')] },
         bots_delta: [],
@@ -174,7 +205,7 @@ describe('GalleryLiveStore', () => {
       // first, not overwrite it.
       store.ingestUpdate({
         surface_version: 2,
-        as_of_ms: 2,
+        as_of_ms: Date.now(),
         symbols: [],
         markers_delta: { 'sid-1': [marker('order-1', 2, 'exec-2')] },
         bots_delta: [],
@@ -192,7 +223,7 @@ describe('GalleryLiveStore', () => {
 
       store.ingestUpdate({
         surface_version: 5,
-        as_of_ms: 1,
+        as_of_ms: Date.now(),
         symbols: [{ symbol: 'SPY', bars: [bar(9_999)] }],
         markers_delta: {},
         bots_delta: [bot('sid-9')],
@@ -237,7 +268,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 2,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [],
           markers_delta: {},
           bots_delta: [bot('sid-9')],
@@ -247,6 +278,63 @@ describe('GalleryLiveStore', () => {
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-1', 'sid-9']);
 
       source.emit('error');
+      expect(store.status()).toBe('stale');
+    });
+
+    // #2330 / #2326: a hung frame build leaves the stream open and silent.
+    it('reads stale once the newest frame ages past twice the poll interval, and live again on a fresh frame', async () => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2 })));
+      expect(store.status()).toBe('live');
+
+      // The transport stays open, but no frame arrives.
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(store.status()).toBe('live');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(store.status()).toBe('stale');
+
+      source.emit(
+        'update',
+        JSON.stringify({
+          surface_version: 3,
+          as_of_ms: Date.now(),
+          symbols: [],
+          markers_delta: {},
+          bots_delta: [bot('sid-1')],
+          removed_sids: [],
+        }),
+      );
+      expect(store.status()).toBe('live');
+    });
+
+    // #2403 review: frame age is local elapsed time since receipt, so a
+    // browser clock skewed from the lane's neither flags fresh frames nor
+    // hides a silent stream.
+    it.each([
+      ['ahead of', -60_000],
+      ['behind', 60_000],
+    ])('measures frame age from receipt when the browser clock is 60 s %s the lane', async (_label, skewMs) => {
+      vi.useFakeTimers();
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2, as_of_ms: Date.now() + skewMs })));
+      expect(store.status()).toBe('live');
+
+      await vi.advanceTimersByTimeAsync(11_000);
       expect(store.status()).toBe('stale');
     });
 
@@ -277,7 +365,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 2,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [{ symbol: 'SPY', bars: [bar(3_000)] }],
           markers_delta: {},
           bots_delta: [bot('sid-9')],
@@ -382,7 +470,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 6,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }],
           markers_delta: {},
           bots_delta: [],
@@ -446,7 +534,7 @@ describe('GalleryLiveStore', () => {
         'update',
         JSON.stringify({
           surface_version: 3,
-          as_of_ms: 1,
+          as_of_ms: Date.now(),
           symbols: [{ symbol: 'IWM', bars: [], paged_bar_count: 1 }],
           markers_delta: {},
           bots_delta: [],

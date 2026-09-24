@@ -11,12 +11,21 @@ from app.schemas.broker_v2_gallery import (
     GalleryBarsPage,
     GalleryBotDelta,
     GalleryBotView,
+    GalleryFeedView,
     GalleryLiveSnapshot,
     GalleryLiveUpdate,
     GalleryPrimaryAction,
     GallerySymbolBars,
 )
 from app.schemas.broker_v2_panel import ChartBar
+
+_LIVE_FEED = GalleryFeedView(
+    state="LIVE",
+    headline="Feed live",
+    detail="IBKR bars are arriving on schedule.",
+    attention_required=False,
+    last_error=None,
+)
 
 
 def _bar() -> ChartBar:
@@ -56,6 +65,7 @@ def test_snapshot_round_trips_and_is_snake_case() -> None:
                 primary_action=GalleryPrimaryAction(
                     action_id="stop", label="Stop", enabled=True, disabled_reason=None
                 ),
+                feed=_LIVE_FEED,
             )
         ],
         symbols=[GallerySymbolBars(symbol="SPY", bars=[_bar()])],
@@ -97,6 +107,7 @@ def test_bot_delta_is_self_contained_with_symbol_and_label() -> None:
         primary_action=GalleryPrimaryAction(
             action_id="stop", label="Stop", enabled=True, disabled_reason=None
         ),
+        feed=_LIVE_FEED,
     )
     assert delta.symbol == "SPY"
     assert delta.label == "ORB"

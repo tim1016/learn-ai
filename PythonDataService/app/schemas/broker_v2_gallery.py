@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.broker_v2_panel import ChartBar, ChartFillMarker
+from app.services.live_chart_window import ChartFeedState
 
 GalleryResolution = Literal["5s", "1m"]
 
@@ -29,6 +30,31 @@ class GalleryPrimaryAction(BaseModel):
     label: str
     enabled: bool
     disabled_reason: str | None = None
+
+
+# The tile states are the chart-line states: one classifier owns both (#2330).
+GalleryFeedState = ChartFeedState
+
+
+class GalleryFeedView(BaseModel):
+    """The IBKR bar line a tile charts, with backend-authored copy (#2330).
+
+    An open stream proves only that the transport works; this says whether
+    market data is arriving. ``LIVE`` and ``NOT_EXPECTED`` (no regular-session
+    bar is due now) are quiet; ``STARTING`` is a line that has not delivered
+    its first bar of the session yet; ``STALLED``, ``ERRORED`` and
+    ``RECOVERING`` are a line that is not delivering, so the tile's candles
+    are frozen (``attention_required``). ``last_error`` is the aggregator's
+    diagnostic, shown verbatim.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: GalleryFeedState
+    headline: str
+    detail: str
+    attention_required: bool
+    last_error: str | None
 
 
 class GalleryBotView(BaseModel):
@@ -63,6 +89,8 @@ class GalleryBotView(BaseModel):
     fills_today: int | None
     last_bar_at_ms: int | None = None
     primary_action: GalleryPrimaryAction
+    # Required, never defaulted: a tile with no feed fact must not render as live.
+    feed: GalleryFeedView
 
 
 class GalleryBotDelta(GalleryBotView):

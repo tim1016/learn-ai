@@ -17159,6 +17159,9 @@
             "title": "Desired State",
             "type": "string"
           },
+          "feed": {
+            "$ref": "#/components/schemas/GalleryFeedView"
+          },
           "fills_today": {
             "anyOf": [
               {
@@ -17255,9 +17258,60 @@
           "day_pnl",
           "session_change_pct",
           "fills_today",
-          "primary_action"
+          "primary_action",
+          "feed"
         ],
         "title": "GalleryBotView",
+        "type": "object"
+      },
+      "GalleryFeedView": {
+        "additionalProperties": false,
+        "description": "The IBKR bar line a tile charts, with backend-authored copy (#2330).\n\nAn open stream proves only that the transport works; this says whether\nmarket data is arriving. ``LIVE`` and ``NOT_EXPECTED`` (no regular-session\nbar is due now) are quiet; ``STARTING`` is a line that has not delivered\nits first bar of the session yet; ``STALLED``, ``ERRORED`` and\n``RECOVERING`` are a line that is not delivering, so the tile's candles\nare frozen (``attention_required``). ``last_error`` is the aggregator's\ndiagnostic, shown verbatim.",
+        "properties": {
+          "attention_required": {
+            "title": "Attention Required",
+            "type": "boolean"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "state": {
+            "enum": [
+              "LIVE",
+              "STARTING",
+              "STALLED",
+              "ERRORED",
+              "RECOVERING",
+              "NOT_EXPECTED"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "headline",
+          "detail",
+          "attention_required",
+          "last_error"
+        ],
+        "title": "GalleryFeedView",
         "type": "object"
       },
       "GalleryLiveSnapshot": {
