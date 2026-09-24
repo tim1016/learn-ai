@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
 )
+from app.broker.contract.errors import BrokerError
 
 
 class RecoveryExecutionError(Exception):
@@ -276,6 +277,10 @@ async def execute_recovery_action(
             )
         except ResidueDischargeRefused as exc:
             raise RecoveryExecutionError(str(exc)) from exc
+        except BrokerError as exc:
+            raise RecoveryExecutionError(
+                f"The broker could not be read, so nothing was discharged: {exc}"
+            ) from exc
         return RecoveryExecutionResult(
             action_id=request.action_id,
             applied=True,

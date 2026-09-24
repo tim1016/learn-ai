@@ -932,9 +932,9 @@ def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
                     effect_operation_id=None,
                     order_ref=None,
                     trigger="operator",
-                    attempted_at_ms=1_700_000_009_000,
+                    attempted_at_ms=1_700_000_009_500,
                     outcome="RESOLVED_SUCCESS",
-                    evidence_age_ms=1_000,
+                    evidence_age_ms=500,
                     evidence_refs=("alpaca:positions:17",),
                 )
             },
@@ -971,3 +971,23 @@ def test_residue_discharge_token_rejects_a_changed_residue() -> None:
             action_id="discharge_attributed_residue",
             concurrency_token=presented.concurrency_token,
         )
+
+
+def test_a_reconciliation_older_than_the_residue_does_not_hide_the_discharge() -> None:
+    """PR #2404 review: a clean pass before the EXIT episode proves nothing about it."""
+    action = _discharge(
+        _residue_context(
+            latest_account_reconciliation=ProjectedReconciliation(
+                reconciliation_id="reconciliation-16",
+                effect_operation_id=None,
+                order_ref=None,
+                trigger="operator",
+                attempted_at_ms=1_700_000_007_000,
+                outcome="RESOLVED_SUCCESS",
+                evidence_age_ms=3_000,
+                evidence_refs=("alpaca:positions:16",),
+            )
+        )
+    )
+
+    assert action.available is True

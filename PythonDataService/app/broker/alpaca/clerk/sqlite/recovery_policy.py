@@ -736,14 +736,34 @@ def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     return replace(base, token_facts=token_facts)
 
 
+def _reconciliation_confirms_residue(
+    reconciliation: ProjectedReconciliation | None,
+    positions: tuple[ProjectedPosition, ...],
+    episodes: tuple[ProjectedUncertainty, ...],
+) -> bool:
+    """Whether a clean account pass observed the broker after the residue formed."""
+    if not _is_successful_account_reconciliation(reconciliation):
+        return False
+    residue_formed_at_ms = max(
+        (
+            *(position.updated_at_ms for position in positions),
+            *(episode.observed_at_ms for episode in episodes),
+        ),
+        default=0,
+    )
+    return reconciliation.attempted_at_ms > residue_formed_at_ms
+
+
 def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     """Offer the discharge of one bot's residue that an open EXIT episode strands (#2381).
 
     Presentation reads only durable custody; the broker proof is the
     executor's own fresh read (``residue_discharge.discharge_attributed_residue``),
     which refuses unless the discharge restores broker agreement. A last
-    successful reconciliation means the broker agreed with the residue, so the
-    position is real and the cure is a flatten, not a discharge.
+    successful reconciliation that postdates both the residue and its
+    stranding episode means the broker agreed with it, so the position is real
+    and the cure is a flatten, not a discharge. An older one says nothing about
+    the residue and does not hide the action.
     """
     positions = _relevant_positions(ctx)
     relevant = _relevant_uncertainties(ctx)
@@ -785,7 +805,7 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason_code = "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
         reason = "Cancel and prove every working order terminal before discharging."
         next_step = "Cancel verified working orders first."
-    elif _is_successful_account_reconciliation(ctx.latest_account_reconciliation):
+    elif _reconciliation_confirms_residue(ctx.latest_account_reconciliation, positions, episodes):
         reason_code = "BROKER_AGREES_WITH_CUSTODY"
         reason = "The latest reconciliation found the broker holding this exposure."
         next_step = "Flatten the exposure instead of discharging it."

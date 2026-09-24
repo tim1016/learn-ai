@@ -13,8 +13,11 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_sto
 from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.lane_quiet import observe_account_quiet
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionError,
     RecoveryExecutionRequest,
     execute_recovery_action,
 )
@@ -37,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
     ExitStuckCause,
 )
+from app.broker.contract.errors import BrokerUnavailable
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (  # noqa: F401  (fixture import)
     ACCOUNT_ID,
@@ -48,6 +52,7 @@ from tests.broker.alpaca.clerk.sqlite.test_reconcile import (  # noqa: F401  (fi
     _held_position,
     _position,
     _raise_exit_not_flat,
+    _SequentialRead,
     clocked_repo,
 )
 
@@ -376,3 +381,118 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
         "LIVE_ENVELOPE_LOSS_HOLD",
     }
     assert residue_discharge_role("NOT_A_REGISTERED_CODE") == "refuses"
+
+
+# ── PR #2404 review ──────────────────────────────────────────────────────────
+
+
+async def test_a_full_open_order_page_refuses(clocked_repo) -> None:  # noqa: F811
+    """A page at the read's limit cannot prove no older order is working."""
+    repo, _clock = clocked_repo
+    await _stranded(repo)
+    page = [
+        _broker_order(f"other-{index}", order_id=f"bo-{index}", symbol="QQQ", status="new")
+        for index in range(MAX_OPEN_ORDER_SNAPSHOT)
+    ]
+
+    with pytest.raises(ResidueDischargeRefused) as refused:
+        await _discharge(repo, _FakeRead(orders=page, positions=[]))
+
+    assert refused.value.reason_code == "OPEN_ORDER_SNAPSHOT_INCOMPLETE"
+    assert _discharges(repo) == []
+
+
+async def test_a_fill_landing_between_the_order_and_position_reads_refuses(clocked_repo) -> None:  # noqa: F811
+    """Read 1 sees the working BUY gone but the position still flat (orders read
+    after the fill, positions before it); read 2 sees the +10 the fill left."""
+    repo, _clock = clocked_repo
+    await _stranded(repo)
+    read = _SequentialRead(
+        order_snapshots=[[], []],
+        position_snapshots=[[], [_position("SPY", quantity=10.0)]],
+    )
+
+    with pytest.raises(ResidueDischargeRefused) as refused:
+        await _discharge(repo, read)
+
+    assert refused.value.reason_code == "BROKER_SNAPSHOT_UNSETTLED"
+    assert repo.position(WATCHDOG_SID, "SPY") == 10.0
+
+
+async def test_a_non_finite_broker_quantity_refuses(clocked_repo) -> None:  # noqa: F811
+    repo, _clock = clocked_repo
+    await _stranded(repo)
+    nan_position = _position("SPY", quantity=10.0).model_copy(update={"quantity": float("nan")})
+
+    with pytest.raises(ResidueDischargeRefused) as refused:
+        await _discharge(repo, _FakeRead(positions=[nan_position]))
+
+    assert refused.value.reason_code == "EXPOSURE_NOT_PROVEN"
+    assert _discharges(repo) == []
+
+
+async def test_an_order_short_of_its_broker_cumulative_refuses(clocked_repo) -> None:  # noqa: F811
+    """A late slice the Clerk still expects (#2305) must not fold onto a zeroed
+    residue: while any order on the symbol is short of the broker's cumulative
+    it stays reconcilable, and the discharge refuses as work in flight."""
+    repo, _clock = clocked_repo
+    entry_ref = await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    _stop_run(repo)
+    entry = repo.order(entry_ref)
+    assert entry is not None
+    fold_order_acknowledgement(
+        repo,
+        effect_operation_id=entry.effect_operation_id,
+        order=_broker_order(
+            entry_ref, status="filled", quantity=12.0, filled_quantity=12.0,
+            filled_avg_price=100.0,
+        ).model_copy(update={"updated_at_ms": 1_700_000_000_900}),
+    )
+    assert repo.order_fills_short_of_broker_cumulative(entry_ref)
+
+    with pytest.raises(ResidueDischargeRefused) as refused:
+        await _discharge(repo, _FakeRead(positions=[]))
+
+    assert refused.value.reason_code == "CLERK_WORK_IN_FLIGHT"
+    assert _discharges(repo) == []
+
+
+async def test_an_unreadable_broker_is_a_recovery_refusal(clocked_repo) -> None:  # noqa: F811
+    repo, _clock = clocked_repo
+    await _stranded(repo)
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=repo,
+        read=_FakeRead(error=BrokerUnavailable("alpaca down")),
+        trade=_FakeTrade(),
+    )
+
+    async def current_context() -> RecoveryPolicyContext:
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            context = reader.recovery_context(strategy_instance_id=WATCHDOG_SID)
+        finally:
+            reader.close()
+        assert context is not None
+        return context
+
+    capability = next(
+        item
+        for item in build_recovery_catalog(await current_context())
+        if item.action_id == "discharge_attributed_residue"
+    )
+    assert capability.available, capability.unavailable_reason
+
+    with pytest.raises(RecoveryExecutionError, match="nothing was discharged"):
+        await execute_recovery_action(
+            facade,
+            request=RecoveryExecutionRequest(
+                action_id="discharge_attributed_residue",
+                concurrency_token=capability.concurrency_token,
+                execution_ref=capability.execution_ref,
+                reason=None,
+            ),
+            current_context=current_context,
+        )
+    assert _discharges(repo) == []

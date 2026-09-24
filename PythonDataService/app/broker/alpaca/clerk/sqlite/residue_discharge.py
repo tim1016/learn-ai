@@ -24,6 +24,7 @@ attributed-flat proof.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
@@ -35,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
+    MAX_OPEN_ORDER_SNAPSHOT,
     broker_symbol_reader,
     read_account_open_work,
 )
@@ -79,15 +81,35 @@ async def discharge_attributed_residue(
     append run in one fenced fold, so the attribution checked is the
     attribution zeroed. A ``BrokerError`` propagates: an unreadable broker is
     no proof.
+
+    **The re-read rule** (``lane_quiet``'s, for the same reason): one read
+    gathers orders and positions concurrently with no consistency fence, so a
+    working order can finish between them and show neither as working nor as
+    a position. Two complete reads, the second issued after the first
+    returned, must both show nothing working on the symbol and the same broker
+    position. A read whose open-order page is full cannot prove no order is
+    working and refuses, as reconciliation's does.
     """
-    broker_orders, broker_positions = await read_account_open_work(read)
+    readers = []
+    for _ in range(2):
+        broker_orders, broker_positions = await read_account_open_work(read)
+        if len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT:
+            raise ResidueDischargeRefused(
+                "OPEN_ORDER_SNAPSHOT_INCOMPLETE",
+                f"The broker returned {len(broker_orders)} open orders, the read's "
+                "limit, so it cannot prove nothing is working on the symbol.",
+            )
+        readers.append(
+            broker_symbol_reader(
+                repo, broker_orders=broker_orders, broker_positions=broker_positions
+            )
+        )
     broker_observed_at_ms = repo.clock()
+    first, second = readers
     return await intake.off_loop(
         _discharge,
         repo,
-        broker_symbol=broker_symbol_reader(
-            repo, broker_orders=broker_orders, broker_positions=broker_positions
-        ),
+        broker_reads=(first, second),
         broker_observed_at_ms=broker_observed_at_ms,
         strategy_instance_id=strategy_instance_id,
         symbol=symbol.upper(),
@@ -98,7 +120,7 @@ async def discharge_attributed_residue(
 def _discharge(
     repo: ClerkSqliteRepository,
     *,
-    broker_symbol: BrokerSymbolReader,
+    broker_reads: tuple[BrokerSymbolReader, BrokerSymbolReader],
     broker_observed_at_ms: int,
     strategy_instance_id: str,
     symbol: str,
@@ -151,12 +173,25 @@ def _discharge(
             f"The Clerk still has {symbol} work in flight that could fill; "
             "let it finish, then retry.",
         )
-    view = broker_symbol(symbol)
-    if view.working:
+    earlier, view = (read_symbol(symbol) for read_symbol in broker_reads)
+    if earlier.working or view.working:
         raise ResidueDischargeRefused(
             "BROKER_ORDER_WORKING",
             f"An order for {symbol} is working at the broker; cancel it or let it "
             "finish, then retry.",
+        )
+    quantities = (residue, earlier.broker_qty, view.broker_qty, view.attributed_qty)
+    if not all(math.isfinite(quantity) for quantity in quantities):
+        raise ResidueDischargeRefused(
+            "EXPOSURE_NOT_PROVEN",
+            f"A broker or attributed {symbol} quantity is not finite, so no "
+            "discharge can be proven.",
+        )
+    if position_quantity_is_nonzero(earlier.broker_qty - view.broker_qty):
+        raise ResidueDischargeRefused(
+            "BROKER_SNAPSHOT_UNSETTLED",
+            f"The broker's {symbol} position changed between two reads; retry once "
+            "it settles.",
         )
     if position_quantity_is_nonzero(view.broker_qty - (view.attributed_qty - residue)):
         raise ResidueDischargeRefused(
