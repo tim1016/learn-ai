@@ -1513,3 +1513,75 @@ async def test_a_print_after_the_timer_emit_does_not_abort_the_stream(
     assert first.start_ms == minute_start_ms
     assert second.start_ms == minute_start_ms + 60_000
     assert assembler.counters.ignored_late_print_after_emit == 1
+
+
+@pytest.mark.asyncio
+async def test_a_lone_print_minute_is_emitted_before_the_line_is_declared_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2376 review: with one print at ``:00`` the stall verdict (60 s after it)
+    used to land before the timer emit (close + 8 s) and replaced the line."""
+    minute_start_ms = _et_ms(2026, 9, 22, 8, 0)
+    now = {"ms": minute_start_ms + 60_000 + 1_000}  # past the stall, inside the grace
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now["ms"])
+    # Armed as in production outside RTH: once the line has printed in the phase.
+    monkeypatch.setattr(
+        bars_mod, "_stall_timer_armed", lambda _use_rth, last_source_ms: last_source_ms is not None
+    )
+    client = _FakeClient()
+    client.ib.bars = [_raw_print(minute_start_ms)]
+    stream = stream_minute_bars(
+        client, "SPY", use_rth=False, stall_timeout_s=0.01, assembler=MinuteAssembler()
+    )
+    pending = asyncio.ensure_future(stream.__anext__())
+    try:
+        await asyncio.sleep(0.25)  # the stall timeout is long past; the verdict is held
+        assert not pending.done()
+
+        now["ms"] = minute_start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS
+        emitted = await asyncio.wait_for(pending, timeout=2.0)
+        assert emitted.start_ms == minute_start_ms
+        # With the minute emitted, the silent line is a stall again.
+        with pytest.raises(IBKRBarSubscriptionStalled):
+            await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    finally:
+        if not pending.done():
+            pending.cancel()
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_print_ignored_after_a_timer_emit_is_not_reported_as_source_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2376 review: a continuity loop must not take an ignored late print as a
+    recovery landing, so it is not reported through ``on_source_bar``."""
+    minute_start_ms = _et_ms(2026, 9, 22, 8, 0)
+    now = {"ms": minute_start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS}
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now["ms"])
+    client = _FakeClient()
+    client.ib.bars = _sparse_pre_prints(minute_start_ms)
+    reported: list[int] = []
+    stream = stream_minute_bars(
+        client,
+        "SPY",
+        use_rth=False,
+        stall_timeout_s=3_600.0,
+        on_source_bar=reported.append,
+        assembler=MinuteAssembler(),
+    )
+    try:
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        client.ib.bars.append(_raw_print(minute_start_ms + 55_000))  # late, ignored
+        client.ib.bars.append(_raw_print(minute_start_ms + 60_000))  # next minute
+        now["ms"] = minute_start_ms + 120_000 + SPARSE_MINUTE_EMIT_GRACE_MS
+        await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    finally:
+        await stream.aclose()
+
+    assert reported == [
+        minute_start_ms,
+        minute_start_ms + 15_000,
+        minute_start_ms + 30_000,
+        minute_start_ms + 60_000,
+    ]

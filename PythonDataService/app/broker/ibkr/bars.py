@@ -718,8 +718,16 @@ def _check_realtime_subscription_liveness(
     stall_timeout_s: float,
     last_progress_at: float,
     last_source_ms: int | None,
+    stall_deferred: bool = False,
 ) -> tuple[float, bool, bool]:
-    """Fail closed on a stale-generation, disconnected, data-lost, invalidated, or stalled line."""
+    """Fail closed on a stale-generation, disconnected, data-lost, invalidated, or stalled line.
+
+    ``stall_deferred`` holds only the stall verdict (never a connectivity one)
+    while the consumer still owes a clock-driven emit of its open minute: a
+    sparse extended-hours minute whose lone print came at ``:00`` would
+    otherwise be declared stalled at ``:60``, before its emit at ``:68``
+    (#2376). Once the minute is emitted, the timer applies as before.
+    """
     if lease.generation != _client_generation(client):
         raise IBKRBarInterrupted(
             f"IBKR connection was re-established while streaming {symbol} 5-second bars; "
@@ -756,7 +764,7 @@ def _check_realtime_subscription_liveness(
     now_monotonic = time.monotonic()
     if not _stall_timer_armed(use_rth, last_source_ms):
         last_progress_at = now_monotonic
-    elif now_monotonic - last_progress_at >= stall_timeout_s:
+    elif now_monotonic - last_progress_at >= stall_timeout_s and not stall_deferred:
         lease.invalidate()
         raise IBKRBarSubscriptionStalled(
             f"IBKR real-time-bar subscription for {symbol} stalled for "
@@ -890,6 +898,7 @@ async def _iter_leased_raw_bars(
     last_source_ms: int | None = None,
     on_source_bar: Callable[[int], None] | None = None,
     request_deadline_ms: int | None = None,
+    stall_deferred: Callable[[], bool] | None = None,
 ) -> AsyncIterator[_LeasedBar | None]:
     """Yield raw 5-second bars off one leased ``reqRealTimeBars`` line.
 
@@ -910,6 +919,8 @@ async def _iter_leased_raw_bars(
     Each idle poll of a line that just passed the liveness gate yields
     ``None``, so a consumer can act on the wall clock while no print arrives
     (the sparse-minute emit, #2376); a consumer with no clock work skips it.
+    ``stall_deferred`` lets that consumer hold the stall verdict while its
+    clock-driven emit is still due.
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
@@ -995,6 +1006,7 @@ async def _iter_leased_raw_bars(
                     stall_timeout_s=stall_timeout_s,
                     last_progress_at=last_progress_at,
                     last_source_ms=last_source_ms,
+                    stall_deferred=stall_deferred is not None and stall_deferred(),
                 )
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as interruption:
                 # Ruling P10: the queue holds real pre-disconnect prints, and
@@ -1135,14 +1147,15 @@ async def stream_minute_bars(
                 no_bar_message="IBKR reqRealTimeBars has not delivered 5-second bars",
                 first_bar_message="IBKR reqRealTimeBars delivered first 5-second bar",
                 last_source_ms=assembler.last_source_ms,
-                on_source_bar=on_source_bar,
                 request_deadline_ms=request_deadline_ms,
+                stall_deferred=assembler.awaits_clock_emit,
             )
         ) as leased_bars:
             async for leased in leased_bars:
                 if leased is None:
                     emitted = assembler.emit_if_elapsed(now_ms_utc())
                 else:
+                    accepted_before = assembler.last_source_ms
                     emitted = assembler.feed(
                         leased.raw,
                         symbol=sym,
@@ -1150,6 +1163,13 @@ async def stream_minute_bars(
                         venue=leased.venue,
                         use_rth=use_rth,
                     )
+                    # Reported only for a print the assembler took: one absorbed
+                    # after its minute was emitted (a redelivery, or a late print
+                    # into a timer-emitted minute) is no source progress, and a
+                    # continuity loop must never take it as a recovery landing
+                    # (#2376 review). Still before the minute is yielded (#1411).
+                    if on_source_bar is not None and assembler.last_source_ms != accepted_before:
+                        on_source_bar(assembler.last_source_ms)
                 if emitted is not None:
                     yield emitted
     finally:

@@ -568,6 +568,18 @@ class MinuteAssembler:
         # the next trading day and was decided eight hours late (#2345).
         return emitted if emitted is not None else self._emit_if_complete()
 
+    def awaits_clock_emit(self) -> bool:
+        """Whether an open extended-hours minute is still owed its clock-driven emit.
+
+        The line's stall verdict is held while this is true: the liveness gate
+        runs before each idle tick, so without the hold a minute whose lone
+        print came at ``:00`` is declared stalled at ``:60``, before the tick
+        that would emit it at ``:68`` (#2376 review). The hold ends with the
+        emit, at most ``SPARSE_MINUTE_EMIT_GRACE_MS`` after the minute's close.
+        """
+        current = self.current
+        return current is not None and _session_phase_for_ms(current.start_ms) != "RTH"
+
     def emit_if_elapsed(self, now_ms: int) -> IbkrMinuteBar | None:
         """Emit a sparse extended-hours minute once its close is past by the grace (#2376).
 
