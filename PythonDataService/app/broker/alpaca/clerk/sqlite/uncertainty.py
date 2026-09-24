@@ -404,11 +404,12 @@ def failed_enter_fill_is_answered(
     order_ref: str,
     filled_qty: float,
 ) -> bool:
-    """Whether an episode already named this order at this fill quantity (#2348).
+    """Whether the newest episode naming this order recorded this fill quantity (#2348).
 
     Active *or* resolved: a fence a legitimate flatten cleared must not
-    re-raise while the order's fills are unchanged, but a later fill on the
-    same order is a new contradiction and must.
+    re-raise while the order's fills are unchanged, but any change since that
+    newest answer -- a further fill, or a correction back to a quantity an
+    *older* episode once recorded -- is a new contradiction and must.
     """
     for episode in repo.uncertainty_history(
         scope="CUSTODY_SUBJECT",
@@ -418,12 +419,9 @@ def failed_enter_fill_is_answered(
         cause = FailedEnterFilledCause.from_mapping(
             UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).cause_facts
         )
-        if any(
-            order.order_ref == order_ref
-            and not position_quantity_is_nonzero(order.filled_qty - filled_qty)
-            for order in cause.orders
-        ):
-            return True
+        for order in cause.orders:
+            if order.order_ref == order_ref:
+                return not position_quantity_is_nonzero(order.filled_qty - filled_qty)
     return False
 
 

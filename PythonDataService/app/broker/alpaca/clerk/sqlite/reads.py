@@ -561,6 +561,38 @@ def terminal_entry_orders_with_fills(
     return [(row["order_ref"], row["strategy_instance_id"]) for row in rows]
 
 
+def terminal_entry_orders_unproven_at_broker(
+    conn: sqlite3.Connection, *, symbols: frozenset[str], limit: int
+) -> list[str]:
+    """Newest ENTRY orders folded ``failed``/``rejected`` that no broker state ended (#2348).
+
+    The sweep's exact-lookup worklist for a late fill the open-order snapshot
+    cannot show: an ENTER voided on absence (#2342) or refused on a
+    duplicate-id reply (#2304) never recorded a broker-terminal state, so the
+    order may be live -- or already ``filled`` and closed -- at the broker.
+    One the broker itself ended is proven and excluded. Narrowed to
+    ``symbols`` (matched on the immutable ``ENTER_ACCEPTED`` leg), newest
+    first, capped at ``limit``.
+    """
+    if not symbols:
+        return []
+    symbol_marks = ", ".join("?" for _ in symbols)
+    rows = conn.execute(
+        "SELECT o.order_ref FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN custody_transitions t ON t.order_ref = o.order_ref "
+        "AND t.transition_kind = 'ENTER_ACCEPTED' "
+        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
+        "('filled','canceled','expired','rejected','replaced')) "
+        f"AND UPPER(json_extract(t.facts_json, '$.leg.symbol')) IN ({symbol_marks}) "
+        "ORDER BY e.updated_at_ms DESC, o.order_ref DESC LIMIT ?",
+        (*sorted(symbols), limit),
+    ).fetchall()
+    return [row["order_ref"] for row in rows]
+
+
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     """Every immutable broker identity captured by this authority."""
     rows = conn.execute("SELECT order_ref FROM orders").fetchall()
@@ -1074,14 +1106,16 @@ def uncertainty_history(
 ) -> list[dict]:
     """Every episode, active or resolved, for one ``(scope, reason_code, instance)``.
 
-    Newest observation first. For a detector that must not re-raise a cause
-    an earlier episode already answered (#2348); the active-only read cannot
-    see an episode a legitimate flatten resolved.
+    Newest episode first. For a detector that must not re-raise a cause the
+    latest episode already answered (#2348); the active-only read cannot see
+    an episode a legitimate flatten resolved. Episodes of one identity never
+    overlap, so the raising transition's sequence (``uncertainty:<seq>``)
+    orders them exactly; a clock tie or a lexical id sort would not.
     """
     rows = conn.execute(
         f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
         "WHERE scope = ? AND reason_code = ? AND strategy_instance_id IS ? "
-        "ORDER BY observed_at_ms DESC, uncertainty_id DESC",
+        "ORDER BY CAST(SUBSTR(uncertainty_id, INSTR(uncertainty_id, ':') + 1) AS INTEGER) DESC",
         (scope, reason_code, strategy_instance_id),
     ).fetchall()
     return [dict(row) for row in rows]

@@ -85,6 +85,8 @@ from app.engine.live.order_identity import (
 logger = logging.getLogger(__name__)
 
 MAX_OPEN_ORDER_SNAPSHOT = 500
+#: Exact lookups one pass spends on failed ENTERs in drifted symbols (#2348).
+MAX_TERMINAL_ENTER_LOOKUPS = 5
 
 _RECONCILIATION_LOCKS: WeakKeyDictionary[ClerkSqliteRepository, asyncio.Lock] = WeakKeyDictionary()
 _DIRECT_RECONCILIATION_INTAKES: WeakKeyDictionary[ClerkSqliteRepository, ReentrantAsyncLock] = (
@@ -201,6 +203,21 @@ def _in_flight_symbols(broker_orders: list[BrokerOrder]) -> frozenset[str]:
     )
 
 
+def _mismatched_symbols(
+    broker_positions: list[BrokerPosition], attributed_positions: dict[str, float]
+) -> frozenset[str]:
+    """Upper-cased symbols whose broker position differs from the attributed one."""
+    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
+    return frozenset(
+        symbol
+        for symbol in set(broker_by_symbol) | set(attributed_by_symbol)
+        if position_quantity_is_nonzero(
+            broker_by_symbol.get(symbol, 0.0) - attributed_by_symbol.get(symbol, 0.0)
+        )
+    )
+
+
 def plan_account_reconciliation(
     *,
     namespaces: frozenset[str],
@@ -223,17 +240,7 @@ def plan_account_reconciliation(
         )
     )
     in_flight_symbols = _in_flight_symbols(broker_orders)
-    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
-    attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
-    symbols = set(broker_by_symbol) | set(attributed_by_symbol)
-    mismatched_symbols = {
-        symbol
-        for symbol in symbols
-        if position_quantity_is_nonzero(
-            broker_by_symbol.get(symbol, 0.0)
-            - attributed_by_symbol.get(symbol, 0.0)
-        )
-    }
+    mismatched_symbols = _mismatched_symbols(broker_positions, attributed_positions)
     drifted = tuple(
         sorted(symbol for symbol in mismatched_symbols if symbol not in in_flight_symbols)
     )
@@ -580,6 +587,63 @@ def _resolve_flat_failed_enter_filled_fences(
         )
 
 
+async def _recover_fills_on_terminal_enters(
+    repo: ClerkSqliteRepository,
+    *,
+    broker_orders: list[BrokerOrder],
+    broker_positions: list[BrokerPosition],
+    trade: BrokerTradePort,
+    intake: ReentrantAsyncLock,
+    simulated_authority: bool,
+) -> None:
+    """Exact-look-up failed ENTERs that may have filled where the snapshot cannot see (#2348).
+
+    The open-order snapshot omits a closed order, so a voided or
+    duplicate-id-refused ENTER that landed and fully filled while
+    ``trade_updates`` was down is invisible to it: its fill is never folded,
+    the symbol reads as drift, and :func:`fence_fills_on_terminal_enters` has
+    nothing to find. Only a drifted symbol can hide such a fill, so only the
+    ENTERs in one are asked about, newest first and at most
+    :data:`MAX_TERMINAL_ENTER_LOOKUPS` per pass; each answer is folded like a
+    snapshot row, and the verdict's detector then fences the fill. A lookup
+    failure leaves the drift standing for the next pass.
+    """
+    attributed = await to_thread(repo.attributed_positions_by_symbol)
+    drifted = _mismatched_symbols(broker_positions, attributed)
+    if not drifted:
+        return
+    candidates = await to_thread(
+        lambda: repo.terminal_entry_orders_unproven_at_broker(
+            symbols=drifted, limit=MAX_TERMINAL_ENTER_LOOKUPS
+        )
+    )
+    in_snapshot = frozenset(order.client_order_id for order in broker_orders)
+    for order_ref in candidates:
+        if order_ref in in_snapshot:
+            continue
+        try:
+            observed = await trade.get_order_by_client_order_id(order_ref)
+        except BrokerError as exc:
+            logger.warning(
+                "could not look up a failed ENTER in a drifted symbol",
+                extra={
+                    "action": "terminal_enter_lookup_failed",
+                    "account_id": repo.account_id,
+                    "order_ref": order_ref,
+                    "error": str(exc),
+                },
+            )
+            continue
+        if observed is None or observed.client_order_id != order_ref:
+            continue
+        await _fold_snapshot_evidence_under_intake(
+            repo,
+            broker_orders=[observed],
+            intake=intake,
+            simulated_authority=simulated_authority,
+        )
+
+
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
@@ -914,6 +978,18 @@ async def _reconcile_account_serialized(
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
     # POST that landed after Stop is cancelled within one sweep.
     await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
+
+    # A failed ENTER that filled and closed while trade_updates was down is
+    # absent from the open-order snapshot; fold it before the verdict so its
+    # detector can fence the fill (#2348).
+    await _recover_fills_on_terminal_enters(
+        repo,
+        broker_orders=broker_orders,
+        broker_positions=broker_positions,
+        trade=trade,
+        intake=intake,
+        simulated_authority=simulated_authority,
+    )
 
     # Recovery can poll fills, cancel entries, or submit a reducing order.
     # Re-read broker truth and fold the newest open-order evidence before the

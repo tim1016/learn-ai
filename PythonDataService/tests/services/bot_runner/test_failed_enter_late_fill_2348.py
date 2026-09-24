@@ -219,12 +219,14 @@ async def _run_late_fill_case(
     broker = _LateLandingBroker(first_error)
     clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     calls: list[tuple[str, str]] = []
+    explanations: list[str] = []
     strategy_kwargs: list[dict] = []
     real_execute = clerk.execute_for_instance
 
     async def recording_execute(**kwargs):
         receipt = await real_execute(**kwargs)
         calls.append((kwargs["purpose"].value, receipt.state.value))
+        explanations.append(receipt.explanation)
         strategy_kwargs.append(kwargs)
         return receipt
 
@@ -262,6 +264,16 @@ async def _run_late_fill_case(
         for bar in (_green_bar(base + 300_000), _green_bar(base + 360_000), _green_bar(base + 420_000)):
             feed.q.put_nowait(bar)
         await _wait_for(lambda: feed.bars_done == 8, timeout_s=5)
+
+        # The strategy, flat in its own eyes, kept deciding ENTER on the green
+        # bars after the fence. Each came back a blocked receipt naming the
+        # fence -- never an admission error the supervisor records as a crash
+        # -- and the run kept consuming bars: after the operator's flatten
+        # clears the fence it trades again without a restart.
+        assert calls[-2:] == [("ENTER", "rejected"), ("ENTER", "rejected")], calls
+        assert all(
+            text.startswith(f"{FAILED_ENTER_FILLED_REASON_CODE}:") for text in explanations[-2:]
+        ), explanations
 
         # The Clerk's belief still matches the broker: it holds the real long.
         assert repo.position(_SID, "SPY") == pytest.approx(1.0, abs=1e-9, rel=0)

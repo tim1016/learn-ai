@@ -460,6 +460,14 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.terminal_entry_orders_with_fills(self._conn, order_ref=order_ref)
 
+    def terminal_entry_orders_unproven_at_broker(
+        self: ClerkSqliteRepository, *, symbols: frozenset[str], limit: int
+    ) -> list[str]:
+        with self._write_lock:
+            return reads.terminal_entry_orders_unproven_at_broker(
+                self._conn, symbols=symbols, limit=limit
+            )
+
     def all_order_refs(self: ClerkSqliteRepository) -> frozenset[str]:
         with self._write_lock:
             return reads.all_order_refs(self._conn)

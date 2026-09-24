@@ -19,6 +19,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.order_evidence import fence_fills_on_terminal_enters
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
@@ -33,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     ReductionIntent,
     decide_capability,
     raise_failed_enter_filled_uncertainty,
+    resolve_failed_enter_filled_uncertainty_if_flat,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLED_REASON_CODE
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
@@ -304,6 +306,48 @@ async def test_a_second_contradicted_order_widens_the_open_fence(
         )
         == "unchanged"
     )
+
+
+def _clear_fence_as_if_flattened(
+    repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve the open fence through its real resolver, as a proven flatten would."""
+    with monkeypatch.context() as flat:
+        flat.setattr(repo, "position", lambda *_args: 0.0)
+        assert resolve_failed_enter_filled_uncertainty_if_flat(
+            repo, strategy_instance_id=SID, evidence_refs=("test_flatten",)
+        )
+    assert _fence(repo) is None
+
+
+async def test_a_correction_back_to_an_older_answered_quantity_raises_a_new_fence(
+    crashed_with_exposure,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Corrections 10 -> 5 -> 10: only the NEWEST episode's quantity is an answer.
+
+    The first episode answered 10 and a flatten cleared it; a correction to 5
+    was fenced and flattened again. Back at 10, the order carries 5 shares of
+    exposure the latest answer never covered -- the older 10-share episode
+    must not suppress the fence. The frozen clock also ties every episode's
+    ``observed_at_ms``, so "newest" must come from the raise order.
+    """
+    repo, _clock = crashed_with_exposure
+    order_ref = await _failed_enter_that_filled(repo)
+    _clear_fence_as_if_flattened(repo, monkeypatch)
+    raise_failed_enter_filled_uncertainty(
+        repo, strategy_instance_id=SID, order_ref=order_ref, symbol="SPY", filled_qty=5.0
+    )
+    _clear_fence_as_if_flattened(repo, monkeypatch)
+
+    # The order's effective fills stand at 10 again.
+    fence_fills_on_terminal_enters(repo, order_ref=order_ref)
+
+    episode = _fence(repo)
+    assert episode is not None
+    assert _cause_orders(episode) == [
+        {"order_ref": order_ref, "symbol": "SPY", "filled_qty": 10.0}
+    ]
 
 
 async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
