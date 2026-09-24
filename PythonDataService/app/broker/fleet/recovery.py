@@ -38,7 +38,6 @@ from app.broker.fleet.records import (
     AccountAssignmentRecord,
     AssignmentState,
     ProviderSummaryObservation,
-    StoredLifecycleState,
 )
 from app.broker.fleet.store import registry_database_path
 from app.utils.advisory_lock import advisory_file_lock
@@ -528,28 +527,26 @@ def reconcile_restored_lane(
             f"Clerk {clerk_id}'s durable evidence does not match the restored registry and volume.",
             next_step="Keep routing closed; use the original registry and lane-volume backup pair.",
         )
-    # #2350: the drained tombstone is proof the lane is out, never a voucher.
-    # When the restored row still says provisioned, the backup predates the
-    # drain and cannot know who took the account over, so re-seating the lane
-    # from its tombstone would route the account to a drained lane. A backup
-    # that already records the drain agrees with the volume: reconciling it
-    # cannot turn the lane back on (``resolve_route`` refuses a draining
-    # clerk), and refusing it would make a mid-drain backup unrestorable.
-    if (
-        evidence.lifecycle_state != StoredLifecycleState.PROVISIONED.value
-        and clerk.lifecycle_state == StoredLifecycleState.PROVISIONED
-    ):
+    # #2350: the drained tombstone is proof the lane is out, never a voucher,
+    # whatever the restored row says. A backup older than the drain cannot
+    # know who took the account over, and neither can one captured mid-drain:
+    # the lane's volume reads the same whether the lane is still draining or
+    # was released and succeeded after the capture. Re-seating the lane from
+    # its tombstone could route the account to a retired lane while its real
+    # holder is unknown, so the lane stays unreconciled and the hold stays
+    # closed until a backup captured after the release is restored.
+    if evidence.is_drained:
         raise FleetRegistryBackupPredatesDrain(
-            f"Clerk {clerk_id}'s own volume records it {evidence.lifecycle_state}, but the "
-            "restored registry backup still records it provisioned: the backup was captured "
-            "before the lane was drained and cannot know who holds its account now. The lane "
-            "stays unreconciled and the recovery hold stays closed; run restore-registry with "
-            "a newer backup captured after the drain.",
-            next_step="Run restore-registry with a backup captured after this lane's drain "
-            "(and after any successor confirmed the account), then reconcile-registry again. "
-            "Never rewrite the drained evidence to force this reconciliation.",
+            f"Clerk {clerk_id}'s own volume records it {evidence.lifecycle_state}: the "
+            "restored registry backup was captured before this drained lane's account was "
+            "released and cannot know who holds that account now. The lane stays "
+            "unreconciled and the recovery hold stays closed; run restore-registry with a "
+            "newer backup captured after the release.",
+            next_step="Run restore-registry with a backup captured after this lane's account "
+            "was released (and after any successor confirmed it), then reconcile-registry "
+            "again. Never rewrite the drained evidence to force this reconciliation.",
         )
-    canonical =service._adapter(clerk.broker).canonical_account_id(evidence.canonical_account_id)
+    canonical = service._adapter(clerk.broker).canonical_account_id(evidence.canonical_account_id)
     if canonical != evidence.canonical_account_id:
         raise ClerkIdentityMismatch(
             f"Clerk {clerk_id}'s evidence carries a noncanonical account identity.",

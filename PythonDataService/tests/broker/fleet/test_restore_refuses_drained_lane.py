@@ -28,12 +28,11 @@ from app.broker.fleet.confirmation import (
     write_confirmation_evidence,
 )
 from app.broker.fleet.errors import (
-    ClerkUnreachable,
     FleetRegistryBackupPredatesDrain,
     FleetRegistryRecoveryPending,
 )
 from app.broker.fleet.provider import OperationReadiness
-from app.broker.fleet.records import AssignmentState, StoredLifecycleState
+from app.broker.fleet.records import StoredLifecycleState
 from app.broker.fleet.recovery import (
     create_registry_backup,
     read_recovery_state,
@@ -253,42 +252,86 @@ def test_reconcile_refuses_a_lane_drained_after_the_backup_even_without_a_succes
         service.close()
 
 
-def test_a_backup_captured_mid_drain_still_reconciles_without_turning_the_lane_on(
+def test_reconcile_refuses_a_mid_drain_backup_whose_lane_was_later_succeeded(
     control_dir: Path, fleet_service: FleetControlService, clock: FrozenClock
 ) -> None:
-    """Registry and volume agree the lane is draining: the hold clears, the lane stays down.
+    """A backup captured mid-drain cannot know the successor either (thermo on #2350).
 
-    Refusing every tombstone would make a backup captured during a drain
-    unrestorable forever. When the restored registry already records the
-    drain, reconciling cannot turn the lane back on, so it is admitted.
+    L drains and tombstones, THEN the backup is captured, then L is released
+    and retired while M confirms PAPER. The restored registry agrees with L's
+    volume that L is draining, yet reconciling L would clear the hold with M
+    unknown and PAPER wedged on a retired lane. The volume reads the same
+    whether L is still draining or was succeeded, so every tombstone refuses.
     """
-    lane = provision_lane(fleet_service, broker="fake_alpha", label="L", tmp_path=control_dir.parent)
-    _bind_with_evidence(fleet_service, lane, account="PAPER")
-    fleet_service.drain_clerk(clerk_id=lane.clerk_id)
-    assert mark_confirmation_evidence_draining(lane.volume_root)
+    old = provision_lane(fleet_service, broker="fake_alpha", label="L", tmp_path=control_dir.parent)
+    old_session = _bind_with_evidence(fleet_service, old, account="PAPER")
+    clock.advance(1000)
+    drained = fleet_service.drain_clerk(clerk_id=old.clerk_id)
+    assert mark_confirmation_evidence_draining(old.volume_root)
     backup = control_dir.parent / "backup"
     manifest = create_registry_backup(fleet_service._store, backup_dir=backup)
-    assert manifest.active_clerk_ids == (lane.clerk_id,)
+    assert manifest.active_clerk_ids == (old.clerk_id,)
+
+    clock.advance(drained.drain_deadline_at_ms - clock() + 1)
+    fleet_service.confirm_lane_quiet(
+        clerk_id=old.clerk_id,
+        agent_instance_id=old_session.agent_instance_id,
+        routing_epoch=old_session.routing_epoch,
+        observed_at_ms=clock(),
+        runner_idle=True,
+        broker_work_ended=True,
+        account_flat=True,
+        intents_resolved=True,
+    )
+    fleet_service.release_assignment(
+        broker="fake_alpha",
+        external_account_id="PAPER",
+        expected_assignment_generation=1,
+        operator=TEST_OPERATOR,
+        change_ref=TEST_CHANGE_REF,
+    )
+    fleet_service.retire_clerk(clerk_id=old.clerk_id)
+    new = provision_lane(fleet_service, broker="fake_alpha", label="M", tmp_path=control_dir.parent)
+    new_session = fleet_service.register_agent_session(
+        fleet_protocol_version=2, clerk_id=new.clerk_id, worker_key=new.worker_key
+    )
+    fleet_service.reserve_assignment(
+        broker="fake_alpha",
+        clerk_id=new.clerk_id,
+        external_account_id="PAPER",
+        volume_root=new.volume_root,
+    )
+    fleet_service.confirm_assignment(
+        broker="fake_alpha",
+        clerk_id=new.clerk_id,
+        external_account_id="PAPER",
+        binding_generation=1,
+        agent_instance_id=new_session.agent_instance_id,
+        routing_epoch=new_session.routing_epoch,
+    )
     adapters = dict(fleet_service._provider_adapters)
     fleet_service.close()
 
     restore_registry_backup(control_dir=control_dir, backup_dir=backup, max_schema_version=SCHEMA_VERSION)
     service = _reopen(control_dir, adapters, clock)
     try:
-        state = reconcile_restored_lane(
-            service,
-            clerk_id=lane.clerk_id,
-            volume_root=lane.volume_root,
-            provider_summary=_PROVIDER_SUMMARY,
-        )
-        assert state.mutations_closed is False
-        clerk = service._store.read_clerk(lane.clerk_id)
-        assert clerk is not None and clerk.lifecycle_state == StoredLifecycleState.DRAINING
-        assignment = service._store.read_assignment(broker="fake_alpha", canonical_account_id="PAPER")
-        assert assignment is not None and assignment.state == AssignmentState.EFFECTIVE
-        with pytest.raises(ClerkUnreachable):
+        restored_clerk = service._store.read_clerk(old.clerk_id)
+        assert restored_clerk is not None
+        assert restored_clerk.lifecycle_state == StoredLifecycleState.DRAINING
+        with pytest.raises(FleetRegistryBackupPredatesDrain):
+            reconcile_restored_lane(
+                service,
+                clerk_id=old.clerk_id,
+                volume_root=old.volume_root,
+                provider_summary=_PROVIDER_SUMMARY,
+            )
+        state = read_recovery_state(control_dir)
+        assert state is not None
+        assert state.mutations_closed is True
+        assert old.clerk_id not in state.reconciled_clerk_ids
+        with pytest.raises(FleetRegistryRecoveryPending):
             service.resolve_route(
-                broker="fake_alpha", clerk_id=lane.clerk_id, readiness=OperationReadiness.EXECUTION
+                broker="fake_alpha", clerk_id=old.clerk_id, readiness=OperationReadiness.EXECUTION
             )
     finally:
         service.close()
