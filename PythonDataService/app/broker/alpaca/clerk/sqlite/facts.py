@@ -531,6 +531,33 @@ class UncertaintyResolvedFacts:
 
 
 @dataclass(frozen=True)
+class AttributedResidueDischargedFacts:
+    """``ATTRIBUTED_RESIDUE_DISCHARGED`` (#2381): an operator wrote a stranded
+    attributed residue to zero after the Clerk read the broker flat for it.
+
+    ``discharged_qty`` is the strategy's signed attributed quantity the fold
+    must find and zero; the broker figures are the fresh snapshot that proved
+    the discharge restores agreement (broker = account attribution − residue),
+    and ``uncertainty_ids`` name the open EXIT episodes that stranded it.
+    """
+
+    symbol: str
+    discharged_qty: float
+    broker_qty: float
+    account_attributed_qty: float
+    broker_observed_at_ms: int
+    uncertainty_ids: list[str]
+    operator_reason: str | None
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> AttributedResidueDischargedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class OrderFillObservedFacts:
     """The evidence ``_fold_order_fill_observed`` needs beyond the outer
     transition row: Alpaca's REST-reported *cumulative* ``filled_quantity``

@@ -23,10 +23,15 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     recheck_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.residue_discharge import (
+    ResidueDischargeReceipt,
+    ResidueDischargeRefused,
+)
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
 )
+from app.broker.contract.errors import BrokerError
 
 
 class RecoveryExecutionError(Exception):
@@ -76,6 +81,14 @@ class ActiveSqliteRecoveryFacade(Protocol):
         reason: str | None = None,
         confirmed_limit: ConfirmedRecoveryLimit | None = None,
     ) -> SafeFlattenResult: ...
+
+    async def discharge_attributed_residue(
+        self,
+        *,
+        strategy_instance_id: str,
+        symbol: str,
+        reason: str | None,
+    ) -> ResidueDischargeReceipt: ...
 
 
 @dataclass(frozen=True)
@@ -249,6 +262,30 @@ async def execute_recovery_action(
             receipt_id=receipt_id,
             recorded_at_ms=result.recorded_at_ms,
             orders=result.orders,
+        )
+    if request.action_id == "discharge_attributed_residue":
+        strategy_instance_id = _require_strategy_instance(context)
+        if capability.execution_ref is None or request.execution_ref != capability.execution_ref:
+            raise RecoveryExecutionError(
+                "The residue does not match the symbol authorized by the presented action."
+            )
+        try:
+            receipt = await facade.discharge_attributed_residue(
+                strategy_instance_id=strategy_instance_id,
+                symbol=capability.execution_ref,
+                reason=request.reason,
+            )
+        except ResidueDischargeRefused as exc:
+            raise RecoveryExecutionError(str(exc)) from exc
+        except BrokerError as exc:
+            raise RecoveryExecutionError(
+                f"The broker could not be read, so nothing was discharged: {exc}"
+            ) from exc
+        return RecoveryExecutionResult(
+            action_id=request.action_id,
+            applied=True,
+            receipt_id=f"transition:{receipt.sequence}",
+            recorded_at_ms=receipt.recorded_at_ms,
         )
     raise RecoveryExecutionError(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "

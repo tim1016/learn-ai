@@ -67,9 +67,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_account_hold,
     raise_uncertainty,
     resolve_account_hold,
-    resolve_exit_not_flat_uncertainty,
-    resolve_exit_stuck_uncertainty,
     resolve_failed_enter_filled_uncertainty_if_flat,
+    resolve_flat_exit_fences,
     resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
@@ -168,7 +167,7 @@ def _attributed_quantity_by_symbol(attributed_positions: dict[str, float]) -> di
     return attributed_by_symbol
 
 
-def _broker_symbol_reader(
+def broker_symbol_reader(
     repo: ClerkSqliteRepository,
     *,
     broker_orders: list[BrokerOrder],
@@ -194,13 +193,12 @@ def _broker_symbol_reader(
         attributed_qty = _attributed_quantity_by_symbol(
             repo.attributed_positions_by_symbol()
         ).get(normalized, 0.0)
+        working = normalized in in_flight
         return BrokerSymbolView(
             broker_qty=broker_qty,
             attributed_qty=attributed_qty,
-            agrees=(
-                not position_quantity_is_nonzero(broker_qty - attributed_qty)
-                and normalized not in in_flight
-            ),
+            working=working,
+            agrees=not position_quantity_is_nonzero(broker_qty - attributed_qty) and not working,
         )
 
     return read
@@ -606,21 +604,9 @@ def _resolve_flat_exit_fences(
     repo: ClerkSqliteRepository, instances: list[dict]
 ) -> None:
     for instance in instances:
-        strategy_instance_id = instance["strategy_instance_id"]
-        attributed = repo.attributed_positions_for_strategy(strategy_instance_id)
-        if any(position_quantity_is_nonzero(quantity) for quantity in attributed.values()):
-            continue
-        resolve_exit_not_flat_uncertainty(
+        resolve_flat_exit_fences(
             repo,
-            strategy_instance_id=strategy_instance_id,
-            evidence_refs=("fresh_account_snapshot", "attributed_flat"),
-        )
-        # A stuck-EXIT escalation outlives its EXIT_NOT_FLAT origin; the same
-        # attributed-flat proof must clear it, or the now-flat strategy stays
-        # permanently barred from new exposure.
-        resolve_exit_stuck_uncertainty(
-            repo,
-            strategy_instance_id=strategy_instance_id,
+            strategy_instance_id=instance["strategy_instance_id"],
             evidence_refs=("fresh_account_snapshot", "attributed_flat"),
         )
 
@@ -1067,7 +1053,7 @@ async def _reconcile_account_serialized(
         repo,
         trade=trade,
         intake=intake,
-        broker_symbol=_broker_symbol_reader(
+        broker_symbol=broker_symbol_reader(
             repo, broker_orders=broker_orders, broker_positions=broker_positions
         ),
         pricing=pricing,

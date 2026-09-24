@@ -117,7 +117,7 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
   clerk_reassignment_blocked: {
     outcome: 'conflict',
     message: "Lane-to-lane reassignment is blocked until the drain ceremony proves the drained lane's quiet.",
-    nextStep: 'Use whole-machine migration, which moves the volume with the lane.',
+    nextStep: 'An account released without that proof never moves; discharge any stranded residue before retiring a lane.',
   },
   clerk_routing_attempt_conflict: {
     outcome: 'conflict',

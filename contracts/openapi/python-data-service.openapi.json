@@ -27652,6 +27652,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -27736,6 +27737,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -27826,6 +27828,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -27891,6 +27894,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -27988,6 +27992,7 @@
                 "cancel_verified_working_orders",
                 "prepare_safe_flatten",
                 "execute_safe_flatten",
+                "discharge_attributed_residue",
                 "stop_bot_decisions",
                 "open_custody_timeline"
               ],
@@ -28019,7 +28024,8 @@
               "stop_bot_decisions",
               "cancel_verified_working_orders",
               "execute_safe_flatten",
-              "reconcile_now"
+              "reconcile_now",
+              "discharge_attributed_residue"
             ],
             "title": "Action Id",
             "type": "string"
@@ -28824,6 +28830,7 @@
                   "cancel_verified_working_orders",
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
+                  "discharge_attributed_residue",
                   "stop_bot_decisions",
                   "open_custody_timeline"
                 ],
@@ -28854,6 +28861,7 @@
                   "cancel_verified_working_orders",
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
+                  "discharge_attributed_residue",
                   "stop_bot_decisions",
                   "open_custody_timeline"
                 ],
@@ -30278,6 +30286,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -31421,6 +31430,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -31506,6 +31516,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -31570,6 +31581,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -31643,6 +31655,7 @@
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "execute_safe_flatten",
+              "discharge_attributed_residue",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -41502,6 +41515,7 @@
           "ACCOUNT_HOLD_RAISED",
           "ACCOUNT_HOLD_REFRESHED",
           "ACCOUNT_HOLD_RESOLVED",
+          "ATTRIBUTED_RESIDUE_DISCHARGED",
           "COMMAND_REJECTED",
           "CUSTODY_SUBJECT_REGISTERED",
           "ENTER_ACCEPTED",

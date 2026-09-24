@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.external_order_folds import (
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     AccountHoldResolvedFacts,
+    AttributedResidueDischargedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
     ExecutionCorrectedFacts,
@@ -933,6 +934,37 @@ def _apply_attributed_position_delta(
     )
 
 
+def _fold_attributed_residue_discharged(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Zero one strategy's stranded attributed residue (#2381).
+
+    The one position write not driven by a fill: an operator discharge,
+    admitted only after a fresh broker read proved the account flat for the
+    residue (``residue_discharge.discharge_attributed_residue``). The fold
+    re-proves the residue it zeroes is the one the facts name, so a replay
+    against a ledger whose attribution differs fails instead of zeroing a
+    different quantity.
+
+    Formula: attributed_qty' = 0, requires |attributed_qty - discharged_qty|
+      < POSITION_QTY_EPSILON.
+    """
+    facts = AttributedResidueDischargedFacts.from_facts_json(payload["facts_json"])
+    symbol = facts.symbol.upper()
+    row = conn.execute(
+        "SELECT attributed_qty FROM positions WHERE strategy_instance_id = ? AND symbol = ?",
+        (payload["strategy_instance_id"], symbol),
+    ).fetchone()
+    if row is None or position_quantity_is_nonzero(row["attributed_qty"] - facts.discharged_qty):
+        raise ValueError(
+            "residue discharge names an attributed quantity the ledger does not hold: "
+            f"{facts.discharged_qty!r} of {symbol!r}"
+        )
+    conn.execute(
+        "UPDATE positions SET attributed_qty = 0.0, updated_at_ms = ? "
+        "WHERE strategy_instance_id = ? AND symbol = ?",
+        (payload["recorded_at_ms"], payload["strategy_instance_id"], symbol),
+    )
+
+
 def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Fold one idempotent broker execution slice into exposure.
 
@@ -1522,6 +1554,7 @@ DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_TERMINAL", _fold_manual_order_termi
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_CONFIRMED", _fold_manual_order_cancel_confirmed)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_TERMINAL", _fold_manual_order_cancel_terminal)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
+DEFAULT_FOLD_REGISTRY.register("ATTRIBUTED_RESIDUE_DISCHARGED", _fold_attributed_residue_discharged)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_REFRESHED", _fold_account_hold_refreshed)

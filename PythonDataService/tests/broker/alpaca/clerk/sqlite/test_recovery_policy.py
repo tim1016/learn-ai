@@ -84,6 +84,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
         "cancel_verified_working_orders",
         "prepare_safe_flatten",
         "execute_safe_flatten",
+        "discharge_attributed_residue",
         "stop_bot_decisions",
         "open_custody_timeline",
     }
@@ -843,3 +844,150 @@ def test_safe_flatten_admits_an_exit_episode_refreshed_after_the_reconciliation(
 
     assert actions["prepare_safe_flatten"].available is True
     assert actions["execute_safe_flatten"].available is True
+
+
+def _bot_exit_episode(reason_code: str = "EXIT_STUCK") -> ProjectedUncertainty:
+    return replace(
+        _account_uncertainty(reason_code),
+        scope="CUSTODY_SUBJECT",
+        strategy_instance_id="spy-bot",
+    )
+
+
+def _residue_context(**overrides) -> RecoveryPolicyContext:
+    """Bot +10 SPY stranded by an EXIT episode, run stopped, last pass drifted."""
+    values = {
+        "runs": (),
+        "positions": (
+            ProjectedPosition(
+                strategy_instance_id="spy-bot",
+                symbol="SPY",
+                attributed_qty=10.0,
+                updated_at_ms=1_700_000_008_000,
+            ),
+        ),
+        "uncertainties": (_bot_exit_episode(),),
+    }
+    values.update(overrides)
+    return _context(**values)
+
+
+def _discharge(context: RecoveryPolicyContext) -> RecoveryCapability:
+    return next(
+        action
+        for action in build_recovery_catalog(context)
+        if action.action_id == "discharge_attributed_residue"
+    )
+
+
+@pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK"])
+def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
+    reason_code: str,
+) -> None:
+    """#2381: the one cure for a flat broker under EXIT_NOT_FLAT/EXIT_STUCK."""
+    action = _discharge(_residue_context(uncertainties=(_bot_exit_episode(reason_code),)))
+
+    assert action.available is True
+    assert action.execution_ref == "SPY"
+    assert action.mutation is True
+    assert action.confirmation is not None
+    assert [item.reference for item in action.evidence] == [f"uncertainty:episode:{reason_code}"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_code"),
+    [
+        ({"strategy_instance_id": None}, "RECOVERY_SCOPE_UNSUPPORTED"),
+        ({"positions": ()}, "RECOVERY_SCOPE_UNSUPPORTED"),
+        ({"uncertainties": ()}, "NO_STRANDED_EXIT_EPISODE"),
+        ({"uncertainties": (_account_uncertainty("POSITION_DRIFT"),)}, "NO_STRANDED_EXIT_EPISODE"),
+        (
+            {
+                "uncertainties": (
+                    _bot_exit_episode(),
+                    _bot_exit_episode("EXECUTION_COVERAGE_CONFLICT"),
+                )
+            },
+            "EXPOSURE_NOT_PROVEN",
+        ),
+        (
+            {
+                "runs": (
+                    ProjectedRun(
+                        run_id="run-1",
+                        strategy_instance_id="spy-bot",
+                        lifecycle_run_id="lifecycle-1",
+                        state="ACTIVE",
+                        started_at_ms=1_700_000_000_000,
+                        stopped_at_ms=None,
+                    ),
+                )
+            },
+            "RUN_STILL_ACTIVE",
+        ),
+        (
+            {
+                "latest_account_reconciliation": ProjectedReconciliation(
+                    reconciliation_id="reconciliation-17",
+                    effect_operation_id=None,
+                    order_ref=None,
+                    trigger="operator",
+                    attempted_at_ms=1_700_000_009_500,
+                    outcome="RESOLVED_SUCCESS",
+                    evidence_age_ms=500,
+                    evidence_refs=("alpaca:positions:17",),
+                )
+            },
+            "BROKER_AGREES_WITH_CUSTODY",
+        ),
+    ],
+)
+def test_residue_discharge_is_refused_outside_its_stranded_state(
+    overrides: dict, reason_code: str
+) -> None:
+    action = _discharge(_residue_context(**overrides))
+
+    assert action.available is False
+    assert action.unavailable_reason_code == reason_code
+    assert action.execution_ref is None
+
+
+def test_residue_discharge_token_rejects_a_changed_residue() -> None:
+    presented = _discharge(_residue_context())
+    moved = _residue_context(
+        positions=(
+            ProjectedPosition(
+                strategy_instance_id="spy-bot",
+                symbol="SPY",
+                attributed_qty=4.0,
+                updated_at_ms=1_700_000_009_500,
+            ),
+        )
+    )
+
+    with pytest.raises(StaleRecoveryTokenError):
+        recheck_recovery_action(
+            moved,
+            action_id="discharge_attributed_residue",
+            concurrency_token=presented.concurrency_token,
+        )
+
+
+def test_a_reconciliation_older_than_the_residue_does_not_hide_the_discharge() -> None:
+    """PR #2404 review: a clean pass before the EXIT episode proves nothing about it."""
+    action = _discharge(
+        _residue_context(
+            latest_account_reconciliation=ProjectedReconciliation(
+                reconciliation_id="reconciliation-16",
+                effect_operation_id=None,
+                order_ref=None,
+                trigger="operator",
+                attempted_at_ms=1_700_000_007_000,
+                outcome="RESOLVED_SUCCESS",
+                evidence_age_ms=3_000,
+                evidence_refs=("alpaca:positions:16",),
+            )
+        )
+    )
+
+    assert action.available is True

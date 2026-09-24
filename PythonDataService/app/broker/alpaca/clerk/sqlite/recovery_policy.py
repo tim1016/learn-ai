@@ -37,7 +37,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SafeFlattenPlanLeg,
 )
 from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
-from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    reason_policy,
+    residue_discharge_role,
+)
 
 RecoveryActionId = Literal[
     "reconcile_now",
@@ -46,6 +49,7 @@ RecoveryActionId = Literal[
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
     "execute_safe_flatten",
+    "discharge_attributed_residue",
     "stop_bot_decisions",
     "open_custody_timeline",
 ]
@@ -200,6 +204,22 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
             "The Clerk will submit reduction-only orders for the exact attributed "
             "quantities in the prepared plan.",
             "Flatten now",
+        ),
+    ),
+    _Descriptor(
+        action_id="discharge_attributed_residue",
+        label="Discharge stranded residue",
+        explanation=(
+            "Write off an attributed position the broker does not hold, after the "
+            "Clerk re-reads the broker and proves the account flat for it."
+        ),
+        mutation=True,
+        confirmation=_confirmation(
+            "Discharge the stranded residue?",
+            "Confirm at the broker that this symbol is flat. The Clerk re-reads the "
+            "account, writes the attributed quantity to zero under your reason, and "
+            "submits no order.",
+            "Discharge residue",
         ),
     ),
     _Descriptor(
@@ -550,6 +570,8 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
         return _safe_flatten_decision(ctx)
     if action_id == "execute_safe_flatten":
         return _execute_safe_flatten_decision(ctx)
+    if action_id == "discharge_attributed_residue":
+        return _residue_discharge_decision(ctx)
     raise AssertionError(f"healthy catalog cannot evaluate {action_id!r}")
 
 
@@ -714,6 +736,121 @@ def _execute_safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     return replace(base, token_facts=token_facts)
 
 
+def _reconciliation_confirms_residue(
+    reconciliation: ProjectedReconciliation | None,
+    positions: tuple[ProjectedPosition, ...],
+    episodes: tuple[ProjectedUncertainty, ...],
+) -> bool:
+    """Whether a clean account pass observed the broker after the residue formed."""
+    if not _is_successful_account_reconciliation(reconciliation):
+        return False
+    residue_formed_at_ms = max(
+        (
+            *(position.updated_at_ms for position in positions),
+            *(episode.observed_at_ms for episode in episodes),
+        ),
+        default=0,
+    )
+    return reconciliation.attempted_at_ms > residue_formed_at_ms
+
+
+def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
+    """Offer the discharge of one bot's residue that an open EXIT episode strands (#2381).
+
+    Presentation reads only durable custody; the broker proof is the
+    executor's own fresh read (``residue_discharge.discharge_attributed_residue``),
+    which refuses unless the discharge restores broker agreement. A last
+    successful reconciliation that postdates both the residue and its
+    stranding episode means the broker agreed with it, so the position is real
+    and the cure is a flatten, not a discharge. An older one says nothing about
+    the residue and does not hide the action.
+    """
+    positions = _relevant_positions(ctx)
+    relevant = _relevant_uncertainties(ctx)
+    episodes = tuple(
+        uncertainty
+        for uncertainty in relevant
+        if residue_discharge_role(uncertainty.reason_code) == "strands"
+    )
+    refusing = tuple(
+        uncertainty
+        for uncertainty in relevant
+        if residue_discharge_role(uncertainty.reason_code) == "refuses"
+    )
+    active_runs = _relevant_runs(ctx)
+    working_orders = _working_orders(ctx)
+    reason_code: str | None = None
+    reason: str | None = None
+    next_step = "Confirm at the broker that the symbol is flat, then discharge the residue."
+    if ctx.strategy_instance_id is None or len(positions) != 1:
+        reason_code = "RECOVERY_SCOPE_UNSUPPORTED"
+        reason = "Discharge a residue from the single bot that holds one attributed symbol."
+        next_step = "Open the bot that holds the residue."
+    elif not episodes:
+        reason_code = "NO_STRANDED_EXIT_EPISODE"
+        reason = "No open EXIT_NOT_FLAT or EXIT_STUCK episode names this bot's exposure."
+        next_step = "Flatten real exposure instead of discharging it."
+    elif refusing:
+        reason_code = "EXPOSURE_NOT_PROVEN"
+        reason = (
+            "Another open uncertainty may mean the Clerk has not yet recorded a fill "
+            "that moves this residue."
+        )
+        next_step = "Resolve that uncertainty first; it may settle the residue itself."
+    elif active_runs:
+        reason_code = "RUN_STILL_ACTIVE"
+        reason = "Stop the bot's active run before discharging its residue."
+        next_step = "Stop bot decisions first."
+    elif working_orders:
+        reason_code = "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+        reason = "Cancel and prove every working order terminal before discharging."
+        next_step = "Cancel verified working orders first."
+    elif _reconciliation_confirms_residue(ctx.latest_account_reconciliation, positions, episodes):
+        reason_code = "BROKER_AGREES_WITH_CUSTODY"
+        reason = "The latest reconciliation found the broker holding this exposure."
+        next_step = "Flatten the exposure instead of discharging it."
+    available = reason_code is None
+    evidence = tuple(
+        _evidence(
+            ctx,
+            reference=f"uncertainty:{episode.uncertainty_id}",
+            label="Stranding EXIT episode",
+            observed_at_ms=episode.observed_at_ms,
+            required_fresh=False,
+        )
+        for episode in episodes
+    )
+    return _Decision(
+        available=available,
+        reason_code=reason_code,
+        reason=reason,
+        freshness="not_required",
+        evidence=evidence,
+        next_step=next_step,
+        token_facts={
+            "positions": [
+                (
+                    position.strategy_instance_id,
+                    position.symbol,
+                    position.attributed_qty,
+                    position.updated_at_ms,
+                )
+                for position in positions
+            ],
+            "episodes": [(episode.uncertainty_id, episode.reason_code) for episode in episodes],
+            "refusing": [(episode.uncertainty_id, episode.reason_code) for episode in refusing],
+            "active_runs": [run.run_id for run in active_runs],
+            "working_orders": [order.order_ref for order in working_orders],
+            "reconciliation": (
+                None
+                if ctx.latest_account_reconciliation is None
+                else ctx.latest_account_reconciliation.reconciliation_id
+            ),
+        },
+        execution_ref=positions[0].symbol if available else None,
+    )
+
+
 def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Decision:
     return _coverage_decision(
         coverage_resolution_decision(
@@ -867,6 +1004,7 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
         "stop_bot_decisions",
         "execute_safe_flatten",
         "prepare_safe_flatten",
+        "discharge_attributed_residue",
         "open_custody_timeline",
     )
     available = {capability.action_id for capability in capabilities if capability.available}
