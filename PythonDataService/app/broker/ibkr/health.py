@@ -7,6 +7,8 @@ the link colour and detail string. That state has two sources:
   account, server version, last own-event timestamp).
 * ``AutoReconnectMonitor`` — owns the "is_attempting" overlay, the
   current attempt number, and the cumulative recovery count.
+* The real-time-bar registry in ``bars`` — owns whether a bot lease opened
+  before the latest IBKR 1101 is still held (diagnostic only, #2393).
 
 Neither side needs to know about the other. This module is the single
 place that knows both, so the wire model can be built without leaking
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.broker.ibkr.bars import realtime_bar_lines_unreplaced
 from app.broker.ibkr.config import get_settings
 from app.broker.ibkr.models import (
     BrokerConnectionState,
@@ -49,7 +52,9 @@ def build_broker_health(
     so the cockpit's "since" age reflects whichever event happened most
     recently.
     """
-    base = client.health()
+    base = client.health().model_copy(
+        update={"realtime_bar_lines_unreplaced": realtime_bar_lines_unreplaced(client)}
+    )
     operator_disconnected = (
         getattr(client, "desired_connected", True) is False and base.connection_state == "disconnected"
     )

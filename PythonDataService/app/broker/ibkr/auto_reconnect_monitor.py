@@ -153,12 +153,10 @@ class AutoReconnectMonitor:
         # failing resubscribe doesn't spam every poll cycle. ``0`` lets the
         # first stale observation fire immediately on detection.
         self._last_subscription_recovery_ms: int = 0
-        # The client's 1101 count the recovery callbacks last completed for.
-        # ``subscriptions_stale`` now stays set until a replacement real-time
-        # bar line delivers (#2393), which in PRE/POST can be minutes; keying
-        # the callbacks on the stale flag would re-run ``resubscribe_all``
-        # every interval meanwhile and spend the shared reqRealTimeBars budget
-        # on chart restarts. Each 1101 is recovered exactly once.
+        # The client's 1101 count the recovery callbacks last completed for
+        # (#2393). Each 1101 is recovered exactly once -- including one that
+        # lands while the callbacks run, whose ``subscriptions_stale`` the
+        # run's own success would otherwise clear unrecovered.
         self._recovered_data_loss_epoch: int = 0
         # Durable outage anchor (#2080). Set on the first failed connect of
         # an outage; unlike ``_last_transition_ms``, a later open-breaker
@@ -341,7 +339,7 @@ class AutoReconnectMonitor:
 
     def _data_loss_unrecovered(self) -> bool:
         """Whether the client has seen a 1101 the recovery callbacks have not yet run for."""
-        return getattr(self._client, "data_loss_epoch", 0) != self._recovered_data_loss_epoch
+        return self._client.data_loss_epoch != self._recovered_data_loss_epoch
 
     async def _recover_subscriptions_if_stale(self) -> bool:
         """Run recovery callbacks once for each IBKR 1101 the client reports.
@@ -606,7 +604,7 @@ class AutoReconnectMonitor:
         """Run post-connect recovery before the monitor reports healthy."""
         # Read before the callbacks: a 1101 that lands while they run is a
         # later loss, and the next tick recovers it.
-        data_loss_epoch = getattr(self._client, "data_loss_epoch", 0)
+        data_loss_epoch = self._client.data_loss_epoch
         self._begin_recovery()
         try:
             for callback in self._recovery_callbacks:

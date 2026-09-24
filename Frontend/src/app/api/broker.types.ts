@@ -15969,6 +15969,11 @@ export interface components {
             mode: "paper" | "live";
             /** Port */
             port: number;
+            /**
+             * Realtime Bar Lines Unreplaced
+             * @default false
+             */
+            realtime_bar_lines_unreplaced?: boolean;
             /** Reason */
             reason?: string | null;
             /** Reconnect Attempt */

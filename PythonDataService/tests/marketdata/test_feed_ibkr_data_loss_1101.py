@@ -21,12 +21,22 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from eventkit import Event
+from ib_async import Ticker
 
+from app.broker.alpaca.clerk.sqlite.qualification_polygon_replay import _PolygonReplayClient
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.ibkr import bars as bars_mod
 from app.broker.ibkr.auto_reconnect_monitor import AutoReconnectMonitor
-from app.broker.ibkr.bars import IBKRBarInterrupted, IBKRBarStreamError, stream_raw_5s_bars
+from app.broker.ibkr.bars import (
+    IBKRBarInterrupted,
+    RealtimeBarClient,
+    realtime_bar_lines_unreplaced,
+    stream_raw_5s_bars,
+)
 from app.broker.ibkr.client import IbkrClient
+from app.broker.ibkr.health import build_broker_health
+from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
@@ -35,7 +45,7 @@ from app.marketdata.feed import (
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.services.decision_session import RunDecisionSession
-from tests._helpers.ibkr_feed_adversarial import AcceleratedFeedClock
+from tests._helpers.ibkr_feed_adversarial import AcceleratedFeedClock, _AdversarialIbkrClient
 
 _ET = ZoneInfo("America/New_York")
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
@@ -73,13 +83,26 @@ class _Transport:
     def __init__(self) -> None:
         self.lines: list[_Line] = []
         self.cancelled: list[_Line] = []
+        self._con_ids: dict[str, int] = {}
+        # The reqMktData side the quote/status source owns (ADR 0067).
+        self.errorEvent = Event()
+        self.wrapper = SimpleNamespace(_market_status_callbacks_installed=True, ticker2ReqId={"mktData": {}})
+        self.quote_requests = 0
+        self.client = None  # no server version to report in ``IbkrClient.health()``
 
     def isConnected(self) -> bool:
         return True
 
     async def qualifyContractsAsync(self, contract: Any) -> list[Any]:
-        contract.conId = 756_733
+        contract.conId = self._con_ids.setdefault(contract.symbol, 756_733 + len(self._con_ids))
         return [contract]
+
+    def reqMktData(self, contract: Any, *_args: Any) -> Ticker:
+        self.quote_requests += 1
+        return Ticker(contract=contract)
+
+    def cancelMktData(self, contract: Any) -> None:
+        return None
 
     async def reqCurrentTimeAsync(self) -> datetime:
         return datetime.now(UTC)
@@ -206,10 +229,11 @@ async def test_1101_in_pre_market_resubscribes_a_fresh_line_under_continuity(
 ) -> None:
     """An extended run's line dropped by 1101 in PRE is replaced, not left silent.
 
-    Before #2393 the liveness gate never read 1101, the monitor's chart-only
-    callbacks cleared ``subscriptions_stale`` and reported HEALTHY, and the
-    bot's lease kept reading a list IBKR no longer fed -- blind until the RTH
-    open plus 60 s, then dead with ``DECISION_BAR_MISSED``.
+    Before #2393 the liveness gate never read 1101, so the bot's lease kept
+    reading a list IBKR no longer fed -- blind until the RTH open plus 60 s,
+    then dead with ``DECISION_BAR_MISSED``. The monitor's chart-only callbacks
+    still clear ``subscriptions_stale``: the bar line is fenced by its epoch,
+    not by the quote source's health.
     """
     transport = _Transport()
     client = _client(transport)
@@ -231,9 +255,7 @@ async def test_1101_in_pre_market_resubscribes_a_fresh_line_under_continuity(
             await monitor._tick()
             assert chart_resubscribe.calls == 1
             assert monitor.recovery_state == "HEALTHY"
-            # The monitor's chart callbacks are not the bot's line: 1101 stays
-            # visible until a bar actually arrives on a line opened after it.
-            assert client.subscriptions_stale is True
+            assert client.connection_state == "connected"
 
             assert await _until(lambda: len(transport.lines) == 2), "1101 never forced a fresh reqRealTimeBars"
             transport.print_minute(_PRE_MINUTE + 60_000)
@@ -250,7 +272,7 @@ async def test_1101_in_pre_market_resubscribes_a_fresh_line_under_continuity(
     ]
     # Same socket: 1101 fences the line, not the connection.
     assert (sink.events[1].generation_from, sink.events[1].generation_to) == (1, 1)
-    assert client.subscriptions_stale is False
+    assert realtime_bar_lines_unreplaced(client) is False
 
 
 @pytest.mark.asyncio
@@ -316,14 +338,14 @@ async def test_monitor_recovery_after_1101_with_no_line_open_clears_stale(
 
 
 @pytest.mark.asyncio
-async def test_monitor_runs_chart_recovery_once_per_1101_while_the_bar_is_owed(
+async def test_monitor_runs_chart_recovery_once_per_1101(
     clock: AcceleratedFeedClock,
 ) -> None:
-    """A stale flag held for a sparse PRE line must not re-run ``resubscribe_all`` every tick.
+    """Chart recovery runs once per 1101; a bot lease still held never re-runs it.
 
     Each chart restart can issue a fresh ``reqRealTimeBars``; repeating it
-    while the fresh line waits for its first extended-hours print would spend
-    the shared 60-per-600 s budget on nothing.
+    while a bot's old lease waits to be interrupted would spend the shared
+    60-per-600 s budget on nothing.
     """
     transport = _Transport()
     client = _client(transport)
@@ -337,7 +359,7 @@ async def test_monitor_runs_chart_recovery_once_per_1101_while_the_bar_is_owed(
         for _ in range(3):
             await monitor._tick()
         assert callback.calls == 1
-        assert client.subscriptions_stale is True
+        assert client.subscriptions_stale is False
         _data_lost(client, transport)  # a second, distinct 1101 is recovered again
         await monitor._tick()
         assert callback.calls == 2
@@ -348,41 +370,116 @@ async def test_monitor_runs_chart_recovery_once_per_1101_while_the_bar_is_owed(
 
 
 @pytest.mark.asyncio
-async def test_1101_storm_cannot_spend_the_shared_request_budget(
-    clock: AcceleratedFeedClock, monkeypatch: pytest.MonkeyPatch
+async def test_1101_burst_within_the_pacer_budget_does_not_kill_runs(
+    clock: AcceleratedFeedClock,
 ) -> None:
-    """Re-requests of lines 1101 dropped are capped; past the cap the stream fails closed.
+    """A flapping link re-requests every line each 1101; inside the 60-per-600 s pacer none dies.
 
-    The refusal is fatal (not an ``IBKRBarInterrupted``) and issues no request,
-    so a flapping link ends the run instead of exhausting the 60-per-600 s
-    allowance every other line on the username shares.
+    Eight symbols through four 1101s is 32 re-requests plus 8 first requests,
+    within the shared budget. #2393's first cut capped re-requests at 30 and
+    threw a bare error after ``recovered``, killing every run here.
     """
-    pacer = bars_mod._RealtimeBarRequestPacer(max_lost_line_requests=2)
-    monkeypatch.setattr(
-        bars_mod, "_REALTIME_BAR_SUBSCRIPTIONS", bars_mod._RealtimeBarSubscriptionRegistry(pacer)
-    )
     transport = _Transport()
     client = _client(transport)
-
-    async def _open_then_lose_the_line() -> None:
-        stream = stream_raw_5s_bars(client, "SPY", use_rth=False)
-        pending = asyncio.ensure_future(anext(stream))
-        try:
-            lines_before = len(transport.lines)
-            assert await _until(lambda: len(transport.lines) == lines_before + 1)
+    symbols = ("SPY", "QQQ", "IWM", "DIA", "AAPL", "MSFT", "NVDA", "TSLA")
+    streams = [stream_raw_5s_bars(client, symbol, use_rth=False) for symbol in symbols]
+    pending = [asyncio.ensure_future(anext(stream)) for stream in streams]
+    try:
+        for flap in range(4):
+            expected = len(symbols) * (flap + 1)
+            assert await _until(lambda expected=expected: len(transport.lines) == expected)
             _data_lost(client, transport)
-            with pytest.raises(IBKRBarInterrupted) as interrupted:
-                await asyncio.wait_for(pending, 1)
-            assert interrupted.value.cause == "data_lost_1101"
-        finally:
+            for stream, waiting in zip(streams, pending, strict=True):
+                with pytest.raises(IBKRBarInterrupted) as interrupted:
+                    await asyncio.wait_for(waiting, 1)
+                assert interrupted.value.cause == "data_lost_1101"
+                await stream.aclose()
+            streams = [stream_raw_5s_bars(client, symbol, use_rth=False) for symbol in symbols]
+            pending = [asyncio.ensure_future(anext(stream)) for stream in streams]
+
+        assert await _until(lambda: len(transport.lines) == len(symbols) * 5)
+        assert transport.print_bar(_PRE_MINUTE) == len(symbols)
+        landed = await asyncio.wait_for(asyncio.gather(*pending), 1)
+    finally:
+        for waiting in pending:
+            waiting.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for stream in streams:
             await stream.aclose()
+    assert [bar.start_ms for bar in landed] == [_PRE_MINUTE] * len(symbols)
 
-    for _ in range(3):  # the first line, then two replacements
-        await _open_then_lose_the_line()
 
-    refused = stream_raw_5s_bars(client, "SPY", use_rth=False)
-    with pytest.raises(IBKRBarStreamError) as storm:
-        await asyncio.wait_for(anext(refused), 1)
-    await refused.aclose()
-    assert not isinstance(storm.value, IBKRBarInterrupted)
-    assert len(transport.lines) == 3
+@pytest.mark.asyncio
+async def test_1101_in_pre_recovers_the_quote_source_while_the_rth_lease_is_interrupted(
+    clock: AcceleratedFeedClock,
+) -> None:
+    """An RTH-only lease cannot print until 09:30; the quote source must not wait for it.
+
+    #2393's first cut held ``subscriptions_stale`` until a replacement bar
+    line delivered, so the reqMktData status/quote source refused and
+    published RECOVERING until the open -- blocking the top-of-book that
+    PRE/POST safe-flatten and the extended-hours EXIT re-drive price off.
+    """
+    transport = _Transport()
+    client = _client(transport)
+    monitor = _monitor(client, _ChartResubscribe())
+    source = IbkrMarketStatusSource(symbols=lambda: ("SPY",), client=lambda: client, clock=clock.now_ms)
+    rth_only = stream_raw_5s_bars(client, "SPY", use_rth=True)
+    waiting = asyncio.ensure_future(anext(rth_only))
+    try:
+        assert await _until(lambda: len(transport.lines) == 1)
+        assert (await source()).connected is True
+        assert await _until(lambda: transport.quote_requests == 1)
+
+        _data_lost(client, transport)
+        assert realtime_bar_lines_unreplaced(client) is True
+        assert (await source()).connected is False  # 1101 dropped the quote line too
+        await monitor._tick()
+
+        assert build_broker_health(client, monitor).connection_state == "connected"
+        await source()
+        assert await _until(lambda: transport.quote_requests == 2), "the quote line was never requested again"
+        assert (await source()).connected is True
+
+        with pytest.raises(IBKRBarInterrupted) as interrupted:
+            await asyncio.wait_for(waiting, 1)
+        assert interrupted.value.cause == "data_lost_1101"
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await rth_only.aclose()
+        await source.close()
+    assert realtime_bar_lines_unreplaced(client) is False
+
+
+@pytest.mark.asyncio
+async def test_1101_with_no_replacement_ever_requested_leaves_nothing_stale(
+    clock: AcceleratedFeedClock,
+) -> None:
+    """A consumer that never re-acquires after 1101 cannot leave health stale forever."""
+    transport = _Transport()
+    client = _client(transport)
+    monitor = _monitor(client, _ChartResubscribe())
+    stream = stream_raw_5s_bars(client, "SPY", use_rth=False)
+    waiting = asyncio.ensure_future(anext(stream))
+    assert await _until(lambda: len(transport.lines) == 1)
+    _data_lost(client, transport)
+    await monitor._tick()
+    assert build_broker_health(client, monitor).realtime_bar_lines_unreplaced is True
+
+    with pytest.raises(IBKRBarInterrupted):
+        await asyncio.wait_for(waiting, 1)
+    await stream.aclose()  # the run ends here: no fresh line is ever requested
+
+    health = build_broker_health(client, monitor)
+    assert (health.connection_state, health.recovery_state) == ("connected", "HEALTHY")
+    assert health.subscriptions_stale is False
+    assert health.realtime_bar_lines_unreplaced is False
+    assert len(transport.lines) == 1
+
+
+def test_every_bar_client_satisfies_the_realtime_bar_protocol() -> None:
+    """The registry and gate read exactly these members; no client may default one silently."""
+    assert isinstance(_client(_Transport()), RealtimeBarClient)
+    assert isinstance(_PolygonReplayClient([]), RealtimeBarClient)
+    assert isinstance(_AdversarialIbkrClient(SimpleNamespace()), RealtimeBarClient)  # type: ignore[arg-type]
