@@ -76,10 +76,11 @@ class ConfirmationEvidence:
     """The exact grant one clerk confirmed, as nonsecret evidence.
 
     ``lifecycle_state`` is the last lifecycle the lane knew itself to hold:
-    ``provisioned`` at every confirmation (a draining or retired clerk
-    confirms nothing), re-authored to ``draining`` the moment the lane learns
-    its drain (#2155). Evidence in any other lifecycle is a tombstone, not a
-    voucher — it stays on the volume as the auditable reason the lane is
+    a confirmation writes the lifecycle the lane has learned — ``provisioned``
+    unless a drain landed while the confirm reply was in flight, which makes
+    it ``draining`` (#2349) — and the file is re-authored to ``draining`` the
+    moment the lane learns its drain (#2155). Evidence in any other
+    lifecycle is a tombstone, not a voucher — it stays on the volume as the auditable reason the lane is
     down, and ``evidence_vouches_for`` refuses it.
     """
 

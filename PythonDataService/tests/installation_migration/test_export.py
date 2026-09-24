@@ -106,7 +106,7 @@ def test_check_refuses_a_non_flat_account_naming_it_and_its_open_work(
     assert entry["account_id"] in {LIVE_ACCOUNT, PAPER_ACCOUNT}
     assert entry["account_id"] in refused.value.message
     assert entry["open"] in (
-        ["the account is not flat"],
+        ["the account or the lane's custody is not flat"],
         ["a working order on the account has not ended"],
     )
     assert installation.lanes.stopped == []

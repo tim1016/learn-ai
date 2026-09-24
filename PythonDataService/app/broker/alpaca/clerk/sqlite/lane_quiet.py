@@ -10,7 +10,13 @@ and only this layer can read them:
   it, so it must block rather than be filtered out;
 - **the account is flat** — the broker's own position list is empty, for the
   same reason. A hand-opened position blocks and the operator closes it at the
-  broker; nothing here closes anything;
+  broker; nothing here closes anything. Flat is also the lane's *own* custody
+  (#2344): the ledger attributes no exposure, and no open episode's policy
+  declares ``blocks_lane_quiet`` — ``EXIT_NOT_FLAT``, ``EXIT_STUCK``,
+  ``POSITION_DRIFT`` and the others that say the Clerk does not know what it
+  holds. A lane whose custody still believes it holds a position would act on
+  the account again after handing it over, so a flat broker alone does not
+  answer flat. An episode with no registered policy blocks;
 - **no order intent is in flight** — ``reconcilable_effect_operations`` is
   empty account-wide. Not ``InstanceCustodyProof.unresolved_intent_refs``,
   which covers only effects in state ``unknown`` and would miss an
@@ -36,9 +42,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.reconcile import read_account_open_work
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.ports import BrokerReadPort
 
@@ -48,6 +56,11 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class AccountQuietObservation:
     """The account's answer to three of lane quiet's five conditions.
+
+    ``account_flat`` is the broker's position list *and* the lane's own
+    custody (#2344): attributed-flat, with no open lane-quiet-blocking
+    uncertainty episode. One field on the wire, so the coordinator's refusal
+    names both halves in one phrase.
 
     ``observed_at_ms`` is when the first read was issued: the earliest instant
     the answer covers, so the coordinator's freshness window ages it from the
@@ -60,12 +73,52 @@ class AccountQuietObservation:
     intents_resolved: bool
 
 
+def _episode_blocks_lane_quiet(reason_code: str) -> bool:
+    """Read the registry's declaration; an unregistered code fails closed."""
+    policy = reason_policy(reason_code)
+    return policy is None or policy.blocks_lane_quiet
+
+
+def _custody_flat(repo: ClerkSqliteRepository) -> bool:
+    """Whether the lane's own ledger holds nothing and doubts nothing (#2344).
+
+    Logs which half blocks, by count and reason code only: the coordinator
+    hears only the account-flat condition, never a symbol or a quantity.
+    """
+    # Per custody subject, never the account-wide net: +10 in one subject
+    # and -10 in another is two exposures, not flat.
+    exposed_positions = sum(
+        position_quantity_is_nonzero(quantity)
+        for quantity in repo.attributed_positions_by_subject().values()
+    )
+    open_episodes = sorted(
+        {
+            episode["reason_code"]
+            for episode in repo.active_uncertainties()
+            if _episode_blocks_lane_quiet(episode["reason_code"])
+        }
+    )
+    if exposed_positions or open_episodes:
+        logger.info(
+            "lane-quiet: the lane's custody is not flat",
+            extra={
+                "action": "lane_quiet_custody_not_flat",
+                "account_id": repo.account_id,
+                "attributed_position_count": exposed_positions,
+                "open_episode_reason_codes": open_episodes,
+            },
+        )
+        return False
+    return True
+
+
 async def _read_once(
     repo: ClerkSqliteRepository, read: BrokerReadPort
 ) -> tuple[bool, bool, bool]:
     orders, positions = await read_account_open_work(read)
     in_flight = await to_thread(repo.reconcilable_effect_operations)
-    return not orders, not positions, not in_flight
+    custody_flat = await to_thread(lambda: _custody_flat(repo))
+    return not orders, not positions and custody_flat, not in_flight
 
 
 async def observe_account_quiet(

@@ -56,7 +56,7 @@ def test_export_check_on_an_open_position_exits_2_naming_the_account(
     refusal = _lines(capsys)[-1]
     assert refusal["reason"] == "accounts_not_flat"
     assert LIVE_ACCOUNT in refusal["error"]
-    assert refusal["details"]["accounts"][0]["open"] == ["the account is not flat"]
+    assert refusal["details"]["accounts"][0]["open"] == ["the account or the lane's custody is not flat"]
 
 
 def test_export_then_import_round_trips_with_exit_0(

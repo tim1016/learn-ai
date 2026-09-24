@@ -19,6 +19,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.execution_coverage import ORDER_TOTAL_PROVEN_SUMMARY_CODE
 from app.broker.alpaca.clerk.sqlite.order_evidence import fence_fills_on_terminal_enters
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -598,3 +599,70 @@ async def test_an_order_in_the_open_snapshot_spends_no_lookup_slot(
     await reconcile_account(repo, read=read, trade=trade)
 
     assert trade.lookup_calls == [filled_ref]
+
+
+def _coverage_conflicts(repo: ClerkSqliteRepository) -> list[dict]:
+    return [
+        episode
+        for episode in repo.active_uncertainties_for_admission(strategy_instance_id=SID)
+        if episode["reason_code"] == "EXECUTION_COVERAGE_CONFLICT"
+    ]
+
+
+async def test_proving_a_coverage_conflict_leaves_the_failed_enter_fence_standing(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """#2346 x #2348: a failed ENTER for 12 fills 10 across a websocket outage.
+
+    exec-A (3) is lost in the outage; the sweep's terminal-ENTER lookup
+    recovers it as a cumulative fill and raises the fence. exec-B (7) then
+    arrives live as an exact slice the recorded fills cannot explain, raising
+    an ``EXECUTION_COVERAGE_CONFLICT``. The remainder is canceled, and the next
+    lookup folds the broker's final total (10), which proves the conflict and
+    closes it. That proof resolves only its own episode: the fence stays up,
+    widened to the full 10 by the same pass's detector.
+    """
+    repo, clock = crashed_with_exposure
+    order_ref = await _failed_enter_never_filled(repo, clock, decision_id="enter-outage")
+
+    def broker_view(status: str, filled: int, avg: float) -> BrokerOrder:
+        return _broker_order(
+            order_ref, status=status, quantity=12.0, filled_quantity=filled, filled_avg_price=avg
+        ).model_copy(update={"order_id": "broker-late-1"})
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=3.0)]),
+        trade=_LookupTrade({order_ref: broker_view("partially_filled", 3, 100.0)}),
+    )
+    fence = _fence(repo)
+    assert fence is not None
+    assert _cause_orders(fence) == [{"order_ref": order_ref, "symbol": "SPY", "filled_qty": 3.0}]
+
+    await _deliver_fill(
+        repo, broker_view("partially_filled", 10, 100.0), quantity=7, execution_id="exec-B"
+    )
+    assert len(_coverage_conflicts(repo)) == 1
+    assert _fence(repo) is not None
+
+    clock.advance(TERMINAL_ENTER_LOOKUP_RECHECK_MS)
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_LookupTrade({order_ref: broker_view("canceled", 10, 100.0)}),
+    )
+
+    assert result.verdict == "clean"
+    assert _coverage_conflicts(repo) == []
+    assert [
+        transition["summary_code"]
+        for transition in repo.transitions_for_order(order_ref)
+        if transition["transition_kind"] == "UNCERTAINTY_RESOLVED"
+    ] == [ORDER_TOTAL_PROVEN_SUMMARY_CODE]
+    assert repo.position(SID, "SPY") == pytest.approx(10.0, abs=QTY_ATOL, rel=0)
+    fence = _fence(repo)
+    assert fence is not None
+    assert _cause_orders(fence) == [{"order_ref": order_ref, "symbol": "SPY", "filled_qty": 10.0}]
+    assert not decide_capability(
+        repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id=SID
+    ).allowed

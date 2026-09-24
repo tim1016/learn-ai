@@ -1,8 +1,8 @@
 """The fleet control plane's closed refusal vocabulary (#2067).
 
-Forty-two distinct reason codes exist on the fleet surface: the 38-class
+Forty-three distinct reason codes exist on the fleet surface: the 39-class
 ``FleetControlError`` subclass closure (``FleetControlError`` itself plus
-every subclass, wherever in ``app/`` it is declared; 37 reasons, since
+every subclass, wherever in ``app/`` it is declared; 38 reasons, since
 ``FleetRegistryBackupPredatesDrain`` keeps its parent's) and 5 codes minted
 without a ``FleetControlError`` at all -- a Pydantic-typed literal
 (``qualification_market_status_unavailable``), a plain ``Exception`` used on
@@ -93,8 +93,8 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The complete fleet refusal vocabulary: the 38-class FleetControlError
-#: subclass closure (37 reasons) plus the 5 codes minted outside it. Sorted by code.
+#: The complete fleet refusal vocabulary: the 39-class FleetControlError
+#: subclass closure (38 reasons) plus the 5 codes minted outside it. Sorted by code.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
         400, "A clerk-scoped request arrived without both a broker and a clerk identity."
@@ -207,8 +207,11 @@ FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "fleet_lane_capacity_exhausted": RefusalFamily(
         503, "A lane's bounded request or stream budget could not admit the caller."
     ),
+    "fleet_presence_refused": RefusalFamily(
+        409, "A reachable coordinator refused the agent's lane identity or admission."
+    ),
     "fleet_presence_unavailable": RefusalFamily(
-        503, "The coordinator could not be reached or refused the agent's presence call."
+        503, "The coordinator could not be reached, or gave no answer about the agent's lane."
     ),
     "fleet_protocol_incompatible": RefusalFamily(
         409, "An agent and coordinator speak different fleet protocol versions."
