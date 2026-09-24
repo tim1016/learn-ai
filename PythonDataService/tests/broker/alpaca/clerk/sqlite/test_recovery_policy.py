@@ -903,6 +903,15 @@ def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
         ({"uncertainties": (_account_uncertainty("POSITION_DRIFT"),)}, "NO_STRANDED_EXIT_EPISODE"),
         (
             {
+                "uncertainties": (
+                    _bot_exit_episode(),
+                    _bot_exit_episode("EXECUTION_COVERAGE_CONFLICT"),
+                )
+            },
+            "EXPOSURE_NOT_PROVEN",
+        ),
+        (
+            {
                 "runs": (
                     ProjectedRun(
                         run_id="run-1",

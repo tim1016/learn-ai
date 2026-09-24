@@ -37,8 +37,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SafeFlattenPlanLeg,
 )
 from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
-from app.broker.alpaca.clerk.sqlite.residue_discharge import STRANDING_REASON_CODES
-from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    reason_policy,
+    residue_discharge_role,
+)
 
 RecoveryActionId = Literal[
     "reconcile_now",
@@ -744,11 +746,16 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     position is real and the cure is a flatten, not a discharge.
     """
     positions = _relevant_positions(ctx)
+    relevant = _relevant_uncertainties(ctx)
     episodes = tuple(
         uncertainty
-        for uncertainty in _relevant_uncertainties(ctx)
-        if uncertainty.scope == "CUSTODY_SUBJECT"
-        and uncertainty.reason_code in STRANDING_REASON_CODES
+        for uncertainty in relevant
+        if residue_discharge_role(uncertainty.reason_code) == "strands"
+    )
+    refusing = tuple(
+        uncertainty
+        for uncertainty in relevant
+        if residue_discharge_role(uncertainty.reason_code) == "refuses"
     )
     active_runs = _relevant_runs(ctx)
     working_orders = _working_orders(ctx)
@@ -763,6 +770,13 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason_code = "NO_STRANDED_EXIT_EPISODE"
         reason = "No open EXIT_NOT_FLAT or EXIT_STUCK episode names this bot's exposure."
         next_step = "Flatten real exposure instead of discharging it."
+    elif refusing:
+        reason_code = "EXPOSURE_NOT_PROVEN"
+        reason = (
+            "Another open uncertainty may mean the Clerk has not yet recorded a fill "
+            "that moves this residue."
+        )
+        next_step = "Resolve that uncertainty first; it may settle the residue itself."
     elif active_runs:
         reason_code = "RUN_STILL_ACTIVE"
         reason = "Stop the bot's active run before discharging its residue."
@@ -804,6 +818,7 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
                 for position in positions
             ],
             "episodes": [(episode.uncertainty_id, episode.reason_code) for episode in episodes],
+            "refusing": [(episode.uncertainty_id, episode.reason_code) for episode in refusing],
             "active_runs": [run.run_id for run in active_runs],
             "working_orders": [order.order_ref for order in working_orders],
             "reconciliation": (

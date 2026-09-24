@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from app.broker.alpaca.clerk.sqlite.facts import FACTS_SCHEMA_VERSION
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -89,6 +89,16 @@ class RedriveThenEscalate:
 AgePolicy = CauseCleared | VoidAfter | RedriveThenEscalate
 
 
+#: What an open episode means for the operator's residue discharge (#2381).
+#: ``strands``: the episode is what leaves an attributed residue the broker
+#: does not hold, and a discharge is offered for it. ``admits``: the episode
+#: doubts no fill the strategy is owed, so a discharge may proceed beside it.
+#: ``refuses`` (the default, and the answer for an unregistered code): the
+#: episode says the Clerk may not yet know a fill that would move the residue,
+#: and zeroing it now could leave a phantom position once that fill folds.
+type ResidueDischargeRole = Literal["strands", "admits", "refuses"]
+
+
 @dataclass(frozen=True)
 class ReasonPolicy:
     scope: str
@@ -129,6 +139,7 @@ class ReasonPolicy:
     # freshness gate), and a sweep's re-derive raises from fills that sweep's
     # broker snapshot already contains.
     safe_flatten_requires_later_reconciliation: bool = False
+    residue_discharge: ResidueDischargeRole = "refuses"
 
 
 def _position_drift_cause_is_valid(value: Any) -> bool:
@@ -217,6 +228,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=_position_drift_cause_is_valid,
         age=CauseCleared(),
         blocks_lane_quiet=True,
+        residue_discharge="admits",
     ),
     BROKER_SNAPSHOT_STALE_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -257,6 +269,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # = 3 module constants in exit_watchdog.py.
         age=RedriveThenEscalate(after_ms=120_000, max_count=3, escalate_to=EXIT_STUCK_REASON_CODE),
         blocks_lane_quiet=True,
+        residue_discharge="strands",
     ),
     EXIT_STUCK_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -270,6 +283,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # preserve (ADR 0048 Decision 1).
         age=CauseCleared(),
         blocks_lane_quiet=True,
+        residue_discharge="strands",
     ),
     # #2348: a fill on an ENTER already folded terminal. The Clerk keeps the
     # real position; this fences the instance against new exposure and admits
@@ -340,6 +354,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # POSITION_DRIFT, which does block -- and an order still working is
         # caught by the broker open-order read.
         blocks_lane_quiet=False,
+        residue_discharge="admits",
     ),
     STREAM_HEALTH_HOLD_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -359,6 +374,7 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=_loss_hold_cause_is_valid,
         age=CauseCleared(),
         blocks_lane_quiet=False,
+        residue_discharge="admits",
     ),
 }
 
@@ -371,6 +387,12 @@ def reason_policy(reason_code: str) -> ReasonPolicy | None:
     on, so every caller branches on it rather than catching a ``KeyError``.
     """
     return _REASON_POLICIES.get(reason_code)
+
+
+def residue_discharge_role(reason_code: str) -> ResidueDischargeRole:
+    """An episode's residue-discharge role; an unregistered code refuses (#2381)."""
+    policy = reason_policy(reason_code)
+    return "refuses" if policy is None else policy.residue_discharge
 
 
 def reason_age_policy[AgePolicyT: (CauseCleared, VoidAfter, RedriveThenEscalate)](

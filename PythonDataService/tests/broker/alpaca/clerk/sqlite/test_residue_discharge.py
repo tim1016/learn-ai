@@ -328,3 +328,51 @@ async def test_the_panel_dispatcher_discharges_a_drifted_residue_end_to_end(cloc
     healed = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
     assert healed.verdict == "clean"
     assert repo.active_uncertainties() == []
+
+
+async def test_an_uncertainty_that_doubts_a_fill_refuses_the_discharge(clocked_repo) -> None:  # noqa: F811
+    """Review of #2381: an open episode meaning the Clerk may not have recorded
+    a fill yet (here, an unknown order outcome) refuses — the late fill would
+    otherwise fold against a zeroed residue and leave a phantom short."""
+    repo, _clock = clocked_repo
+    await _stranded(repo)
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=WATCHDOG_SID,
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        headline="Order outcome unknown",
+        explanation="test: a reducing order's outcome is not yet known",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Wait for broker evidence.",
+        evidence_refs=("wd-unknown",),
+        cause_facts={},
+        severity="error",
+    )
+
+    with pytest.raises(ResidueDischargeRefused) as refused:
+        await _discharge(repo, _FakeRead(positions=[]))
+
+    assert refused.value.reason_code == "UNCERTAINTY_REFUSES_DISCHARGE"
+    assert repo.position(WATCHDOG_SID, "SPY") == 10.0
+    assert _discharges(repo) == []
+
+
+def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
+    """Pin the registry's answer, so a new cause is refused until someone decides."""
+    from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+        _REASON_POLICIES,
+        residue_discharge_role,
+    )
+
+    roles = {code: policy.residue_discharge for code, policy in _REASON_POLICIES.items()}
+
+    assert {code for code, role in roles.items() if role == "strands"} == {
+        "EXIT_NOT_FLAT",
+        "EXIT_STUCK",
+    }
+    assert {code for code, role in roles.items() if role == "admits"} == {
+        "POSITION_DRIFT",
+        "UNFOLDABLE_BROKER_ORDER",
+        "LIVE_ENVELOPE_LOSS_HOLD",
+    }
+    assert residue_discharge_role("NOT_A_REGISTERED_CODE") == "refuses"

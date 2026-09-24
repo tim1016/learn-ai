@@ -407,6 +407,29 @@ def resolve_exit_stuck_uncertainty(
     )
 
 
+def resolve_flat_exit_fences(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    evidence_refs: tuple[str, ...],
+) -> None:
+    """Close a strategy's EXIT fences once its attribution is flat in every symbol.
+
+    A stuck-EXIT escalation outlives its EXIT_NOT_FLAT origin, so the same
+    attributed-flat proof clears both, or a now-flat strategy stays barred
+    from new exposure. A strategy still holding anything keeps both.
+    """
+    attributed = repo.attributed_positions_for_strategy(strategy_instance_id)
+    if any(position_quantity_is_nonzero(quantity) for quantity in attributed.values()):
+        return
+    resolve_exit_not_flat_uncertainty(
+        repo, strategy_instance_id=strategy_instance_id, evidence_refs=evidence_refs
+    )
+    resolve_exit_stuck_uncertainty(
+        repo, strategy_instance_id=strategy_instance_id, evidence_refs=evidence_refs
+    )
+
+
 def _active_failed_enter_filled_cause(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str
 ) -> FailedEnterFilledCause | None:

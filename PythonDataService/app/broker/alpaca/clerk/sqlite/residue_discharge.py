@@ -39,19 +39,13 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
     read_account_open_work,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import (
-    EXIT_NOT_FLAT_REASON_CODE,
-    resolve_exit_not_flat_uncertainty,
-    resolve_exit_stuck_uncertainty,
-)
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_STUCK_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import resolve_flat_exit_fences
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import residue_discharge_role
 from app.broker.contract.ports import BrokerReadPort
 
 logger = logging.getLogger(__name__)
 
 ATTRIBUTED_RESIDUE_DISCHARGED = "ATTRIBUTED_RESIDUE_DISCHARGED"
-# The open episodes that strand a residue; a discharge is offered for nothing else.
-STRANDING_REASON_CODES: tuple[str, ...] = (EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE)
 
 
 class ResidueDischargeRefused(Exception):
@@ -116,17 +110,29 @@ def _discharge(
             "NO_ATTRIBUTED_RESIDUE",
             f"The Clerk attributes no {symbol} to this bot; there is nothing to discharge.",
         )
+    in_scope = [
+        episode
+        for episode in repo.active_uncertainties()
+        if episode["scope"] == "ACCOUNT_CLERK"
+        or episode["strategy_instance_id"] == strategy_instance_id
+    ]
+    refusing = sorted(
+        {
+            episode["reason_code"]
+            for episode in in_scope
+            if residue_discharge_role(episode["reason_code"]) == "refuses"
+        }
+    )
+    if refusing:
+        raise ResidueDischargeRefused(
+            "UNCERTAINTY_REFUSES_DISCHARGE",
+            f"Open {', '.join(refusing)} may mean the Clerk has not yet recorded a "
+            "fill that moves this residue; resolve it first.",
+        )
     episodes = [
         episode
-        for reason_code in STRANDING_REASON_CODES
-        if (
-            episode := repo.active_uncertainty(
-                scope="CUSTODY_SUBJECT",
-                reason_code=reason_code,
-                strategy_instance_id=strategy_instance_id,
-            )
-        )
-        is not None
+        for episode in in_scope
+        if residue_discharge_role(episode["reason_code"]) == "strands"
     ]
     if not episodes:
         raise ResidueDischargeRefused(
@@ -193,15 +199,14 @@ def _discharge(
             "sequence": committed.sequence,
         },
     )
-    attributed = repo.attributed_positions_for_strategy(strategy_instance_id)
-    if not any(position_quantity_is_nonzero(quantity) for quantity in attributed.values()):
-        evidence_refs = (f"residue_discharge:{committed.sequence}", "attributed_flat")
-        resolve_exit_not_flat_uncertainty(
-            repo, strategy_instance_id=strategy_instance_id, evidence_refs=evidence_refs
-        )
-        resolve_exit_stuck_uncertainty(
-            repo, strategy_instance_id=strategy_instance_id, evidence_refs=evidence_refs
-        )
+    # Not in the append's transaction: a crash here leaves the residue zeroed
+    # with the fences open, and the next clean reconciliation pass clears them
+    # through this same attributed-flat proof.
+    resolve_flat_exit_fences(
+        repo,
+        strategy_instance_id=strategy_instance_id,
+        evidence_refs=(f"residue_discharge:{committed.sequence}", "attributed_flat"),
+    )
     return ResidueDischargeReceipt(
         sequence=committed.sequence,
         recorded_at_ms=repo.clock(),

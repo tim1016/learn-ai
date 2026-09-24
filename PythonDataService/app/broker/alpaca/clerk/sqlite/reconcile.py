@@ -67,9 +67,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_account_hold,
     raise_uncertainty,
     resolve_account_hold,
-    resolve_exit_not_flat_uncertainty,
-    resolve_exit_stuck_uncertainty,
     resolve_failed_enter_filled_uncertainty_if_flat,
+    resolve_flat_exit_fences,
     resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
@@ -605,21 +604,9 @@ def _resolve_flat_exit_fences(
     repo: ClerkSqliteRepository, instances: list[dict]
 ) -> None:
     for instance in instances:
-        strategy_instance_id = instance["strategy_instance_id"]
-        attributed = repo.attributed_positions_for_strategy(strategy_instance_id)
-        if any(position_quantity_is_nonzero(quantity) for quantity in attributed.values()):
-            continue
-        resolve_exit_not_flat_uncertainty(
+        resolve_flat_exit_fences(
             repo,
-            strategy_instance_id=strategy_instance_id,
-            evidence_refs=("fresh_account_snapshot", "attributed_flat"),
-        )
-        # A stuck-EXIT escalation outlives its EXIT_NOT_FLAT origin; the same
-        # attributed-flat proof must clear it, or the now-flat strategy stays
-        # permanently barred from new exposure.
-        resolve_exit_stuck_uncertainty(
-            repo,
-            strategy_instance_id=strategy_instance_id,
+            strategy_instance_id=instance["strategy_instance_id"],
             evidence_refs=("fresh_account_snapshot", "attributed_flat"),
         )
 
