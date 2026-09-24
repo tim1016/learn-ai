@@ -63,7 +63,7 @@ from app.engine.live.desired_state import (
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
+from app.marketdata.feed import WARMUP_HISTORY_UNAVAILABLE, MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
     BotProcessFact,
@@ -1797,10 +1797,18 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
+            # A refused warmup never started deciding, so it is recorded under
+            # its own reason: "the feed died" would send the operator looking
+            # at a running bot's stream (#2365). Every other feed failure keeps
+            # the long-standing FEED_DEATH code the manual and panel describe.
             await self._terminal.finalize_crash(
                 binding,
                 exc,
-                reason_code="FEED_DEATH",
+                reason_code=(
+                    WARMUP_HISTORY_UNAVAILABLE
+                    if exc.reason == WARMUP_HISTORY_UNAVAILABLE
+                    else "FEED_DEATH"
+                ),
             )
             self._schedule_run_replay_receipt(binding)
         except Exception as exc:

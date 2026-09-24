@@ -675,6 +675,48 @@ async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_refused_warmup_records_its_own_reason_and_stops_the_run(tmp_path: Path) -> None:
+    """#2365: through the real ``_supervise`` -> ``finalize_crash`` path, a run
+    refused for unmet warmup is recorded under its typed reason, reaped, and
+    left STOPPED -- never resumed on its own and never shown as FEED_DEATH."""
+    feed = _FakeFeed(
+        [_bar(_T0)],
+        mode="crash",
+        error=MarketDataFeedError("no warmup history", reason="WARMUP_HISTORY_UNAVAILABLE"),
+    )
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.running is False
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.kind == "CRASHED"
+    assert view.duty_outcome.reason_code == "WARMUP_HISTORY_UNAVAILABLE"
+    assert view.desired_state == "STOPPED"
+    assert _desired_json(tmp_path)["desired_state"] == "STOPPED"
+    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == "WARMUP_HISTORY_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_other_typed_feed_refusals_keep_the_feed_death_code(tmp_path: Path) -> None:
+    feed = _FakeFeed(
+        [_bar(_T0)],
+        mode="crash",
+        error=MarketDataFeedError("minute not recovered", reason="DECISION_BAR_MISSED"),
+    )
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.reason_code == "FEED_DEATH"
+
+
+@pytest.mark.asyncio
 async def test_count_complete_interruption_keeps_the_run_running(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
