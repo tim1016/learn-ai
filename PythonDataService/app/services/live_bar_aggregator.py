@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
+from app.broker.ibkr.auto_reconnect_monitor import get_monitor, realtime_feed_healthy
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import stream_minute_bars, stream_raw_5s_bars
 from app.broker.ibkr.client import IbkrClient, NotConnectedError, get_client
@@ -465,18 +466,21 @@ class LiveBarAggregator:
     def _resolve_client(self) -> IbkrClient:
         """Fetch the public broker client. ``get_client`` itself raises
         ``NotConnectedError`` if the lifespan event never installed one;
-        we add a liveness check on top so a stale client or a dead feed also
-        surfaces.
+        we add the shared readiness check on top so a stale client, a dead
+        feed or an unfinished reconnect also surfaces.
         """
         client = get_client()
-        # ``require_live``, not ``require_connected``: a TWS 1100 leaves the
-        # socket up with the feed dead. Opening a line then would spend a slot
-        # of the process-wide real-time-bar pacer the bots share, only for the
-        # line's liveness gate to cancel it; a chart polled every second
-        # empties that budget in under a minute and starves the bots' own
-        # resubscribe after the 1102 (#2354). The next poll after the restore
-        # opens the line.
-        client.require_live()
+        # The bots' readiness rule, not ``require_connected``: during a TWS
+        # 1100 the socket stays up with the feed dead, and after the 1102 the
+        # reconnect monitor is still restoring. Opening a line in either window
+        # spends a slot of the process-wide real-time-bar pacer the bots share;
+        # a chart polled every second empties that budget in under a minute
+        # and starves the bots' own resubscribe (#2354). The next poll after
+        # the monitor reports HEALTHY opens the line.
+        if not realtime_feed_healthy(client, get_monitor()):
+            raise NotConnectedError(
+                "public broker feed not live (TWS 1100 or reconnect still restoring)"
+            )
         return client
 
 

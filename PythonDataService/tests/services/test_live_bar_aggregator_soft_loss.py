@@ -25,9 +25,11 @@ Faked edges only:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -36,7 +38,13 @@ import app.broker.ibkr.bars as bars_mod
 import app.marketdata.ibkr_continuity as cont_mod
 import app.marketdata.ibkr_feed as feed_mod
 import app.services.live_bar_aggregator as agg_mod
-from app.marketdata.feed import ContinuityEventRef, ContinuityPolicy, MarketDataFeedError, SubstitutionRefusal
+from app.marketdata.feed import (
+    ContinuityEventRef,
+    ContinuityPolicy,
+    FeedContinuityEvent,
+    MarketDataFeedError,
+    SubstitutionRefusal,
+)
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
 from app.services.decision_session import RunDecisionSession
@@ -54,7 +62,7 @@ def et_ms(h: int, m: int, s: int = 0) -> int:
 class World:
     def __init__(self, start_ms: int) -> None:
         self.now_ms = start_ms
-        self.lines: list[dict] = []
+        self.lines: list[dict[str, Any]] = []
         self.req_log: list[tuple[int, str, bool]] = []  # (ms, symbol, use_rth)
         self.cancels = 0
         self.qualify_calls = 0
@@ -65,20 +73,20 @@ class FakeIB:
         self.w = world
         self.c = client
 
-    async def qualifyContractsAsync(self, contract):
+    async def qualifyContractsAsync(self, contract: Any) -> list[Any]:
         self.w.qualify_calls += 1
         contract.conId = CONIDS[contract.symbol]
         return [contract]
 
-    def reqRealTimeBars(self, contract, bar_size, what, useRTH=True):
-        lst: list = []
+    def reqRealTimeBars(self, contract: Any, bar_size: int, what: str, useRTH: bool = True) -> list[Any]:
+        lst: list[Any] = []
         self.w.lines.append(
             {"symbol": contract.symbol, "bars": lst, "active": True, "gen": self.c.connection_generation}
         )
         self.w.req_log.append((self.w.now_ms, contract.symbol, useRTH))
         return lst
 
-    def cancelRealTimeBars(self, lst):
+    def cancelRealTimeBars(self, lst: list[Any]) -> None:
         self.w.cancels += 1
         for line in self.w.lines:
             if line["bars"] is lst:
@@ -102,10 +110,15 @@ class FakeClient:
         if not self.connected:
             raise agg_mod.NotConnectedError("IBKR client is not connected.")
 
-    def require_live(self) -> None:
-        self.require_connected()
-        if self.connection_lost:
-            raise agg_mod.NotConnectedError("IBKR connectivity lost (TWS error 1100).")
+
+class FakeMonitor:
+    """The reconnect monitor's published recovery state -- all the readiness rule reads."""
+
+    def __init__(self) -> None:
+        self.recovery_state = "HEALTHY"
+
+
+type Rig = tuple[World, FakeClient, bars_mod._RealtimeBarRequestPacer, FakeMonitor]
 
 
 def market_tick(world: World, client: FakeClient) -> None:
@@ -123,10 +136,11 @@ def market_tick(world: World, client: FakeClient) -> None:
 
 
 @pytest.fixture
-def rig(monkeypatch: pytest.MonkeyPatch):
-    def make(start_ms: int):
+def rig(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], Rig]:
+    def make(start_ms: int) -> Rig:
         world = World(start_ms)
         client = FakeClient(world)
+        monitor = FakeMonitor()
         pacer = bars_mod._RealtimeBarRequestPacer(
             clock=lambda: world.now_ms / 1000, sleep=lambda _s: asyncio.sleep(0.002)
         )
@@ -135,9 +149,11 @@ def rig(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(agg_mod, "get_client", lambda: client)
         for mod in (bars_mod, cont_mod, feed_mod):
             monkeypatch.setattr(mod, "now_ms_utc", lambda: world.now_ms)
-        monkeypatch.setattr(cont_mod, "get_monitor", lambda: None)
+        # The bots and the chart read the same monitor through their own seams.
+        monkeypatch.setattr(cont_mod, "get_monitor", lambda: monitor)
+        monkeypatch.setattr(agg_mod, "get_monitor", lambda: monitor)
         monkeypatch.setattr(cont_mod, "WAIT_POLL_S", 0.002)
-        return world, client, pacer
+        return world, client, pacer, monitor
 
     return make
 
@@ -150,7 +166,15 @@ def gallery_hub(aggregator: LiveBarAggregator, symbols: list[str]) -> GalleryHub
     )
 
 
-async def run_seconds(world, client, n, *, hub=None, outage=None, on_second=None, step_real_s=0.004):
+async def run_seconds(
+    world: World,
+    client: FakeClient,
+    n: int,
+    *,
+    hub: GalleryHub | None = None,
+    outage: tuple[int, int] | None = None,
+    step_real_s: float = 0.004,
+) -> None:
     """Advance virtual time 1 s at a time; the gallery stream polls once per second (router loop)."""
     for _ in range(n):
         world.now_ms += 1_000
@@ -159,8 +183,6 @@ async def run_seconds(world, client, n, *, hub=None, outage=None, on_second=None
         market_tick(world, client)
         if hub is not None:
             await hub.build_update({}, known_sids=set())
-        if on_second is not None:
-            on_second()
         for _ in range(5):
             await asyncio.sleep(0)
         await asyncio.sleep(step_real_s)
@@ -169,42 +191,62 @@ async def run_seconds(world, client, n, *, hub=None, outage=None, on_second=None
 # --------------------------------------------------------------------------- A: socket down
 
 
-async def test_a_socket_down_gallery_sends_nothing_to_ibkr(rig) -> None:
-    world, client, pacer = rig(et_ms(10, 0))
+async def test_a_socket_down_gallery_sends_nothing_to_ibkr(rig: Callable[[int], Rig]) -> None:
+    world, client, _pacer, _monitor = rig(et_ms(10, 0))
     agg = LiveBarAggregator()
     hub = gallery_hub(agg, ["SPY", "QQQ", "IWM"])
     client.connected = False
     await run_seconds(world, client, 60, hub=hub)
-    assert len(world.req_log) == 0 and len(pacer._request_times) == 0
+    assert world.req_log == []
     await agg.shutdown()
+
+
+async def _assert_a_bot_line_is_admitted_at_once(pacer: bars_mod._RealtimeBarRequestPacer) -> None:
+    """The bots' post-restore resubscribe must find a pacer slot free, without waiting."""
+    await pacer.acquire(max_wait_s=0)
 
 
 # --------------------------------------------------------------------------- B: 1100 soft loss
 
 
 @pytest.mark.parametrize("symbols", [["SPY"], ["SPY", "QQQ", "IWM"]])
-async def test_b_1100_gallery_does_not_burn_the_shared_pacer(rig, symbols) -> None:
-    world, client, pacer = rig(et_ms(10, 0))
+async def test_b_1100_gallery_leaves_the_bots_a_line(
+    rig: Callable[[int], Rig], symbols: list[str]
+) -> None:
+    world, client, pacer, _monitor = rig(et_ms(10, 0))
     agg = LiveBarAggregator()
     hub = gallery_hub(agg, symbols)
     await run_seconds(world, client, 10, hub=hub)  # healthy: lines open once
     healthy_reqs = len(world.req_log)
     assert healthy_reqs == len(symbols)  # the 1m and 5s streams share one line
     t0 = world.now_ms
-    exhausted_at = None
 
-    def watch() -> None:
-        nonlocal exhausted_at
-        if exhausted_at is None and len(pacer._request_times) >= 60:
-            exhausted_at = world.now_ms
+    await run_seconds(world, client, 60, hub=hub, outage=(t0, t0 + 60_000))
 
-    await run_seconds(world, client, 60, hub=hub, outage=(t0, t0 + 60_000), on_second=watch)
     # Only the line a stream was already opening as the 1100 began reaches
-    # IBKR, once per symbol; before #2354 every one-second poll restarted it
-    # and the budget hit 60/60 within a minute.
-    assert exhausted_at is None
+    # IBKR, once per symbol; before #2354 every one-second poll restarted it,
+    # the pacer ran out within a minute and a bot's resubscribe had to wait.
     assert len(world.req_log) - healthy_reqs <= len(symbols)
-    assert len(pacer._request_times) <= 2 * len(symbols)
+    await _assert_a_bot_line_is_admitted_at_once(pacer)
+    await agg.shutdown()
+
+
+async def test_b_reconnect_still_restoring_opens_no_chart_line(rig: Callable[[int], Rig]) -> None:
+    """After the 1102 the monitor restores before it reports HEALTHY; the bots wait
+    for HEALTHY to resubscribe, so a chart must not take lines ahead of them."""
+    world, client, pacer, monitor = rig(et_ms(10, 0))
+    agg = LiveBarAggregator()
+    hub = gallery_hub(agg, ["SPY"])
+    monitor.recovery_state = "RESTORING"
+
+    await run_seconds(world, client, 30, hub=hub)
+
+    assert world.req_log == []
+    assert agg.status_5s("SPY").status == "errored"
+    monitor.recovery_state = "HEALTHY"
+    await run_seconds(world, client, 3, hub=hub)
+    assert [symbol for _, symbol, _ in world.req_log] == ["SPY"]
+    await _assert_a_bot_line_is_admitted_at_once(pacer)
     await agg.shutdown()
 
 
@@ -217,19 +259,25 @@ def _next_trigger_1m(last_end: int) -> int:
 
 class Sink:
     def __init__(self) -> None:
-        self.events = []
+        self.events: list[FeedContinuityEvent] = []
 
-    async def __call__(self, event):
+    async def __call__(self, event: FeedContinuityEvent) -> ContinuityEventRef:
         self.events.append(event)
         return ContinuityEventRef(run_id="run-1", evidence_seq=len(self.events))
 
 
-async def _bot_scenario(rig, *, with_gallery: bool, gallery_symbols: list[str], outage=None):
+async def _bot_scenario(
+    rig: Callable[[int], Rig],
+    *,
+    with_gallery: bool,
+    gallery_symbols: list[str],
+    outage: tuple[int, int],
+) -> dict[str, Any]:
     """RTH-kind run (streams use_rth=False, sees PRE minutes) on SPY from 09:05 ET.
 
     A TWS 1100 soft loss before the open, restored (1102) before 09:30. Gallery shows SPY.
     """
-    world, client, _pacer = rig(et_ms(9, 5))
+    world, client, _pacer, _monitor = rig(et_ms(9, 5))
     feed = IbkrMarketDataFeed(client)
     sink = Sink()
     policy = ContinuityPolicy(
@@ -239,7 +287,7 @@ async def _bot_scenario(rig, *, with_gallery: bool, gallery_symbols: list[str], 
         record_event=sink,
     )
     delivered: list[int] = []
-    outcome: dict = {}
+    outcome: dict[str, Any] = {}
 
     async def bot() -> None:
         try:
@@ -252,14 +300,17 @@ async def _bot_scenario(rig, *, with_gallery: bool, gallery_symbols: list[str], 
     agg = LiveBarAggregator()
     hub = gallery_hub(agg, gallery_symbols) if with_gallery else None
     task = asyncio.create_task(bot())
-    outage = outage or (et_ms(9, 24, 2), et_ms(9, 25, 2))
     await run_seconds(world, client, 35 * 60, hub=hub, outage=outage)
     task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    # Only the cancellation is expected: any other failure of the bot task is a
+    # test failure, never a silently passing "recovery".
+    (result,) = await asyncio.gather(task, return_exceptions=True)
+    if not isinstance(result, asyncio.CancelledError) and result is not None:
+        raise result
     await agg.shutdown()
     bot_reqs = [(ms, s) for ms, s, rth in world.req_log if not rth]
 
-    def fmt(ms):
+    def fmt(ms: int) -> str:
         return datetime.fromtimestamp(ms / 1000, tz=ET).strftime("%H:%M:%S")
 
     return {
@@ -282,14 +333,14 @@ OUTAGES = {
 
 @pytest.mark.slow
 @pytest.mark.parametrize("name", list(OUTAGES))
-async def test_c_baseline_no_gallery_bot_recovers(rig, name) -> None:
+async def test_c_baseline_no_gallery_bot_recovers(rig: Callable[[int], Rig], name: str) -> None:
     r = await _bot_scenario(rig, with_gallery=False, gallery_symbols=[], outage=OUTAGES[name])
     assert r["outcome"] is None and r["delivered_rth"] >= 9
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("name", list(OUTAGES))
-async def test_c_with_gallery_bot_still_recovers(rig, name) -> None:
+async def test_c_with_gallery_bot_still_recovers(rig: Callable[[int], Rig], name: str) -> None:
     r = await _bot_scenario(rig, with_gallery=True, gallery_symbols=["SPY"], outage=OUTAGES[name])
     # Before #2354 the bot's post-1102 resubscribe found the pacer emptied by the gallery.
     assert r["outcome"] is None and r["delivered_rth"] >= 9, r

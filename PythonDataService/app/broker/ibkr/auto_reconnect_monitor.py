@@ -738,6 +738,23 @@ def get_monitor() -> AutoReconnectMonitor | None:
     return _monitor
 
 
+def realtime_feed_healthy(
+    client: IbkrClient, monitor: AutoReconnectMonitor | None
+) -> bool:
+    """Whether a new real-time-bar line may be opened on ``client`` now.
+
+    The one readiness rule every line opener shares: the socket is up, TWS
+    reports no 1100, and the reconnect monitor (when installed) has finished
+    restoring. A bot's continuity loop waits on it before resubscribing, and a
+    chart line refuses on it (#2354), so a chart never spends the shared
+    real-time-bar pacer ahead of the bots' post-restore resubscribe. The
+    monitor is a parameter so each caller keeps its own lookup seam.
+    """
+    if not client.is_connected() or client.connection_lost:
+        return False
+    return monitor is None or monitor.recovery_state == "HEALTHY"
+
+
 def set_monitor(monitor: AutoReconnectMonitor | None) -> None:
     global _monitor
     _monitor = monitor

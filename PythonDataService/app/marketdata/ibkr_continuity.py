@@ -17,7 +17,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
-from app.broker.ibkr.auto_reconnect_monitor import get_monitor
+from app.broker.ibkr.auto_reconnect_monitor import get_monitor, realtime_feed_healthy
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.bars import (
     IBKRBarRequestDeadlineExceeded,
@@ -105,10 +105,7 @@ class ResolvedBar:
 
 
 def _healthy(client: IbkrClient) -> bool:
-    if not client.is_connected() or client.connection_lost:
-        return False
-    monitor = get_monitor()
-    return monitor is None or monitor.recovery_state == "HEALTHY"
+    return realtime_feed_healthy(client, get_monitor())
 
 
 def _interruption_cause(exc: IBKRBarStreamError) -> InterruptionCause:
