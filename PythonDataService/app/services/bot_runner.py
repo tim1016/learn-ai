@@ -254,6 +254,12 @@ class LaneStopOutcome:
     still_running: bool
 
 
+def _release_run_owner(run_owner: asyncio.Future[None]) -> None:
+    """Tell the Clerk this process no longer holds the run (#2369)."""
+    if not run_owner.done():
+        run_owner.set_result(None)
+
+
 def _lane_stop_refusal(
     strategy_instance_id: str, run_id: str | None, message: str, detail: str | None
 ) -> LaneStopRefusal:
@@ -789,13 +795,19 @@ class BotTaskRegistry:
             binding.strategy_instance_id,
             lifecycle_repo.read(),
         )
+        # What holds this run in the process until its supervise task has
+        # ended; the Clerk's sweep retires the run once it is done (#2369).
+        run_owner: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         try:
-            await register_alpaca_duty_run(binding, admission_snapshot=admission_snapshot)
+            await register_alpaca_duty_run(
+                binding, admission_snapshot=admission_snapshot, run_owner=run_owner
+            )
         except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
             raise RunAdmissionRefusedError(
                 str(exc),
                 detail="Refresh Clerk custody before starting an Alpaca bot.",
             ) from exc
+        task: asyncio.Task[None] | None = None
         try:
             self._bindings.record_launch(binding, launch_reason=reason)
             self._desired_repo(binding.strategy_instance_id).set(
@@ -820,6 +832,7 @@ class BotTaskRegistry:
                 self._supervise(binding, feed, run_gate),
                 name=f"bot:{binding.strategy_instance_id}",
             )
+            task.add_done_callback(lambda _task: _release_run_owner(run_owner))
             managed = ManagedBot(
                 binding=binding,
                 task=task,
@@ -834,6 +847,10 @@ class BotTaskRegistry:
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
         except BaseException as exc:
+            if task is None:
+                # No supervise task ever held the run, so nothing else will
+                # let the owner go.
+                _release_run_owner(run_owner)
             cleanup_proven = False
             try:
                 await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")

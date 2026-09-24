@@ -344,6 +344,8 @@ async def compose_repository_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=on_result,
+            # Retires a run whose in-process runner is gone (#2369).
+            run_ownership=facade.run_ownership,
             # What the sweep's stuck-EXIT watchdog prices an extended-hours
             # re-drive limit from — the facade's sealed policy (re-resolved
             # per pass so a re-arm is picked up) and its live top-of-book

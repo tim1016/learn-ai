@@ -409,6 +409,8 @@ async def select_synthetic_clerk_runtime(
             # verdict is what lets pure panel reads project real custody
             # instead of answering `stale` forever (#1776 WP2).
             on_result=facade.publish_sweep_reconciliation,
+            # Retires a run whose in-process runner is gone (#2369).
+            run_ownership=facade.run_ownership,
             # Deliberately no extended-hours re-drive pricing inputs here
             # (PR #2230 review): a ``sim:`` authority can declare a window —
             # ``synthetic_broker`` copies the environment's — and a process

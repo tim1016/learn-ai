@@ -222,6 +222,10 @@ async def start_run(
     """Reserve and admit a Start command. Idempotent on
     ``(account_id, strategy_instance_id, lifecycle_run_id)`` — the frontend
     mints ``lifecycle_run_id`` once and resends the same value on retry."""
+    # A run started here has no in-process runner holding it, so the
+    # reconciliation sweep retires it, fail closed, after one pass's grace
+    # (#2369, ``run_ownership``). A bot run is admitted through the bot
+    # registry, which registers the run's owner.
     repo = await _repo(account_id)
     try:
         submission = await asyncio.to_thread(
