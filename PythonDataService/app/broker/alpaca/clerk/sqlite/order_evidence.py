@@ -84,6 +84,7 @@ __all__ = [
     "entry_never_accepted_durably",
     "entry_order_symbol",
     "fence_fills_on_terminal_enters",
+    "fold_enter_unfilled_if_proven",
     "fold_entry_never_accepted",
     "fold_failed",
     "fold_order_acknowledgement",
@@ -583,6 +584,29 @@ def _fold_enter_unfilled_if_proven(
         why=why,
         transition_kind="ENTER_UNFILLED",
     )
+
+
+def fold_enter_unfilled_if_proven(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+) -> None:
+    """The ``trade_updates`` sink's entry to the one ``ENTER_UNFILLED`` fold (#2306).
+
+    A websocket frame folds its acknowledgement through
+    :func:`fold_order_acknowledgement` rather than :func:`fold_order_evidence`
+    (no cumulative fill math from an embedded aggregate), so it reaches the
+    proven-unfilled fold here. Call it after that acknowledgement, with the
+    same effect in charge. Without it a cancel the websocket saw first left
+    the ENTER ``in_progress`` with ``broker_state=canceled`` -- outside every
+    reconciliation read, so nothing ever revisited it.
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    order_ref = order.client_order_id
+    assert order_ref is not None
+    _fold_enter_unfilled_if_proven(repo, effect=effect, order=order, order_ref=order_ref)
 
 
 def fold_order_submission_acknowledgement(
