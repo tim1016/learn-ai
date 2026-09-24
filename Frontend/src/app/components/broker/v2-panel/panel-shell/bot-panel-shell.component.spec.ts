@@ -1444,6 +1444,86 @@ describe('BotPanelShellComponent', () => {
     expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  describe('market tape price (#2407)', () => {
+    function tapeSnapshot(day: number, min: number | null) {
+      const bar = (close: number) => ({ open: close, high: close, low: close, close, volume: 0, vwap: close });
+      return of({
+        success: true,
+        snapshot: {
+          ticker: 'QQQ',
+          day: bar(day),
+          prevDay: bar(515),
+          min: min === null ? null : { ...bar(min), accumulatedVolume: 0, timestamp: null },
+          todaysChange: -2.06,
+          todaysChangePercent: -0.4,
+          updated: 1_753_800_001_000,
+        },
+        error: null,
+      });
+    }
+
+    async function renderTape() {
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: mockService },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    const tapePrices = () =>
+      [...document.querySelectorAll('.ticker-quote__price')].map((el) => el.textContent?.trim());
+
+    afterEach(() => marketDataMock.getStockSnapshot.mockClear());
+
+    it('does not render a zero day bar as a $0.00 price', async () => {
+      marketDataMock.getStockSnapshot.mockReturnValueOnce(tapeSnapshot(0, 0));
+
+      await renderTape();
+
+      expect(tapePrices()).not.toContain('$0.00');
+      expect(screen.queryByText('-0.40%')).toBeNull();
+    });
+
+    it('falls back to the minute bar while the day bar is still zero', async () => {
+      marketDataMock.getStockSnapshot.mockReturnValueOnce(tapeSnapshot(0, 512.34));
+
+      await renderTape();
+
+      expect(tapePrices()).toContain('$512.34');
+    });
+
+    it('re-reads the snapshot so an empty read at the open heals', async () => {
+      // The panel's live store does not load under fake timers, so the test
+      // fires the shell's own snapshot cadence directly.
+      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+      try {
+        marketDataMock.getStockSnapshot
+          .mockReturnValueOnce(tapeSnapshot(0, 0))
+          .mockReturnValueOnce(tapeSnapshot(513.21, 513.1));
+        const fixture = await renderTape();
+        expect(tapePrices()).not.toContain('$513.21');
+        const refresh = setIntervalSpy.mock.calls.find(([, ms]) => ms === 60_000)?.[0];
+        if (typeof refresh !== 'function') throw new Error('Expected a 60 s snapshot refresh.');
+
+        refresh();
+        await fixture.whenStable();
+        fixture.detectChanges();
+
+        expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(2);
+        expect(tapePrices()).toContain('$513.21');
+      } finally {
+        setIntervalSpy.mockRestore();
+      }
+    });
+  });
+
   it('loads previous runs only while the operator lens is mounted', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },

@@ -65,6 +65,7 @@ import {
   LANE_FENCE_REFRESH_FAILED_MESSAGE,
 } from '../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../fleet/open-lane-fence';
+import type { StockTickerSnapshot } from '../../../../graphql/types';
 import { MarketDataService } from '../../../../services/market-data.service';
 import { WorkspaceTitleContextService } from '../../../../shell/workspace-title-context.service';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
@@ -107,6 +108,20 @@ interface PreparedSafeFlatten {
 
 /** An extended-hours ticket re-reads the live quote this often while open (#2007). */
 const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
+
+/** The market-tape header re-reads its delayed Polygon snapshot this often, so
+ * an empty read around the open heals without a page reload (#2407). */
+const MARKET_SNAPSHOT_REFRESH_MS = 60_000;
+
+/** The snapshot's latest price, or null when it has none. Polygon reports an
+ * unpopulated bar as zeros (the day bar before the delayed plan's first print),
+ * and a zero is not a price. */
+function snapshotPrice(snapshot: StockTickerSnapshot | null): number | null {
+  for (const close of [snapshot?.day?.close, snapshot?.min?.close]) {
+    if (close !== null && close !== undefined && close > 0) return close;
+  }
+  return null;
+}
 
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
@@ -356,8 +371,8 @@ export class BotPanelShellComponent {
     const snapshot = this.marketSnapshot.hasValue()
       ? this.marketSnapshot.value().snapshot
       : null;
-    const price = snapshot?.day?.close ?? snapshot?.min?.close;
-    if (price === null || price === undefined) return null;
+    const price = snapshotPrice(snapshot);
+    if (price === null) return null;
     return {
       ticker: snapshot?.ticker ?? this.panel()?.symbol ?? '',
       price,
@@ -419,6 +434,10 @@ export class BotPanelShellComponent {
       }
     }, 5_000);
     this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
+    const snapshotPollTimer = setInterval(() => {
+      if (!this.marketSnapshot.isLoading()) this.marketSnapshot.reload();
+    }, MARKET_SNAPSHOT_REFRESH_MS);
+    this.destroyRef.onDestroy(() => clearInterval(snapshotPollTimer));
     effect(() => {
       const target = this.target();
       void this.liveStore.start({
