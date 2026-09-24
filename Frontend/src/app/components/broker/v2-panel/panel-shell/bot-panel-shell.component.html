@@ -12,7 +12,9 @@
       <app-timestamp-display [value]="stall.last_produced_at_ms" mode="local" />
     </p>
   </section>
-} @else if (!isLoaded()) {
+}
+
+@if (!isLoaded()) {
   <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
     <span class="loading-text">Loading bot control…</span>
   </div>

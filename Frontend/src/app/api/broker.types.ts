@@ -30198,7 +30198,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description The producer has not published its first complete snapshot. */
+            /** @description The producer has not published a complete snapshot, or its last refresh failed. A stalled producer still opens the stream, which reports the stall as a typed `stale` event. */
             503: {
                 headers: {
                     [name: string]: unknown;

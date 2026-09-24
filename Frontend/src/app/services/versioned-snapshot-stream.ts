@@ -50,6 +50,9 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
           callbacks.onMalformedSnapshot(`${label} returned an invalid snapshot.`);
           return;
         }
+        // A producer recovering from a stall republishes its snapshot even when
+        // nothing changed, so a repeated epoch:version id is expected here: it
+        // is the signal that ends a `stale` notice, not a duplicate to drop.
         callbacks.onSnapshot(parsed);
       } catch (error) {
         callbacks.onMalformedSnapshot(

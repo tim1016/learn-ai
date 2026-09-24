@@ -734,7 +734,12 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
     )
 
     class _Hub:
-        async def snapshot(self, *, allow_stalled: bool = False) -> BotPanelLiveSnapshot:
+        strategy_instance_id = SID
+        stream_epoch = "epoch-new"
+        surface_version = 7
+        is_available = True
+
+        async def snapshot(self) -> BotPanelLiveSnapshot:
             return snapshot
 
         def stall(self) -> None:
@@ -792,8 +797,9 @@ async def test_stalled_live_projection_producer_is_served_stale_never_live(
     assembly awaits an event, as a hung SQLite/executor read would).
     """
     live_projection.reset_live_projection_hubs_for_testing()
-    clock = {"now_ms": _T0}
+    clock = {"now_ms": _T0, "monotonic": 1_000.0}
     monkeypatch.setattr(surface_hub, "now_ms_utc", lambda: clock["now_ms"])
+    monkeypatch.setattr(surface_hub, "monotonic", lambda: clock["monotonic"])
 
     async def fake_chart(sid, symbol, fills, *, resolution, now_ms):  # type: ignore[no-untyped-def]
         return ChartLiveResponse(
@@ -831,6 +837,7 @@ async def test_stalled_live_projection_producer_is_served_stale_never_live(
         live_projection.schedule_live_projection_refresh("alpaca", ACCT, SID)
         await asyncio.wait_for(producer_hung.wait(), timeout=2.0)
         clock["now_ms"] += 60_000
+        clock["monotonic"] += 60.0
 
         with pytest.raises(HTTPException) as refused:
             await broker_v2_panel.get_live_snapshot_scoped("alpaca", ACCT, SID, "5s")

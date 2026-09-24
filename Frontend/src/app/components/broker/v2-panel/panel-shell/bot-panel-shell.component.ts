@@ -146,6 +146,7 @@ const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
   providers: [BotPanelLiveStore],
   host: {
     '[class.bot-panel-shell--trader]': "activeLens() === 'trader'",
+    '[class.is-stale]': 'liveStall() !== null',
   },
 })
 export class BotPanelShellComponent {
@@ -317,7 +318,8 @@ export class BotPanelShellComponent {
   });
   protected readonly liveStreamStatus = this.liveStore.status;
   /** The server's typed stale notice while the panel producer is stalled
-   * (#2353). The frozen snapshot is withheld from view, never shown as live. */
+   * (#2353). The frozen snapshot stays visible, dimmed and under the notice,
+   * so its controls keep working: every action is re-checked by the server. */
   protected readonly liveStall = this.liveStore.stall;
 
   private readonly runLifecycle = computed(() => {
@@ -395,7 +397,7 @@ export class BotPanelShellComponent {
   protected readonly histChartFailed = computed(() => this.histChart.error() !== undefined);
 
   protected readonly isLoaded = computed(
-    () => this.panel() !== null && this.profile.hasValue() && this.liveStall() === null,
+    () => this.panel() !== null && this.profile.hasValue(),
   );
 
   private lensUnregister: (() => void) | null = null;
@@ -728,7 +730,8 @@ export class BotPanelShellComponent {
     try {
       await this.liveStore.refresh();
       if (requestIdentity !== this.routeIdentity()) return;
-      const execute = this.presentedAction('execute_safe_flatten');
+      const execute = await this.currentExecuteSafeFlatten(prepared.target, prepared.sid);
+      if (requestIdentity !== this.routeIdentity()) return;
       if (execute === undefined) {
         throw new Error('This bot no longer presents a safe flatten; refresh and prepare again.');
       }
@@ -787,6 +790,18 @@ export class BotPanelShellComponent {
   /** The named action as the panel presents it right now, with its current token. */
   private presentedAction(actionId: PanelAction['action_id']): PanelAction | undefined {
     return this.panel()?.actions.find((candidate) => candidate.action_id === actionId);
+  }
+
+  /** The execute token comes from a live read: while the live projection is
+   * stalled (#2353) the snapshot's token is frozen, so it is read from the
+   * panel endpoint, which does not go through the stalled producer. */
+  private async currentExecuteSafeFlatten(
+    target: ResourceTarget,
+    sid: string,
+  ): Promise<PanelAction | undefined> {
+    if (this.liveStore.stall() === null) return this.presentedAction('execute_safe_flatten');
+    const panel = await this.panelSvc.getPanel(target, sid);
+    return panel.actions.find((candidate) => candidate.action_id === 'execute_safe_flatten');
   }
 
   private commandTarget(target: ResourceTarget): ResourceTarget {

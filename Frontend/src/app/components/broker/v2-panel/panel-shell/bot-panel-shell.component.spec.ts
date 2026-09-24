@@ -739,42 +739,91 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('withholds the frozen panel behind the server stale notice while the producer is stalled (#2353)', async () => {
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService }],
-    });
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
-
-    emitOnLiveStream('stale', JSON.stringify({
+  describe('while the live producer is stalled (#2353)', () => {
+    const STALL = {
       reason: 'PRODUCER_STALLED',
       message: 'The live panel stopped updating.',
       why: 'The data plane has not completed a panel refresh in over 20 seconds.',
-      next_action: 'Do not act on the last values shown.',
+      next_action: 'The values shown are frozen; the controls still work.',
       last_produced_at_ms: 1_753_800_000_000,
       observed_at_ms: 1_753_800_060_000,
-    }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    } as const;
 
-    const notice = screen.getByRole('alert', { name: 'The live panel stopped updating.' });
-    expect(within(notice).getByText('Do not act on the last values shown.')).toBeTruthy();
-    expect(within(notice).getByText(
-      formatTimestampDisplay(1_753_800_000_000, { mode: 'local' }),
-      { exact: false },
-    )).toBeTruthy();
-    expect(screen.queryByRole('article', { name: 'Market tape for QQQ' })).toBeNull();
-    expect(screen.queryByText('Loading bot control…')).toBeNull();
+    function resumableSnapshot(): BotPanelLiveSnapshot {
+      return liveSnapshot({
+        ...PANEL,
+        health: { ...PANEL.health, running: false },
+        actions: [
+          {
+            action_id: 'resume',
+            label: 'Resume',
+            explanation: 'Resume evaluating bars.',
+            enabled: true,
+            blockers: [],
+            confirmation: null,
+            revision: 1,
+            concurrency_token: 'start-token',
+          },
+        ],
+        primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      });
+    }
 
-    emitOnLiveStream('snapshot', JSON.stringify(liveSnapshot()));
-    await fixture.whenStable();
-    fixture.detectChanges();
+    async function renderShell(): Promise<ComponentFixture<BotPanelShellComponent>> {
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService }],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return fixture;
+    }
 
-    expect(screen.queryByRole('alert', { name: 'The live panel stopped updating.' })).toBeNull();
-    expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
+    it('shows the server notice above the frozen panel and keeps its controls', async () => {
+      mockService.getLiveSnapshot.mockResolvedValueOnce(resumableSnapshot());
+      const fixture = await renderShell();
+
+      emitOnLiveStream('stale', JSON.stringify(STALL));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const notice = screen.getByRole('alert', { name: 'The live panel stopped updating.' });
+      expect(within(notice).getByText(STALL.next_action)).toBeTruthy();
+      expect(within(notice).getByText(
+        formatTimestampDisplay(STALL.last_produced_at_ms, { mode: 'local' }),
+        { exact: false },
+      )).toBeTruthy();
+      expect(fixture.nativeElement.classList.contains('is-stale')).toBe(true);
+      expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+
+      emitOnLiveStream('snapshot', JSON.stringify(resumableSnapshot()));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(screen.queryByRole('alert', { name: 'The live panel stopped updating.' })).toBeNull();
+      expect(fixture.nativeElement.classList.contains('is-stale')).toBe(false);
+    });
+
+    it('keeps the action receipt when the post-action refresh finds the producer stalled', async () => {
+      mockService.getLiveSnapshot
+        .mockResolvedValueOnce(resumableSnapshot())
+        .mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: STALL } }));
+      const fixture = await renderShell();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      for (let step = 0; step < 4; step += 1) {
+        await fixture.whenStable();
+        fixture.detectChanges();
+      }
+
+      expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('alert', { name: 'The live panel stopped updating.' })).toBeTruthy();
+      expect(screen.getByText('Bot start requested.')).toBeTruthy();
+      expect(screen.getByText('receipt-001')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    });
   });
 
   it('shows loading state initially then renders the trader lens', async () => {
@@ -1157,6 +1206,49 @@ describe('BotPanelShellComponent', () => {
       expect(mockService.runBotAction).not.toHaveBeenCalled();
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
         .toBeNull();
+      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+    });
+
+    it('takes the execute token from a live panel read while the live projection is stalled (#2353)', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValue(EXTENDED_CHECK_WITH_READING(observedAtMs));
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+
+      mockService.getLiveSnapshot.mockRejectedValue(new HttpErrorResponse({
+        status: 503,
+        error: {
+          detail: {
+            reason: 'PRODUCER_STALLED',
+            message: 'The live panel stopped updating.',
+            why: 'The data plane has not completed a panel refresh in over 20 seconds.',
+            next_action: 'The values shown are frozen; the controls still work.',
+            last_produced_at_ms: 1_753_800_000_000,
+            observed_at_ms: 1_753_800_060_000,
+          },
+        },
+      }));
+      const livePanel = extendedFlattenSnapshot().panel;
+      mockService.getPanel.mockResolvedValueOnce({
+        ...livePanel,
+        actions: livePanel.actions.map((action) => action.action_id === 'execute_safe_flatten'
+          ? { ...action, concurrency_token: 'execute-token-live' }
+          : action),
+      });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+      await settle(fixture);
+
+      expect(screen.getByRole('alert', { name: 'The live panel stopped updating.' })).toBeTruthy();
+      expect(mockService.executeExtendedSafeFlatten).toHaveBeenCalledWith(
+        expect.objectContaining({ clerkId: 'clrk_spec', accountId: 'DUM284968' }),
+        'sid-001',
+        'execute-token-live',
+        { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
+      );
       expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
     });
 

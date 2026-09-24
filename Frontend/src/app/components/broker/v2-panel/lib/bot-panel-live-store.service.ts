@@ -60,9 +60,9 @@ function stallFromHttpError(error: unknown): LiveSnapshotUnavailableDetail | nul
   return isStallDetail(detail) ? detail : null;
 }
 
-/** Keeps the last complete same-session panel visible across SSE reconnects,
- * except while the server reports its producer stalled (#2353): then `stall()`
- * carries the server's typed notice and the snapshot is frozen, not live. */
+/** Keeps the last complete same-session panel visible across SSE reconnects.
+ * While the server reports its producer stalled (#2353), `stall()` carries the
+ * server's typed notice: the snapshot stays visible but is frozen, not live. */
 @Injectable()
 export class BotPanelLiveStore {
   private readonly panelService = inject(BrokerV2PanelService);
@@ -243,6 +243,7 @@ export class BotPanelLiveStore {
     const stall = stallFromHttpError(error);
     if (stall !== null) {
       this.currentStall.set(stall);
+      this.currentError.set(null);
       return;
     }
     this.currentError.set(error instanceof Error ? error.message : fallback);
