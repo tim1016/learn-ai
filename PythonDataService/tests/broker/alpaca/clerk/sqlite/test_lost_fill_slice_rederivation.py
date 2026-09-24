@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
@@ -404,6 +405,133 @@ async def test_sweep_cumulative_then_late_exact_slice_leaves_no_coverage_conflic
     assert effect_id not in _reconcilable(repo)
     verdicts = await _sweep_until_settled(repo, clock, trade, broker_qty=5.0, passes=1)
     assert verdicts == ["clean"]
+
+
+class _StaleLookupTrade(_Trade):
+    """The exact lookup's REST answer is captured, then the websocket folds first (#2385).
+
+    ``during_lookup`` runs after the broker answered but before the sweep folds
+    that answer -- the lookup runs outside intake, so live frames interleave.
+    Every later lookup answers ``broker_state`` as usual.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stale_answer: BrokerOrder | None = None
+        self.during_lookup: Any = None
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        if self.stale_answer is None or self.during_lookup is None:
+            return await super().get_order_by_client_order_id(client_order_id)
+        self.lookup_calls.append(client_order_id)
+        stale, self.stale_answer = self.stale_answer, None
+        interleave, self.during_lookup = self.during_lookup, None
+        await interleave()
+        return stale
+
+
+async def test_late_stale_rest_ack_does_not_hide_a_short_canceled_order(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """#2385: a pre-cancel REST answer folding after the ``canceled`` frame keeps the order short.
+
+    exec-A (2) is recorded, exec-B (3) is lost, and the ``canceled`` frame
+    reports ``filled_qty=5``. The sweep's REST answer was captured before the
+    cancel (``pending_cancel``, 2) and folds after the frame, so it becomes
+    the latest acknowledgement. Its working-state cumulative is not the
+    broker's final word: the order must stay reconcilable until a final
+    acknowledgement accounts for the lost 3 shares.
+    """
+    repo, clock = clocked_repo
+    trade = _StaleLookupTrade()
+    ref, bo, effect_id = await _open_enter(repo, trade, decision_id="stale-rest")
+    trade.stale_answer = _broker_order(
+        ref, order_id=bo, status="pending_cancel", quantity=5.0,
+        filled_quantity=2.0, filled_avg_price=100.0,
+    )
+
+    async def _live_frames() -> None:
+        await _connect(
+            repo,
+            [
+                _frame(
+                    event="partial_fill", coid=ref, broker_id=bo, side="buy", order_qty=5,
+                    filled_qty=2, status="partially_filled", qty=2, exec_id="exec-A",
+                ),
+                _frame(
+                    event="partial_fill", coid=ref, broker_id=bo, side="buy", order_qty=5,
+                    filled_qty=5, status="partially_filled", qty=3, exec_id="exec-B",
+                ),
+                _frame(
+                    event="canceled", coid=ref, broker_id=bo, side="buy", order_qty=5,
+                    filled_qty=5, status="canceled",
+                ),
+            ],
+            capture=_Capture(fail_at=frozenset({2})),
+        )
+
+    trade.during_lookup = _live_frames
+    trade.lookup_calls.clear()
+    clock.advance(15_000)
+    await reconcile_account(
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=5.0)]), trade=trade
+    )
+
+    assert trade.lookup_calls == [ref]
+    assert (repo.order(ref).broker_state or "").lower() == "canceled"
+    latest_ack = repo.last_order_transition(order_ref=ref, transition_kind="ORDER_SUBMIT_ACKED")
+    assert latest_ack is not None and latest_ack["broker_state"] == "pending_cancel"
+    assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(2.0, abs=QTY_ATOL, rel=0)
+    # The stale working-state answer must not settle the order.
+    assert repo.order_fills_short_of_broker_cumulative(ref)
+    assert effect_id in _reconcilable(repo)
+
+    trade.broker_state[ref] = _broker_filled(ref, bo, qty=5.0, status="canceled")
+    trade.lookup_calls.clear()
+    verdicts = await _sweep_until_settled(repo, clock, trade, broker_qty=5.0)
+
+    assert repo.position(WATCHDOG_SID, "SPY") == pytest.approx(5.0, abs=QTY_ATOL, rel=0)
+    assert verdicts[-1] == "clean"
+    assert effect_id not in _reconcilable(repo)
+    assert trade.lookup_calls == [ref]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Known residual (#2385 review): final acknowledgements are ordered by sequence, so a "
+        "stale final answer folded last governs. Ordering by broker source time instead "
+        "re-opens #2305 Major A (unbounded rows when the lookup's updated_at sorts before "
+        "the frame's) -- owner decision pending."
+    ),
+)
+async def test_stale_final_rest_ack_folded_last_does_not_govern(
+    clocked_repo: tuple[ClerkSqliteRepository, Any],  # noqa: F811
+) -> None:
+    """#2385 review probe: a stale final answer folded last should not govern.
+
+    The broker reports filled 10 @t100, a correction to 5 @t200 and back to
+    10 @t300. A stale REST answer from t200 (5) then folds last by sequence;
+    ideally it would not displace the t300 total.
+    """
+    repo, _clock = clocked_repo
+    trade = _Trade()
+    ref, bo, effect_id = await _open_enter(repo, trade, decision_id="stale-final")
+
+    def _filled(qty: float, at_ms: int) -> BrokerOrder:
+        return _broker_filled(ref, bo, qty=qty).model_copy(
+            update={"quantity": 10.0, "updated_at_ms": at_ms}
+        )
+
+    for qty, at_ms in ((10.0, 1_700_000_000_100), (5.0, 1_700_000_000_200), (10.0, 1_700_000_000_300)):
+        fold_order_acknowledgement(repo, effect_operation_id=effect_id, order=_filled(qty, at_ms))
+    fold_order_acknowledgement(repo, effect_operation_id=effect_id, order=_filled(5.0, 1_700_000_000_200))
+
+    latest_ack = repo.last_order_transition(order_ref=ref, transition_kind="ORDER_SUBMIT_ACKED")
+    assert latest_ack is not None and latest_ack["source_event_at_ms"] == 1_700_000_000_200
+    assert reads.governing_acknowledgement(repo._conn, ref) == ("filled", 10.0)
+    # No fill was recorded, so the order is short of the governing 10.
+    assert repo.order_fills_short_of_broker_cumulative(ref)
 
 
 async def _exit_with_open_reducing(
