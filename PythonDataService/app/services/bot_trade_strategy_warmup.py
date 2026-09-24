@@ -162,7 +162,15 @@ async def replay_warmup_bars(
                     else Settlement.DISCARD
                 )
             else:
-                if captured and uncaptured is None and stage.decision.intent is not None:
+                # Only a bucket some run decided live can be a crash artifact:
+                # history (a fresh deploy's warmup, or #2314's hole fill) was
+                # never decided, so its candidates are ordinary catch-up.
+                if (
+                    captured
+                    and uncaptured is None
+                    and stage.decision.intent is not None
+                    and market_bar.provenance != "history"
+                ):
                     uncaptured = (market_bar, stage)
                 runtime.settle(Settlement.DISCARD)
         context.signal_intents.clear()

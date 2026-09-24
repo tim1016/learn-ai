@@ -1,0 +1,80 @@
+<section class="resume-bots" aria-labelledby="resume-bots-title">
+  <header class="resume-bots__header">
+    <h2 id="resume-bots-title">Stopped bots</h2>
+    <p>Resume a bot on this account and see how its warmup joined the time it was stopped.</p>
+  </header>
+
+  @if (outcome(); as result) {
+    <section
+      class="resume-bots__outcome"
+      [class.resume-bots__outcome--refused]="outcomeRefused()"
+      role="status"
+      aria-labelledby="resume-outcome-title"
+    >
+      <div class="resume-bots__identity">
+        <h3 id="resume-outcome-title">{{ result.strategyLabel }}</h3>
+        <app-asset-identity [symbol]="result.symbol" size="sm" />
+      </div>
+      <p>{{ result.message }}</p>
+      @switch (result.state) {
+        @case ('warming') {
+          <p class="resume-bots__muted">Warming up — checking how the gap since it stopped was joined…</p>
+        }
+        @case ('unreported') {
+          <p class="resume-bots__muted">The bot has not reported its warmup yet. Open it to follow the run.</p>
+        }
+        @case ('unreadable') {
+          <p class="resume-bots__muted">This page could not read the bot after Resume. Open it to see how its run started.</p>
+        }
+        @case ('reported') {
+          @if (result.warmupJoin; as join) {
+            <p class="resume-bots__verdict">{{ join.label }}</p>
+            <p>{{ join.explanation }}</p>
+            @if (join.filled_start_ms !== null && join.filled_end_ms !== null) {
+              <dl>
+                <div>
+                  <dt>Filled from</dt>
+                  <dd><app-timestamp-display [value]="join.filled_start_ms" mode="et" /></dd>
+                </div>
+                <div>
+                  <dt>Filled to</dt>
+                  <dd><app-timestamp-display [value]="join.filled_end_ms" mode="et" /></dd>
+                </div>
+              </dl>
+            }
+          } @else if (result.dutyOutcome; as duty) {
+            <p class="resume-bots__verdict">{{ duty.label }}</p>
+            <p>{{ duty.explanation }}</p>
+          }
+        }
+      }
+      <a [routerLink]="botPath(result.sid)">Open bot control</a>
+    </section>
+  }
+
+  @if (catalog.error()) {
+    <p class="resume-bots__muted" role="alert">Stopped bots could not be loaded.</p>
+  } @else if (catalog.hasValue() && stoppedBots().length === 0) {
+    <p class="resume-bots__muted">No stopped bots on this account can be resumed.</p>
+  }
+
+  <ul class="resume-bots__list">
+    @for (entry of stoppedBots(); track entry.bot.strategy_instance_id) {
+      <li class="resume-bots__row">
+        <div>
+          <div class="resume-bots__identity">
+            <strong>{{ entry.bot.strategy_label }}</strong>
+            <app-asset-identity [symbol]="entry.bot.symbol" size="sm" />
+          </div>
+          <p>{{ entry.bot.status_explanation }}</p>
+        </div>
+        <app-panel-action-button
+          [action]="entry.resume"
+          [pending]="pendingSid() === entry.bot.strategy_instance_id"
+          tone="primary"
+          (triggered)="resume(entry, $event)"
+        />
+      </li>
+    }
+  </ul>
+</section>

@@ -4367,6 +4367,16 @@
             "title": "Updated At Ms",
             "type": "integer"
           },
+          "warmup_join": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WarmupJoinView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "working_orders": {
             "items": {
               "$ref": "#/components/schemas/WorkingOrderView"
@@ -44142,6 +44152,110 @@
           }
         },
         "title": "WalkForwardWindowResponse",
+        "type": "object"
+      },
+      "WarmupJoinView": {
+        "description": "How the current run joined its retained bars to the present (#2314).\n\nPresent only for a run that resumed on retained bars. ``state`` is\n``contiguous`` (nothing missing), ``filled`` (the hole was fetched from\nIBKR 1-minute history before warmup) or ``refused`` (the hole could not\nbe filled, so the run never decided). ``warmed_from_history_only`` means\nthe bot was stopped longer than its warmup lookback and warmed on that\nlookback's history, as a fresh deploy does.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "filled_count": {
+            "minimum": 0.0,
+            "title": "Filled Count",
+            "type": "integer"
+          },
+          "filled_end_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled End Ms"
+          },
+          "filled_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled Start Ms"
+          },
+          "joined_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Joined At Ms",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "WARMUP_HISTORY_UNAVAILABLE",
+                  "RESUME_HOLE_AFTER_HOURS",
+                  "RESUME_HOLE_UNFILLED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "retained_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Retained End Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "contiguous",
+              "filled",
+              "refused"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "warmed_from_history_only": {
+            "title": "Warmed From History Only",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "state",
+          "label",
+          "explanation",
+          "retained_end_ms",
+          "joined_at_ms",
+          "filled_count",
+          "filled_start_ms",
+          "filled_end_ms",
+          "warmed_from_history_only",
+          "reason_code"
+        ],
+        "title": "WarmupJoinView",
         "type": "object"
       },
       "WindowSummary": {

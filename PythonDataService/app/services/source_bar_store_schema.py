@@ -146,6 +146,22 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             CHECK((kind = 'extended') = (window_open_minute_et IS NOT NULL)),
             CHECK((kind = 'extended') = (window_close_minute_et IS NOT NULL))
         );
+        CREATE TABLE IF NOT EXISTS source_run_warmup_join (
+            run_id TEXT PRIMARY KEY,
+            outcome TEXT NOT NULL CHECK(outcome IN ('contiguous','filled','refused')),
+            retained_end_ms INTEGER NOT NULL CHECK(retained_end_ms BETWEEN 0 AND 253402300799999),
+            joined_at_ms INTEGER NOT NULL CHECK(joined_at_ms BETWEEN 0 AND 253402300799999),
+            filled_count INTEGER NOT NULL CHECK(filled_count >= 0),
+            filled_start_ms INTEGER CHECK(filled_start_ms BETWEEN 0 AND 253402300799999),
+            filled_end_ms INTEGER CHECK(filled_end_ms BETWEEN 0 AND 253402300799999),
+            warm_from_ms INTEGER CHECK(warm_from_ms BETWEEN 0 AND 253402300799999),
+            reason_code TEXT CHECK(reason_code IN (
+                'WARMUP_HISTORY_UNAVAILABLE','RESUME_HOLE_AFTER_HOURS','RESUME_HOLE_UNFILLED'
+            )),
+            CHECK((outcome = 'filled') = (filled_count > 0)),
+            CHECK((outcome = 'filled') = (filled_start_ms IS NOT NULL AND filled_end_ms IS NOT NULL)),
+            CHECK((outcome = 'refused') = (reason_code IS NOT NULL))
+        );
         CREATE TABLE IF NOT EXISTS source_evidence_journal (
             evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT,

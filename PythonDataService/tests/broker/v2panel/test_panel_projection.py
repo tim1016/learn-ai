@@ -647,12 +647,13 @@ def test_panel_data_source_reads_only_the_binding_run_from_its_live_evidence_led
     monkeypatch.setattr(panel_data_source, "live_artifacts_root", lambda: tmp_path)
     monkeypatch.setattr(panel_data_source, "primary_custody_world", lambda: "real_live")
 
-    events = panel_data_source._feed_continuity_events_for(
+    evidence = panel_data_source._run_source_evidence_for(
         SimpleNamespace(mode="trade", strategy_instance_id=SID, run_id="r1")
     )
 
-    assert events is not None
-    assert [(event.run_id, event.kind) for event in events] == [("r1", "recovered")]
+    assert evidence is not None
+    assert [(event.run_id, event.kind) for event in evidence.events] == [("r1", "recovered")]
+    assert evidence.warmup_join is None
 
 
 def test_panel_data_source_degrades_continuity_read_when_no_authority_is_installed(
@@ -665,11 +666,11 @@ def test_panel_data_source_degrades_continuity_read_when_no_authority_is_install
     """
     monkeypatch.setattr(panel_data_source, "primary_custody_world", lambda: None)
 
-    events = panel_data_source._feed_continuity_events_for(
+    evidence = panel_data_source._run_source_evidence_for(
         SimpleNamespace(mode="trade", strategy_instance_id=SID, run_id="r1")
     )
 
-    assert events is None
+    assert evidence is None
 
 
 def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
@@ -2849,3 +2850,48 @@ def test_retire_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
     adapted = adapt_sqlite_panel(base, projection)
 
     assert "retire" in [action.action_id for action in adapted.actions]
+
+
+@pytest.mark.parametrize(
+    ("reason", "label"),
+    [
+        ("RESUME_HOLE_AFTER_HOURS", "Refused: after-hours hole"),
+        ("RESUME_HOLE_UNFILLED", "Refused: gap could not be filled"),
+    ],
+)
+def test_a_resume_hole_refusal_carries_its_own_duty_outcome_copy(reason: str, label: str) -> None:
+    """#2314: a resume refused at its hole is not a feed death or a generic crash."""
+    status = _status(running=False).model_copy(
+        update={
+            "duty_outcome": BotDutyOutcomeView(
+                kind="CRASHED", reason_code=reason, recorded_at_ms=_NOW, run_id="run-1"
+            ),
+        }
+    )
+
+    panel = _panel(status, _clerk_status(), [])
+
+    assert panel.health.duty_outcome is not None
+    assert panel.health.duty_outcome.label == label
+
+
+def test_warmup_join_projection_names_the_filled_window() -> None:
+    from app.services.broker_v2_panel.feed_continuity_projection import build_warmup_join
+    from app.services.source_bar_ledger import RetainedWarmupJoin
+
+    view = build_warmup_join(
+        RetainedWarmupJoin(
+            run_id="run-2",
+            outcome="filled",
+            retained_end_ms=_NOW - 600_000,
+            joined_at_ms=_NOW,
+            filled_count=10,
+            filled_start_ms=_NOW - 600_000,
+            filled_end_ms=_NOW,
+        )
+    )
+
+    assert view is not None
+    assert (view.state, view.label) == ("filled", "Filled 10 missing bars from IBKR history")
+    assert view.warmed_from_history_only is False
+    assert build_warmup_join(None) is None

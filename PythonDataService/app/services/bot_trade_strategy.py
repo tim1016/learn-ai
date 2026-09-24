@@ -65,6 +65,7 @@ from app.services.market_liveness import (
     market_data_bars_live,
     market_liveness_fact,
 )
+from app.services.retained_tail_join import warmup_rows_after_join
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 
@@ -298,7 +299,19 @@ class _RetainedSourceBarFeed:
         if retained:
             # Recovery must rebuild the session from the precise observations
             # that drove its first run. A provider's corrected history is new
-            # information, not safe warmup input for an already-running bot.
+            # information, not safe warmup input for an already-running bot --
+            # except across the hole after the last retained bar, which no run
+            # observed and which is filled from history or refused (#2314).
+            warmup_rows = await warmup_rows_after_join(
+                self._source,
+                self._ledger,
+                run_id=self._run_id,
+                session=session,
+                symbol=symbol,
+                retained=retained,
+                lookback_days=lookback_days,
+                now_ms=now_ms_utc(),
+            )
             return [
                 MarketDataBar(
                     symbol=row.symbol,
@@ -319,7 +332,7 @@ class _RetainedSourceBarFeed:
                     authorization_id=row.authorization_id,
                     continuity_event_ref=row.continuity_event_ref,
                 )
-                for row in retained
+                for row in warmup_rows
                 if session.includes(row)
             ]
         bars = await self._source.recent_closed_bars(

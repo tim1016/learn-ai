@@ -189,6 +189,12 @@ def to_market_bar(bar: RetainedSourceBar) -> MarketDataBar:
         fetched_at_ms=bar.fetched_at_ms,
         feed_id=bar.provider,
         session_phase=bar.session_phase,
+        # The live run warmed on these rows with their provenance; dropping it
+        # would replay a history bucket as live-decided and flag its candidate
+        # as a crash artifact the live journal never recorded (#2314).
+        provenance=bar.provenance,
+        authorization_id=bar.authorization_id,
+        continuity_event_ref=bar.continuity_event_ref,
     )
 
 
@@ -1054,6 +1060,7 @@ class RunReplayProofService:
                     else stored_evidence_end_seq
                 )
                 events = ledger.events(run_id=run_record.run_id, evidence_end_seq=evidence_end_seq)
+                warm_floor_ms = ledger.warm_floor_ms(run_id=run_record.run_id)
             finally:
                 ledger.close(checkpoint=False)
             bars = bounded_replay_bars(
@@ -1062,6 +1069,11 @@ class RunReplayProofService:
                 terminal_recorded_at_ms=terminal_recorded_at_ms,
                 evidence_end_seq=evidence_end_seq,
             )
+            # A resume whose hole outran the sealed lookback warmed like a fresh
+            # deploy, and every later run inherits that floor (#2314); the run's
+            # input starts there, so its replay does too.
+            if warm_floor_ms is not None:
+                bars = [bar for bar in bars if bar.start_ms >= warm_floor_ms]
             if not bars:
                 raise RunReplayUnavailableError(
                     f"No retained source bars exist for {binding.symbol!r} within this run's bounds.",

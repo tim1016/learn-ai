@@ -16,23 +16,33 @@ from wall-clock timestamps.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.broker.contract.capabilities import ExtendedHoursWindow
-from app.marketdata.feed import ContinuityEventRef, FeedContinuityEvent, MarketDataBar
+from app.marketdata.feed import (
+    ContinuityEventRef,
+    FeedContinuityEvent,
+    MarketDataBar,
+    WarmupRefusalReason,
+)
 from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_store_schema import (
     LEGACY_SOURCE_BAR_LEDGER_FILENAME,
     initialize_store,
     journal_row,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+logger = logging.getLogger(__name__)
 
 SOURCE_BAR_LEDGER_FILENAME = "source_bars.sqlite3"
 """Indexed durable authority store for retained source observations."""
@@ -131,6 +141,54 @@ class RetainedContinuityEvent(FeedContinuityEvent):
     seq: int = Field(ge=1)
     run_id: str
     evidence_seq: int = Field(ge=1)
+
+
+WarmupJoinOutcome = Literal["contiguous", "filled", "refused"]
+_Instant = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
+
+
+class RetainedWarmupJoin(BaseModel):
+    """How one resumed run joined its retained bars to the present (#2314).
+
+    ``contiguous`` means the retained bars already reached every minute the
+    run decides on; ``filled`` means ``filled_count`` IBKR history bars
+    spanning ``filled_start_ms``..``filled_end_ms`` were retained first;
+    ``refused`` means the hole could not be filled and ``reason_code`` says
+    why. A fresh run, which retained nothing, records no join. The validator
+    makes every other combination unrepresentable.
+
+    ``warm_from_ms`` is set when the hole outran the sealed warmup lookback:
+    the run warmed only on bars opening at or after it, like a fresh deploy,
+    and every later run inherits it as a floor (``warm_floor_ms``).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: str
+    outcome: WarmupJoinOutcome
+    retained_end_ms: _Instant
+    joined_at_ms: _Instant
+    filled_count: int = Field(default=0, ge=0)
+    filled_start_ms: _Instant | None = None
+    filled_end_ms: _Instant | None = None
+    warm_from_ms: _Instant | None = None
+    reason_code: WarmupRefusalReason | None = None
+
+    @model_validator(mode="after")
+    def _one_coherent_outcome(self) -> RetainedWarmupJoin:
+        filled = (self.filled_count, self.filled_start_ms, self.filled_end_ms)
+        if self.outcome == "filled":
+            if self.filled_count == 0 or self.filled_start_ms is None or self.filled_end_ms is None:
+                raise ValueError("a filled join names its bar count and window")
+            if self.filled_end_ms <= self.filled_start_ms:
+                raise ValueError("a filled window ends after it starts")
+        elif filled != (0, None, None):
+            raise ValueError(f"a {self.outcome} join filled nothing")
+        if (self.outcome == "refused") != (self.reason_code is not None):
+            raise ValueError("exactly a refused join carries a refusal reason")
+        if self.outcome == "refused" and self.warm_from_ms is not None:
+            raise ValueError("a refused join warmed on nothing")
+        return self
 
 
 class SourceBarConflictError(RuntimeError):
@@ -308,6 +366,128 @@ class SourceBarLedger:
     def append_history(self, bar: MarketDataBar, *, run_id: str) -> RetainedSourceBar:
         """Persist one ordered warmup observation before live delivery begins."""
         return self._append(bar, delivery="history", run_id=run_id)
+
+    def retain_warmup_join(
+        self, backfill: Sequence[MarketDataBar], join: RetainedWarmupJoin
+    ) -> list[RetainedSourceBar]:
+        """Retain the history that fills a resumed run's hole and record its join, atomically (#2314).
+
+        The backfill is the one history delivery allowed after live delivery
+        has begun: a resumed run fills the minutes no run observed live,
+        before its own live stream starts. The monotonic rule still applies,
+        so it can only extend the stream past its newest retained bar. The
+        bars and the join that explains them commit together or not at all --
+        a ledger extended by a fill it holds no fact about is not evidence.
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                retained = [
+                    self._insert_bar_locked(bar, delivery="backfill", run_id=join.run_id)
+                    for bar in backfill
+                ]
+                self._insert_join_locked(join)
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return retained
+
+    def record_warmup_join(self, join: RetainedWarmupJoin) -> None:
+        """Record a join that retained no bars (a refusal)."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._insert_join_locked(join)
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def _insert_join_locked(self, join: RetainedWarmupJoin) -> None:
+        """Insert ``join`` keep-first, surfacing a later join that disagrees.
+
+        Keep-first, like ``record_decision_session``: a re-entered run (a
+        second runner pass) joins again against a tail its first pass already
+        extended, and that later, smaller join is not the run's evidence. It
+        is logged rather than dropped silently, so a disagreement is visible.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO source_run_warmup_join (
+                run_id, outcome, retained_end_ms, joined_at_ms, filled_count,
+                filled_start_ms, filled_end_ms, warm_from_ms, reason_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO NOTHING
+            """,
+            (
+                join.run_id,
+                join.outcome,
+                join.retained_end_ms,
+                join.joined_at_ms,
+                join.filled_count,
+                join.filled_start_ms,
+                join.filled_end_ms,
+                join.warm_from_ms,
+                join.reason_code,
+            ),
+        )
+        stored = self._conn.execute(
+            "SELECT * FROM source_run_warmup_join WHERE run_id = ?", (join.run_id,)
+        ).fetchone()
+        kept = RetainedWarmupJoin.model_validate(dict(stored))
+        if kept != join:
+            logger.warning(
+                "A re-entered run joined its retained bars again; the first join stays its evidence",
+                extra={
+                    "action": "warmup_join_kept_first",
+                    "run_id": join.run_id,
+                    "kept_outcome": kept.outcome,
+                    "discarded_outcome": join.outcome,
+                    "discarded_filled_count": join.filled_count,
+                },
+            )
+
+    def warm_floor_ms(self, *, run_id: str) -> int | None:
+        """The earliest bar open ``run_id`` may warm on, or ``None`` for no floor.
+
+        A resume whose hole outran the sealed lookback warmed from history
+        alone, from its ``warm_from_ms``. Every later run of the instance
+        inherits that floor: the retained rows before it end at a hole no run
+        filled, so warming on them again would reopen #2314. The floor is the
+        newest ``warm_from_ms`` recorded at or before this run's own join, so
+        an earlier run's replay is never cut by a later run's floor.
+        """
+        with self._lock:
+            if not self._has_warmup_join_table():
+                return None
+            row = self._conn.execute(
+                """
+                SELECT MAX(warm_from_ms) AS floor FROM source_run_warmup_join
+                WHERE rowid <= (SELECT rowid FROM source_run_warmup_join WHERE run_id = ?)
+                """,
+                (run_id,),
+            ).fetchone()
+        return None if row is None or row["floor"] is None else int(row["floor"])
+
+    def _has_warmup_join_table(self) -> bool:
+        """A pre-#2314 file opened read-only has no join table, and so no joins."""
+        return (
+            self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_run_warmup_join'"
+            ).fetchone()
+            is not None
+        )
+
+    def warmup_join(self, *, run_id: str) -> RetainedWarmupJoin | None:
+        """The run's recorded join, or ``None`` for a fresh run or a pre-#2314 file."""
+        with self._lock:
+            if not self._has_warmup_join_table():
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM source_run_warmup_join WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return None if row is None else RetainedWarmupJoin.model_validate(dict(row))
 
     def append_event(self, event: FeedContinuityEvent, *, run_id: str) -> ContinuityEventRef:
         """Persist one continuity fact and its journal position in one transaction.
@@ -590,109 +770,119 @@ class SourceBarLedger:
         self,
         bar: MarketDataBar,
         *,
-        delivery: Literal["history", "live"],
+        delivery: Literal["history", "backfill", "live"],
         run_id: str | None,
     ) -> RetainedSourceBar:
-        candidate = RetainedSourceBar.from_market_bar(seq=1, account_id=self.account_id, bar=bar)
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                retained = self.by_identity(candidate.bar_identity)
-                if retained is not None:
-                    if _same_market_payload(retained, candidate):
-                        self._conn.execute("COMMIT")
-                        return retained
-                    raise SourceBarConflictError(
-                        "SOURCE_BAR_IDENTITY_CONFLICT: "
-                        f"{candidate.bar_identity!r} was observed with a different payload"
-                    )
-
-                latest = self._conn.execute(
-                    """
-                    SELECT end_ms FROM source_bars
-                    WHERE provider = ? AND symbol = ?
-                    ORDER BY end_ms DESC LIMIT 1
-                    """,
-                    (candidate.provider, candidate.symbol),
-                ).fetchone()
-                stream_state = self._conn.execute(
-                    """
-                    SELECT live_started FROM source_bar_stream_state
-                    WHERE provider = ? AND symbol = ?
-                    """,
-                    (candidate.provider, candidate.symbol),
-                ).fetchone()
-                if delivery == "history" and stream_state is not None and bool(stream_state["live_started"]):
-                    raise SourceBarConflictError(
-                        "SOURCE_BAR_HISTORY_AFTER_LIVE: retained replay must be used after live delivery begins"
-                    )
-                if latest is not None and candidate.end_ms <= int(latest["end_ms"]):
-                    raise SourceBarConflictError(
-                        f"SOURCE_BAR_NON_MONOTONIC_{delivery.upper()}: "
-                        f"{candidate.bar_identity!r} is not after the retained decision clock"
-                    )
-
-                count = self._conn.execute(
-                    "SELECT COUNT(*) AS count FROM source_bars WHERE provider = ? AND symbol = ?",
-                    (candidate.provider, candidate.symbol),
-                ).fetchone()
-                assert count is not None
-                if int(count["count"]) >= SOURCE_BAR_STREAM_CAPACITY:
-                    raise SourceBarRetentionLimitError(
-                        "SOURCE_BAR_RETENTION_LIMIT: "
-                        f"{candidate.provider}:{candidate.symbol} reached {SOURCE_BAR_STREAM_CAPACITY} retained bars"
-                    )
-
-                cursor = self._conn.execute(
-                    """
-                    INSERT INTO source_bars (
-                        account_id, provider, symbol, bar_identity, bar_ref,
-                        start_ms, end_ms, open, high, low, close, volume,
-                        fetched_at_ms, session_phase,
-                        provenance, authorization_id, continuity_event_ref
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        candidate.account_id,
-                        candidate.provider,
-                        candidate.symbol,
-                        candidate.bar_identity,
-                        candidate.bar_ref,
-                        candidate.start_ms,
-                        candidate.end_ms,
-                        str(candidate.open),
-                        str(candidate.high),
-                        str(candidate.low),
-                        str(candidate.close),
-                        candidate.volume,
-                        candidate.fetched_at_ms,
-                        candidate.session_phase,
-                        candidate.provenance,
-                        candidate.authorization_id,
-                        candidate.continuity_event_ref,
-                    ),
-                )
-                seq = int(cursor.lastrowid)
-                evidence_seq = journal_row(
-                    self._conn,
-                    run_id=run_id,
-                    kind="bar",
-                    row_seq=seq,
-                    observed_at_ms=candidate.fetched_at_ms,
-                )
-                if delivery == "live":
-                    self._conn.execute(
-                        """
-                        INSERT INTO source_bar_stream_state (provider, symbol, live_started)
-                        VALUES (?, ?, 1)
-                        ON CONFLICT(provider, symbol) DO UPDATE SET live_started = 1
-                        """,
-                        (candidate.provider, candidate.symbol),
-                    )
+                retained = self._insert_bar_locked(bar, delivery=delivery, run_id=run_id)
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+        return retained
+
+    def _insert_bar_locked(
+        self,
+        bar: MarketDataBar,
+        *,
+        delivery: Literal["history", "backfill", "live"],
+        run_id: str | None,
+    ) -> RetainedSourceBar:
+        """Validate and insert one bar inside the caller's open transaction."""
+        candidate = RetainedSourceBar.from_market_bar(seq=1, account_id=self.account_id, bar=bar)
+        retained = self.by_identity(candidate.bar_identity)
+        if retained is not None:
+            if _same_market_payload(retained, candidate):
+                return retained
+            raise SourceBarConflictError(
+                "SOURCE_BAR_IDENTITY_CONFLICT: "
+                f"{candidate.bar_identity!r} was observed with a different payload"
+            )
+
+        latest = self._conn.execute(
+            """
+            SELECT end_ms FROM source_bars
+            WHERE provider = ? AND symbol = ?
+            ORDER BY end_ms DESC LIMIT 1
+            """,
+            (candidate.provider, candidate.symbol),
+        ).fetchone()
+        stream_state = self._conn.execute(
+            """
+            SELECT live_started FROM source_bar_stream_state
+            WHERE provider = ? AND symbol = ?
+            """,
+            (candidate.provider, candidate.symbol),
+        ).fetchone()
+        if delivery == "history" and stream_state is not None and bool(stream_state["live_started"]):
+            raise SourceBarConflictError(
+                "SOURCE_BAR_HISTORY_AFTER_LIVE: retained replay must be used after live delivery begins"
+            )
+        if latest is not None and candidate.end_ms <= int(latest["end_ms"]):
+            raise SourceBarConflictError(
+                f"SOURCE_BAR_NON_MONOTONIC_{delivery.upper()}: "
+                f"{candidate.bar_identity!r} is not after the retained decision clock"
+            )
+
+        count = self._conn.execute(
+            "SELECT COUNT(*) AS count FROM source_bars WHERE provider = ? AND symbol = ?",
+            (candidate.provider, candidate.symbol),
+        ).fetchone()
+        assert count is not None
+        if int(count["count"]) >= SOURCE_BAR_STREAM_CAPACITY:
+            raise SourceBarRetentionLimitError(
+                "SOURCE_BAR_RETENTION_LIMIT: "
+                f"{candidate.provider}:{candidate.symbol} reached {SOURCE_BAR_STREAM_CAPACITY} retained bars"
+            )
+
+        cursor = self._conn.execute(
+            """
+            INSERT INTO source_bars (
+                account_id, provider, symbol, bar_identity, bar_ref,
+                start_ms, end_ms, open, high, low, close, volume,
+                fetched_at_ms, session_phase,
+                provenance, authorization_id, continuity_event_ref
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                candidate.account_id,
+                candidate.provider,
+                candidate.symbol,
+                candidate.bar_identity,
+                candidate.bar_ref,
+                candidate.start_ms,
+                candidate.end_ms,
+                str(candidate.open),
+                str(candidate.high),
+                str(candidate.low),
+                str(candidate.close),
+                candidate.volume,
+                candidate.fetched_at_ms,
+                candidate.session_phase,
+                candidate.provenance,
+                candidate.authorization_id,
+                candidate.continuity_event_ref,
+            ),
+        )
+        seq = int(cursor.lastrowid)
+        evidence_seq = journal_row(
+            self._conn,
+            run_id=run_id,
+            kind="bar",
+            row_seq=seq,
+            observed_at_ms=candidate.fetched_at_ms,
+        )
+        if delivery == "live":
+            self._conn.execute(
+                """
+                INSERT INTO source_bar_stream_state (provider, symbol, live_started)
+                VALUES (?, ?, 1)
+                ON CONFLICT(provider, symbol) DO UPDATE SET live_started = 1
+                """,
+                (candidate.provider, candidate.symbol),
+            )
         return candidate.model_copy(
             update={"seq": seq, "run_id": run_id, "evidence_seq": evidence_seq}
         )

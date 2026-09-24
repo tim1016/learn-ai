@@ -1,0 +1,25 @@
+{
+ "fetched": "2026-09-24 after close; reqHistoricalData 1 min TRADES useRTH=True durationStr=1 D endDateTime=20260924 20:00:00 UTC",
+ "symbols": {
+  "SPY": {
+   "rth_minutes": 390,
+   "zero_volume": 0
+  },
+  "IWM": {
+   "rth_minutes": 390,
+   "zero_volume": 0
+  },
+  "EWN": {
+   "rth_minutes": 390,
+   "zero_volume": 314
+  },
+  "FLCH": {
+   "rth_minutes": 390,
+   "zero_volume": 343
+  },
+  "KBWP": {
+   "rth_minutes": 390,
+   "zero_volume": 371
+  }
+ }
+}
