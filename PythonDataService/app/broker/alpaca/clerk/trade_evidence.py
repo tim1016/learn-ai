@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fence_fills_on_terminal_enters,
     fold_order_acknowledgement,
     fold_order_evidence,
 )
@@ -232,6 +233,11 @@ class SqliteTradeUpdateEvidenceSink:
                 order=order,
                 append_stale_ack=False,
             )
+            if event.event_type in {"fill", "partial_fill"}:
+                # Early, for latency only: every reconciliation pass is the
+                # canonical detector and re-derives this from durable facts
+                # (#2348). Same function, scoped to this order, under intake.
+                fence_fills_on_terminal_enters(self._repo, order_ref=local_order.order_ref)
             return "order_event"
 
     async def reconcile_gap(self) -> None:

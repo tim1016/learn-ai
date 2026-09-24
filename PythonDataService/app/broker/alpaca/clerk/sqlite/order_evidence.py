@@ -12,6 +12,8 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 
 from __future__ import annotations
 
+import logging
+
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     SIMULATED_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
@@ -42,11 +44,17 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
 )
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    failed_enter_fill_is_answered,
+    raise_failed_enter_filled_uncertainty,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
+
+logger = logging.getLogger(__name__)
 
 
 def submit_absence_grace_ms() -> int:
@@ -75,6 +83,7 @@ __all__ = [
     "UNFILLED_TERMINAL_STATES",
     "entry_never_accepted_durably",
     "entry_order_symbol",
+    "fence_fills_on_terminal_enters",
     "fold_entry_never_accepted",
     "fold_failed",
     "fold_order_acknowledgement",
@@ -96,6 +105,61 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     if transition is None:
         raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
     return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
+
+
+def fence_fills_on_terminal_enters(
+    repo: ClerkSqliteRepository, *, order_ref: str | None = None
+) -> None:
+    """Raise ``FAILED_ENTER_FILLED`` for every fill that contradicts its ENTER (#2348).
+
+    No fold terminalizes an ENTER that has an effective fill: the void,
+    ``ENTER_UNFILLED`` and the absence proofs all require zero fills. So a
+    fill on an ENTRY order whose ENTER is ``failed``/``rejected`` is always
+    contradicting evidence -- #2304's live duplicate-id order, or #2342's
+    voided order whose abandoned POST landed. The fill stays folded (the
+    Clerk's position must match the broker's); this only refuses to absorb it
+    silently.
+
+    The one detector, re-derived from durable facts on every reconciliation
+    pass, so a crash between a fill's commit and the fence's commit -- or an
+    instance wedged before this detector existed -- is fenced on the next
+    pass. ``order_ref`` narrows it to one order for the trade_updates sink's
+    early call. Idempotent: an order an episode (active or resolved) already
+    recorded at its current effective quantity is answered, so a fence a
+    flatten cleared stays cleared until the order fills further.
+
+    Caller must hold the Clerk's intake lock (the raise is a read-merge-write).
+    """
+    for candidate_ref, strategy_instance_id in repo.terminal_entry_orders_with_fills(
+        order_ref=order_ref
+    ):
+        filled_qty, _ = repo.effective_fill_totals_for_order(candidate_ref)
+        if abs(filled_qty) < FILL_QTY_EPSILON or failed_enter_fill_is_answered(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            order_ref=candidate_ref,
+            filled_qty=filled_qty,
+        ):
+            continue
+        symbol = entry_order_symbol(repo, candidate_ref)
+        outcome = raise_failed_enter_filled_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            order_ref=candidate_ref,
+            symbol=symbol,
+            filled_qty=filled_qty,
+        )
+        logger.warning(
+            "fill recorded on an ENTER already folded terminal",
+            extra={
+                "action": "failed_enter_filled",
+                "order_ref": candidate_ref,
+                "strategy_instance_id": strategy_instance_id,
+                "symbol": symbol,
+                "filled_qty": filled_qty,
+                "episode": outcome,
+            },
+        )
 
 
 def fold_order_evidence(

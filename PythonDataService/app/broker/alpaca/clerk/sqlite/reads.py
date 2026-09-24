@@ -629,6 +629,86 @@ def orders_for_effect_operation(conn: sqlite3.Connection, effect_operation_id: s
     return [OrderResource(**dict(row)) for row in rows]
 
 
+def terminal_entry_orders_with_fills(
+    conn: sqlite3.Connection, *, order_ref: str | None = None
+) -> list[tuple[str, str]]:
+    """``(order_ref, strategy_instance_id)`` of every ENTRY order carrying a fill
+    row while its ENTER is ``failed``/``rejected`` (#2348).
+
+    No fold terminalizes an ENTER that has an effective fill, so each row is a
+    candidate contradiction; the caller nets superseded fills. ``order_ref``
+    narrows the scan to one order (the trade_updates sink's early check).
+    """
+    rows = conn.execute(
+        "SELECT o.order_ref, e.strategy_instance_id FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "AND (? IS NULL OR o.order_ref = ?) "
+        "AND EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref) "
+        "ORDER BY o.order_ref ASC",
+        (order_ref, order_ref),
+    ).fetchall()
+    return [(row["order_ref"], row["strategy_instance_id"]) for row in rows]
+
+
+def terminal_entry_orders_unproven_at_broker(
+    conn: sqlite3.Connection,
+    *,
+    symbols: frozenset[str],
+    exclude_client_order_ids: frozenset[str],
+    rested_since_ms: int,
+    limit: int,
+) -> list[str]:
+    """ENTRY orders folded ``failed``/``rejected`` that no broker state ended (#2348).
+
+    The sweep's exact-lookup worklist for a late fill the open-order snapshot
+    cannot show: an ENTER voided on absence (#2342) or refused on a
+    duplicate-id reply (#2304) never recorded a broker-terminal state, so the
+    order may be live -- or already ``filled`` and closed -- at the broker.
+    One the broker itself ended is proven and excluded. Narrowed to
+    ``symbols`` (matched on the immutable ``ENTER_ACCEPTED`` leg).
+
+    A lookup that finds nothing leaves ``broker_state`` NULL, so without a
+    rotation the same never-landed voids would take every slot on every pass
+    and starve an older void that did land. So each order's latest per-order
+    reconciliation attempt (a Clerk-clock ``reconciliations`` row, recorded by
+    every exact lookup) orders the list, never-looked-up first; an order
+    last looked up after ``rested_since_ms`` is excluded until it has rested.
+    Orders already in the open-order snapshot are dropped before ``limit``,
+    so they cannot spend a slot either.
+    """
+    if not symbols:
+        return []
+    symbol_marks = ", ".join("?" for _ in symbols)
+    excluded = sorted(exclude_client_order_ids)
+    exclude_clause = (
+        f"AND o.client_order_id NOT IN ({', '.join('?' for _ in excluded)}) " if excluded else ""
+    )
+    rows = conn.execute(
+        "SELECT order_ref FROM ("
+        "SELECT o.order_ref, e.updated_at_ms, "
+        "(SELECT MAX(r.attempted_at_ms) FROM reconciliations r "
+        "WHERE r.effect_operation_id = o.effect_operation_id "
+        "AND r.order_ref = o.order_ref) AS last_lookup_ms "
+        "FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN custody_transitions t ON t.order_ref = o.order_ref "
+        "AND t.transition_kind = 'ENTER_ACCEPTED' "
+        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "AND e.strategy_instance_id IS NOT NULL "
+        "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
+        "('filled','canceled','expired','rejected','replaced')) "
+        f"AND UPPER(json_extract(t.facts_json, '$.leg.symbol')) IN ({symbol_marks}) "
+        f"{exclude_clause}"
+        ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
+        "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
+        "updated_at_ms DESC, order_ref DESC LIMIT ?",
+        (*sorted(symbols), *excluded, rested_since_ms, limit),
+    ).fetchall()
+    return [row["order_ref"] for row in rows]
+
+
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     """Every immutable broker identity captured by this authority."""
     rows = conn.execute("SELECT order_ref FROM orders").fetchall()
@@ -1135,6 +1215,26 @@ def active_uncertainty(
         (scope, reason_code, strategy_instance_id),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def uncertainty_history(
+    conn: sqlite3.Connection, *, scope: str, reason_code: str, strategy_instance_id: str | None
+) -> list[dict]:
+    """Every episode, active or resolved, for one ``(scope, reason_code, instance)``.
+
+    Newest episode first. For a detector that must not re-raise a cause the
+    latest episode already answered (#2348); the active-only read cannot see
+    an episode a legitimate flatten resolved. Episodes of one identity never
+    overlap, so the raising transition's sequence (``uncertainty:<seq>``)
+    orders them exactly; a clock tie or a lexical id sort would not.
+    """
+    rows = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE scope = ? AND reason_code = ? AND strategy_instance_id IS ? "
+        "ORDER BY CAST(SUBSTR(uncertainty_id, INSTR(uncertainty_id, ':') + 1) AS INTEGER) DESC",
+        (scope, reason_code, strategy_instance_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def active_uncertainties(conn: sqlite3.Connection) -> list[dict]:

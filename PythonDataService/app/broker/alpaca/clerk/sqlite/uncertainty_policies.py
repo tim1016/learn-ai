@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
+    FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
@@ -34,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
+    FailedEnterFilledCause,
     LossHoldCause,
     PositionDriftCause,
     StreamHealthHoldCause,
@@ -99,8 +101,9 @@ class ReasonPolicy:
     # Distinct from ``allows_reduction``: POSITION_DRIFT and the loss hold
     # admit a proven REDUCE, yet a flatten plan built from attributed
     # quantities must still refuse under them. Set only for causes a flatten
-    # exists to clear (a stuck/not-flat EXIT) or that say nothing about any
-    # attributed quantity (an unfoldable foreign order, #2363).
+    # exists to clear (a stuck/not-flat EXIT, a fill on a failed ENTER #2348)
+    # or that say nothing about any attributed quantity (an unfoldable foreign
+    # order, #2363).
     admits_safe_flatten: bool = False
     # Whether an admitted episode is *broker-side* evidence the latest
     # successful account reconciliation must postdate before a safe flatten
@@ -111,7 +114,11 @@ class ReasonPolicy:
     # refreshed by every automatic re-drive, and requiring a newer
     # reconciliation after each would refuse the very flatten that clears
     # them; their attributed quantities are already pinned by the
-    # position-evidence freshness gate.
+    # position-evidence freshness gate. Not set for FAILED_ENTER_FILLED
+    # (#2348) either: it is derived from a folded fill, so every raise moves
+    # the fenced symbol's attributed position with it (pinned by the same
+    # freshness gate), and a sweep's re-derive raises from fills that sweep's
+    # broker snapshot already contains.
     safe_flatten_requires_later_reconciliation: bool = False
 
 
@@ -140,6 +147,14 @@ def _exit_not_flat_cause_is_valid(value: Any) -> bool:
 def _exit_stuck_cause_is_valid(value: Any) -> bool:
     try:
         ExitStuckCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _failed_enter_filled_cause_is_valid(value: Any) -> bool:
+    try:
+        FailedEnterFilledCause.from_mapping(value)
     except ValueError:
         return False
     return True
@@ -239,6 +254,19 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # attributed-flat proof or an operator may end it. VoidAfter here
         # would silently discard the episode the escalation exists to
         # preserve (ADR 0048 Decision 1).
+        age=CauseCleared(),
+    ),
+    # #2348: a fill on an ENTER already folded terminal. The Clerk keeps the
+    # real position; this fences the instance against new exposure and admits
+    # only reduction of the contradicted symbols, so the operator's flatten or
+    # a strategy EXIT can close it. Ended only by an attributed-flat proof on a
+    # clean broker reconciliation -- never on a timer.
+    FAILED_ENTER_FILLED_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        cause_is_valid=_failed_enter_filled_cause_is_valid,
         age=CauseCleared(),
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
