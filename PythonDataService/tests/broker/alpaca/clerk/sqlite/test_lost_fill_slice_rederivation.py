@@ -664,7 +664,7 @@ def test_v15_migration_adds_the_fill_indexes(tmp_path: Path) -> None:
 
         schema.migrate_schema(conn, from_version=14)
 
-        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 15
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == schema.SCHEMA_VERSION
         assert _index_names(conn) >= _FILL_INDEXES
     finally:
         repo.close()

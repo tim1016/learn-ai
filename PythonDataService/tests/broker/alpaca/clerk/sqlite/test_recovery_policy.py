@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
+    RecoveryCapability,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     UNCONDITIONAL_RECOVERY_ACTION_IDS,
@@ -732,3 +733,113 @@ def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:
     assert guidance.may_create_exposure is False
     assert guidance.impact == "Only this bot cannot create exposure."
     assert guidance.next_step == "The Clerk is reconciling automatically."
+
+
+def _account_uncertainty(
+    reason_code: str, *, observed_at_ms: int = 1_700_000_009_000
+) -> ProjectedUncertainty:
+    return ProjectedUncertainty(
+        uncertainty_id=f"episode:{reason_code}",
+        scope="ACCOUNT_CLERK",
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=None,
+        reason_code=reason_code,
+        headline="Account episode",
+        explanation="Account episode.",
+        operator_impact="New entries are paused account-wide.",
+        next_step="Review it.",
+        observed_at_ms=observed_at_ms,
+        evidence_age_ms=1_000,
+        evidence_refs=("evidence",),
+    )
+
+
+def _flatten_actions(*uncertainties: ProjectedUncertainty) -> dict[str, RecoveryCapability]:
+    context = _context(
+        runs=(),
+        positions=(
+            ProjectedPosition(
+                strategy_instance_id="spy-bot",
+                symbol="SPY",
+                attributed_qty=1.0,
+                updated_at_ms=1_700_000_008_000,
+            ),
+        ),
+        uncertainties=uncertainties,
+        latest_account_reconciliation=ProjectedReconciliation(
+            reconciliation_id="reconciliation-17",
+            effect_operation_id=None,
+            order_ref=None,
+            trigger="operator",
+            attempted_at_ms=1_700_000_009_000,
+            outcome="RESOLVED_SUCCESS",
+            evidence_age_ms=1_000,
+            evidence_refs=("alpaca:positions:17",),
+        ),
+    )
+    return {
+        action.action_id: action
+        for action in build_recovery_catalog(context)
+        if action.action_id in {"prepare_safe_flatten", "execute_safe_flatten"}
+    }
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    ["UNFOLDABLE_BROKER_ORDER", "EXIT_NOT_FLAT", "EXIT_STUCK", "FAILED_ENTER_FILLED"],
+)
+def test_safe_flatten_stays_available_under_a_cause_whose_policy_admits_it(
+    reason_code: str,
+) -> None:
+    """#2363: an unfoldable foreign order must not freeze safe-flatten.
+
+    The admission is the registry's ``admits_safe_flatten`` flag, shared with
+    the stuck/not-flat EXIT causes the executor exists to clear.
+    """
+    actions = _flatten_actions(_account_uncertainty(reason_code))
+
+    assert actions["prepare_safe_flatten"].available is True
+    assert actions["execute_safe_flatten"].available is True
+
+
+@pytest.mark.parametrize(
+    "reason_code", ["POSITION_DRIFT", "ORDER_OUTCOME_UNKNOWN", "UNREGISTERED_REASON"]
+)
+def test_safe_flatten_still_refuses_a_cause_that_does_not_admit_it(reason_code: str) -> None:
+    """``allows_reduction`` alone never opens safe-flatten: POSITION_DRIFT admits
+    a proven REDUCE, yet attributed quantities are exactly what it disputes."""
+    actions = _flatten_actions(_account_uncertainty(reason_code))
+
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        assert actions[action_id].available is False, action_id
+        assert actions[action_id].unavailable_reason_code == "EXPOSURE_NOT_PROVEN"
+
+
+def test_safe_flatten_refuses_an_unfoldable_order_newer_than_the_reconciliation() -> None:
+    """#2363 review: an unfoldable order is broker-side evidence the flatten's
+    reconciliation must postdate; admitting it is not ignoring it."""
+    actions = _flatten_actions(
+        _account_uncertainty("UNFOLDABLE_BROKER_ORDER", observed_at_ms=1_700_000_009_001)
+    )
+
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        assert actions[action_id].available is False, action_id
+        assert actions[action_id].unavailable_reason_code == "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
+
+
+@pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK", "FAILED_ENTER_FILLED"])
+def test_safe_flatten_admits_an_exit_episode_refreshed_after_the_reconciliation(
+    reason_code: str,
+) -> None:
+    """EXIT_NOT_FLAT / EXIT_STUCK are the Clerk's own EXIT bookkeeping, refreshed
+    by every automatic re-drive; the flatten that clears them must not demand a
+    newer reconciliation after each refresh (behaviour unchanged by #2363).
+    FAILED_ENTER_FILLED (#2348) is derived from a folded fill, whose position
+    change the position-evidence freshness gate already pins."""
+    actions = _flatten_actions(_account_uncertainty(reason_code, observed_at_ms=1_700_000_009_500))
+
+    assert actions["prepare_safe_flatten"].available is True
+    assert actions["execute_safe_flatten"].available is True
