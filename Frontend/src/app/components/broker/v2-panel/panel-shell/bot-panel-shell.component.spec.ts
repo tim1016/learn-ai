@@ -426,10 +426,27 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 }
 
 class StubEventSource {
+  static latest: StubEventSource | null = null;
   addEventListener = vi.fn();
   close = vi.fn();
 
-  constructor(readonly url: string) {}
+  constructor(readonly url: string) {
+    StubEventSource.latest = this;
+  }
+
+  emit(name: string, data: string): void {
+    for (const [eventName, listener] of this.addEventListener.mock.calls) {
+      if (eventName === name) (listener as (event: MessageEvent<string>) => void)(
+        new MessageEvent(name, { data }),
+      );
+    }
+  }
+}
+
+function emitOnLiveStream(name: string, data: string): void {
+  const source = StubEventSource.latest;
+  if (source === null) throw new Error('No live stream was opened.');
+  source.emit(name, data);
 }
 
 const originalEventSource = globalThis.EventSource;
@@ -720,6 +737,44 @@ describe('BotPanelShellComponent', () => {
       // (ActiveLensBridgeService), not a nav row this page renders itself.
       expect(TestBed.inject(ActiveLensBridgeService).host()).not.toBeNull();
     });
+  });
+
+  it('withholds the frozen panel behind the server stale notice while the producer is stalled (#2353)', async () => {
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
+
+    emitOnLiveStream('stale', JSON.stringify({
+      reason: 'PRODUCER_STALLED',
+      message: 'The live panel stopped updating.',
+      why: 'The data plane has not completed a panel refresh in over 20 seconds.',
+      next_action: 'Do not act on the last values shown.',
+      last_produced_at_ms: 1_753_800_000_000,
+      observed_at_ms: 1_753_800_060_000,
+    }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const notice = screen.getByRole('alert', { name: 'The live panel stopped updating.' });
+    expect(within(notice).getByText('Do not act on the last values shown.')).toBeTruthy();
+    expect(within(notice).getByText(
+      formatTimestampDisplay(1_753_800_000_000, { mode: 'local' }),
+      { exact: false },
+    )).toBeTruthy();
+    expect(screen.queryByRole('article', { name: 'Market tape for QQQ' })).toBeNull();
+    expect(screen.queryByText('Loading bot control…')).toBeNull();
+
+    emitOnLiveStream('snapshot', JSON.stringify(liveSnapshot()));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('alert', { name: 'The live panel stopped updating.' })).toBeNull();
+    expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
   });
 
   it('shows loading state initially then renders the trader lens', async () => {

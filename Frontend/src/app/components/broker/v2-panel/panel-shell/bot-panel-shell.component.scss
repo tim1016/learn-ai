@@ -40,6 +40,20 @@
   color: var(--text-primary);
 }
 
+.live-stall {
+  margin: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid rgba(239, 83, 80, 0.5);
+  border-radius: var(--radius);
+  background: var(--bear-soft);
+  color: var(--text-primary);
+
+  p { margin: var(--space-2) 0 0; }
+}
+
+.live-stall__title { margin: 0; font-size: var(--fs-md); }
+.live-stall__meta { color: var(--text-secondary); font-size: var(--fs-xs); }
+
 .loading-state {
   display: grid;
   min-height: 22rem;

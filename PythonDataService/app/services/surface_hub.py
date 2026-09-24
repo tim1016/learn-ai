@@ -13,6 +13,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from app.utils.timestamps import now_ms_utc
+
 logger = logging.getLogger(__name__)
 
 SnapshotT = TypeVar("SnapshotT", bound=BaseModel)
@@ -45,10 +47,36 @@ _EVALUATION_RECEIPT_LABELS = frozenset(
     }
 )
 _CLIENT_QUEUE_MAXSIZE = 1
+#: A producer that has not completed an assembly for this many refresh
+#: intervals is stalled: its stored snapshot is no longer the live state.
+_STALL_AFTER_REFRESH_INTERVALS = 4
 
 
 class SnapshotUnavailableError(RuntimeError):
     """The producer has not completed a successful assembly yet."""
+
+
+@dataclass(frozen=True)
+class SurfaceHubStall:
+    """The producer has not completed an assembly within its liveness budget.
+
+    Both instants are ``int64 ms UTC`` read from this process's own clock: the
+    producer stamps ``last_produced_at_ms`` on every completed assembly, and
+    the reader stamps ``observed_at_ms`` when it checks. Transport keepalives
+    play no part.
+    """
+
+    last_produced_at_ms: int
+    observed_at_ms: int
+    stall_after_ms: int
+
+
+class SnapshotStalledError(SnapshotUnavailableError):
+    """The stored snapshot is older than the producer's liveness budget."""
+
+    def __init__(self, strategy_instance_id: str, stall: SurfaceHubStall) -> None:
+        super().__init__(strategy_instance_id)
+        self.stall = stall
 
 
 @dataclass(frozen=True)
@@ -127,7 +155,11 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         self._assemble = assemble
         self._on_snapshot = on_snapshot
         self._refresh_interval_seconds = refresh_interval_seconds
+        self._stall_after_ms = int(
+            _STALL_AFTER_REFRESH_INTERVALS * refresh_interval_seconds * 1_000
+        )
         self._latest: SnapshotT | None = None
+        self._last_produced_at_ms: int | None = None
         self._surface_version = 0
         self._fingerprint: str | None = None
         self._refresh_guard = asyncio.Lock()
@@ -178,6 +210,7 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
                     self._surface_version = 0
                     self._fingerprint = None
                     self._latest = None
+                    self._last_produced_at_ms = None
                 self._producer_started_once = True
                 self._last_refresh_failed = False
                 self._generation += 1
@@ -190,14 +223,50 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
             initial_cycle_done = self._initial_cycle_done
         await initial_cycle_done.wait()
 
-    async def snapshot(self, *, refresh: bool = False) -> SnapshotT:
-        """Return the stored snapshot, optionally after one coalesced cycle."""
+    async def snapshot(
+        self,
+        *,
+        refresh: bool = False,
+        allow_stalled: bool = False,
+    ) -> SnapshotT:
+        """Return the stored snapshot, optionally after one coalesced cycle.
+
+        A stalled producer's snapshot is refused with ``SnapshotStalledError``
+        unless the caller (the stream, which reports the stall itself) asks
+        for it with ``allow_stalled``.
+        """
 
         if refresh:
             return await self.refresh()
         if self._latest is None or self._last_refresh_failed:
             raise SnapshotUnavailableError(self.strategy_instance_id)
+        if not allow_stalled and (stall := self.stall()) is not None:
+            raise SnapshotStalledError(self.strategy_instance_id, stall)
         return self._latest
+
+    def stall(self) -> SurfaceHubStall | None:
+        """Return the stall when the last completed assembly is too old."""
+
+        if self._last_produced_at_ms is None:
+            return None
+        observed_at_ms = now_ms_utc()
+        if observed_at_ms - self._last_produced_at_ms <= self._stall_after_ms:
+            return None
+        return SurfaceHubStall(
+            last_produced_at_ms=self._last_produced_at_ms,
+            observed_at_ms=observed_at_ms,
+            stall_after_ms=self._stall_after_ms,
+        )
+
+    def seconds_until_stall(self) -> float | None:
+        """Seconds until the stored snapshot stalls; ``None`` if it cannot now."""
+
+        if self._last_produced_at_ms is None:
+            return None
+        remaining_ms = self._last_produced_at_ms + self._stall_after_ms - now_ms_utc()
+        if remaining_ms < 0:
+            return None
+        return (remaining_ms + 1) / 1_000
 
     async def refresh(self) -> SnapshotT:
         """Coalesce concurrent callers onto one assembly task."""
@@ -278,6 +347,10 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         if generation != self._generation or epoch != self.stream_epoch:
             raise asyncio.CancelledError
         self._last_refresh_failed = False
+        # A completed assembly after a stall is news even when nothing semantic
+        # changed: watchers were told the projection was stale.
+        recovered = self.stall() is not None
+        self._last_produced_at_ms = now_ms_utc()
         fingerprint = semantic_surface_fingerprint(candidate)
         semantic_changed = fingerprint != self._fingerprint
         if semantic_changed:
@@ -290,7 +363,7 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
             }
         )
         self._latest = versioned
-        if semantic_changed:
+        if semantic_changed or recovered:
             self._publish_to_watchers(versioned)
         return versioned
 
@@ -397,10 +470,12 @@ class SurfaceHubRegistry(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runti
 
 
 __all__ = [
+    "SnapshotStalledError",
     "SnapshotUnavailableError",
     "SurfaceHub",
     "SurfaceHubRefreshFailure",
     "SurfaceHubRegistry",
     "SurfaceHubResourceLimits",
+    "SurfaceHubStall",
     "semantic_surface_fingerprint",
 ]

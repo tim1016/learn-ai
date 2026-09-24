@@ -996,13 +996,24 @@ class BotPanelLiveSnapshot(BaseModel):
 
 
 class LiveSnapshotUnavailableDetail(BaseModel):
-    """Retry guidance when a producer has not published its first snapshot."""
+    """Why the live panel snapshot is withheld, with retry guidance.
+
+    ``SNAPSHOT_UNAVAILABLE``: the producer has not published a complete
+    snapshot yet, or its latest refresh failed. ``PRODUCER_STALLED`` (#2353):
+    the producer has not completed an assembly within its liveness budget, so
+    its last snapshot is frozen and is withheld rather than served as live.
+    The stall instants come from the data plane's own clock; this model is
+    also the payload of the live stream's ``stale`` event.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    reason: Literal["SNAPSHOT_UNAVAILABLE", "PRODUCER_STALLED"]
     message: str
     why: str
     next_action: str
+    last_produced_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    observed_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class LiveSnapshotUnavailableResponse(BaseModel):

@@ -43,6 +43,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
+import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
   ORIGIN_TAB_QUERY_PARAM,
@@ -138,6 +139,7 @@ const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
     TraderLensComponent,
     OperatorLensComponent,
     BotBannerComponent,
+    TimestampDisplayComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
@@ -314,6 +316,9 @@ export class BotPanelShellComponent {
     return chart?.resolution === this.liveResolution() ? chart : null;
   });
   protected readonly liveStreamStatus = this.liveStore.status;
+  /** The server's typed stale notice while the panel producer is stalled
+   * (#2353). The frozen snapshot is withheld from view, never shown as live. */
+  protected readonly liveStall = this.liveStore.stall;
 
   private readonly runLifecycle = computed(() => {
     const health = this.panel()?.health;
@@ -390,7 +395,7 @@ export class BotPanelShellComponent {
   protected readonly histChartFailed = computed(() => this.histChart.error() !== undefined);
 
   protected readonly isLoaded = computed(
-    () => this.panel() !== null && this.profile.hasValue(),
+    () => this.panel() !== null && this.profile.hasValue() && this.liveStall() === null,
   );
 
   private lensUnregister: (() => void) | null = null;

@@ -18,6 +18,8 @@ export interface SnapshotStreamCallbacks<T extends VersionedSnapshot> {
   readonly onMalformedSnapshot: (message: string) => void;
   readonly onStatus: (status: AuthenticatedSseStatus) => void;
   readonly onReset?: (message: string) => void;
+  /** The producer stalled; the payload is the server's typed stale notice. */
+  readonly onStale?: (message: string) => void;
 }
 
 /** ADR-0028 latest-wins adoption: new epochs replace, same-epoch versions advance. */
@@ -57,10 +59,11 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
     },
     onControlEvent: (name, message) => {
       if (name === 'reset') callbacks.onReset?.(message.data);
+      if (name === 'stale') callbacks.onStale?.(message.data);
       if (name === 'end') {
         connection?.close();
       }
     },
-  }, ['reset', 'end']);
+  }, ['reset', 'stale', 'end']);
   return { close: () => connection?.close() };
 }

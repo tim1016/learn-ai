@@ -23155,8 +23155,21 @@
       },
       "LiveSnapshotUnavailableDetail": {
         "additionalProperties": false,
-        "description": "Retry guidance when a producer has not published its first snapshot.",
+        "description": "Why the live panel snapshot is withheld, with retry guidance.\n\n``SNAPSHOT_UNAVAILABLE``: the producer has not published a complete\nsnapshot yet, or its latest refresh failed. ``PRODUCER_STALLED`` (#2353):\nthe producer has not completed an assembly within its liveness budget, so\nits last snapshot is frozen and is withheld rather than served as live.\nThe stall instants come from the data plane's own clock; this model is\nalso the payload of the live stream's ``stale`` event.",
         "properties": {
+          "last_produced_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Produced At Ms"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -23165,15 +23178,39 @@
             "title": "Next Action",
             "type": "string"
           },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "reason": {
+            "enum": [
+              "SNAPSHOT_UNAVAILABLE",
+              "PRODUCER_STALLED"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
           "why": {
             "title": "Why",
             "type": "string"
           }
         },
         "required": [
+          "reason",
           "message",
           "why",
-          "next_action"
+          "next_action",
+          "last_produced_at_ms",
+          "observed_at_ms"
         ],
         "title": "LiveSnapshotUnavailableDetail",
         "type": "object"
@@ -51235,7 +51272,7 @@
                 }
               }
             },
-            "description": "The producer has not published its first complete snapshot."
+            "description": "The producer has not published a complete snapshot, its last refresh failed, or it stalled (reason PRODUCER_STALLED)."
           }
         },
         "summary": "Versioned REST bootstrap for the live bot panel",

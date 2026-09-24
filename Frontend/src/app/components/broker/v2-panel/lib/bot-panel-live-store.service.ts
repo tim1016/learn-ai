@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import type { AuthenticatedSseStatus } from '../../../../services/authenticated-sse-connection';
 import {
@@ -8,6 +9,7 @@ import {
 import type {
   BotPanelLiveSnapshot,
   ChartLiveResolution,
+  LiveSnapshotUnavailableDetail,
 } from './broker-v2-panel.types';
 import { BrokerV2PanelService } from './broker-v2-panel.service';
 import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
@@ -38,13 +40,36 @@ function isLiveSnapshot(value: unknown): value is BotPanelLiveSnapshot {
     && candidate.live_chart !== null;
 }
 
-/** Keeps the last complete same-session panel visible across SSE reconnects. */
+function isStallDetail(value: unknown): value is LiveSnapshotUnavailableDetail {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<LiveSnapshotUnavailableDetail>;
+  return candidate.reason === 'PRODUCER_STALLED'
+    && typeof candidate.message === 'string'
+    && typeof candidate.why === 'string'
+    && typeof candidate.next_action === 'string'
+    && typeof candidate.last_produced_at_ms === 'number'
+    && typeof candidate.observed_at_ms === 'number';
+}
+
+/** The typed stalled-producer refusal inside a REST 503, if that is what failed. */
+function stallFromHttpError(error: unknown): LiveSnapshotUnavailableDetail | null {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 503) return null;
+  const body: unknown = error.error;
+  if (typeof body !== 'object' || body === null) return null;
+  const detail = (body as { detail?: unknown }).detail;
+  return isStallDetail(detail) ? detail : null;
+}
+
+/** Keeps the last complete same-session panel visible across SSE reconnects,
+ * except while the server reports its producer stalled (#2353): then `stall()`
+ * carries the server's typed notice and the snapshot is frozen, not live. */
 @Injectable()
 export class BotPanelLiveStore {
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly currentSnapshot = signal<BotPanelLiveSnapshot | null>(null);
   private readonly currentStatus = signal<AuthenticatedSseStatus>('closed');
   private readonly currentError = signal<string | null>(null);
+  private readonly currentStall = signal<LiveSnapshotUnavailableDetail | null>(null);
   private stream: SnapshotStream | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private request: LivePanelRequest | null = null;
@@ -55,6 +80,7 @@ export class BotPanelLiveStore {
   readonly snapshot = this.currentSnapshot.asReadonly();
   readonly status = this.currentStatus.asReadonly();
   readonly error = this.currentError.asReadonly();
+  readonly stall = this.currentStall.asReadonly();
 
   async start(request: LivePanelRequest): Promise<void> {
     const generation = ++this.generation;
@@ -71,6 +97,7 @@ export class BotPanelLiveStore {
       this.selectedRail = null;
       this.currentSnapshot.set(null);
       this.currentError.set(null);
+      this.currentStall.set(null);
     }
     this.stopTransport();
     this.request = request;
@@ -81,7 +108,7 @@ export class BotPanelLiveStore {
       this.adopt(bootstrap);
     } catch (error) {
       if (!this.isCurrent(generation)) return;
-      this.currentError.set(error instanceof Error ? error.message : 'Live snapshot is unavailable.');
+      this.adoptFailure(error, 'Live snapshot is unavailable.');
     }
     if (!this.isCurrent(generation)) return;
     this.openStream(generation, request);
@@ -97,7 +124,7 @@ export class BotPanelLiveStore {
       this.adopt(snapshot);
     } catch (error) {
       if (!this.isCurrent(generation)) return;
-      this.currentError.set(error instanceof Error ? error.message : 'Live snapshot refresh failed.');
+      this.adoptFailure(error, 'Live snapshot refresh failed.');
     }
   }
 
@@ -186,6 +213,9 @@ export class BotPanelLiveStore {
         onReset: () => {
           if (this.isCurrent(generation)) void this.refresh();
         },
+        onStale: (message) => {
+          if (this.isCurrent(generation)) this.adoptStaleNotice(message);
+        },
         onStatus: (status) => {
           if (!this.isCurrent(generation)) return;
           this.currentStatus.set(status);
@@ -204,6 +234,35 @@ export class BotPanelLiveStore {
     const adopted = adoptVersionedSnapshot(current, candidate);
     if (adopted !== current) this.currentSnapshot.set(adopted);
     this.currentError.set(null);
+    // Any delivered snapshot, even one at the current version, proves the
+    // producer completed a refresh: the stall is over.
+    this.currentStall.set(null);
+  }
+
+  private adoptFailure(error: unknown, fallback: string): void {
+    const stall = stallFromHttpError(error);
+    if (stall !== null) {
+      this.currentStall.set(stall);
+      return;
+    }
+    this.currentError.set(error instanceof Error ? error.message : fallback);
+  }
+
+  private adoptStaleNotice(message: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(message);
+    } catch (error) {
+      this.currentError.set(
+        `Bot panel stream returned a malformed stale notice: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    if (!isStallDetail(parsed)) {
+      this.currentError.set('Bot panel stream returned an invalid stale notice.');
+      return;
+    }
+    this.currentStall.set(parsed);
   }
 
   private isCurrent(generation: number): boolean {
