@@ -1036,8 +1036,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # crash-candidate recreation from it. At zero, that replay reads
             # zero bars -- `recent_closed_bars(lookback_days=0)` builds the
             # IBKR duration string "0 D", which is not valid, and the failure
-            # is caught and degraded to a cold start. A Resume after a crash
-            # would therefore never recreate the candidate, silently
+            # used to be degraded to a cold start (since #2365 it refuses the
+            # run). A Resume after a crash would never have recreated the
+            # candidate that way, silently
             # switching off a shipped recovery path from a field whose
             # justification only mentioned indicators.
             #

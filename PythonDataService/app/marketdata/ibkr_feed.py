@@ -327,8 +327,14 @@ class IbkrMarketDataFeed:
         Used only to warm up a strategy's indicator state before live
         decisions begin (a fresh RTH session alone can't warm
         ADX/EMA-class indicators with multi-day lookback periods) -- never
-        itself treated as a decision. A fetch failure is non-fatal:
-        callers fall back to a cold start, matching pre-warmup behavior.
+        itself treated as a decision.
+
+        A fetch failure raises ``MarketDataFeedError`` with reason
+        ``WARMUP_HISTORY_UNAVAILABLE`` (#2365). It used to return ``[]`` and
+        let the run start cold, which silently replaced the sealed warmup
+        lookback with the bare indicator minimum and changed which real
+        orders the program placed. A run that cannot warm up as sealed does
+        not start; the runner records the refusal as a typed crash.
         """
         normalized_symbol = symbol.upper()
         # Anchor the closed-bar cutoff before broker I/O. A request that starts
@@ -344,16 +350,21 @@ class IbkrMarketDataFeed:
                 use_rth=use_rth,
             )
         except (IBKRBarStreamError, NotConnectedError) as exc:
-            logger.warning(
-                "Historical warmup bars unavailable; strategy will cold-start",
+            logger.error(
+                "Historical warmup bars unavailable; refusing to start the run cold",
                 extra={
                     "action": "warmup_bars_unavailable",
                     "feed_id": self.feed_id,
                     "symbol": normalized_symbol,
+                    "lookback_days": lookback_days,
                     "error": str(exc),
                 },
             )
-            return []
+            raise MarketDataFeedError(
+                f"the {lookback_days}-day warmup history for {normalized_symbol} "
+                f"could not be fetched: {exc}",
+                reason="WARMUP_HISTORY_UNAVAILABLE",
+            ) from exc
         bars = [self._translate(bar) for bar in historical]
         # IBKR's historical endpoint includes the still-forming minute as its
         # last row. A forming bar is not a closed observation: sealing it into

@@ -367,8 +367,12 @@ class MarketDataFeed(Protocol):
 
         Used to warm up a consumer's indicator state before it starts
         making decisions from ``stream_bars`` -- never itself a decision
-        input. A source that cannot serve history returns an empty list;
-        callers must treat that as "no warmup available", not an error.
+        input. A source that has no history to serve returns an empty list.
+        A source whose history fetch *fails* raises ``MarketDataFeedError``
+        (reason ``WARMUP_HISTORY_UNAVAILABLE``) rather than returning an
+        empty list: a failure silently read as "no history" would start the
+        run cold on a shorter lookback than the one it was sealed with
+        (#2365).
         """
         ...
 

@@ -747,6 +747,45 @@ async def test_recent_closed_bars_anchors_cutoff_before_history_request(
     assert await feed.recent_closed_bars("SPY", use_rth=False) == []
 
 
+def _warmup_history_failures() -> list[Exception]:
+    from app.broker.ibkr.bars import IBKRBarStreamError
+    from app.broker.ibkr.client import NotConnectedError
+
+    return [
+        IBKRBarStreamError("historical data farm connection is broken"),
+        NotConnectedError("IB Gateway is not connected"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", _warmup_history_failures(), ids=["stream_error", "not_connected"]
+)
+async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """#2365: a failed warmup fetch must not read as "no history, start cold".
+
+    Returning ``[]`` let the run start on the bare indicator minimum instead
+    of its sealed lookback -- different real orders, with only a log line to
+    show for it. The failure is a typed feed refusal the runner records.
+    """
+
+    async def _history_fails(*_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
+        raise failure
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _history_fails
+    )
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=7)
+
+    assert refused.value.reason == "WARMUP_HISTORY_UNAVAILABLE"
+    assert refused.value.__cause__ is failure
+
+
 # ---------------------------------------------------------------------------
 # #1921 — reconnect continuity: bar provenance, typed feed errors, the policy
 # ---------------------------------------------------------------------------

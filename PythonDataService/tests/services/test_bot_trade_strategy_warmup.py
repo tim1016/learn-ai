@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,9 +31,11 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     SqliteDecisionReceipts,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.ibkr.bars import IBKRBarStreamError
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import MarketDataBar, MarketDataFeedError
+from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy_warmup import (
     _WARMUP_LOOKBACK_DAYS,
@@ -156,6 +160,43 @@ async def test_replay_warmup_bars_requests_the_floor_for_an_unregistered_strateg
     )
 
     assert feed.recorded_lookback_days == _WARMUP_LOOKBACK_DAYS
+
+
+@pytest.mark.asyncio
+async def test_replay_warmup_bars_refuses_the_run_when_the_sealed_lookback_cannot_be_fetched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2365: a failed history fetch must not start the run cold.
+
+    Drives the real ``IbkrMarketDataFeed`` warmup path with only the IBKR
+    history call faked to fail. Before the fix the feed returned ``[]`` and
+    replay finished normally -- the strategy then decided on the bare
+    indicator minimum instead of the sealed 7-day lookback. Now the replay
+    ends with the feed's typed refusal before any warmup state is built.
+    """
+
+    async def _history_fails(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise IBKRBarStreamError("historical data farm connection is broken")
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _history_fails
+    )
+    client = MagicMock()
+    client.is_connected.return_value = True
+    client.connection_lost = False
+    runtime = _FakeRuntime()
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await replay_warmup_bars(
+            runtime,  # type: ignore[arg-type]
+            _context(),
+            IbkrMarketDataFeed(client),
+            _binding(strategy_key="sma_crossover"),
+            captured_decisions=None,
+        )
+
+    assert refused.value.reason == "WARMUP_HISTORY_UNAVAILABLE"
+    assert runtime.strategy.force_flat_calls == 0
 
 
 def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> None:
