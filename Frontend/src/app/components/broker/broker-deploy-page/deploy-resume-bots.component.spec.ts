@@ -1,5 +1,6 @@
 import { provideRouter } from '@angular/router';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
@@ -63,6 +64,11 @@ async function renderSection(
 
 afterEach(() => vi.useRealTimers());
 
+/** Fake timers need user-event to advance them, or its own delays never elapse. */
+function user() {
+  return vi.isFakeTimers() ? userEvent.setup({ advanceTimers: vi.advanceTimersByTime }) : userEvent.setup();
+}
+
 describe('DeployResumeBotsComponent (#2314)', () => {
   it('lists only the bots the backend offers a Resume for', async () => {
     const running = fakeCatalogBot({ strategy_instance_id: 'still-running', strategy_label: 'Running bot' });
@@ -101,7 +107,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     await vi.advanceTimersByTimeAsync(0);
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
     await vi.advanceTimersByTimeAsync(0);
     fixture.detectChanges();
 
@@ -146,7 +152,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     await vi.advanceTimersByTimeAsync(0);
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
     await vi.advanceTimersByTimeAsync(2_000);
     fixture.detectChanges();
 
@@ -166,7 +172,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -183,7 +189,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -201,7 +207,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     await vi.advanceTimersByTimeAsync(0);
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
     await vi.advanceTimersByTimeAsync(2_000 * 45);
     fixture.detectChanges();
 

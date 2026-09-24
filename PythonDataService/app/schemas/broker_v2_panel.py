@@ -30,6 +30,7 @@ from app.broker.v2panel.vocabulary import (
     StationId,
     StationState,
 )
+from app.marketdata.feed import WarmupRefusalReason
 from app.schemas.account_authority import (
     SIMULATED_AUTHORITY_KINDS,
     AuthorityKind,
@@ -306,7 +307,7 @@ class WarmupJoinView(BaseModel):
     filled_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     filled_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     warmed_from_history_only: bool
-    reason_code: str | None
+    reason_code: WarmupRefusalReason | None
 
 
 class ClerkCard(BaseModel):

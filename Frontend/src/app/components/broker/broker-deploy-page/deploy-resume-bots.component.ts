@@ -19,6 +19,7 @@ import {
   type LaneFence,
 } from '../../../fleet/lane-fence';
 import { withCommand, withEntity, type ResourceTarget } from '../../../fleet/resource-target';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { PanelActionButtonComponent } from '../v2-panel/panel-action-button/panel-action-button.component';
 import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
@@ -62,7 +63,7 @@ interface ResumeOutcome {
 @Component({
   selector: 'app-deploy-resume-bots',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PanelActionButtonComponent, RouterLink, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, PanelActionButtonComponent, RouterLink, TimestampDisplayComponent],
   templateUrl: './deploy-resume-bots.component.html',
   styleUrl: './deploy-resume-bots.component.scss',
 })

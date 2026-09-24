@@ -33,28 +33,19 @@ from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.marketdata.feed import (
     RESUME_HOLE_AFTER_HOURS,
     RESUME_HOLE_UNFILLED,
+    WARMUP_REFUSAL_REASONS,
     MarketDataBar,
     MarketDataFeed,
     MarketDataFeedError,
+    warmup_window_start_ms,
 )
 from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import declared_session_bounds
+from app.services.source_bar_ledger import RetainedSourceBar, RetainedWarmupJoin, SourceBarLedger
 from app.utils.session_anchors import et_date_at_ms
 
 _MINUTE_MS = 60_000
-
-
-@dataclass(frozen=True)
-class OwedHole:
-    """The minutes between the retained tail and ``now_ms`` the run decides on.
-
-    Minutes are named by their close (``end_ms``), the instant a bar for them
-    exists. ``extended_minute_end_ms`` is the first owed extended-hours minute,
-    or ``None`` when the hole holds none.
-    """
-
-    regular_minute_ends_ms: tuple[int, ...]
-    extended_minute_end_ms: int | None
+_DAY_MS = 86_400_000
 
 
 @dataclass(frozen=True)
@@ -65,45 +56,43 @@ class RetainedTailJoin:
     joined_at_ms: int
     filled: tuple[MarketDataBar, ...]
     # ``None``: warm on every retained bar plus ``filled``. Otherwise the hole
-    # outran the lookback, and warmup starts at the first history bar.
+    # outran the lookback, and warmup starts here, as a fresh deploy's does.
     warm_from_ms: int | None = None
 
 
-def owed_hole(
-    session: RunDecisionSession, *, retained_end_ms: int, now_ms: int
-) -> OwedHole:
-    """Every minute closing in ``(retained_end_ms, now_ms]`` that ``session`` decides on."""
-    if now_ms <= retained_end_ms:
-        return OwedHole(regular_minute_ends_ms=(), extended_minute_end_ms=None)
-    first_date, last_date = et_date_at_ms(retained_end_ms), et_date_at_ms(now_ms)
-    regular: list[int] = []
-    extended: int | None = None
-    for window in session_windows_ms_utc(first_date, last_date):
-        regular.extend(
-            end_ms
-            for end_ms in range(window.open_ms_utc + _MINUTE_MS, window.close_ms_utc + 1, _MINUTE_MS)
-            if retained_end_ms < end_ms <= now_ms
-        )
-        if extended is None and session.window is not None:
-            bounds = declared_session_bounds(window.session_date, session.window)
-            if bounds is None:
-                raise ValueError(f"{window.session_date.isoformat()} is a session with no declared bounds")
-            extended = _first_owed_end(
-                ((bounds.open_ms, bounds.rth_open_ms), (bounds.rth_close_ms, bounds.close_ms)),
-                retained_end_ms=retained_end_ms,
-                now_ms=now_ms,
-            )
-    return OwedHole(regular_minute_ends_ms=tuple(regular), extended_minute_end_ms=extended)
+def owed_regular_minute_ends(*, after_ms: int, now_ms: int) -> tuple[int, ...]:
+    """Every regular-hours minute close in ``(after_ms, now_ms]``, from the calendar."""
+    if now_ms <= after_ms:
+        return ()
+    return tuple(
+        end_ms
+        for window in session_windows_ms_utc(et_date_at_ms(after_ms), et_date_at_ms(now_ms))
+        for end_ms in range(window.open_ms_utc + _MINUTE_MS, window.close_ms_utc + 1, _MINUTE_MS)
+        if after_ms < end_ms <= now_ms
+    )
 
 
-def _first_owed_end(
-    spans: Sequence[tuple[int, int]], *, retained_end_ms: int, now_ms: int
+def first_owed_extended_minute_end(
+    session: RunDecisionSession, *, after_ms: int, now_ms: int
 ) -> int | None:
-    """The first minute close in any ``[open, close)`` span inside the hole."""
-    for open_ms, close_ms in spans:
-        first_end = max(open_ms + _MINUTE_MS, retained_end_ms + _MINUTE_MS)
-        if first_end <= min(close_ms, now_ms):
-            return first_end
+    """The first extended-hours minute close in ``(after_ms, now_ms]`` ``session`` decides on.
+
+    ``None`` for a regular-hours session, which decides on none. Walks the
+    calendar session by session and stops at the first hit, so a long hole
+    costs one pass over its sessions, never one step per minute.
+    """
+    if session.window is None or now_ms <= after_ms:
+        return None
+    for window in session_windows_ms_utc(et_date_at_ms(after_ms), et_date_at_ms(now_ms)):
+        bounds = declared_session_bounds(window.session_date, session.window)
+        if bounds is None:
+            raise ValueError(f"{window.session_date.isoformat()} is a session with no declared bounds")
+        # A bar opening in [open, close) closes in (open, close]; the first
+        # close after ``after_ms`` is one minute past it (bars are minute-aligned).
+        for open_ms, close_ms in ((bounds.open_ms, bounds.rth_open_ms), (bounds.rth_close_ms, bounds.close_ms)):
+            first_end = max(open_ms, after_ms) + _MINUTE_MS
+            if first_end <= min(close_ms, now_ms):
+                return first_end
     return None
 
 
@@ -118,62 +107,64 @@ async def join_retained_tail(
 ) -> RetainedTailJoin:
     """Fill the hole after ``retained_end_ms`` from IBKR history, or refuse the run.
 
-    The warmup horizon comes first. A hole within the lookback is owed from
-    the retained tail; a hole that outruns it is owed only from the first bar
-    of the lookback's history (``warm_from_ms``), since the run warms like a
-    fresh deploy and nothing before that bar is replayed.
+    **Refusal facts span the whole hole.** An extended-hours minute the run
+    decides on anywhere between the retained tail and now refuses the run
+    (``RESUME_HOLE_AFTER_HOURS``, owner decision): the refusal is about the
+    hole the bot sat through, not about how much of it warmup replays.
 
-    Raises ``MarketDataFeedError`` with ``RESUME_HOLE_AFTER_HOURS`` when the
-    session owes an extended-hours minute after the horizon, with
-    ``RESUME_HOLE_UNFILLED`` when history is missing an owed regular minute,
-    and propagates the source's own ``WARMUP_HISTORY_UNAVAILABLE`` when
-    history cannot be fetched. Requiring every regular minute is safe for
-    thin symbols: IBKR's 1-minute TRADES history returns a zero-volume bar
-    for a minute with no trades (measured 2026-09-24: 390 of 390 regular
-    minutes for EWN, FLCH and KBWP, with 314-371 of them zero-volume).
+    **Data is clamped to the lookback.** A hole within the sealed lookback
+    window (``warmup_window_start_ms``, the same window the fresh-warmup
+    coverage rule owes) is fetched and owed from the retained tail. A longer one warms like a fresh
+    deploy: the lookback's history is fetched under the source's own warmup
+    coverage rule (the canonical one a fresh deploy obeys, which is also why
+    an empty lookback with no owed session is admitted), warmup starts at its
+    first bar (``warm_from_ms``), and only minutes after that are owed.
+
+    ``RESUME_HOLE_UNFILLED`` refuses when history is missing an owed regular
+    minute; the source's ``WARMUP_HISTORY_UNAVAILABLE`` propagates. Requiring
+    every regular minute is safe for thin symbols: IBKR's 1-minute TRADES
+    history returns a zero-volume bar for a no-trade minute (receipt:
+    ``tests/fixtures/golden/ibkr-history-vs-live-minutes-2026-09-24``).
 
     Every closed bar history returns after the tail is kept, not only the
     owed ones: the ledger retains unfiltered observations, exactly as the
     live stream does, and the session filter applies downstream.
     """
+    unfilled = RetainedTailJoin(retained_end_ms=retained_end_ms, joined_at_ms=now_ms, filled=())
     if now_ms <= retained_end_ms:
-        return RetainedTailJoin(retained_end_ms=retained_end_ms, joined_at_ms=now_ms, filled=())
-    hole_days = (et_date_at_ms(now_ms) - et_date_at_ms(retained_end_ms)).days + 1
-    history: list[MarketDataBar] | None = None
-    warm_from_ms: int | None = None
-    if hole_days > lookback_days:
-        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=lookback_days)
-        if not history:
-            raise MarketDataFeedError(
-                f"IBKR history returned no {symbol} bars for the {lookback_days}-day warmup "
-                f"lookback after the retained bars end at {retained_end_ms}",
-                reason=RESUME_HOLE_UNFILLED,
-            )
-        warm_from_ms = min(bar.start_ms for bar in history)
-    horizon_ms = retained_end_ms if warm_from_ms is None else max(retained_end_ms, warm_from_ms)
-    hole = owed_hole(session, retained_end_ms=horizon_ms, now_ms=now_ms)
-    if hole.extended_minute_end_ms is not None:
+        return unfilled
+    extended_end_ms = first_owed_extended_minute_end(session, after_ms=retained_end_ms, now_ms=now_ms)
+    if extended_end_ms is not None:
         raise MarketDataFeedError(
             f"the run decides on extended-hours {symbol} minutes it did not observe (first "
-            f"closing at {hole.extended_minute_end_ms}); IBKR history does not reproduce "
-            "extended-hours minutes exactly, so the hole cannot be filled",
+            f"closing at {extended_end_ms}); IBKR history does not reproduce extended-hours "
+            "minutes exactly, so the hole cannot be filled",
             reason=RESUME_HOLE_AFTER_HOURS,
         )
-    if not hole.regular_minute_ends_ms and history is None:
-        return RetainedTailJoin(retained_end_ms=retained_end_ms, joined_at_ms=now_ms, filled=())
-    if history is None:
+    if retained_end_ms >= warmup_window_start_ms(lookback_days, now_ms=now_ms):
+        owed = owed_regular_minute_ends(after_ms=retained_end_ms, now_ms=now_ms)
+        if not owed:
+            return unfilled
+        # The smallest window reaching back to the tail; never past the lookback.
+        hole_days = -(-(now_ms - retained_end_ms) // _DAY_MS)
         history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=hole_days)
+        warm_from_ms: int | None = None
+    else:
+        history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=lookback_days)
+        # An empty lookback passed the source's coverage rule, so it owes no
+        # session: the run warms on nothing before now, as a fresh deploy would.
+        warm_from_ms = min((bar.start_ms for bar in history), default=now_ms)
+        owed = owed_regular_minute_ends(after_ms=max(retained_end_ms, warm_from_ms), now_ms=now_ms)
     filled = tuple(
         sorted((bar for bar in history if bar.end_ms > retained_end_ms), key=lambda bar: bar.end_ms)
     )
     returned = {bar.end_ms for bar in filled}
-    missing = [end_ms for end_ms in hole.regular_minute_ends_ms if end_ms not in returned]
+    missing = [end_ms for end_ms in owed if end_ms not in returned]
     if missing:
-        owed = len(hole.regular_minute_ends_ms)
         raise MarketDataFeedError(
-            f"IBKR history returned {owed - len(missing)} of the {owed} regular-hours {symbol} "
-            f"minutes the run owes after {horizon_ms} (first missing closes at {missing[0]}); "
-            "warming across the hole would decide on indicators that skipped it",
+            f"IBKR history returned {len(owed) - len(missing)} of the {len(owed)} regular-hours "
+            f"{symbol} minutes the run owes (first missing closes at {missing[0]}); warming "
+            "across the hole would decide on indicators that skipped it",
             reason=RESUME_HOLE_UNFILLED,
         )
     return RetainedTailJoin(
@@ -184,4 +175,76 @@ async def join_retained_tail(
     )
 
 
-__all__ = ["OwedHole", "RetainedTailJoin", "join_retained_tail", "owed_hole"]
+async def warmup_rows_after_join(
+    source: MarketDataFeed,
+    ledger: SourceBarLedger,
+    *,
+    run_id: str,
+    session: RunDecisionSession,
+    symbol: str,
+    retained: Sequence[RetainedSourceBar],
+    lookback_days: int,
+    now_ms: int,
+) -> list[RetainedSourceBar]:
+    """Join a resumed run's retained bars to ``now_ms``, record it, and return what it warms on.
+
+    The backfill and its join commit in one ledger transaction; a refusal is
+    recorded before it is raised, so the run's evidence says why it never
+    decided. The rows returned are every retained row plus the backfill that
+    open at or after the instance's warm floor: a hole that outran the
+    lookback (this run's, or an earlier run's) warmed from history alone, and
+    nothing before that point is replayed again.
+    """
+    retained_end_ms = retained[-1].end_ms
+    try:
+        join = await join_retained_tail(
+            source,
+            symbol=symbol,
+            session=session,
+            retained_end_ms=retained_end_ms,
+            now_ms=now_ms,
+            lookback_days=lookback_days,
+        )
+    except MarketDataFeedError as exc:
+        if exc.reason in WARMUP_REFUSAL_REASONS:
+            ledger.record_warmup_join(
+                RetainedWarmupJoin(
+                    run_id=run_id,
+                    outcome="refused",
+                    retained_end_ms=retained_end_ms,
+                    joined_at_ms=now_ms,
+                    reason_code=exc.reason,
+                )
+            )
+        raise
+    filled_window = (
+        {}
+        if not join.filled
+        else {
+            "filled_count": len(join.filled),
+            "filled_start_ms": join.filled[0].start_ms,
+            "filled_end_ms": join.filled[-1].end_ms,
+        }
+    )
+    filled = ledger.retain_warmup_join(
+        join.filled,
+        RetainedWarmupJoin(
+            run_id=run_id,
+            outcome="filled" if join.filled else "contiguous",
+            retained_end_ms=retained_end_ms,
+            joined_at_ms=now_ms,
+            warm_from_ms=join.warm_from_ms,
+            **filled_window,
+        ),
+    )
+    floor_ms = ledger.warm_floor_ms(run_id=run_id)
+    return [row for row in (*retained, *filled) if floor_ms is None or row.start_ms >= floor_ms]
+
+
+__all__ = [
+    "RetainedTailJoin",
+    "first_owed_extended_minute_end",
+    "join_retained_tail",
+    "owed_regular_minute_ends",
+    "warmup_rows_after_join",
+]

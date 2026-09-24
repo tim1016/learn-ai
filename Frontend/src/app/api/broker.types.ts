@@ -26747,7 +26747,7 @@ export interface components {
             /** Label */
             label: string;
             /** Reason Code */
-            reason_code: string | null;
+            reason_code: ("WARMUP_HISTORY_UNAVAILABLE" | "RESUME_HOLE_AFTER_HOURS" | "RESUME_HOLE_UNFILLED") | null;
             /** Retained End Ms */
             retained_end_ms: number;
             /** Run Id */

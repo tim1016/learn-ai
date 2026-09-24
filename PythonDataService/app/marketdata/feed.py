@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -75,10 +75,23 @@ RESUME_HOLE_UNFILLED = "RESUME_HOLE_UNFILLED"
 before regular-hours minutes the IBKR 1-minute history did not return (#2314).
 Warming across the hole would decide on indicators that skipped it."""
 
-WARMUP_REFUSAL_REASONS = frozenset(
-    {WARMUP_HISTORY_UNAVAILABLE, RESUME_HOLE_AFTER_HOURS, RESUME_HOLE_UNFILLED}
-)
+def warmup_window_start_ms(lookback_days: int, *, now_ms: int) -> int:
+    """Where a ``lookback_days`` warmup window starts: that many 24-hour days before ``now_ms``.
+
+    The one definition of the window a sealed warmup lookback covers, shared
+    by the fresh-warmup coverage rule (``ibkr_feed._owed_warmup_sessions``)
+    and a resumed run's hole join (``retained_tail_join``), so the two can
+    never disagree about whether a hole reaches past the lookback.
+    """
+    return now_ms - lookback_days * 86_400_000
+
+
+WarmupRefusalReason = Literal[
+    "WARMUP_HISTORY_UNAVAILABLE", "RESUME_HOLE_AFTER_HOURS", "RESUME_HOLE_UNFILLED"
+]
 """Every reason a run is refused during warmup, before it decided anything."""
+
+WARMUP_REFUSAL_REASONS: frozenset[str] = frozenset(get_args(WarmupRefusalReason))
 
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]

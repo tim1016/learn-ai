@@ -44205,6 +44205,11 @@
           "reason_code": {
             "anyOf": [
               {
+                "enum": [
+                  "WARMUP_HISTORY_UNAVAILABLE",
+                  "RESUME_HOLE_AFTER_HOURS",
+                  "RESUME_HOLE_UNFILLED"
+                ],
                 "type": "string"
               },
               {

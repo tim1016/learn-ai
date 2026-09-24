@@ -63,6 +63,7 @@ from app.marketdata.feed import (
     FeedHealth,
     MarketDataBar,
     MarketDataFeedError,
+    warmup_window_start_ms,
 )
 from app.marketdata.ibkr_continuity import MINUTE_INCOMPLETE_REASON_CODE, ContinuityLoop, ResolvedBar
 from app.utils.session_anchors import et_date_at_ms
@@ -85,7 +86,6 @@ class _SymbolLiveness:
     active_count: int = 0
 
 
-_DAY_MS: int = 86_400_000
 
 
 def _owed_warmup_sessions(lookback_days: int, *, now_ms: int) -> list[tuple[int, int]]:
@@ -109,7 +109,7 @@ def _owed_warmup_sessions(lookback_days: int, *, now_ms: int) -> list[tuple[int,
       sparse. For a one-day warmup the two edge sessions together span one
       session, so one of them is always owed while the market is open.
     """
-    window_start_ms = now_ms - lookback_days * _DAY_MS
+    window_start_ms = warmup_window_start_ms(lookback_days, now_ms=now_ms)
     owed: list[tuple[int, int]] = []
     for session in expected_sessions(et_date_at_ms(window_start_ms), et_date_at_ms(now_ms)):
         open_ms = session_open_ms_utc(session)

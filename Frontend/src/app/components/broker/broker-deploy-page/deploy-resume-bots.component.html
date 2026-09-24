@@ -11,7 +11,10 @@
       role="status"
       aria-labelledby="resume-outcome-title"
     >
-      <h3 id="resume-outcome-title">{{ result.strategyLabel }} · {{ result.symbol }}</h3>
+      <div class="resume-bots__identity">
+        <h3 id="resume-outcome-title">{{ result.strategyLabel }}</h3>
+        <app-asset-identity [symbol]="result.symbol" size="sm" />
+      </div>
       <p>{{ result.message }}</p>
       @switch (result.state) {
         @case ('warming') {
@@ -59,8 +62,10 @@
     @for (bot of stoppedBots(); track bot.strategy_instance_id) {
       <li class="resume-bots__row">
         <div>
-          <strong>{{ bot.strategy_label }}</strong>
-          <span class="resume-bots__symbol">{{ bot.symbol }}</span>
+          <div class="resume-bots__identity">
+            <strong>{{ bot.strategy_label }}</strong>
+            <app-asset-identity [symbol]="bot.symbol" size="sm" />
+          </div>
           <p>{{ bot.status_explanation }}</p>
         </div>
         @if (bot.row_action; as action) {

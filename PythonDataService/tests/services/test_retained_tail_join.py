@@ -19,9 +19,17 @@ from app.marketdata.feed import (
 )
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.decision_session import RunDecisionSession
-from app.services.retained_tail_join import join_retained_tail, owed_hole
+from app.services.retained_tail_join import (
+    first_owed_extended_minute_end,
+    join_retained_tail,
+    owed_regular_minute_ends,
+)
 from app.services.session_authority import et_minute_of_day_ms
-from app.services.source_bar_ledger import SourceBarConflictError, SourceBarLedger
+from app.services.source_bar_ledger import (
+    RetainedWarmupJoin,
+    SourceBarConflictError,
+    SourceBarLedger,
+)
 
 _RTH = RunDecisionSession(kind="rth", window=None)
 _EXTENDED = RunDecisionSession(
@@ -81,32 +89,33 @@ class _HistoryFeed:
         return list(self._bars)
 
 
-# ── owed_hole ────────────────────────────────────────────────────────────────
+# ── owed minutes ─────────────────────────────────────────────────────────────
 
 
-def test_owed_hole_counts_the_regular_minutes_a_mid_session_stop_skipped() -> None:
-    hole = owed_hole(_RTH, retained_end_ms=_et(_THU, 10, 7), now_ms=_et(_THU, 13, 0) + 30_000)
+def test_a_mid_session_stop_owes_every_regular_minute_it_skipped() -> None:
+    owed = owed_regular_minute_ends(after_ms=_et(_THU, 10, 7), now_ms=_et(_THU, 13, 0) + 30_000)
 
-    assert hole.regular_minute_ends_ms[0] == _et(_THU, 10, 8)
-    assert hole.regular_minute_ends_ms[-1] == _et(_THU, 13, 0)
-    assert len(hole.regular_minute_ends_ms) == 173
-    assert hole.extended_minute_end_ms is None
+    assert owed[0] == _et(_THU, 10, 8)
+    assert owed[-1] == _et(_THU, 13, 0)
+    assert len(owed) == 173
 
 
-def test_owed_hole_is_empty_across_a_closed_night_for_a_regular_session() -> None:
-    open_ms = session_window_for_date(_THU).open_ms_utc
-    hole = owed_hole(
-        _RTH, retained_end_ms=session_window_for_date(_WED).close_ms_utc, now_ms=open_ms
+def test_a_closed_night_owes_no_regular_minute() -> None:
+    owed = owed_regular_minute_ends(
+        after_ms=session_window_for_date(_WED).close_ms_utc,
+        now_ms=session_window_for_date(_THU).open_ms_utc,
     )
 
-    assert hole.regular_minute_ends_ms == ()
-    assert hole.extended_minute_end_ms is None
+    assert owed == ()
 
 
-def test_owed_hole_names_the_first_extended_minute_an_extended_session_decides_on() -> None:
-    hole = owed_hole(_EXTENDED, retained_end_ms=_et(_WED, 17, 0), now_ms=_et(_THU, 10, 0))
-
-    assert hole.extended_minute_end_ms == _et(_WED, 17, 1)
+def test_an_extended_session_owes_its_first_after_hours_minute() -> None:
+    assert first_owed_extended_minute_end(
+        _EXTENDED, after_ms=_et(_WED, 17, 0), now_ms=_et(_THU, 10, 0)
+    ) == _et(_WED, 17, 1)
+    assert first_owed_extended_minute_end(
+        _RTH, after_ms=_et(_WED, 17, 0), now_ms=_et(_THU, 10, 0)
+    ) is None
 
 
 # ── join_retained_tail ───────────────────────────────────────────────────────
@@ -187,7 +196,52 @@ async def test_a_hole_longer_than_the_lookback_warms_on_the_lookback_history_onl
     assert len(join.filled) == len(history)
 
 
+@pytest.mark.asyncio
+async def test_an_old_after_hours_gap_is_refused_even_past_the_lookback() -> None:
+    """Review P1: a week-old extended-hours gap with a one-day lookback was admitted.
+    The refusal is about the hole the bot sat through, not how much warmup replays."""
+    now_ms = _et(_THU, 13, 0)
+    feed = _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms))
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await join_retained_tail(
+            feed, symbol="SPY", session=_EXTENDED,
+            retained_end_ms=_et(date(2026, 9, 17), 17, 0), now_ms=now_ms, lookback_days=1,
+        )
+
+    assert refused.value.reason == RESUME_HOLE_AFTER_HOURS
+    assert feed.lookbacks == []
+
+
+@pytest.mark.asyncio
+async def test_a_weekend_outrunning_the_lookback_warms_like_a_fresh_deploy() -> None:
+    """Review P1: Friday close to Monday 08:30 with a one-day lookback owes no session,
+    so an empty lookback is admitted -- the fresh-warmup coverage rule's answer."""
+    friday, monday = date(2026, 9, 18), date(2026, 9, 21)
+    now_ms = _et(monday, 8, 30)
+
+    join = await join_retained_tail(
+        _HistoryFeed([]), symbol="SPY", session=_RTH,
+        retained_end_ms=session_window_for_date(friday).close_ms_utc, now_ms=now_ms, lookback_days=1,
+    )
+
+    assert join.filled == ()
+    assert join.warm_from_ms == now_ms
+
+
 # ── _RetainedSourceBarFeed (the resumed run's warmup) ───────────────────────
+
+
+def _filled_join(run_id: str, start_ms: int) -> RetainedWarmupJoin:
+    return RetainedWarmupJoin(
+        run_id=run_id,
+        outcome="filled",
+        retained_end_ms=start_ms,
+        joined_at_ms=start_ms + 2 * _MIN,
+        filled_count=1,
+        filled_start_ms=start_ms,
+        filled_end_ms=start_ms + _MIN,
+    )
 
 
 def _ledger_with_live_bars_through(tmp_path: Path, end_ms: int) -> SourceBarLedger:
@@ -296,12 +350,63 @@ async def test_a_hole_past_the_lookback_drops_the_stale_retained_bars_from_warmu
 def test_backfill_is_accepted_after_live_delivery_but_stays_monotonic(tmp_path: Path) -> None:
     ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
     try:
-        ledger.append_backfill(_minute_bar(_et(_THU, 10, 7)), run_id="run-2")
+        ledger.retain_warmup_join([_minute_bar(_et(_THU, 10, 7))], _filled_join("run-2", _et(_THU, 10, 7)))
 
         with pytest.raises(SourceBarConflictError, match="NON_MONOTONIC_BACKFILL"):
-            ledger.append_backfill(_minute_bar(_et(_WED, 15, 0)), run_id="run-2")
+            ledger.retain_warmup_join([_minute_bar(_et(_WED, 15, 0))], _filled_join("run-3", _et(_WED, 15, 0)))
     finally:
         ledger.close()
+
+
+def test_a_fill_and_its_join_commit_together_or_not_at_all(tmp_path: Path) -> None:
+    """Review P1: a crash mid-fill must not leave bars with no join explaining them."""
+    ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
+    try:
+        # The second bar is out of order, so the batch fails after the first insert.
+        with pytest.raises(SourceBarConflictError):
+            ledger.retain_warmup_join(
+                [_minute_bar(_et(_THU, 10, 7)), _minute_bar(_et(_THU, 10, 0), close="1")],
+                _filled_join("run-2", _et(_THU, 10, 7)),
+            )
+
+        assert ledger.bars(provider="ibkr", symbol="SPY")[-1].end_ms == _et(_THU, 10, 7)
+        assert ledger.warmup_join(run_id="run-2") is None
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"outcome": "filled"},
+        {"outcome": "contiguous", "filled_count": 3, "filled_start_ms": 1, "filled_end_ms": 2},
+        {"outcome": "refused"},
+        {"outcome": "contiguous", "reason_code": "RESUME_HOLE_UNFILLED"},
+        {"outcome": "contiguous", "retained_end_ms": 253_402_300_800_000},
+    ],
+)
+def test_contradictory_join_evidence_is_unrepresentable(fields: dict[str, object]) -> None:
+    from pydantic import ValidationError
+
+    from app.services.source_bar_ledger import RetainedWarmupJoin
+
+    with pytest.raises(ValidationError):
+        RetainedWarmupJoin.model_validate(
+            {"run_id": "r", "retained_end_ms": 1, "joined_at_ms": 2, **fields}
+        )
+
+
+def test_the_join_table_admits_exactly_the_typed_refusal_reasons() -> None:
+    """Parity: the SQL CHECK and ceiling restate the Literal and ``MAX_TIMESTAMP_MS``."""
+    import inspect
+
+    from app.marketdata.feed import WARMUP_REFUSAL_REASONS
+    from app.services import source_bar_store_schema
+    from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+    ddl = inspect.getsource(source_bar_store_schema)
+    assert all(f"'{reason}'" in ddl for reason in WARMUP_REFUSAL_REASONS)
+    assert f"BETWEEN 0 AND {MAX_TIMESTAMP_MS}" in ddl
 
 
 def test_a_fresh_run_records_no_warmup_join(tmp_path: Path) -> None:
