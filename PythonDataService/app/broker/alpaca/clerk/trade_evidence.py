@@ -14,7 +14,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     WEBSOCKET_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
@@ -35,7 +35,10 @@ from app.broker.contract.ports import BrokerReadPort
 # The v12 registry spelling; this module used to carry its own copy of the
 # pre-normalisation string (ADR 0048 Decision 2).
 UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
-TradeUpdateDisposition = Literal["order_event", "unexplained_order"]
+# ``unfoldable_order``: a foreign broker order the fold cannot state
+# truthfully (#2363). It is recorded durably by name and contained to itself,
+# so the stream keeps folding every other order instead of reconnecting forever.
+TradeUpdateDisposition = Literal["order_event", "unexplained_order", "unfoldable_order"]
 
 logger = logging.getLogger(__name__)
 
@@ -148,13 +151,14 @@ class SqliteTradeUpdateEvidenceSink:
             if local_order is None and order is not None:
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
-                # observation fold raises its own atomic account hold.
-                observe_external_order(
+                # observation fold raises its own atomic account hold; an
+                # order no row can state is contained to itself (#2363).
+                observed = observe_or_record_unfoldable(
                     self._repo,
                     order=order,
                     proof_reference=event_key,
                 )
-                return "unexplained_order"
+                return "unfoldable_order" if observed == "unfoldable" else "unexplained_order"
 
             if local_order is None or order is None:
                 evidence_refs = tuple(

@@ -21,8 +21,13 @@ from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_at
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    acknowledge_unfoldable_broker_order,
+    record_unfoldable_broker_order,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, YESTERDAY_NOON
+from app.broker.contract.models import BrokerOrder
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, TODAY_OPEN, YESTERDAY_NOON
 
 # The ledger these tests judge -- the seeded fixtures, the two builders and the
 # clocked authority -- lives in ``conftest`` because the envelope sync suite
@@ -125,3 +130,131 @@ def test_unreported_fees_net_nothing_and_say_so(
 ) -> None:
     pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
     assert pnl.fee_usd == 0.0 and pnl.fee_fidelity == "not_reported"
+
+
+def _unfoldable_foreign_order(
+    *, observed_at_ms: int, status: str = "filled", filled_quantity: float = 1.0
+) -> BrokerOrder:
+    """A multi-leg parent with a null side: no external row can state it (#2363)."""
+    return BrokerOrder(
+        broker="alpaca",
+        order_id="mleg-parent-1",
+        client_order_id="alpaca-console:mleg-1",
+        symbol="MSFT",
+        asset_class="us_option",
+        side="None",
+        order_type="limit",
+        time_in_force="day",
+        quantity=1.0,
+        filled_quantity=filled_quantity,
+        limit_price=1.25,
+        stop_price=None,
+        filled_avg_price=1.20 if filled_quantity else None,
+        status=status,
+        submitted_at_ms=observed_at_ms,
+        created_at_ms=observed_at_ms,
+        updated_at_ms=observed_at_ms,
+        filled_at_ms=observed_at_ms,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        events=[],
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def test_an_unfoldable_order_seen_today_makes_the_fact_unknown_even_after_release(
+    day_pnl_repo: ClerkSqliteRepository,
+    reader: SqliteEconomicProjectionReader,
+) -> None:
+    """#2363: an order the Clerk could not record has unjournaled P&L too.
+
+    Before the fix only ``external_orders`` rows counted, so a day with an
+    unfoldable foreign fill read as *known* and the loss hold judged an
+    optimistic number. Releasing the entry fence does not journal its P&L,
+    so the day stays unknown after the acknowledgement as well.
+    """
+    record_unfoldable_broker_order(
+        day_pnl_repo,
+        order=_unfoldable_foreign_order(observed_at_ms=TODAY_OPEN),
+        reason="external order side must be buy or sell",
+    )
+
+    pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert not pnl.known
+    assert pnl.external_orders_today == 0 and pnl.unfoldable_orders_today == 1
+
+    acknowledge_unfoldable_broker_order(
+        day_pnl_repo, broker_order_id="mleg-parent-1", operator="operator-1"
+    )
+    released = day_pnl_at(
+        reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON
+    )
+    assert released.unfoldable_orders_today == 1 and not released.known
+
+
+def test_an_unfoldable_order_seen_yesterday_does_not(
+    day_pnl_repo: ClerkSqliteRepository,
+    reader: SqliteEconomicProjectionReader,
+) -> None:
+    record_unfoldable_broker_order(
+        day_pnl_repo,
+        order=_unfoldable_foreign_order(observed_at_ms=YESTERDAY_NOON),
+        reason="external order side must be buy or sell",
+    )
+    pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert pnl.unfoldable_orders_today == 0 and pnl.known
+
+
+@pytest.mark.parametrize("acknowledged_yesterday", [False, True])
+def test_an_unfoldable_order_seen_yesterday_that_fills_today_makes_today_unknown(
+    day_pnl_repo: ClerkSqliteRepository,
+    reader: SqliteEconomicProjectionReader,
+    acknowledged_yesterday: bool,
+) -> None:
+    """#2363 review: first-seen alone missed today's activity on an old order.
+
+    The order rested unfilled yesterday -- today's fact was known -- and
+    fills this morning. Its fill is not journaled, so today is unknown
+    whether or not the operator reviewed the resting order yesterday: the
+    review covered an unfilled order, and the fill is new broker activity.
+    """
+    record_unfoldable_broker_order(
+        day_pnl_repo,
+        order=_unfoldable_foreign_order(
+            observed_at_ms=YESTERDAY_NOON, status="new", filled_quantity=0.0
+        ),
+        reason="external order side must be buy or sell",
+    )
+    if acknowledged_yesterday:
+        acknowledge_unfoldable_broker_order(
+            day_pnl_repo, broker_order_id="mleg-parent-1", operator="operator-1"
+        )
+    resting = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert resting.unfoldable_orders_today == 0 and resting.known
+
+    record_unfoldable_broker_order(
+        day_pnl_repo,
+        order=_unfoldable_foreign_order(observed_at_ms=TODAY_OPEN),
+        reason="external order side must be buy or sell",
+    )
+
+    filled = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert filled.unfoldable_orders_today == 1 and not filled.known
+
+
+def test_an_unfoldable_order_resting_unchanged_since_yesterday_keeps_today_known(
+    day_pnl_repo: ClerkSqliteRepository,
+    reader: SqliteEconomicProjectionReader,
+) -> None:
+    """A sweep re-seeing the same resting state today is not activity."""
+    for observed_at_ms in (YESTERDAY_NOON, TODAY_OPEN):
+        record_unfoldable_broker_order(
+            day_pnl_repo,
+            order=_unfoldable_foreign_order(
+                observed_at_ms=observed_at_ms, status="new", filled_quantity=0.0
+            ),
+            reason="external order side must be buy or sell",
+        )
+
+    pnl = day_pnl_at(reader, day_pnl_repo, observation=_observation(unrealized=0.0), now_ms=NOON)
+    assert pnl.unfoldable_orders_today == 0 and pnl.known

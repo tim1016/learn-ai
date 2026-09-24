@@ -20,6 +20,10 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
 )
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    acknowledge_unfoldable_broker_order,
+    record_unfoldable_broker_order,
+)
 from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
 from app.broker.alpaca.clerk.sqlite.reconcile import ReconciliationLockOrderError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -1207,3 +1211,78 @@ def test_synthetic_authority_refuses_to_call_itself_live(tmp_path: Path) -> None
         SqliteAlpacaClerkFacade(
             repo=repo, read=broker, trade=broker, authority_kind="synthetic", account_mode="live"
         )
+
+
+async def test_an_unfoldable_order_pause_refuses_enter_as_a_receipt_and_lifts_on_review(
+    tmp_path: Path,
+) -> None:
+    """#2363 review: the account-wide unfoldable-order pause never kills a bot.
+
+    The ENTER comes back as a ``rejected`` receipt (the runner discards the
+    candidate and decides again next clock) rather than an exception the
+    supervisor records as a crash, and the very next ENTER after the
+    operator's review is submitted.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=repo,
+        read=broker,
+        trade=broker,
+        stream_health=_gate(market_data_healthy=True, execution_healthy=True),
+    )
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+    record_unfoldable_broker_order(
+        repo,
+        order=BrokerOrder(
+            broker="alpaca",
+            order_id="mleg-parent-1",
+            client_order_id="alpaca-console:mleg-1",
+            symbol="AAPL",
+            asset_class="us_option",
+            side="None",
+            order_type="limit",
+            time_in_force="day",
+            quantity=1.0,
+            filled_quantity=0.0,
+            limit_price=1.25,
+            stop_price=None,
+            filled_avg_price=None,
+            status="new",
+            submitted_at_ms=1,
+            created_at_ms=1,
+            updated_at_ms=1,
+            filled_at_ms=None,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            events=[],
+            observed_at_ms=1,
+        ),
+        reason="external order side must be buy or sell",
+    )
+
+    async def enter(decision_id: str) -> Any:
+        return await facade.execute_for_instance(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            decision_id=decision_id,
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+        )
+
+    try:
+        paused = await enter("decision-paused")
+        assert paused.state is EffectOperationState.REJECTED
+        assert "UNFOLDABLE_BROKER_ORDER" in (paused.explanation or "")
+        assert broker.submissions == []
+
+        acknowledge_unfoldable_broker_order(repo, broker_order_id="mleg-parent-1", operator="op-1")
+        resumed = await enter("decision-after-review")
+        assert resumed.state is EffectOperationState.SUBMITTED
+        assert len(broker.submissions) == 1
+    finally:
+        repo.close()

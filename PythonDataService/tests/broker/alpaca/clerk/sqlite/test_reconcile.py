@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import json
 import logging
 import threading
 from collections.abc import Iterator
@@ -762,6 +763,46 @@ async def test_reconcile_foreign_order_records_external_observation_without_bot_
     ]
     assert repo.attributed_positions_by_symbol() == {}
     assert repo.fills_for_order("external-order-1") == []
+
+
+async def test_reconcile_contains_an_open_unfoldable_foreign_order_and_fences_only_entries(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2363: a resting multi-leg parent (``side`` null) must not wedge the sweep.
+
+    Before the fix ``observe_external_order`` raised inside the final verdict
+    on every pass, so every sweep and every trade_updates reconnect failed —
+    the reconnect-forever wedge and its account-wide exit freeze, for as long
+    as the order rested. It is now contained to the order: recorded durably,
+    entries fenced, exits admitted, and it never joins the unexplained-order
+    hold (whose acknowledgement it could never satisfy).
+    """
+    poisoned = _broker_order("alpaca-console:mleg-1", order_id="mleg-open-1").model_copy(
+        update={"side": "None", "status": "new"}
+    )
+    readable = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
+
+    result = await reconcile_account(
+        repo, read=_FakeRead(orders=[poisoned, readable]), trade=_FakeTrade()
+    )
+
+    assert result.verdict == "unexplained_order"
+    episode = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
+    )
+    assert episode is not None
+    assert bool(episode["blocks_new_exposure"]) and bool(episode["allows_reduction"])
+    assert json.loads(episode["evidence_refs_json"]) == ["mleg-open-1"]
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
+    assert hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
+    assert [row["broker_order_id"] for row in repo.external_orders()] == ["external-order-1"]
+
+    # A second pass over the same resting order appends nothing new for it.
+    before = len(repo.custody_transitions())
+    await reconcile_account(repo, read=_FakeRead(orders=[poisoned, readable]), trade=_FakeTrade())
+    assert [
+        row["transition_kind"] for row in repo.custody_transitions()[before:]
+    ].count("UNCERTAINTY_REFRESHED") == 0
 
 
 async def test_acknowledging_one_external_order_keeps_another_external_cause_held(
