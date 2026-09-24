@@ -334,6 +334,10 @@ async def test_hung_assembly_stalls_the_snapshot_by_the_producer_stamp(
         stall_after_ms=20_000,
     )
     assert hub.stall() == stall
+    # A passed deadline is "stall now", never "no deadline".
+    clock["monotonic"] += 10.0
+    assert hub.seconds_until_stall() == pytest.approx(0.001)
+    clock["monotonic"] -= 10.0
     with pytest.raises(SnapshotStalledError) as refused:
         await hub.snapshot()
     assert refused.value.stall == stall

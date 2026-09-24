@@ -75,6 +75,10 @@ export class BotPanelLiveStore {
   private request: LivePanelRequest | null = null;
   private generation = 0;
   private transactionRequest = 0;
+  /** Orders liveness (stall / recovered) facts. The stream delivers in order;
+   * a REST read that resolves after a newer stream event carries an older
+   * liveness fact and must not overwrite it (#2353 review). */
+  private livenessSequence = 0;
   private selectedRail: BotPanelLiveSnapshot['panel']['rail'] | null = null;
 
   readonly snapshot = this.currentSnapshot.asReadonly();
@@ -102,30 +106,15 @@ export class BotPanelLiveStore {
     this.stopTransport();
     this.request = request;
     this.currentStatus.set('connecting');
-    try {
-      const bootstrap = await this.fetchSnapshot(request);
-      if (!this.isCurrent(generation)) return;
-      this.adopt(bootstrap);
-    } catch (error) {
-      if (!this.isCurrent(generation)) return;
-      this.adoptFailure(error, 'Live snapshot is unavailable.');
-    }
+    await this.fetchAndAdopt(request, generation, 'Live snapshot is unavailable.');
     if (!this.isCurrent(generation)) return;
     this.openStream(generation, request);
   }
 
-  async refresh(): Promise<void> {
+  refresh(): Promise<void> {
     const request = this.request;
-    if (request === null) return;
-    const generation = this.generation;
-    try {
-      const snapshot = await this.fetchSnapshot(request);
-      if (!this.isCurrent(generation)) return;
-      this.adopt(snapshot);
-    } catch (error) {
-      if (!this.isCurrent(generation)) return;
-      this.adoptFailure(error, 'Live snapshot refresh failed.');
-    }
+    if (request === null) return Promise.resolve();
+    return this.fetchAndAdopt(request, this.generation, 'Live snapshot refresh failed.');
   }
 
   async selectTransaction(transactionRef: string): Promise<void> {
@@ -167,6 +156,32 @@ export class BotPanelLiveStore {
     this.currentStatus.set('closed');
   }
 
+  /** One REST read. Its liveness fact (stalled / live) applies only when no
+   * stream event landed while it was in flight; its snapshot is still offered
+   * to the version-ordered adoption, which drops anything older. */
+  private async fetchAndAdopt(
+    request: LivePanelRequest,
+    generation: number,
+    fallback: string,
+  ): Promise<void> {
+    const sequence = this.livenessSequence;
+    try {
+      const snapshot = await this.fetchSnapshot(request);
+      if (!this.isCurrent(generation)) return;
+      this.adopt(snapshot, this.claimLiveness(sequence));
+    } catch (error) {
+      if (!this.isCurrent(generation)) return;
+      this.adoptFailure(error, fallback, this.claimLiveness(sequence));
+    }
+  }
+
+  /** True when no newer liveness fact landed since `sequence` was read. */
+  private claimLiveness(sequence: number): boolean {
+    if (sequence !== this.livenessSequence) return false;
+    this.livenessSequence += 1;
+    return true;
+  }
+
   private fetchSnapshot(request: LivePanelRequest): Promise<BotPanelLiveSnapshot> {
     return this.panelService.getLiveSnapshot(
       this.readTarget(request),
@@ -205,7 +220,9 @@ export class BotPanelLiveStore {
       'Bot panel stream',
       {
         onSnapshot: (snapshot) => {
-          if (this.isCurrent(generation)) this.adopt(snapshot);
+          if (!this.isCurrent(generation)) return;
+          this.livenessSequence += 1;
+          this.adopt(snapshot, true);
         },
         onMalformedSnapshot: (message) => {
           if (this.isCurrent(generation)) this.currentError.set(message);
@@ -226,7 +243,7 @@ export class BotPanelLiveStore {
     );
   }
 
-  private adopt(candidate: BotPanelLiveSnapshot): void {
+  private adopt(candidate: BotPanelLiveSnapshot, updatesLiveness: boolean): void {
     if (this.selectedRail !== null) {
       candidate = { ...candidate, panel: { ...candidate.panel, rail: this.selectedRail } };
     }
@@ -235,14 +252,15 @@ export class BotPanelLiveStore {
     if (adopted !== current) this.currentSnapshot.set(adopted);
     this.currentError.set(null);
     // Any delivered snapshot, even one at the current version, proves the
-    // producer completed a refresh: the stall is over.
-    this.currentStall.set(null);
+    // producer completed a refresh: the stall is over — unless a newer stream
+    // event already reported otherwise.
+    if (updatesLiveness) this.currentStall.set(null);
   }
 
-  private adoptFailure(error: unknown, fallback: string): void {
+  private adoptFailure(error: unknown, fallback: string, updatesLiveness: boolean): void {
     const stall = stallFromHttpError(error);
     if (stall !== null) {
-      this.currentStall.set(stall);
+      if (updatesLiveness) this.currentStall.set(stall);
       this.currentError.set(null);
       return;
     }
@@ -263,6 +281,7 @@ export class BotPanelLiveStore {
       this.currentError.set('Bot panel stream returned an invalid stale notice.');
       return;
     }
+    this.livenessSequence += 1;
     this.currentStall.set(parsed);
   }
 

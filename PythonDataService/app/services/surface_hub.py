@@ -259,14 +259,17 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         )
 
     def seconds_until_stall(self) -> float | None:
-        """Seconds until the stored snapshot stalls; ``None`` if it cannot now."""
+        """Seconds until the stored snapshot stalls, 1 ms once it already has.
+
+        ``None`` only when nothing has been produced yet, so a deadline that
+        already passed is never mistaken for "no deadline". The floor stays
+        positive so a waiter still takes a snapshot that is already queued.
+        """
 
         if self._last_produced_monotonic is None:
             return None
         remaining = self._last_produced_monotonic + self._stall_after_seconds - monotonic()
-        if remaining < 0:
-            return None
-        return remaining + 0.001
+        return max(remaining, 0.0) + 0.001
 
     async def refresh(self) -> SnapshotT:
         """Coalesce concurrent callers onto one assembly task."""
