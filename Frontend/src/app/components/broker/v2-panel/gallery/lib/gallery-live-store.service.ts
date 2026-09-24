@@ -10,11 +10,14 @@ import {
 import { operationUrl } from '../../../../../fleet/operation-url';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
 import type {
+  GalleryBarsPage,
   GalleryBotView,
   GalleryLiveSnapshot,
   GalleryLiveStatus,
   GalleryLiveUpdate,
+  GalleryRefusedEvent,
   GalleryResolution,
+  GallerySymbolBars,
 } from './gallery.types';
 
 const FALLBACK_POLL_MS = 5_000;
@@ -57,6 +60,31 @@ function isGalleryLiveUpdate(value: unknown): value is GalleryLiveUpdate {
     && Array.isArray(candidate.removed_sids)
     && typeof candidate.markers_delta === 'object'
     && candidate.markers_delta !== null;
+}
+
+function isGalleryBarsPage(value: unknown): value is GalleryBarsPage {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<GalleryBarsPage>;
+  return typeof candidate.surface_version === 'number'
+    && Number.isInteger(candidate.surface_version)
+    && typeof candidate.symbol === 'string'
+    && Array.isArray(candidate.bars);
+}
+
+function isGalleryRefusedEvent(value: unknown): value is GalleryRefusedEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<GalleryRefusedEvent>;
+  return typeof candidate.reason === 'string'
+    && candidate.reason.length > 0
+    && typeof candidate.event === 'string'
+    && typeof candidate.bytes === 'number'
+    && typeof candidate.max_bytes === 'number';
+}
+
+/** ``bars`` pages staged for the stream frame with the same ``surface_version`` (#2328). */
+interface StagedBarsPages {
+  readonly version: number;
+  readonly bySymbol: Map<string, ChartBar[]>;
 }
 
 /** Replace the bar sharing a ``start_ms`` (the forming bar); otherwise append. Always returns ``start_ms``-sorted. */
@@ -105,11 +133,15 @@ function dropRemoved(bots: readonly GalleryBotView[], removedSids: readonly stri
  * EventSource lifecycle is modeled on ``AccountDeskHoldingsStore``
  * (auto-close on host destroy via ``DestroyRef``) using the lower-level
  * ``openAuthenticatedSseConnection`` primitive directly — the gallery
- * stream has two named event types (``snapshot`` primary, ``update`` and
- * ``reset`` as control events), which that primitive already supports,
- * rather than the single-event ``openVersionedSnapshotStream`` wrapper
- * ``BotPanelLiveStore`` uses. The 5s poll-fallback-on-error behavior is
- * mirrored from ``BotPanelLiveStore``.
+ * stream has several named event types (``snapshot`` primary; ``update``,
+ * ``bars``, ``reset`` and ``refused`` as control events), which that
+ * primitive already supports, rather than the single-event
+ * ``openVersionedSnapshotStream`` wrapper ``BotPanelLiveStore`` uses.
+ * ``bars`` pages are staged and folded into the ``snapshot``/``update``
+ * with the same ``surface_version`` (checked against its
+ * ``paged_bar_count``); ``refused`` means the lane cannot fit a frame under
+ * the coordinator's event cap, so the store stops reconnecting (#2328). The
+ * 5s poll-fallback-on-error behavior is mirrored from ``BotPanelLiveStore``.
  *
  * The wire-frame parsing/merge logic is exposed as ``ingestSnapshot`` /
  * ``ingestUpdate`` so it is directly unit-testable without a live
@@ -126,21 +158,26 @@ export class GalleryLiveStore {
   private readonly markersState = signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map());
   private readonly resolutionState = signal<GalleryResolution>('1m');
   private readonly statusState = signal<GalleryLiveStatus>('connecting');
+  private readonly refusalReasonState = signal<string | null>(null);
 
   readonly bots = this.botsState.asReadonly();
   readonly barsBySymbol = this.barsState.asReadonly();
   readonly markersBySid = this.markersState.asReadonly();
   readonly resolution = this.resolutionState.asReadonly();
   readonly status = this.statusState.asReadonly();
+  /** The lane's reason code when it refused the stream (#2328); `null` otherwise. */
+  readonly refusalReason = this.refusalReasonState.asReadonly();
 
   private request: GalleryRequest | null = null;
   private connection: AuthenticatedSseConnection | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
+  private resyncTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   // Empty string == "no snapshot adopted yet"; also doubles as the
   // ``ingestUpdate``/``applyTransportStatus`` "do we have data" guard.
   private epoch = '';
   private surfaceVersion = -1;
+  private stagedPages: StagedBarsPages | null = null;
 
   constructor() {
     this.destroyRef.onDestroy(() => this.stop());
@@ -180,6 +217,7 @@ export class GalleryLiveStore {
       this.barsState.set(new Map());
       this.markersState.set(new Map());
     }
+    this.refusalReasonState.set(null);
     this.statusState.set('connecting');
     await this.bootstrap(generation, request);
     if (generation !== this.generation) return;
@@ -274,27 +312,124 @@ export class GalleryLiveStore {
         },
         onEvent: (event) => {
           if (generation !== this.generation) return;
-          this.parseAndIngest(event.data, isGalleryLiveSnapshot, (snapshot) => this.ingestSnapshot(snapshot));
+          this.parseAndIngest(event.data, isGalleryLiveSnapshot, (snapshot) => {
+            const complete = this.withStagedBars(snapshot);
+            if (complete === null) {
+              this.dropIncompleteFrame(generation, request);
+              return;
+            }
+            this.ingestSnapshot(complete);
+            // The stream is live once it has delivered a snapshot, not when
+            // the transport opens: a relay can send the 200 and then abort
+            // the stream before any frame arrives (#2328).
+            this.refusalReasonState.set(null);
+            this.statusState.set('live');
+            this.stopFallback();
+          });
         },
         onControlEvent: (name, event) => {
           if (generation !== this.generation) return;
           if (name === 'update') {
-            this.parseAndIngest(event.data, isGalleryLiveUpdate, (update) => this.ingestUpdate(update));
+            this.parseAndIngest(event.data, isGalleryLiveUpdate, (update) => {
+              const complete = this.withStagedBars(update);
+              if (complete === null) {
+                this.dropIncompleteFrame(generation, request);
+                return;
+              }
+              this.ingestUpdate(complete);
+            });
+          } else if (name === 'bars') {
+            this.parseAndIngest(event.data, isGalleryBarsPage, (page) => this.stageBarsPage(page));
           } else if (name === 'reset') {
             void this.bootstrap(generation, request);
+          } else if (name === 'refused') {
+            this.parseAndIngest(event.data, isGalleryRefusedEvent, (refusal) =>
+              this.refuseStream(refusal, generation, request));
           }
         },
       },
-      ['update', 'reset'],
+      ['update', 'bars', 'reset', 'refused'],
     );
+  }
+
+  private stageBarsPage(page: GalleryBarsPage): void {
+    if (this.stagedPages?.version !== page.surface_version) {
+      this.stagedPages = { version: page.surface_version, bySymbol: new Map() };
+    }
+    const staged = this.stagedPages.bySymbol.get(page.symbol) ?? [];
+    staged.push(...page.bars);
+    this.stagedPages.bySymbol.set(page.symbol, staged);
+  }
+
+  /**
+   * Fold the staged ``bars`` pages into the frame they precede, then drop
+   * them. Returns ``null`` when a symbol's staged total differs from the
+   * ``paged_bar_count`` the frame declares: a page went missing, and an
+   * empty ``bars`` list must not be applied as if the symbol had none.
+   */
+  private withStagedBars<T extends { readonly surface_version: number; readonly symbols: readonly GallerySymbolBars[] }>(
+    frame: T,
+  ): T | null {
+    const staged = this.stagedPages;
+    this.stagedPages = null;
+    const pages = staged !== null && staged.version === frame.surface_version ? staged.bySymbol : new Map<string, ChartBar[]>();
+    const incomplete = frame.symbols.some((entry) =>
+      entry.paged_bar_count != null && (pages.get(entry.symbol)?.length ?? 0) !== entry.paged_bar_count);
+    if (incomplete) return null;
+    if (pages.size === 0) return frame;
+    return {
+      ...frame,
+      symbols: frame.symbols.map((entry) => ({
+        ...entry,
+        bars: [...(pages.get(entry.symbol) ?? []), ...(entry.bars ?? [])],
+      })),
+    };
+  }
+
+  /**
+   * A paged frame arrived without all of its pages. Applying it would blank
+   * those symbols' charts, so drop it and treat the stream like a failing
+   * transport: not live, and the REST poll keeps the wall current. The lane
+   * sends a snapshot only once per connection, so this connection can never
+   * return to live; close it and reopen after one poll interval (not at
+   * once, so a lane that keeps sending incomplete frames cannot drive a hot
+   * reconnect loop) to be handed a fresh snapshot.
+   */
+  private dropIncompleteFrame(generation: number, request: GalleryRequest): void {
+    this.connection?.close();
+    this.connection = null;
+    this.statusState.set(this.epoch === '' ? 'error' : 'stale');
+    this.startFallback(generation, request);
+    if (this.resyncTimer !== null) return;
+    this.resyncTimer = setTimeout(() => {
+      this.resyncTimer = null;
+      if (generation !== this.generation) return;
+      this.openStream(generation, request);
+    }, FALLBACK_POLL_MS);
+  }
+
+  /**
+   * The lane cannot send a frame under the coordinator's per-event cap and
+   * has ended the stream (#2328). Reconnecting would only be refused again,
+   * so stop the transport, say the wall is not live, keep the lane's reason
+   * for the page to show, and keep the wall current through the REST poll.
+   */
+  private refuseStream(refusal: GalleryRefusedEvent, generation: number, request: GalleryRequest): void {
+    this.connection?.close();
+    this.connection = null;
+    this.stagedPages = null;
+    this.refusalReasonState.set(refusal.reason);
+    this.statusState.set(this.epoch === '' ? 'error' : 'stale');
+    this.startFallback(generation, request);
   }
 
   /**
    * Connection health and frame-parse errors are deliberately decoupled
    * (mirroring `BotPanelLiveStore`'s separate `currentError` signal,
-   * scaled down to this store's fixed 4-value `status`): `status` is
-   * owned exclusively by `applyTransportStatus` (the transport's own
-   * `onopen`/`onerror`). A malformed frame is dropped — not merged, and
+   * scaled down to this store's fixed 4-value `status`): `status` moves
+   * only on transport transitions (`applyTransportStatus`), a delivered
+   * stream snapshot (`live`), or a lane refusal (`refuseStream`). A
+   * malformed frame is dropped — not merged, and
    * not allowed to flip a healthy `'live'`/`'stale'` connection to
    * `'error'` — since the transport itself is fine; only this one
    * payload was bad. The next good frame on the same connection still
@@ -330,11 +465,12 @@ export class GalleryLiveStore {
       return;
     }
     if (status === 'open') {
-      this.statusState.set('live');
-      this.stopFallback();
+      // Not 'live' yet, and the fallback poll keeps running: 'live' waits for
+      // the stream's own snapshot frame (see ``openStream``) (#2328).
       return;
     }
     if (status === 'error') {
+      this.stagedPages = null;
       this.statusState.set(this.epoch === '' ? 'error' : 'stale');
       this.startFallback(generation, request);
     }
@@ -354,7 +490,10 @@ export class GalleryLiveStore {
   private closeTransport(): void {
     this.connection?.close();
     this.connection = null;
+    this.stagedPages = null;
     this.stopFallback();
+    if (this.resyncTimer !== null) clearTimeout(this.resyncTimer);
+    this.resyncTimer = null;
   }
 
   private snapshotUrl(request: GalleryRequest): string {

@@ -14935,6 +14935,8 @@ export interface components {
         GallerySymbolBars: {
             /** Bars */
             bars?: components["schemas"]["ChartBar"][];
+            /** Paged Bar Count */
+            paged_bar_count?: number | null;
             /** Symbol */
             symbol: string;
         };
@@ -16007,6 +16009,11 @@ export interface components {
             mode: "paper" | "live";
             /** Port */
             port: number;
+            /**
+             * Realtime Bar Lines Unreplaced
+             * @default false
+             */
+            realtime_bar_lines_unreplaced?: boolean;
             /** Reason */
             reason?: string | null;
             /** Reconnect Attempt */

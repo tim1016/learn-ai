@@ -787,7 +787,10 @@ def _flatten_actions(*uncertainties: ProjectedUncertainty) -> dict[str, Recovery
     }
 
 
-@pytest.mark.parametrize("reason_code", ["UNFOLDABLE_BROKER_ORDER", "EXIT_NOT_FLAT", "EXIT_STUCK"])
+@pytest.mark.parametrize(
+    "reason_code",
+    ["UNFOLDABLE_BROKER_ORDER", "EXIT_NOT_FLAT", "EXIT_STUCK", "FAILED_ENTER_FILLED"],
+)
 def test_safe_flatten_stays_available_under_a_cause_whose_policy_admits_it(
     reason_code: str,
 ) -> None:
@@ -827,13 +830,15 @@ def test_safe_flatten_refuses_an_unfoldable_order_newer_than_the_reconciliation(
         assert actions[action_id].unavailable_reason_code == "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
 
 
-@pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK"])
+@pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK", "FAILED_ENTER_FILLED"])
 def test_safe_flatten_admits_an_exit_episode_refreshed_after_the_reconciliation(
     reason_code: str,
 ) -> None:
     """EXIT_NOT_FLAT / EXIT_STUCK are the Clerk's own EXIT bookkeeping, refreshed
     by every automatic re-drive; the flatten that clears them must not demand a
-    newer reconciliation after each refresh (behaviour unchanged by #2363)."""
+    newer reconciliation after each refresh (behaviour unchanged by #2363).
+    FAILED_ENTER_FILLED (#2348) is derived from a folded fill, whose position
+    change the position-evidence freshness gate already pins."""
     actions = _flatten_actions(_account_uncertainty(reason_code, observed_at_ms=1_700_000_009_500))
 
     assert actions["prepare_safe_flatten"].available is True

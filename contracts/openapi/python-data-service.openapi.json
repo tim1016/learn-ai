@@ -17364,6 +17364,17 @@
             "title": "Bars",
             "type": "array"
           },
+          "paged_bar_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paged Bar Count"
+          },
           "symbol": {
             "title": "Symbol",
             "type": "string"
@@ -19807,6 +19818,11 @@
           "port": {
             "title": "Port",
             "type": "integer"
+          },
+          "realtime_bar_lines_unreplaced": {
+            "default": false,
+            "title": "Realtime Bar Lines Unreplaced",
+            "type": "boolean"
           },
           "reason": {
             "anyOf": [

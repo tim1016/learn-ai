@@ -23,6 +23,9 @@
       @if (stale()) {
         <div class="gallery-page__stale-banner" role="status">
           Live feed delayed — showing the last known bars and stats.
+          @if (store.refusalReason(); as reason) {
+            <span class="gallery-page__stale-reason">Stream refused: {{ reason | receiptLabel }}</span>
+          }
         </div>
       }
       <app-bot-gallery-dock

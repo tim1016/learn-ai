@@ -38,6 +38,7 @@ _CONTINUITY_EVENT_COPY: dict[str, tuple[str, str]] = {
 _CONTINUITY_CAUSE_COPY: dict[str, str] = {
     "socket_down": "The IBKR socket disconnected.",
     "soft_loss_1100": "IBKR reported connectivity loss while the socket remained open.",
+    "data_lost_1101": "IBKR restored connectivity but dropped the market-data subscription, so it was requested again.",
     "stall": "The IBKR real-time bar subscription stopped advancing.",
     "generation_changed": "The IBKR connection was replaced while this stream was active.",
 }

@@ -1033,13 +1033,14 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             #
             # But this field governs a second thing: `replay_warmup_bars`
             # (app/services/bot_trade_strategy_warmup.py) sizes FR-016
-            # crash-candidate recreation from it. At zero, that replay reads
-            # zero bars -- `recent_closed_bars(lookback_days=0)` builds the
-            # IBKR duration string "0 D", which is not valid, and the failure
-            # is caught and degraded to a cold start. A Resume after a crash
-            # would therefore never recreate the candidate, silently
-            # switching off a shipped recovery path from a field whose
-            # justification only mentioned indicators.
+            # crash-candidate recreation from it. At zero the replay has no
+            # window to rebuild from: `recent_closed_bars(lookback_days=0)`
+            # builds the IBKR duration string "0 D", which is not valid. That
+            # failure used to degrade silently to a cold start, switching off
+            # a shipped recovery path from a field whose justification only
+            # mentioned indicators; since #2365 a failed or short warmup
+            # fetch refuses the run (WARMUP_HISTORY_UNAVAILABLE) instead, so
+            # zero would stop every start rather than degrade it.
             #
             # One day covers the intra-session state this strategy actually
             # has. This is deliberately not solved by flooring the value in

@@ -18,6 +18,7 @@ nothing, online or off.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -802,6 +803,57 @@ async def test_a_drain_first_heard_at_confirmation_marks_and_refuses(
         service.close()
 
 
+async def test_a_confirmation_over_a_tombstone_the_lane_never_learned_refuses(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2349 review: a tombstone on the volume with no drain learned in this
+    process means the coordinator confirmed a binding this volume records as
+    drained — a stale registry (#2350). The confirmation refuses loudly and
+    leaves the tombstone in place, rather than overwriting it back to
+    ``provisioned`` or silently keeping it."""
+    service = _service(control_dir, clock)
+    try:
+        _provisioned, root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        from app.broker.alpaca.clerk.fleet_boot import (
+            FleetBootRefused,
+            close_fleet_lane,
+            confirm_binding,
+        )
+
+        # The volume carries a drain the (restored, older) registry forgot.
+        assert mark_confirmation_evidence_draining(root) is True
+        assert boot.draining is False
+        grant_before = boot.confirmed_grant
+
+        with caplog.at_level("ERROR"), pytest.raises(
+            FleetBootRefused, match="registry is stale"
+        ):
+            await confirm_binding(
+                boot,
+                external_account_id=ACCOUNT,
+                binding_generation=1,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+            )
+        assert any(
+            getattr(record, "action", None) == "confirm_over_tombstone_refused"
+            for record in caplog.records
+        )
+        evidence = read_confirmation_evidence(root)
+        assert evidence is not None
+        assert evidence.lifecycle_state == "draining"
+        assert boot.confirmed_grant is grant_before
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
 async def test_a_drain_in_the_reserve_to_confirm_window_refuses_the_bringup(
     control_dir: Path,
     clock: FrozenClock,
@@ -1020,6 +1072,130 @@ async def test_a_v1_volume_still_boots_offline(
         )
         assert boot is not None and not boot.online
         assert offline_boot_matches(
+            boot,
+            canonical_account_id=ACCOUNT,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+            binding_generation=1,
+        )
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("prior_evidence", [False, True], ids=["first-bringup", "restart"])
+async def test_a_drain_learned_while_the_confirm_reply_is_in_flight_survives_the_reply(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prior_evidence: bool,
+) -> None:
+    """#2349: the confirm reply is older news than a drain the lane learned.
+
+    The coordinator commits the confirmation (fenced on ``provisioned``),
+    then the drain commits, and the heartbeat carries the drain to the lane
+    while the confirm reply is still on the wire. When the reply lands, its
+    evidence write must not re-author the tombstone back to ``provisioned``:
+    the ``draining`` latch is already set, so nothing would ever re-mark it,
+    and a restart during a coordinator outage would boot the drained binding.
+    Real code everywhere except the transport: ``RemotePresence`` talks to
+    the real internal fleet router over ``httpx.ASGITransport``.
+    """
+    from app.broker.alpaca.clerk.fleet_boot import (
+        FleetBootRefused,
+        close_fleet_lane,
+        confirm_and_report,
+        offline_boot_matches,
+        open_fleet_lane,
+        reserve_account,
+        start_heartbeat,
+    )
+    from app.broker.fleet import presence as presence_module
+
+    service = _service(control_dir, clock)
+    try:
+        provisioned = _enrolled_lane(service, tmp_path, clock)
+        clerk_id = provisioned.clerk.clerk_id
+        root = Path(provisioned.clerk.volume_root)
+        _fence_satisfying_roots(monkeypatch, root)
+        _boot_service_on_the_test_clock(monkeypatch, clock)
+        app = _agent_app(clerk_id)
+        app.state.fleet_service = service
+        monkeypatch.setattr(
+            presence_module,
+            "build_internal_client",
+            lambda: httpx.AsyncClient(transport=httpx.ASGITransport(app=app)),
+        )
+        remote_settings = _offline_settings(provisioned)
+
+        async def _bring_up() -> FleetLaneBoot:
+            opened = await open_fleet_lane(settings=remote_settings, volume_root=root)
+            assert opened is not None and opened.online
+            assert isinstance(opened.presence, RemotePresence)
+            await reserve_account(opened, external_account_id=ACCOUNT)
+            return opened
+
+        async def _confirm(lane: FleetLaneBoot) -> None:
+            await confirm_and_report(
+                lane,
+                account_pin=ACCOUNT,
+                effective_binding_generation=1,
+                effective_profile_id="prof_1",
+                effective_revision=2,
+                authority_kind="sqlite",
+                endpoint_mode="paper",
+            )
+
+        if prior_evidence:
+            first = await _bring_up()
+            await _confirm(first)
+            await close_fleet_lane(first)
+
+        boot = await _bring_up()
+        # main.py installs the beat before the confirmation.
+        start_heartbeat(boot, interval_s=0.05)
+        committed = asyncio.Event()
+        release = asyncio.Event()
+        real_confirm = boot.presence.confirm
+
+        async def _confirm_reply_in_flight(**kwargs: object) -> object:
+            result = await real_confirm(**kwargs)  # the registry committed EFFECTIVE
+            committed.set()
+            await release.wait()  # the reply has not reached the lane yet
+            return result
+
+        monkeypatch.setattr(boot.presence, "confirm", _confirm_reply_in_flight)
+        confirm_task = asyncio.create_task(_confirm(boot))
+        await asyncio.wait_for(committed.wait(), 5)
+        service.drain_clerk(clerk_id=clerk_id)
+        clock.advance(1_000)
+        for _ in range(500):
+            if boot.draining:
+                break
+            await asyncio.sleep(0.01)
+        assert boot.draining is True
+
+        release.set()
+        await asyncio.wait_for(confirm_task, 5)
+        for _ in range(5):
+            clock.advance(1_000)
+            await asyncio.sleep(0.06)
+        after = read_confirmation_evidence(root)
+        await close_fleet_lane(boot)
+        assert after is not None
+        assert after.lifecycle_state == "draining"
+
+        # A restart during a coordinator outage boots nothing.
+        def _dead_client() -> httpx.AsyncClient:
+            def _refuse(request: httpx.Request) -> httpx.Response:
+                raise httpx.ConnectError("coordinator down", request=request)
+
+            return httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
+
+        monkeypatch.setattr(presence_module, "build_internal_client", _dead_client)
+        with pytest.raises(FleetBootRefused, match="marked drained"):
+            await open_fleet_lane(settings=remote_settings, volume_root=root)
+        assert not offline_boot_matches(
             boot,
             canonical_account_id=ACCOUNT,
             effective_profile_id="prof_1",

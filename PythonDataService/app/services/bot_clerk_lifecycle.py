@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.active_protocol import (
     RevisionBoundRunRegistrar,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import ActiveSqliteAlpacaLifecycleAuthority
@@ -48,18 +49,26 @@ async def register_alpaca_duty_run(
     binding: BrokerBotBinding,
     *,
     admission_snapshot: ClerkCustodySnapshot | None = None,
+    run_owner: RunOwner,
 ) -> None:
-    """Persist SQLite duty identity before any Alpaca task can exist."""
+    """Persist SQLite duty identity before any Alpaca task can exist.
+
+    ``run_owner`` answers ``done()`` once the run's supervise task has ended;
+    the Clerk retires the run then, so a runner whose STOP commit failed
+    cannot leave its ENTERs working (#2369).
+    """
     if not _requires_duty_authority(binding):
         return
     clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     if admission_snapshot is None or not isinstance(clerk, RevisionBoundRunRegistrar):
-        await clerk.register_strategy_run(binding)
+        await clerk.register_strategy_run(binding, run_owner=run_owner)
         return
     try:
-        await clerk.register_strategy_run(binding, admission_snapshot=admission_snapshot)
+        await clerk.register_strategy_run(
+            binding, admission_snapshot=admission_snapshot, run_owner=run_owner
+        )
     except ClerkAdmissionSnapshotStaleError as exc:
         raise ClerkAdmissionTokenStaleError(str(exc)) from exc
 

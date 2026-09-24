@@ -63,7 +63,7 @@ from app.engine.live.desired_state import (
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
+from app.marketdata.feed import WARMUP_HISTORY_UNAVAILABLE, MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
     BotProcessFact,
@@ -193,7 +193,7 @@ __all__ = [
     "RestartIntensityRefusedError",
     "RunAdmissionRefusedError",
     "UnknownBotError",
-    "drained_lane_start_gate",
+    "fleet_lane_start_gate",
     "go_live_start_gate",
 ]
 
@@ -252,6 +252,12 @@ class LaneStopOutcome:
     intent_stopped: tuple[LaneIntentStoppedBot, ...]
     refused: tuple[LaneStopRefusal, ...]
     still_running: bool
+
+
+def _release_run_owner(run_owner: asyncio.Future[None]) -> None:
+    """Tell the Clerk this process no longer holds the run (#2369)."""
+    if not run_owner.done():
+        run_owner.set_result(None)
 
 
 def _lane_stop_refusal(
@@ -333,19 +339,52 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
 LaneStartGate = Callable[[str], None]
 
 
-def drained_lane_start_gate(is_draining: Callable[[], bool]) -> LaneStartGate:
-    """#2155: a lane that has learned it is drained starts no new runs."""
+#: What the operator reads when the fleet lane starts no new bot, keyed by
+#: the fleet refusal code ``FleetLaneBoot.start_refusal`` answers with — a
+#: closed map, so no coordinator-authored code reaches operator prose.
+_FLEET_LANE_START_REFUSAL: dict[str | None, tuple[str, str]] = {
+    "clerk_lane_draining": (
+        "This lane is drained; it starts no new bots.",
+        "The fleet coordinator marked this lane draining and its binding is "
+        "being handed over. Existing bots settle; new starts refuse for the "
+        "rest of this lane's life.",
+    ),
+    "clerk_lane_retired": (
+        "This lane is retired; it starts no new bots.",
+        "The fleet coordinator retired this lane's clerk. It never returns to "
+        "service; its bots are stopped.",
+    ),
+    "fleet_presence_refused": (
+        "The fleet coordinator refused this lane; it starts no new bots.",
+        "The coordinator answered this lane's registration with a refusal. "
+        "Running bots keep running; new starts refuse until the coordinator "
+        "admits the lane again.",
+    ),
+    None: (
+        "This lane starts no new bots.",
+        "The fleet lane reported a reason this runner does not recognise, so "
+        "it refuses the start rather than guess.",
+    ),
+}
 
-    def refuse_if_lane_drained(_strategy_instance_id: str) -> None:
-        if is_draining():
-            raise RunAdmissionRefusedError(
-                "This lane is drained; it starts no new bots.",
-                detail="The fleet coordinator marked this lane draining and its "
-                "binding is being handed over. Existing bots settle; new "
-                "starts refuse for the rest of this lane's life.",
-            )
 
-    return refuse_if_lane_drained
+def fleet_lane_start_gate(start_refusal: Callable[[], str | None]) -> LaneStartGate:
+    """#2155/#2351/#2320: a drained, retired or refused fleet lane starts no new runs.
+
+    ``start_refusal`` is ``FleetLaneBoot.start_refusal``: the fleet refusal
+    code while the lane may start nothing, ``None`` otherwise. A lane the
+    coordinator admits again starts bots again; a drained or retired one
+    never does.
+    """
+
+    def refuse_if_fleet_lane_refuses(_strategy_instance_id: str) -> None:
+        reason = start_refusal()
+        if reason is None:
+            return
+        message, detail = _FLEET_LANE_START_REFUSAL.get(reason, _FLEET_LANE_START_REFUSAL[None])
+        raise RunAdmissionRefusedError(message, detail=detail, reason_code=reason)
+
+    return refuse_if_fleet_lane_refuses
 
 
 def go_live_start_gate(read_hold: Callable[[], GoLiveHoldState]) -> LaneStartGate:
@@ -789,13 +828,19 @@ class BotTaskRegistry:
             binding.strategy_instance_id,
             lifecycle_repo.read(),
         )
+        # What holds this run in the process until its supervise task has
+        # ended; the Clerk's sweep retires the run once it is done (#2369).
+        run_owner: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         try:
-            await register_alpaca_duty_run(binding, admission_snapshot=admission_snapshot)
+            await register_alpaca_duty_run(
+                binding, admission_snapshot=admission_snapshot, run_owner=run_owner
+            )
         except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
             raise RunAdmissionRefusedError(
                 str(exc),
                 detail="Refresh Clerk custody before starting an Alpaca bot.",
             ) from exc
+        task: asyncio.Task[None] | None = None
         try:
             self._bindings.record_launch(binding, launch_reason=reason)
             self._desired_repo(binding.strategy_instance_id).set(
@@ -820,6 +865,7 @@ class BotTaskRegistry:
                 self._supervise(binding, feed, run_gate),
                 name=f"bot:{binding.strategy_instance_id}",
             )
+            task.add_done_callback(lambda _task: _release_run_owner(run_owner))
             managed = ManagedBot(
                 binding=binding,
                 task=task,
@@ -834,6 +880,10 @@ class BotTaskRegistry:
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
         except BaseException as exc:
+            if task is None:
+                # No supervise task ever held the run, so nothing else will
+                # let the owner go.
+                _release_run_owner(run_owner)
             cleanup_proven = False
             try:
                 await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
@@ -1797,10 +1847,18 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
+            # A refused warmup never started deciding, so it is recorded under
+            # its own reason: "the feed died" would send the operator looking
+            # at a running bot's stream (#2365). Every other feed failure keeps
+            # the long-standing FEED_DEATH code the manual and panel describe.
             await self._terminal.finalize_crash(
                 binding,
                 exc,
-                reason_code="FEED_DEATH",
+                reason_code=(
+                    WARMUP_HISTORY_UNAVAILABLE
+                    if exc.reason == WARMUP_HISTORY_UNAVAILABLE
+                    else "FEED_DEATH"
+                ),
             )
             self._schedule_run_replay_receipt(binding)
         except Exception as exc:

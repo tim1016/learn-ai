@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, FeedHealth, MarketDataBar
@@ -231,7 +232,10 @@ class _CustodyClerk:
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+    async def register_strategy_run(
+        self, binding: BrokerBotBinding, *, run_owner: object = None
+    ) -> None:
+        del run_owner
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
@@ -355,8 +359,18 @@ class _SqliteRuntimeBroker:
         self.orders: dict[str, BrokerOrder] = {}
         self.cancellations: list[str] = []
 
-    async def list_orders(self, **_kwargs) -> list[BrokerOrder]:
-        return list(self.orders.values())
+    async def list_orders(self, *, status: str | None = None, **_kwargs) -> list[BrokerOrder]:
+        """Honour Alpaca's ``status`` filter: ``open`` omits closed orders (#2348 review).
+
+        Returning a closed order to an ``open`` read would hand the sweep a
+        filled order that production reconciliation never sees.
+        """
+        orders = list(self.orders.values())
+        if status == "open":
+            return [o for o in orders if o.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES]
+        if status == "closed":
+            return [o for o in orders if o.status.lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES]
+        return orders
 
     async def list_positions(self) -> list:
         return []
@@ -454,7 +468,10 @@ class _FakeClerk:
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+    async def register_strategy_run(
+        self, binding: BrokerBotBinding, *, run_owner: object = None
+    ) -> None:
+        del run_owner
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))

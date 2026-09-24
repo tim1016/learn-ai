@@ -43,6 +43,9 @@ class _FakeClient:
         # short-circuit on intentional disconnects.
         self._desired_connected = desired_connected
         self._subscriptions_stale = subscriptions_stale
+        # As on the real client, stale subscriptions come from an IBKR 1101,
+        # which advances the data-loss epoch the monitor recovers once each.
+        self._data_loss_epoch = 1 if subscriptions_stale else 0
         self._last_ibkr_code = last_ibkr_code
         self.recovery_succeeded_calls = 0
         self.recovery_failed_calls = 0
@@ -72,6 +75,10 @@ class _FakeClient:
         return self._subscriptions_stale
 
     @property
+    def data_loss_epoch(self) -> int:
+        return self._data_loss_epoch
+
+    @property
     def last_ibkr_code(self) -> int | None:
         return self._last_ibkr_code
 
@@ -89,6 +96,8 @@ class _FakeClient:
         self._reachable = value
 
     def mark_recovery_succeeded(self) -> None:
+        # The real client keeps the flag while a real-time-bar line lost at
+        # 1101 still owes a bar (#2393); this fake never holds one.
         self.recovery_succeeded_calls += 1
         self._subscriptions_stale = False
 

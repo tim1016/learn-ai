@@ -682,6 +682,11 @@ class IbkrConnectionHealth(BaseModel):
     subscriptions_stale: bool = False
     """True after IBKR code 1101 ("data lost") until recovery callbacks have
     resubscribed active streams."""
+    realtime_bar_lines_unreplaced: bool = False
+    """True while a bot's real-time-bar lease opened before the latest IBKR
+    1101 is still held (#2393). Diagnostic only: it never changes
+    ``connection_state``. Each such lease is interrupted by its own liveness
+    gate and stops counting once its consumer releases it, replaced or not."""
     data_farm_degraded: bool = False
     """True while market-data or historical-data farm connectivity is
     degraded (e.g. 2103 / 2105 without its matching OK code yet)."""
