@@ -33,7 +33,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired, FleetControlError
+from app.broker.fleet.errors import (
+    ClerkEndpointNotApproved,
+    ClerkIdentityMismatch,
+    ClerkLaneDraining,
+    ClerkLaneRetired,
+    ClerkNotFound,
+    FleetAgentTokenRefused,
+    FleetControlError,
+    FleetProtocolIncompatible,
+)
 from app.broker.fleet.internal_http import (
     build_internal_client,
     enforce_private_http_target,
@@ -53,15 +62,66 @@ class SessionInfo:
 
 
 class FleetPresenceError(FleetControlError):
-    """The coordinator could not be reached or refused the presence call.
+    """The coordinator could not be reached, or gave no answer about this lane.
 
-    The agent's boot treats this exactly like the coordinator being absent
-    (PRD FR-066): an already-confirmed lane may recover its last-effective
+    Transport failures, 5xx, and every refusal that is not the coordinator's
+    typed word about this lane's own identity or admission: a restore
+    ceremony's ``fleet_registry_recovery_pending``, or a 4xx carrying no
+    fleet reason code at all (a process serving no fleet router). The
+    agent's boot treats this exactly like the coordinator being absent (PRD
+    FR-066): an already-confirmed lane may recover its last-effective
     binding; a first assignment, a changed binding and new enrolment refuse.
+    The typed lane refusals are ``FleetPresenceRefused`` instead.
     """
 
     reason = "fleet_presence_unavailable"
     status_code = 503
+
+
+class FleetPresenceRefused(FleetControlError):
+    """A reachable coordinator refused this lane's identity or admission (#2320).
+
+    Deliberately *not* a ``FleetPresenceError``: FR-066's offline fallback
+    rides out a coordinator the lane cannot reach, never one that answered.
+    Raised only for the typed codes in ``LANE_ADMISSION_REFUSALS`` — an
+    unknown clerk, a mixed build refused by the version fences, an identity
+    or endpoint the registry does not hold, a token the coordinator does not
+    accept. Each is the coordinator's word about this lane, and a lane that
+    read it as absence booted its last binding offline against the very
+    coordinator that had just refused it (#2320, #2340).
+    ``coordinator_reason`` carries that code.
+    """
+
+    reason = "fleet_presence_refused"
+    status_code = 409
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        coordinator_reason: str,
+        next_step: str | None = None,
+    ) -> None:
+        """Capture the refusal and the coordinator's own reason code."""
+        super().__init__(message, next_step=next_step)
+        self.coordinator_reason = coordinator_reason
+
+
+#: The coordinator's typed refusals about this lane's own identity or
+#: admission (#2320, #2340): an answer, never an outage. Every other refusal
+#: a coordinator can give a presence call — ``fleet_registry_recovery_pending``
+#: during a restore, or a 4xx with no fleet reason code — stays in the
+#: unavailability family, so a restore ceremony never stops a live lane
+#: booting its custody. The drain and retirement lessons have their own types.
+LANE_ADMISSION_REFUSALS: frozenset[str] = frozenset(
+    {
+        ClerkNotFound.reason,
+        FleetProtocolIncompatible.reason,
+        ClerkIdentityMismatch.reason,
+        ClerkEndpointNotApproved.reason,
+        FleetAgentTokenRefused.reason,
+    }
+)
 
 
 class FleetLaneDraining(FleetControlError):
@@ -402,31 +462,7 @@ class RemotePresence:
                 f"The fleet coordinator refused {path}: {response.status_code}.",
             )
         if response.status_code != 200:
-            detail = _error_detail(response)
-            if _error_reason(response) == "clerk_lane_draining":
-                # The refusal the lane must learn from, kept clearly out of
-                # the unavailability family: FR-066's offline fallback would
-                # otherwise boot the drained binding right back up (#2155).
-                raise FleetLaneDraining(
-                    detail or f"The fleet coordinator refused {path}: the lane is drained.",
-                    next_step="Finish the drain ceremony on the coordinator; "
-                    "this lane marks its own evidence drained and stays down.",
-                )
-            if _error_reason(response) == "clerk_lane_retired":
-                # Retirement is news about this lane, not an outage (#2351):
-                # the lane stops its bots and its beat rather than falling
-                # back to FR-066's offline boot or re-registering forever.
-                raise FleetLaneRetired(
-                    detail or f"The fleet coordinator refused {path}: the lane is retired.",
-                    next_step="Nothing re-enrols a retired lane; this lane "
-                    "stops its bots and decommissions.",
-                )
-            raise FleetPresenceError(
-                f"The fleet coordinator refused {path}: {detail or response.status_code}",
-                next_step="Retry once the coordinator is reachable; an "
-                "already-confirmed lane may recover its last-effective "
-                "binding meanwhile.",
-            )
+            raise _refusal(response, f"The fleet coordinator refused {path}")
         try:
             body = response.json()
         except ValueError as exc:
@@ -464,11 +500,10 @@ class RemotePresence:
                 f"for clerk {clerk_id}: {response.status_code}.",
             )
         if response.status_code != 200:
-            raise FleetPresenceError(
+            raise _refusal(
+                response,
                 "The fleet coordinator refused to serve the volume expectation "
-                f"for clerk {clerk_id}: {_error_detail(response) or response.status_code}",
-                next_step="Retry the volume-expectation call once the "
-                "coordinator is reachable.",
+                f"for clerk {clerk_id}",
             )
         try:
             body = response.json()
@@ -657,6 +692,48 @@ def matches_service_token(presented: str, expected: str) -> bool:
     return hmac.compare_digest(presented, expected)
 
 
+def _refusal(response: object, message: str) -> FleetControlError:
+    """Classify a coordinator's 4xx by its reason code, never its status class.
+
+    The drain and retirement lessons (#2155, #2351) and the typed lane
+    admission refusals (``LANE_ADMISSION_REFUSALS``, #2320) are answers about
+    this lane; anything else — a restore's recovery-pending, a bodyless 4xx
+    from a process serving no fleet router — stays unavailability, which
+    FR-066 rides out.
+    """
+    reason = _error_reason(response)
+    detail = _error_detail(response) or str(getattr(response, "status_code", ""))
+    if reason == ClerkLaneDraining.reason:
+        # Kept clearly out of the unavailability family: FR-066's offline
+        # fallback would otherwise boot the drained binding right back up.
+        return FleetLaneDraining(
+            f"{message}: {detail}",
+            next_step="Finish the drain ceremony on the coordinator; "
+            "this lane marks its own evidence drained and stays down.",
+        )
+    if reason == ClerkLaneRetired.reason:
+        # The lane stops its bots and its beat rather than falling back to
+        # FR-066's offline boot or re-registering forever.
+        return FleetLaneRetired(
+            f"{message}: {detail}",
+            next_step="Nothing re-enrols a retired lane; this lane "
+            "stops its bots and decommissions.",
+        )
+    if reason in LANE_ADMISSION_REFUSALS:
+        return FleetPresenceRefused(
+            f"{message}: {detail} ({reason})",
+            coordinator_reason=reason,
+            next_step="The coordinator answered; a lane it refuses starts no "
+            "new bot. Resolve the refusal it names.",
+        )
+    return FleetPresenceError(
+        f"{message}: {detail}" + ("" if reason is None else f" ({reason})"),
+        next_step="Retry once the coordinator is reachable; an "
+        "already-confirmed lane may recover its last-effective binding "
+        "meanwhile.",
+    )
+
+
 def _error_detail(response: object) -> str | None:
     """Best-effort reason extraction from a refusal body."""
     body = _error_body(response)
@@ -726,10 +803,12 @@ def _optional_int(body: dict[str, object], key: str) -> int | None:
 
 
 __all__ = [
+    "LANE_ADMISSION_REFUSALS",
     "FleetLaneDraining",
     "FleetLaneRetired",
     "FleetPresence",
     "FleetPresenceError",
+    "FleetPresenceRefused",
     "LocalPresence",
     "RemotePresence",
     "SessionInfo",

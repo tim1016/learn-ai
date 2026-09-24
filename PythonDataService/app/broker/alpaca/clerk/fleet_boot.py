@@ -53,7 +53,18 @@ destination the coordinator will deliver to.
 With the coordinator unreachable mid-boot, the offline rule is FR-066: only
 a recovered binding that exactly matches the confirmation evidence boots
 (last-effective recovery); a first assignment or a changed binding waits for
-the coordinator, failing closed.
+the coordinator, failing closed. "Unreachable" is decided by the refusal's
+reason code, not its status class (#2320): the coordinator's typed word about
+this lane — an unknown clerk, a version fence, a refused token or identity —
+refuses the boot, while a transport failure, a 5xx, a restore's
+recovery-pending or a 4xx with no fleet reason code is ridden out offline.
+And an offline lane is offline until the coordinator answers, not for life
+(#2321): every beat registers again. Boot, a refused beat's repair and an
+offline lane's rejoin are one registration unit (``_register_and_learn``),
+volume identity gate included, so the same answer means the same thing
+wherever it arrives: a drain or a retirement is learned, and any other
+refusal gates new bot starts while running bots keep running — only the
+lane's own retirement stops them.
 
 The lane's own drain is learned, never assumed (#2155): a heartbeat's
 lifecycle answer, or the coordinator's typed refusal at registration,
@@ -76,7 +87,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 from app.broker.fleet import volume as volume_module
@@ -89,7 +100,13 @@ from app.broker.fleet.confirmation import (
     read_confirmation_evidence,
     write_confirmation_evidence,
 )
-from app.broker.fleet.errors import FleetControlError
+from app.broker.fleet.errors import (
+    ClerkLaneDraining,
+    ClerkLaneRetired,
+    FleetControlError,
+    FleetRegistryRecoveryPending,
+    FleetRegistryUnavailable,
+)
 from app.broker.fleet.identity import new_agent_instance_id
 from app.broker.fleet.internal_http import FleetTransportRefused
 from app.broker.fleet.presence import (
@@ -97,6 +114,7 @@ from app.broker.fleet.presence import (
     FleetLaneRetired,
     FleetPresence,
     FleetPresenceError,
+    FleetPresenceRefused,
     LocalPresence,
     RemotePresence,
     SessionInfo,
@@ -221,7 +239,7 @@ def lane_quiet_probe(
     the account observation and holds only if both reads find nothing, so a
     bot still winding down while the broker was read cannot slip between
     them. Once the lane has learned its drain a new start or resume refuses
-    (``bot_runner.drained_lane_start_gate``), which is what keeps the answer
+    (``bot_runner.fleet_lane_start_gate``), which is what keeps the answer
     true after it is taken. The gate is checked at admission, so a start
     already past it when the drain is learned can still create its task a
     moment later; the next beat then reports the bot running, and the gate
@@ -262,8 +280,8 @@ class FleetLaneBoot:
     #: session's current reference only while its row survives; a session it
     #: lost is re-created citing whatever the registration named, and a
     #: replacement citing none is refused delivery while the lane goes on
-    #: heartbeating as reachable. Offline boots register nothing and keep
-    #: ``None``.
+    #: heartbeating as reachable. An offline boot keeps it too: its beat
+    #: registers the lane once the coordinator answers (#2321).
     endpoint_ref: str | None = None
     offline_reason: str | None = None
     owned_service: FleetControlService | None = field(default=None, repr=False)
@@ -283,7 +301,12 @@ class FleetLaneBoot:
     #: ``endpoint_ref`` is: the beat may have to present it again under a
     #: replacement session. ``None`` until a confirmation succeeds — an
     #: unbound lane has nothing to re-present, and neither has a lane whose
-    #: confirmation was refused.
+    #: confirmation was refused. An offline lane (FR-066) holds the grant its
+    #: confirmation evidence vouches for instead, with no confirming session,
+    #: for its beat to present once it rejoins (#2321). Precondition: the
+    #: composition root has already checked ``offline_boot_matches`` for
+    #: exactly this grant — an offline boot whose binding the evidence does
+    #: not vouch for refuses before ``confirm_and_report`` is reached.
     confirmed_grant: ConfirmedGrant | None = None
     #: The session ``confirmed_grant`` was actually confirmed under. A
     #: re-registration replaces ``session`` without touching this field, so a
@@ -313,6 +336,23 @@ class FleetLaneBoot:
     #: ``_learn_retirement``. A retired lane runs no bot, re-registers
     #: nothing and ends its beat once its retirement is complete.
     retirement: RetirementProgress | None = None
+    #: The reason code of the refusal the coordinator last answered this
+    #: lane's registration with, other than a drain or a retirement (#2320,
+    #: #2321): an unknown clerk, a version fence, a refused token or identity,
+    #: a volume that fails the identity gate. While set the lane starts no
+    #: new bot; the bots it runs keep running — a refusal can be the
+    #: coordinator's own misconfiguration, and a stopped bot leaves its
+    #: position unmanaged and stays stopped after readmission. Cleared once
+    #: the coordinator admits the lane again — a registration that succeeds,
+    #: or a beat that lands (``_learn_admitted``). Log vocabulary only:
+    #: operator prose reads ``start_refusal``.
+    admission_refusal: str | None = None
+    #: Whether ``admission_refusal`` is the volume identity gate's. A beat
+    #: landing under the session the lane already held says nothing about
+    #: the mounted root, so this refusal is lifted only by a registration
+    #: that passes the gate; while it stands every landed beat re-runs the
+    #: registration unit instead of readmitting the lane.
+    admission_refused_by_volume_gate: bool = False
     #: How a retired lane stops its bots. Installed by the composition root
     #: beside ``lane_quiet_probe``; ``None`` on a lane with no bot runner,
     #: which has nothing to stop.
@@ -328,6 +368,22 @@ class FleetLaneBoot:
     def retired(self) -> bool:
         """Whether this lane has learned its own clerk is retired (#2351)."""
         return self.retirement is not None
+
+    @property
+    def start_refusal(self) -> str | None:
+        """Why this lane starts no new bot, as a fleet refusal code; else ``None``.
+
+        The one question the bot runner's fleet start gate asks
+        (``bot_runner.fleet_lane_start_gate``): retired, drained, or refused
+        by a reachable coordinator (#2155, #2351, #2320).
+        """
+        if self.retired:
+            return ClerkLaneRetired.reason
+        if self.draining:
+            return ClerkLaneDraining.reason
+        if self.admission_refusal is not None:
+            return FleetPresenceRefused.reason
+        return None
 
 
 async def open_fleet_lane(
@@ -434,6 +490,9 @@ async def open_fleet_lane(
         volume_root=volume_root,
         registry_id="",
         volume_id="",
+        # The lane's for its whole lifetime, not one call's: every
+        # re-registration — an offline boot's rejoin included — cites it.
+        endpoint_ref=settings.AGENT_ENDPOINT_REF,
         owned_service=owned_service,
     )
     # The writable-root fence (fleet A2 inventory): the lane's bot-binding
@@ -450,99 +509,190 @@ async def open_fleet_lane(
         # propagating, same as every other pre-registration refusal below.
         await close_fleet_lane(boot)
         raise
+    answer = await _register_and_learn(boot)
+    if answer is None:
+        return boot
+    if not isinstance(answer, FleetPresenceError):
+        await close_fleet_lane(boot)
+        _raise_boot_refusal(answer)
+    # Offline rule (FR-066): the evidence must name THIS volume's
+    # enrolled identity — a foreign or hand-copied evidence file does
+    # not vouch for anything here.
+    marker = volume_module.read_volume_marker(volume_root)
+    evidence = read_confirmation_evidence(volume_root)
+    if marker is not None and evidence is not None and (
+        evidence.clerk_id != marker.clerk_id or evidence.volume_id != marker.volume_id
+    ):
+        await close_fleet_lane(boot)
+        raise FleetBootRefused(
+            "The confirmation evidence on this volume names clerk "
+            f"{evidence.clerk_id}/volume {evidence.volume_id}; the volume's "
+            f"marker names {marker.clerk_id}/{marker.volume_id}. Evidence "
+            "never migrates onto another lane.",
+            next_step="Restore this volume's own evidence from backup or "
+            "re-enrol it with the coordinator available.",
+        ) from answer
+    if evidence is None:
+        await close_fleet_lane(boot)
+        raise FleetBootRefused(
+            f"The fleet coordinator is unreachable and this volume carries no "
+            f"confirmation evidence: {answer.message}",
+            next_step="A first enrolment or a never-confirmed binding waits "
+            "for the coordinator; it never boots unfenced.",
+        ) from answer
+    if evidence.lifecycle_state != StoredLifecycleState.PROVISIONED.value:
+        # The resurrection block (#2155): a coordinator outage is exactly
+        # when a drained lane must NOT fall back to its last-effective
+        # binding. The lane itself marked this file when it learned the
+        # drain; the mark, not the coordinator's availability, decides.
+        await close_fleet_lane(boot)
+        raise FleetBootRefused(
+            "The confirmation evidence on this volume is marked drained; "
+            "a drained lane boots nothing, with or without the "
+            "coordinator.",
+            next_step="Finish the drain ceremony on the coordinator and "
+            "decommission this volume; a drained lane never returns to "
+            "service.",
+        ) from answer
+    boot.offline_reason = answer.message
+    logger.warning(
+        "Fleet coordinator unreachable; booting offline against confirmed "
+        "evidence (routing stays closed until the coordinator returns; "
+        "every beat tries to rejoin).",
+        extra={"clerk_id": boot.clerk_id},
+    )
+    return boot
+
+
+def _raise_boot_refusal(answer: FleetControlError) -> NoReturn:
+    """Refuse a boot the coordinator answered with anything but a session.
+
+    The answer's lesson is already learned (``_register_and_learn``); a boot
+    refuses on every one of them, because nothing has started yet. A typed
+    fleet refusal from the in-process transport or the identity gate (a
+    volume mismatch, an unknown clerk) is raised as itself, as it always was.
+    """
+    if isinstance(answer, FleetLaneRetired):
+        # Nothing has started yet, so there is no bot to stop (#2351).
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane's registration because "
+            f"its clerk is retired: {answer.message}",
+            next_step="A retired lane never re-enrols; decommission this volume "
+            "or provision a new clerk.",
+        ) from answer
+    if isinstance(answer, FleetLaneDraining):
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane's registration because "
+            f"it is drained: {answer.message}",
+            next_step="Finish the drain ceremony on the coordinator; this "
+            "volume's evidence is marked drained and boots nothing.",
+        ) from answer
+    if isinstance(answer, FleetPresenceRefused):
+        # Only an unreachable coordinator is FR-066's to ride out (#2320);
+        # booting offline here would start the lane against the very answer
+        # that refused it.
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane: {answer.message}",
+            next_step="Resolve the refusal the coordinator names, then restart "
+            "the lane; a refusal is never read as the coordinator being away.",
+        ) from answer
+    raise answer
+
+
+#: The answers that mean the coordinator could not answer about this lane, on
+#: either transport. ``RemotePresence`` folds a registry restore or an
+#: unreadable registry into ``FleetPresenceError``; ``LocalPresence`` raises
+#: the registry's own types. A combined lane mid-restore must learn what a
+#: remote lane learns from the same state: nothing (#2398 review).
+_COORDINATOR_UNAVAILABLE = (
+    FleetPresenceError,
+    FleetRegistryUnavailable,
+    FleetRegistryRecoveryPending,
+)
+
+
+async def _register_and_learn(boot: FleetLaneBoot) -> FleetControlError | None:
+    """Register this lane and act on the coordinator's answer: boot, repair, rejoin.
+
+    The one registration unit (#2320, #2321). The volume identity gate comes
+    first (ADR 0062 Decision 2; audit 2026-09-13, finding 4): the
+    registry-served expectation, the mounted root proven against it, and only
+    then a registration citing ``boot.endpoint_ref``. The answer is then
+    learned the same way wherever it arrives:
+
+    - a session: adopted, with the registry and volume ids of the
+      expectation it was admitted under; any earlier refusal is cleared, and
+      the confirmed grant is re-presented if this session has not confirmed
+      it (a no-op at boot, which has confirmed nothing yet);
+    - a drain or a retirement: learned (``_learn_drain`` /
+      ``_learn_retirement``). The retirement is the only answer that stops
+      the bots this lane runs;
+    - any other refusal, the identity gate's own included: recorded
+      (``_learn_admission_refused``). That gates new bot starts and leaves
+      the running bots and the current session as they are;
+    - an unreachable coordinator, or a registry that cannot answer
+      (``_COORDINATOR_UNAVAILABLE``): nothing changes.
+
+    Returns ``None`` once a session is adopted, otherwise the answer; only a
+    booting lane has anything left to decide with it. Only a
+    ``FleetControlError`` is an answer: anything else (a malformed
+    expectation, a raw transport or filesystem error) propagates, so a boot
+    fails and a beat dies at its one log site.
+    """
+    rejoining = boot.session is None and boot.heartbeat is not None
+    proving_volume = False
     try:
-        expectation = await presence.expectation(clerk_id=settings.CLERK_ID)
-        boot.registry_id = str(expectation["registry_id"])
-        boot.volume_id = str(expectation["volume_id"])
-        _verify_root_against_expectation(volume_root, expectation, clerk_id=settings.CLERK_ID)
-        if isinstance(presence, LocalPresence):
+        expectation = await boot.presence.expectation(clerk_id=boot.clerk_id)
+        proving_volume = True
+        _verify_root_against_expectation(boot.volume_root, expectation, clerk_id=boot.clerk_id)
+        if isinstance(boot.presence, LocalPresence):
             # `register` re-proves the volume itself, so this is redundant —
             # deliberately: it is an earlier-failure belt. A wrong volume
             # fails here, before any registry transaction is opened.
-            await presence.verify_volume(clerk_id=settings.CLERK_ID, volume_root=volume_root)
-        boot.session = await presence.register(
-            clerk_id=settings.CLERK_ID,
-            worker_key=settings.WORKER_KEY,
+            await boot.presence.verify_volume(clerk_id=boot.clerk_id, volume_root=boot.volume_root)
+        proving_volume = False
+        session = await boot.presence.register(
+            clerk_id=boot.clerk_id,
+            worker_key=boot.worker_key,
             agent_instance_id=new_agent_instance_id(),
-            endpoint_ref=settings.AGENT_ENDPOINT_REF,
+            endpoint_ref=boot.endpoint_ref,
             adapter_version=_ADAPTER.adapter_version,
             fleet_protocol_version=FLEET_PROTOCOL_VERSION,
         )
-        # Kept on the boot so a re-registration presents the same reference:
-        # it is the lane's for its whole lifetime, not this one call's.
-        boot.endpoint_ref = settings.AGENT_ENDPOINT_REF
     except FleetLaneRetired as exc:
-        # A retired lane booting is the same lesson one step later (#2351):
-        # tombstone the evidence so no offline boot can resurrect it, and
-        # refuse — nothing has started yet, so there is no bot to stop.
         _learn_retirement(boot)
-        await close_fleet_lane(boot)
-        raise FleetBootRefused(
-            f"The fleet coordinator refused this lane's registration because "
-            f"its clerk is retired: {exc.message}",
-            next_step="A retired lane never re-enrols; decommission this volume "
-            "or provision a new clerk.",
-        ) from exc
+        return exc
     except FleetLaneDraining as exc:
-        # The lesson, not a transport failure (#2155): mark the evidence on
-        # this volume so no later offline boot can present the drained
-        # binding, then refuse — a drained lane never re-enrols.
+        # Learned; a lane already up keeps beating, so the retirement that
+        # follows a drain it cannot answer lane quiet for arrives the same way.
         _learn_drain(boot)
-        await close_fleet_lane(boot)
-        raise FleetBootRefused(
-            f"The fleet coordinator refused this lane's registration because "
-            f"it is drained: {exc.message}",
-            next_step="Finish the drain ceremony on the coordinator; this "
-            "volume's evidence is marked drained and boots nothing.",
-        ) from exc
-    except FleetPresenceError as exc:
-        # Offline rule (FR-066): the evidence must name THIS volume's
-        # enrolled identity — a foreign or hand-copied evidence file does
-        # not vouch for anything here.
-        marker = volume_module.read_volume_marker(volume_root)
-        evidence = read_confirmation_evidence(volume_root)
-        if marker is not None and evidence is not None and (
-            evidence.clerk_id != marker.clerk_id or evidence.volume_id != marker.volume_id
-        ):
-            await close_fleet_lane(boot)
-            raise FleetBootRefused(
-                "The confirmation evidence on this volume names clerk "
-                f"{evidence.clerk_id}/volume {evidence.volume_id}; the volume's "
-                f"marker names {marker.clerk_id}/{marker.volume_id}. Evidence "
-                "never migrates onto another lane.",
-                next_step="Restore this volume's own evidence from backup or "
-                "re-enrol it with the coordinator available.",
-            ) from exc
-        if evidence is None:
-            await close_fleet_lane(boot)
-            raise FleetBootRefused(
-                f"The fleet coordinator is unreachable and this volume carries no "
-                f"confirmation evidence: {exc.message}",
-                next_step="A first enrolment or a never-confirmed binding waits "
-                "for the coordinator; it never boots unfenced.",
-            ) from exc
-        if evidence.lifecycle_state != StoredLifecycleState.PROVISIONED.value:
-            # The resurrection block (#2155): a coordinator outage is exactly
-            # when a drained lane must NOT fall back to its last-effective
-            # binding. The lane itself marked this file when it learned the
-            # drain; the mark, not the coordinator's availability, decides.
-            await close_fleet_lane(boot)
-            raise FleetBootRefused(
-                "The confirmation evidence on this volume is marked drained; "
-                "a drained lane boots nothing, with or without the "
-                "coordinator.",
-                next_step="Finish the drain ceremony on the coordinator and "
-                "decommission this volume; a drained lane never returns to "
-                "service.",
-            ) from exc
-        boot.session = None
-        boot.offline_reason = exc.message
+        return exc
+    except _COORDINATOR_UNAVAILABLE as exc:
+        return exc
+    except FleetControlError as exc:
+        _learn_admission_refused(boot, exc, by_volume_gate=proving_volume)
+        return exc
+    boot.session = session
+    boot.registry_id = str(expectation["registry_id"])
+    boot.volume_id = str(expectation["volume_id"])
+    boot.offline_reason = None
+    _learn_admitted(boot)
+    if rejoining:
         logger.warning(
-            "Fleet coordinator unreachable; booting offline against confirmed "
-            "evidence (routing stays closed until the coordinator returns).",
+            "This offline-booted lane rejoined the fleet coordinator.",
+            extra={
+                "clerk_id": boot.clerk_id,
+                "action": "fleet_lane_rejoined",
+                "routing_epoch": session.routing_epoch,
+            },
+        )
+    elif boot.heartbeat is not None:
+        logger.info(
+            "Fleet session re-registered after heartbeat refusal.",
             extra={"clerk_id": boot.clerk_id},
         )
-    return boot
+    await _reconfirm_grant_if_stale(boot)
+    return None
 
 
 async def reserve_account(boot: FleetLaneBoot, *, external_account_id: str) -> None:
@@ -931,6 +1081,51 @@ async def _stop_bots_after_retirement(boot: FleetLaneBoot, progress: RetirementP
     )
 
 
+def _learn_admission_refused(
+    boot: FleetLaneBoot, exc: FleetControlError, *, by_volume_gate: bool
+) -> None:
+    """The coordinator refused this lane's registration, or its volume failed the gate.
+
+    Not a lifecycle lesson, so nothing is tombstoned and no bot is stopped:
+    a refused token, a version fence, recovery work or an unknown clerk can
+    each be the coordinator's own state (a restart with an empty token map, a
+    registry mid-restore), and a lane that stopped its bots on it would leave
+    their positions unmanaged and keep them stopped after it is readmitted.
+    Only retirement stops bots. The refusal gates new starts
+    (``FleetLaneBoot.start_refusal``), is logged loudly once per change of
+    reason, and the next beat asks again. ``by_volume_gate`` marks a refusal
+    only a registration that passes the gate may lift
+    (``FleetLaneBoot.admission_refused_by_volume_gate``).
+    """
+    reason = exc.coordinator_reason if isinstance(exc, FleetPresenceRefused) else exc.reason
+    if boot.admission_refusal != reason:
+        logger.error(
+            "The fleet coordinator refused this lane; new bot starts refuse, "
+            "running bots keep running, and every beat asks again.",
+            extra={
+                "clerk_id": boot.clerk_id,
+                "action": "fleet_lane_admission_refused",
+                "reason_code": reason,
+                "online": boot.online,
+                "detail": exc.message[:200],
+            },
+        )
+    boot.admission_refusal = reason
+    boot.admission_refused_by_volume_gate = by_volume_gate
+
+
+def _learn_admitted(boot: FleetLaneBoot) -> None:
+    """The coordinator admitted this lane: a session adopted or a beat landed."""
+    if boot.admission_refusal is None:
+        return
+    logger.warning(
+        "The fleet coordinator admits this lane again; new bot starts reopen.",
+        extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_admission_restored"},
+    )
+    boot.admission_refusal = None
+    boot.admission_refused_by_volume_gate = False
+
+
 async def _advance_retirement(boot: FleetLaneBoot) -> bool:
     """One retired beat's work; whether the lane owes nothing more.
 
@@ -977,7 +1172,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     An observation itself never confirms anything. The refusal path is the
     exception, and it is repair rather than protocol: a beat that re-registers
     replaces the session its binding was confirmed under, so it re-presents
-    that grant immediately (``_repair_lane_after_refused_beat``). If that
+    that grant immediately (``_register_and_learn``). If that
     immediate re-presentation is itself refused (a single transient error
     right after re-registration), the grant stays pending rather than
     dropped, and every later beat — refused or not — retries it
@@ -995,10 +1190,13 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     if await _advance_retirement(boot):
                         return
                     continue
+                if boot.session is None:
+                    # An offline boot (FR-066) asks again on every beat
+                    # (#2321); the next beat observes once it rejoined.
+                    await _register_and_learn(boot)
+                    continue
                 reported = boot.reported_facts
                 summary = reported.get("reported_summary")
-                if boot.session is None:
-                    continue
                 account_id = reported.get("reported_account_id")
                 live_summary = _summary_with_live_nickname(
                     summary,
@@ -1029,8 +1227,18 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     logger.warning(
                         "Fleet heartbeat refused: %s", exc.message, extra={"clerk_id": boot.clerk_id}
                     )
-                    await _repair_lane_after_refused_beat(boot)
+                    await _register_and_learn(boot)
                 else:
+                    if boot.admission_refused_by_volume_gate:
+                        # A landed beat proves the session, never the mounted
+                        # root: only a registration that passes the volume
+                        # gate lifts that refusal, so ask for one.
+                        await _register_and_learn(boot)
+                    else:
+                        # A landed beat is the coordinator admitting this
+                        # lane under its current session, whatever an earlier
+                        # re-registration was refused with.
+                        _learn_admitted(boot)
                     if learned_lifecycle == StoredLifecycleState.DRAINING.value:
                         _learn_drain(boot)
                     # The common case is a no-op: `confirmed_grant_session`
@@ -1053,7 +1261,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
             # announced right here: the task simply stops, and nothing notices
             # until the coordinator eventually projects the lane
             # `unreachable`, or `stop_heartbeat` logs the already-dead task at
-            # shutdown. `_repair_lane_after_refused_beat` absorbs the
+            # shutdown. `_register_and_learn` absorbs the
             # coordinator's own refusals and nothing else, so every other exit
             # path — including one raised from inside the `except` clause
             # above, which Python never routes to a sibling `except` of the
@@ -1270,10 +1478,25 @@ async def confirm_and_report(
     No task is created here. The beat has been running since the lane opened
     and re-reads ``boot.reported_facts`` on every pass, so the binding lands
     under it rather than replacing it.
+
+    An offline lane (FR-066) cannot confirm, and does not need to: it booted
+    only because its evidence vouches for exactly this grant
+    (``offline_boot_matches``). The grant is held with no confirming session,
+    which is precisely what the beat's re-presentation retries once the lane
+    rejoins (#2321).
     """
-    if binding_is_granted(
+    granted = binding_is_granted(
         account_pin=account_pin, effective_binding_generation=effective_binding_generation
-    ):
+    )
+    if granted and boot.session is None:
+        boot.confirmed_grant = ConfirmedGrant(
+            external_account_id=account_pin,
+            binding_generation=effective_binding_generation,
+            effective_profile_id=effective_profile_id,
+            effective_revision=effective_revision,
+        )
+        boot.confirmed_grant_session = None
+    elif granted:
         # `binding_is_granted` has already established the pin is present.
         await confirm_binding(
             boot,
@@ -1316,75 +1539,6 @@ async def close_fleet_lane(boot: FleetLaneBoot | None) -> None:
         boot.owned_service.close()
 
 
-async def _repair_lane_after_refused_beat(boot: FleetLaneBoot) -> None:
-    """Re-register the lost session, then re-present the grant it had confirmed.
-
-    A coordinator that restarted lost this session: a fresh registration
-    returns the lane to routed without a process restart. It cites the
-    reference this lane registered with, which the re-registration always
-    should have carried — a coordinator that lost the session re-creates it
-    citing whatever arrives here, and a session naming no approved endpoint is
-    refused every delivery while the lane keeps beating as reachable.
-
-    The replacement session has confirmed nothing, and the coordinator fences
-    a confirmed observation by the instance id and routing epoch that wrote it
-    (``service._descriptor``) — so a lane that re-registered under a live
-    binding projects ``starting`` rather than ``ready`` until it confirms
-    again. Leaving that to "the next boot" (``confirmation.py``'s recovery
-    story, written for a lost confirmation *reply*, not for a session this
-    process replaced) makes a human restarting the container the only repair.
-    The gap opens on an asymmetric failure: the observation is refused — a
-    transient 5xx is enough — and the registration answering it succeeds.
-
-    Both the registration and the re-confirmation are repairs of a
-    coordinator that is already misbehaving, and a beat that died on either
-    would trade a lane the desk shows as ``starting`` for one the coordinator
-    eventually projects ``unreachable`` — so both are logged and dropped
-    rather than raised. They are not symmetric past that: the registration is
-    only retried by the *next refused* beat (this function runs nowhere
-    else), while the re-confirmation it fires immediately below is retried by
-    *every* later beat, refused or not (``_reconfirm_grant_if_stale``,
-    called again from ``_beat``'s normal path) — because a lane with a live,
-    valid session has no reason to wait for another refusal before trying
-    again to present a grant that session has not yet confirmed. Only a
-    ``FleetControlError`` is absorbed here; anything else (a raw transport or
-    filesystem error) still ends the beat at ``_beat``'s one log site,
-    deliberately.
-    """
-    try:
-        boot.session = await boot.presence.register(
-            clerk_id=boot.clerk_id,
-            worker_key=boot.worker_key,
-            agent_instance_id=new_agent_instance_id(),
-            endpoint_ref=boot.endpoint_ref,
-            adapter_version=_ADAPTER.adapter_version,
-            fleet_protocol_version=FLEET_PROTOCOL_VERSION,
-        )
-    except FleetLaneRetired:
-        # The refused beat's cause was retirement (#2351): the beat stops
-        # the bots and ends instead of re-registering on every pass.
-        _learn_retirement(boot)
-        return
-    except FleetLaneDraining:
-        # Not repairable by re-registration: the refusal is the drain lesson
-        # itself. Mark the evidence, leave the beat to keep observing what
-        # it can, and stop trying to rebuild a session.
-        _learn_drain(boot)
-        return
-    except FleetControlError as exc:
-        logger.warning(
-            "Fleet re-registration refused: %s",
-            exc.message,
-            extra={"clerk_id": boot.clerk_id},
-        )
-        return
-    logger.info(
-        "Fleet session re-registered after heartbeat refusal.",
-        extra={"clerk_id": boot.clerk_id},
-    )
-    await _reconfirm_grant_if_stale(boot)
-
-
 async def _reconfirm_grant_if_stale(boot: FleetLaneBoot) -> None:
     """Re-present the confirmed grant if the current session hasn't confirmed it.
 
@@ -1397,7 +1551,7 @@ async def _reconfirm_grant_if_stale(boot: FleetLaneBoot) -> None:
     what gets confirmed in the first place), and an offline lane has no
     session to present it under.
 
-    Called from two places: immediately after ``_repair_lane_after_refused_beat``
+    Called from two places: immediately after ``_register_and_learn``
     re-registers, and from every other landed beat in ``_beat``. The first
     call is what used to be this function's entire job; the second is the
     fix — it is what lets a re-confirmation that is itself refused (a single

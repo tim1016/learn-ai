@@ -2376,21 +2376,21 @@ async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
 async def test_a_reachable_coordinator_that_refuses_expectation_boots_offline_too(
     control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FR-066 also covers refusal, not only unreachability.
+    """FR-066 also covers a refusal that carries no fleet reason code.
 
     Distinct from ``test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple``
     above: that test dials a dead port and never gets a response at all. Here
     the coordinator is a real, reachable process that answers every
-    boot-time ``expectation()`` call with a plain 403 — a wrong token or an
-    unknown clerk, never a connection failure.
+    boot-time ``expectation()`` call with a plain 403 and no ``reason`` —
+    what a process serving no fleet router, or a proxy in front of one,
+    answers, never a connection failure.
 
-    The only reason this still reaches the FR-066 offline fallback is that
-    ``RemotePresence.expectation``'s non-200 branch in
-    ``app/broker/fleet/presence.py`` raises ``FleetPresenceError``. Before
-    that reclassification it raised the base ``FleetControlError``, which
-    ``fleet_boot.py``'s ``except FleetPresenceError as exc:`` does not catch
-    — boot would crash instead of falling back to the already-confirmed
-    evidence, for an already-confirmed live lane.
+    Refusals are classified by reason code, not status class (#2320): only
+    the coordinator's typed word about this lane (``LANE_ADMISSION_REFUSALS``
+    — an unknown clerk, a version fence, a refused token) refuses the boot.
+    A 4xx that names no such code says nothing about this lane, so it stays
+    ``FleetPresenceError`` and the already-confirmed lane recovers its
+    evidence-vouched binding offline.
     """
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
