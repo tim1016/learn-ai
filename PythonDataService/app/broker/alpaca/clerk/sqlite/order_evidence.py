@@ -84,6 +84,7 @@ __all__ = [
     "entry_never_accepted_durably",
     "entry_order_symbol",
     "fence_fills_on_terminal_enters",
+    "fold_enter_unfilled_if_proven",
     "fold_entry_never_accepted",
     "fold_failed",
     "fold_order_acknowledgement",
@@ -272,8 +273,8 @@ def fold_order_evidence(
         order=order,
         append_stale_ack=append_stale_ack,
     )
-    _fold_enter_unfilled_if_proven(
-        repo, effect=effect, order=order, order_ref=order_ref
+    fold_enter_unfilled_if_proven(
+        repo, effect_operation_id=effect_operation_id, order=order
     )
     # A fresh broker total may now account for exact slices a coverage
     # episode quarantined; without this a slice Alpaca never re-sends would
@@ -483,12 +484,11 @@ def fold_order_acknowledgement(
         )
 
 
-def _fold_enter_unfilled_if_proven(
+def fold_enter_unfilled_if_proven(
     repo: ClerkSqliteRepository,
     *,
-    effect: EffectOperationResource,
+    effect_operation_id: str,
     order: BrokerOrder,
-    order_ref: str,
 ) -> None:
     """Mirror R12 for ENTER: a proven-zero-fill terminal ENTER reaches ``failed``.
 
@@ -532,6 +532,14 @@ def _fold_enter_unfilled_if_proven(
       the next observation lands under the ENTER itself, resolves the
       episode, and folds the first case above.
 
+    **Both evidence routes call it, after their acknowledgement.** The
+    REST/reconciliation route through :func:`fold_order_evidence`; the
+    ``trade_updates`` sink directly (#2306), because a websocket frame folds
+    :func:`fold_order_acknowledgement` alone, and the websocket usually sees a
+    vendor cancel before the sweep. Without that call the ack recorded
+    ``broker_state=canceled``, which drops the ENTER out of every
+    reconciliation read, and it stayed ``in_progress`` for ever.
+
     Reached from the observation gate only, never the submit response and
     never under simulated execution authority (owner decision, 2026-09-21): a
     terminal effect surfaces as an ``EffectOperationState.REJECTED`` receipt,
@@ -552,7 +560,17 @@ def _fold_enter_unfilled_if_proven(
       reporting no filled quantity. Either alone is insufficient: a partial
       fill the vendor then cancelled opened real exposure, and a snapshot
       reporting ``0`` over a recorded execution is not proof of nothing filled.
+    - **The acknowledgement it follows took effect.** The order row must now
+      record this snapshot's unfilled terminal state, and no acknowledgement
+      may have reported a filled quantity. An ack that did not advance (a
+      ``canceled`` frame after a ``filled`` one whose execution slice has not
+      landed) proves nothing: folding there would end an ENTER that bought
+      shares, and nothing would ever look at them again (#2306 review).
     """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    order_ref = order.client_order_id
+    assert order_ref is not None
     owning = repo.order(order_ref)
     if owning is None:
         return
@@ -568,7 +586,9 @@ def _fold_enter_unfilled_if_proven(
         or enter.state not in NONTERMINAL_EFFECT_STATES
         or (not in_charge_is_owner and enter.state == "unknown")
         or (order.status or "").lower() not in UNFILLED_TERMINAL_STATES
+        or (owning.broker_state or "").lower() != (order.status or "").lower()
         or order.filled_quantity >= FILL_QTY_EPSILON
+        or (repo.latest_reported_filled_quantity(order_ref) or 0.0) >= FILL_QTY_EPSILON
         or repo.fills_for_order(order_ref)
     ):
         return

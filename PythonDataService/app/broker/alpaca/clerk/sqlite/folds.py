@@ -1493,7 +1493,7 @@ DEFAULT_FOLD_REGISTRY.register("EXIT_ATTRIBUTED_FLAT", _fold_exit_attributed_fla
 DEFAULT_FOLD_REGISTRY.register("EXIT_NOT_FLAT", _fold_order_submit_failed)
 # ENTER's analog of EXIT_NOT_FLAT (#2006): a proven-zero-fill terminal ENTER is
 # a terminal failure with a receipt, same generic fold body — see
-# order_evidence._fold_enter_unfilled_if_proven for why it is a distinct kind.
+# order_evidence.fold_enter_unfilled_if_proven for why it is a distinct kind.
 DEFAULT_FOLD_REGISTRY.register("ENTER_UNFILLED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_FILLED", _fold_manual_order_filled)
