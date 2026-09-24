@@ -1008,6 +1008,32 @@ def latest_reported_filled_quantity(conn: sqlite3.Connection, order_ref: str) ->
     return float(row["reported"]) if row["reported"] is not None else None
 
 
+def latest_acknowledgement_in_states(
+    conn: sqlite3.Connection,
+    order_ref: str,
+    broker_states: frozenset[str],
+) -> tuple[str, float | None] | None:
+    """The state and reported cumulative of the order's latest acknowledgement in ``broker_states``.
+
+    Both values come from the SAME acknowledgement. The ``orders`` fold keeps
+    a terminal state once it has seen one while a later stale REST fold can
+    still append a working-state acknowledgement with an older cumulative,
+    so pairing the order row's state with the latest acknowledgement's total
+    could claim a final total the broker never reported (#2346).
+    """
+    rows = conn.execute(
+        "SELECT broker_state, CAST(json_extract(facts_json, '$.reported_filled_quantity') AS REAL) "
+        "AS reported FROM custody_transitions WHERE order_ref = ? "
+        "AND transition_kind = 'ORDER_SUBMIT_ACKED' ORDER BY sequence DESC",
+        (order_ref,),
+    )
+    for row in rows:
+        state = row["broker_state"]
+        if isinstance(state, str) and state.lower() in broker_states:
+            return state, (float(row["reported"]) if row["reported"] is not None else None)
+    return None
+
+
 def order_fills_short_of_broker_cumulative(conn: sqlite3.Connection, order_ref: str) -> bool:
     """Whether the order's effective fills fall short of the broker's latest cumulative (#2305).
 

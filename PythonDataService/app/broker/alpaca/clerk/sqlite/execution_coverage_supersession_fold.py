@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
     effective_exact_execution_ids_for_order,
     execution_coverage_candidate,
+    order_total_retained_exact_provenance,
     quarantined_exact_provenance_for_conflict,
     unreadable_quarantine_source_ids_for_order,
 )
@@ -74,7 +75,12 @@ def fold_execution_coverage_superseded(
         raise ValueError("coverage supersession binding does not match the current Clerk authority")
     active = active_execution_coverage_conflicts(conn, order_ref=facts.order_ref)
     if facts.resolved_uncertainty_id is None:
-        if active or facts.prior_exact_observations:
+        # Its only admissible prior is the exacts an order-total proof
+        # already accounted for (#2346); every other retained exact belongs
+        # to an episode that must resolve itself.
+        if active or tuple(facts.prior_exact_observations) != order_total_retained_exact_provenance(
+            conn, order_ref=facts.order_ref
+        ):
             raise ValueError("unconflicted coverage supersession cannot bypass accumulated evidence")
     else:
         if (

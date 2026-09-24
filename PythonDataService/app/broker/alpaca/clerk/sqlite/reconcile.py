@@ -1135,9 +1135,14 @@ def _finalize_reconciliation_verdict(
     if repo.control_meta_snapshot().control_revision != expected_control_revision:
         return None
     _fold_snapshot_evidence(repo, broker_orders, simulated_authority=simulated_authority)
+    # An exact slice that arrived after its order's final REST fold is proven
+    # here, on recorded evidence, or its episode would never close (#2346).
+    repo.resolve_order_total_covered_coverage_conflicts()
     # The canonical #2348 detector, re-derived from durable facts on every
     # pass that reaches a verdict: it heals a fence lost to a crash between a
     # fill's commit and the fence's own, whichever path folded the fill.
+    # Independent of the coverage proof above: that proof resolves only its
+    # own episode and moves no fill, so it can neither clear nor hide a fence.
     fence_fills_on_terminal_enters(repo)
     instances = repo.strategy_instances()
     plan = plan_account_reconciliation(
