@@ -89,7 +89,7 @@ dispatch — wrong-target refuses as `clerk_account_mismatch`, never retargets).
 | `bots_deploy_read` | GET | `/accounts/{account_id}/bots/deploy` | `…/bots/deploy` | `deploy` | read |
 | `bot_panel_read` | GET | `/accounts/{account_id}/bots/{sid}/panel` | `…/bots/{sid}/panel` | `bot_panel_read` | read |
 | `bot_panel_action` | POST | `/accounts/{account_id}/bots/{sid}/actions` | `…/bots/{sid}/actions` | `bot_action` | durable_key |
-| `bot_panel_quiesce_action` | POST | `/accounts/{account_id}/bots/{sid}/actions/quiesce` | `…/bots/{sid}/actions/quiesce` | `bot_action` | durable_key (`stop`/`flatten_stop` only; routes while draining, #2351) |
+| `bot_panel_quiesce_action` | POST | `/accounts/{account_id}/bots/{sid}/actions/quiesce` | `…/bots/{sid}/actions/quiesce` | `bot_action` | durable_key (`QuiesceActionId` only; routes while draining, #2351) |
 | `bot_authority_facts` | GET | `/accounts/{account_id}/bots/{sid}/authority-facts` | `…/bots/{sid}/authority-facts` | `bot_panel_read` | read |
 | `bot_chart_history` | GET | `/accounts/{account_id}/bots/{sid}/chart/history` | `…/bots/{sid}/chart/history` | `bot_panel_read` | read |
 | `bot_chart_live` | GET | `/accounts/{account_id}/bots/{sid}/chart/live` | `…/bots/{sid}/chart/live` | `bot_panel_read` | read |

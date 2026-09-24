@@ -82,6 +82,7 @@ from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 from app.broker.fleet import volume as volume_module
 from app.broker.fleet.confirmation import (
     ConfirmationEvidence,
+    ConfirmationEvidenceError,
     confirmation_evidence_path,
     evidence_vouches_for,
     mark_confirmation_evidence_draining,
@@ -185,6 +186,27 @@ LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
 #: ``stop_all_bots_on_lane``) and says whether every one stopped (#2351).
 LaneBotsStop = Callable[[], Awaitable[bool]]
 
+#: The widest gap, in beats, between two stop attempts on a retired lane
+#: whose bots will not all stop: each attempt writes a lane-stop receipt.
+RETIRED_STOP_RETRY_MAX_GAP_BEATS = 32
+
+
+@dataclass
+class RetirementProgress:
+    """What a retired lane still owes before its beat may end (#2351)."""
+
+    bots_stopped: bool = False
+    tombstone_written: bool = False
+    stop_hook_missing_logged: bool = False
+    #: Beats to skip before the next stop attempt, and the gap after it.
+    beats_until_stop_retry: int = 0
+    stop_retry_gap: int = 1
+
+    @property
+    def complete(self) -> bool:
+        """Both owed acts done: every bot stopped and the tombstone written."""
+        return self.bots_stopped and self.tombstone_written
+
 
 def lane_quiet_probe(
     *,
@@ -286,10 +308,11 @@ class FleetLaneBoot:
     #: The outstanding conditions of the last answer the coordinator accepted,
     #: so the log records a change rather than repeating every beat.
     lane_quiet_outstanding: tuple[str, ...] | None = None
-    #: Whether this lane has learned its own clerk is retired (#2351): set
-    #: once, never cleared, by ``_learn_retirement``. A retired lane runs no
-    #: bot, re-registers nothing and ends its beat once its bots stopped.
-    retired: bool = False
+    #: What this lane still owes since it learned its own clerk is retired
+    #: (#2351); ``None`` until then, set once and never cleared by
+    #: ``_learn_retirement``. A retired lane runs no bot, re-registers
+    #: nothing and ends its beat once its retirement is complete.
+    retirement: RetirementProgress | None = None
     #: How a retired lane stops its bots. Installed by the composition root
     #: beside ``lane_quiet_probe``; ``None`` on a lane with no bot runner,
     #: which has nothing to stop.
@@ -300,6 +323,11 @@ class FleetLaneBoot:
     def online(self) -> bool:
         """Whether this boot carries a registered session."""
         return self.session is not None
+
+    @property
+    def retired(self) -> bool:
+        """Whether this lane has learned its own clerk is retired (#2351)."""
+        return self.retirement is not None
 
 
 async def open_fleet_lane(
@@ -585,6 +613,16 @@ async def confirm_binding(
             next_step="Finish the drain ceremony on the coordinator; this "
             "volume's evidence is marked drained and confirms nothing.",
         ) from exc
+    except FleetLaneRetired as exc:
+        # The confirmation can be the first channel to carry the retirement
+        # too (#2351): learn it so the beat stops the bots, and refuse.
+        _learn_retirement(boot)
+        raise FleetBootRefused(
+            f"The fleet coordinator refused this lane's binding confirmation "
+            f"because its clerk is retired: {exc.message}",
+            next_step="A retired lane confirms nothing; decommission this "
+            "volume or provision a new clerk.",
+        ) from exc
     write_confirmation_evidence(
         boot.volume_root,
         ConfirmationEvidence(
@@ -768,60 +806,115 @@ def _learn_retirement(boot: FleetLaneBoot) -> None:
 
     Retirement is terminal and learned only through the typed
     ``FleetLaneRetired`` refusal, never inferred from an unknown clerk or a
-    transient error. The durable act is the same tombstone a drain writes, so
-    no offline boot can bring the binding back; the in-process acts are the
-    start gate's latch (``boot.draining`` — a retired lane starts nothing
-    either) and ``boot.retired``, which ends re-registration and has the beat
-    stop every bot (``_stop_bots_after_retirement``).
+    transient error. The in-process latches come first and cannot fail: the
+    start gate's ``boot.draining`` (a retired lane starts nothing either) and
+    ``boot.retirement``, which ends re-registration and has every later beat
+    stop the bots. Only then is the durable tombstone attempted — the same
+    one a drain writes, so no offline boot can bring the binding back — and a
+    disk that refuses it (read-only, full) leaves it pending for the next
+    beat instead of killing the beat before a single bot stopped.
     """
-    if boot.retired:
+    if boot.retirement is not None:
         return
-    marked = mark_confirmation_evidence_draining(boot.volume_root)
     boot.draining = True
-    boot.retired = True
+    boot.retirement = RetirementProgress()
     logger.error(
         "This lane's clerk is retired; it stops its bots and its heartbeat.",
-        extra={
-            "clerk_id": boot.clerk_id,
-            "action": "fleet_lane_retirement_learned",
-            "evidence_marked": marked,
-        },
+        extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retirement_learned"},
     )
+    _write_retirement_tombstone(boot, boot.retirement)
 
 
-async def _stop_bots_after_retirement(boot: FleetLaneBoot) -> bool:
-    """Stop every bot a retired lane still runs; whether the lane is done.
+def _write_retirement_tombstone(boot: FleetLaneBoot, progress: RetirementProgress) -> None:
+    """Tombstone this volume's evidence, or log why not and leave it pending."""
+    if progress.tombstone_written:
+        return
+    try:
+        mark_confirmation_evidence_draining(boot.volume_root)
+    except (OSError, ConfirmationEvidenceError) as exc:
+        logger.error(
+            "This retired lane could not tombstone its confirmation evidence; "
+            "the next beat retries.",
+            extra={
+                "clerk_id": boot.clerk_id,
+                "action": "fleet_lane_retirement_tombstone_failed",
+                "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+            },
+        )
+        return
+    progress.tombstone_written = True
+
+
+async def _stop_bots_after_retirement(boot: FleetLaneBoot, progress: RetirementProgress) -> None:
+    """Try to stop every bot a retired lane still runs, with backoff.
 
     The lane-wide stop is the operator's own Stop for each bot, so each stays
     stopped wherever the volume next boots, and the reconciliation sweep then
-    cancels any ENTER still working (#2370). An incomplete stop is logged and
-    retried on the next beat; only a complete one ends the beat.
+    cancels any ENTER still working (#2370). Each attempt writes a lane-stop
+    receipt, so a bot that will not stop is retried on a doubling gap of
+    beats rather than every beat. A hook the composition root has not
+    installed yet is waited for, never read as "nothing to stop".
     """
     if boot.stop_bots is None:
-        logger.warning(
-            "This retired lane runs no bot runner; there is nothing to stop.",
-            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_no_bot_runner"},
-        )
-        return True
+        if not progress.stop_hook_missing_logged:
+            progress.stop_hook_missing_logged = True
+            logger.warning(
+                "This retired lane has no bot-stop hook installed yet; every "
+                "beat checks again.",
+                extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_stop_hook_missing"},
+            )
+        return
+    if progress.beats_until_stop_retry > 0:
+        progress.beats_until_stop_retry -= 1
+        return
     try:
         all_stopped = await boot.stop_bots()
     except Exception:
         logger.exception(
-            "Stopping this retired lane's bots failed; the next beat retries.",
+            "Stopping this retired lane's bots failed; a later beat retries.",
             extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_stop_failed"},
         )
-        return False
-    if not all_stopped:
-        logger.error(
-            "At least one bot on this retired lane did not stop; the next beat retries.",
-            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_stop_incomplete"},
+        all_stopped = False
+    if all_stopped:
+        progress.bots_stopped = True
+        logger.warning(
+            "Every bot on this retired lane is stopped.",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_bots_stopped"},
         )
-        return False
-    logger.warning(
-        "Every bot on this retired lane is stopped; its heartbeat ends.",
-        extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retired_bots_stopped"},
+        return
+    progress.beats_until_stop_retry = progress.stop_retry_gap
+    progress.stop_retry_gap = min(progress.stop_retry_gap * 2, RETIRED_STOP_RETRY_MAX_GAP_BEATS)
+    logger.error(
+        "At least one bot on this retired lane did not stop; a later beat retries.",
+        extra={
+            "clerk_id": boot.clerk_id,
+            "action": "fleet_lane_retired_stop_incomplete",
+            "retry_in_beats": progress.beats_until_stop_retry,
+        },
     )
-    return True
+
+
+async def _advance_retirement(boot: FleetLaneBoot) -> bool:
+    """One retired beat's work; whether the lane owes nothing more.
+
+    The beat ends only when both are done: the bots are stopped and the
+    tombstone is on disk. Custody itself — the reconciliation sweep, the
+    stuck-EXIT watchdog, trade-update intake — keeps running: it only
+    reduces or records exposure, and it is what cancels the stopped bots'
+    working ENTERs.
+    """
+    progress = boot.retirement
+    assert progress is not None
+    _write_retirement_tombstone(boot, progress)
+    if not progress.bots_stopped:
+        await _stop_bots_after_retirement(boot, progress)
+    if progress.complete:
+        logger.warning(
+            "This retired lane's bots are stopped and its evidence tombstoned; "
+            "its heartbeat ends.",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_retirement_complete"},
+        )
+    return progress.complete
 
 
 def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
@@ -861,8 +954,8 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                 await asyncio.sleep(interval_s)
                 if boot.retired:
                     # Nothing to observe or repair for a retired lane: stop
-                    # its bots, and end the beat once they are all stopped.
-                    if await _stop_bots_after_retirement(boot):
+                    # its bots and tombstone its evidence, then end the beat.
+                    if await _advance_retirement(boot):
                         return
                     continue
                 reported = boot.reported_facts
@@ -1374,6 +1467,7 @@ __all__ = [
     "LaneBotsStop",
     "LaneQuietAnswer",
     "LaneQuietProbe",
+    "RetirementProgress",
     "binding_is_granted",
     "close_fleet_lane",
     "confirm_and_report",

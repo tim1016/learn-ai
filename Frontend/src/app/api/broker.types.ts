@@ -1491,13 +1491,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Execute one presented stop or flatten-and-stop action (§11, #2351)
-         * @description The panel's stop and flatten-and-stop, on an operation of their own.
+         * Execute one presented quiesce action: stop, flatten or reconcile (§11, #2351)
+         * @description The panel's quiesce actions, on an operation of their own.
          *
          *     A draining lane routes this operation and refuses ``/actions`` (#2351,
-         *     ADR 0063 §2): the request schema admits only the two actions that stop a
-         *     bot or reduce its exposure, and the execution is the one every panel
-         *     action shares.
+         *     ADR 0063 §2): the request schema admits only the actions that stop a bot,
+         *     reduce its exposure or reconcile, and the execution is the one every
+         *     panel action shares.
          */
         post: operations["run_quiesce_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_quiesce_post"];
         delete?: never;
@@ -19708,18 +19708,19 @@ export interface components {
         };
         /**
          * PanelQuiesceActionRequest
-         * @description Execute one presented action that only stops a bot or reduces exposure.
+         * @description Execute one presented action that stops a bot, reduces exposure or reconciles.
          *
          *     The same request as :class:`PanelActionRequest`, narrowed to the quiesce
-         *     actions a draining lane still routes (#2351): the action set is closed at
-         *     the schema, so a resume or continue sent here refuses before it runs.
+         *     actions a draining lane still routes (#2351, ``QUIESCE_ACTION_IDS``): the
+         *     action set is closed at the schema, so a resume or continue sent here
+         *     refuses before it runs.
          */
         PanelQuiesceActionRequest: {
             /**
              * Action Id
              * @enum {string}
              */
-            action_id: "stop" | "flatten_stop";
+            action_id: "stop" | "flatten_stop" | "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */

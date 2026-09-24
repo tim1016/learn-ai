@@ -22,7 +22,7 @@ set is a contract violation, not a silent passthrough.
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 # ── Phases (bot lifecycle phase, §12) ────────────────────────────────────────
 # Narrowed from the shared BotLifecyclePhase; the panel never renders anything
@@ -166,13 +166,30 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
 # ``panel_projection_service.select_primary_action_by_lens``.
 TRADER_LIFECYCLE_ACTION_IDS: Final[frozenset[str]] = frozenset({"resume", "continue", "stop"})
 
-# The presented actions that only stop a bot or reduce its exposure (#2351).
-# A draining lane routes them through their own operation
-# (``bot_panel_quiesce_action``) while refusing the rest of the action set —
-# ``resume`` and ``continue`` would start decisions again. ADR 0063 §2's
-# amendment names these two, beside the recovery surface's
-# ``cancel_verified_working_orders``, as how an operator makes a lane quiet.
-QuiesceActionId = Literal["stop", "flatten_stop"]
+# The presented actions that only stop a bot, reduce its exposure or
+# reconcile (#2351) — the one closed set a draining lane still executes. They
+# travel on their own operation (``bot_panel_quiesce_action``, whose request
+# schema is this Literal) while the rest of the action set refuses: ``resume``
+# and ``continue`` would start decisions again. ``stop`` and ``flatten_stop``
+# are the runner's lifecycle pair; the other four are the SQLite recovery
+# executor's (``recovery_execution.execute_recovery_action``), which for these
+# ids stops decisions, cancels owned verified working orders, submits a
+# reducing order, or reconciles against the broker. Excluded on purpose:
+# ``resolve_execution_coverage`` rewrites fill evidence and can lift a hold,
+# which can let a still-running bot submit ENTERs again; the view and
+# preparation ids (``prepare_safe_flatten``, ``open_custody_timeline``,
+# ``recover_exact_execution_evidence``) mutate nothing and never ran here.
+QuiesceActionId = Literal[
+    "stop",
+    "flatten_stop",
+    "stop_bot_decisions",
+    "cancel_verified_working_orders",
+    "execute_safe_flatten",
+    "reconcile_now",
+]
+QUIESCE_ACTION_IDS: Final[tuple[QuiesceActionId, ...]] = get_args(QuiesceActionId)
+if not set(QUIESCE_ACTION_IDS) <= set(ACTION_IDS):
+    raise RuntimeError("QuiesceActionId must be a subset of the presented ActionId set")
 
 
 # ── Server-authored copy (decision #7) ───────────────────────────────────────

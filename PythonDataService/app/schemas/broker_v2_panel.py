@@ -648,11 +648,12 @@ class PanelActionRequest(BaseModel):
 
 
 class PanelQuiesceActionRequest(PanelActionRequest):
-    """Execute one presented action that only stops a bot or reduces exposure.
+    """Execute one presented action that stops a bot, reduces exposure or reconciles.
 
     The same request as :class:`PanelActionRequest`, narrowed to the quiesce
-    actions a draining lane still routes (#2351): the action set is closed at
-    the schema, so a resume or continue sent here refuses before it runs.
+    actions a draining lane still routes (#2351, ``QUIESCE_ACTION_IDS``): the
+    action set is closed at the schema, so a resume or continue sent here
+    refuses before it runs.
     """
 
     action_id: QuiesceActionId  # type: ignore[assignment]

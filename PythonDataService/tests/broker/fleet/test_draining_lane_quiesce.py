@@ -24,7 +24,9 @@ The fixed contract, pinned here:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+from typing import get_args
 
 import httpx
 import pytest
@@ -36,12 +38,19 @@ from app.broker.alpaca.clerk.fleet_adapter import ALPACA_OPERATIONS
 from app.broker.alpaca.clerk.fleet_boot import (
     FleetBootRefused,
     FleetLaneBoot,
+    RetirementProgress,
+    _stop_bots_after_retirement,
     close_fleet_lane,
+    confirm_binding,
     open_fleet_lane,
     start_heartbeat,
     stop_heartbeat,
 )
-from app.broker.fleet.confirmation import read_confirmation_evidence
+from app.broker.fleet.confirmation import (
+    confirmation_evidence_path,
+    read_confirmation_evidence,
+    write_confirmation_evidence,
+)
 from app.broker.fleet.delivery import DeliveryResult
 from app.broker.fleet.errors import (
     ClerkLaneRetired,
@@ -65,6 +74,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import StoredLifecycleState
 from app.broker.fleet.routing import CommandEnvelope, LaneRouter
+from app.broker.v2panel.vocabulary import ACTION_IDS, QUIESCE_ACTION_IDS
 from app.schemas.broker_v2_panel import PanelQuiesceActionRequest
 from tests.broker.fleet.conftest import FrozenClock
 
@@ -88,9 +98,8 @@ CHANGE_REF = "incident-2026-09-23-drained-lane-quiesce"
 #: editing this set in review, never silently.
 QUIESCE_OPERATION_IDS = frozenset(
     {
+        "bot_cohort_flatten",
         "bot_panel_quiesce_action",
-        "custody_bot_recovery_execute",
-        "custody_recovery_execute",
         "custody_runs_stop",
         "lane_stop_all_bots",
     }
@@ -126,14 +135,20 @@ class _RecordingDelivery:
 
     def __init__(self) -> None:
         self.delivered: list[str] = []
+        self.bodies: list[object] = []
 
     async def deliver(self, request) -> DeliveryResult:
         self.delivered.append(request.operation.operation_id)
+        self.bodies.append(request.json_body)
         return DeliveryResult(status_code=200, headers={}, body=b"{}")
 
 
 async def _route(
-    router: LaneRouter, clerk_id: str, operation: ProviderOperation, key: str
+    router: LaneRouter,
+    clerk_id: str,
+    operation: ProviderOperation,
+    key: str,
+    body: dict[str, object] | None = None,
 ) -> None:
     """Route one operation exactly as the public coordinator route does."""
     path_params = _path_params(operation)
@@ -152,7 +167,7 @@ async def _route(
         operation=operation,
         path_params=path_params,
         query={},
-        body={"idempotency_key": key},
+        body={**(body or {}), "idempotency_key": key},
         envelope=CommandEnvelope(
             capability=operation.capability.value,
             idempotency_key=key,
@@ -202,9 +217,10 @@ def test_a_read_declaring_quiesce_is_refused_by_the_catalog_validator() -> None:
 @pytest.mark.parametrize(
     "operation_id",
     [
-        # The three ADR 0063 §2 names, plus stop-all and the quiet read.
+        # The ADR 0063 §2 acts (the panel's quiesce operation), cohort
+        # flatten, stop-all, and the reads — the quiet read among them.
         "bot_panel_quiesce_action",
-        "custody_bot_recovery_execute",
+        "bot_cohort_flatten",
         "lane_stop_all_bots",
         "lane_account_quiet_read",
         "custody_account_snapshot",
@@ -244,6 +260,9 @@ async def test_a_draining_lane_routes_its_quiesce_operations_and_reads(
     [
         # Resume and continue travel here; only the quiesce split routes.
         "bot_panel_action",
+        # Both accept every recovery id, resolve_execution_coverage included.
+        "custody_bot_recovery_execute",
+        "custody_recovery_execute",
         "bot_create",
         "custody_runs_start",
         "paper_access_confirm",
@@ -283,18 +302,113 @@ async def test_a_draining_lane_still_refuses_every_operation_that_can_open_expos
         service.close()
 
 
-def test_the_quiesce_panel_route_admits_only_stop_and_flatten_stop() -> None:
+def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -> None:
+    """The panel's quiesce ids, the recovery executor's reducing ids and the
+    cohort flatten legs are one set, and it names only presented actions."""
+    from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
+    from app.schemas.broker_v2_panel import CohortFlattenActionId
+
+    quiesce = set(QUIESCE_ACTION_IDS)
+    assert quiesce <= set(ACTION_IDS)
+    assert quiesce <= set(get_args(PanelQuiesceActionRequest.model_fields["action_id"].annotation))
+    # Every recovery id whose executor only stops decisions, cancels owned
+    # verified working orders, submits a reduction or reconciles.
+    assert quiesce & set(get_args(RecoveryActionId)) == {
+        "stop_bot_decisions",
+        "cancel_verified_working_orders",
+        "execute_safe_flatten",
+        "reconcile_now",
+    }
+    # Rewrites fill evidence and can lift a hold a running bot is under.
+    assert "resolve_execution_coverage" not in quiesce
+    assert set(get_args(CohortFlattenActionId)) <= quiesce
+
+
+def test_the_quiesce_panel_route_admits_exactly_the_quiesce_actions() -> None:
     """The split operation's lane handler cannot be used to resume a bot."""
     body = {
         "revision": 1,
         "concurrency_token": "tok",
         "idempotency_key": "key",
     }
-    for action_id in ("stop", "flatten_stop"):
+    for action_id in QUIESCE_ACTION_IDS:
         assert PanelQuiesceActionRequest.model_validate({**body, "action_id": action_id})
-    for action_id in ("resume", "continue", "deploy"):
+    for action_id in set(ACTION_IDS) - set(QUIESCE_ACTION_IDS):
         with pytest.raises(ValidationError):
             PanelQuiesceActionRequest.model_validate({**body, "action_id": action_id})
+
+
+@pytest.mark.parametrize("action_id", QUIESCE_ACTION_IDS)
+async def test_every_quiesce_action_executes_through_the_quiesce_route(
+    action_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each quiesce id reaches the one executor every panel action shares."""
+    from app.routers import broker_v2_panel
+    from app.schemas.broker_v2_panel import PanelActionResult
+
+    ran: list[str] = []
+
+    async def _record(broker, account_id, sid, request, *, operator_identity):
+        ran.append(request.action_id)
+        return PanelActionResult(
+            action_id=request.action_id,
+            receipt_id="r-1",
+            recorded_at_ms=1,
+            applied=True,
+            revision=2,
+            concurrency_token="tok-2",
+            message="done",
+        )
+
+    monkeypatch.setattr(broker_v2_panel.ds, "run_action", _record)
+    monkeypatch.setattr(
+        broker_v2_panel, "schedule_live_projection_refresh", lambda *_args: None
+    )
+    app = FastAPI()
+    app.include_router(broker_v2_panel.router)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        answered = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT}/bots/sid-1/actions/quiesce",
+            json={
+                "action_id": action_id,
+                "revision": 1,
+                "concurrency_token": "tok",
+                "idempotency_key": "key",
+            },
+        )
+    assert answered.status_code == 200, answered.text
+    assert ran == [action_id]
+
+
+async def test_a_draining_lane_routes_the_panels_cancel_verified_working_orders(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0063 §2 names this panel act; it travels on the quiesce operation."""
+    service = _service(control_dir, clock)
+    try:
+        _provisioned, _root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        service.drain_clerk(clerk_id=boot.clerk_id)
+        delivery = _RecordingDelivery()
+        router = LaneRouter(service=service, delivery_for=lambda broker, session: delivery)
+
+        await _route(
+            router,
+            boot.clerk_id,
+            _operation("bot_panel_quiesce_action"),
+            key="cancel-1",
+            body={"action_id": "cancel_verified_working_orders", "revision": 1},
+        )
+
+        assert delivery.delivered == ["bot_panel_quiesce_action"]
+        delivered_body = delivery.bodies[0]
+        assert isinstance(delivered_body, dict)
+        assert delivered_body["action_id"] == "cancel_verified_working_orders"
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
 
 
 async def test_the_quiesce_panel_route_refuses_a_resume_before_it_runs(
@@ -414,7 +528,7 @@ async def test_a_force_retired_lane_stops_its_bots_and_ends_its_beat(
         service.close()
 
 
-async def test_an_incomplete_stop_is_retried_on_the_next_beat(tmp_path: Path) -> None:
+async def test_an_incomplete_stop_is_retried_on_a_later_beat(tmp_path: Path) -> None:
     """A bot that refused to stop keeps the beat alive until it does."""
     attempts: list[int] = []
 
@@ -431,6 +545,131 @@ async def test_an_incomplete_stop_is_retried_on_the_next_beat(tmp_path: Path) ->
     assert boot.retired
     assert len(attempts) == 3
     await stop_heartbeat(boot)
+
+
+async def test_a_stop_that_keeps_failing_backs_off_instead_of_writing_a_receipt_every_beat(
+    tmp_path: Path,
+) -> None:
+    """Each attempt writes a lane-stop receipt, so retries double their gap."""
+    attempts: list[int] = []
+
+    async def never_stops() -> bool:
+        attempts.append(1)
+        return False
+
+    boot = _stub_boot(tmp_path, _RetiredPresence())
+    boot.stop_bots = never_stops
+    progress = RetirementProgress()
+    for _ in range(15):
+        await _stop_bots_after_retirement(boot, progress)
+
+    # Attempts on beats 1, 3, 6 and 11: gaps of 1, 2 and 4 beats.
+    assert len(attempts) == 4
+    assert not progress.bots_stopped
+
+
+async def test_a_missing_stop_hook_keeps_the_retired_beat_alive_until_it_is_installed(
+    tmp_path: Path,
+) -> None:
+    """A hook the composition root has not installed yet is not "nothing to stop"."""
+    boot = _stub_boot(tmp_path, _RetiredPresence())
+    start_heartbeat(boot, interval_s=0.02)
+    for _ in range(100):
+        if boot.retired:
+            break
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.1)
+    assert boot.retired
+    assert boot.heartbeat is not None and not boot.heartbeat.done()
+
+    stops: list[int] = []
+
+    async def stop_bots() -> bool:
+        stops.append(1)
+        return True
+
+    boot.stop_bots = stop_bots
+    await asyncio.wait_for(asyncio.shield(boot.heartbeat), timeout=5.0)
+    assert stops == [1]
+    await stop_heartbeat(boot)
+
+
+async def test_an_unwritable_volume_still_stops_the_bots_and_retries_the_tombstone(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The review probe: a read-only evidence directory used to kill the beat
+    (PermissionError) before a single bot stopped, with the start gate open."""
+    service = _service(control_dir, clock)
+    evidence_dir: Path | None = None
+    try:
+        _provisioned, root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        evidence_dir = confirmation_evidence_path(root).parent
+        stops: list[int] = []
+
+        async def stop_bots() -> bool:
+            stops.append(1)
+            return True
+
+        boot.stop_bots = stop_bots
+        start_heartbeat(boot, interval_s=0.05)
+        drained = service.drain_clerk(clerk_id=boot.clerk_id)
+        clock.advance(1_000)
+        await _await_beat_at(service, boot.clerk_id, clock, reported_state="binding_confirmed")
+        assert drained.drain_deadline_at_ms is not None
+        clock.advance(drained.drain_deadline_at_ms - clock() + 1)
+        # Force-retire a lane whose drain mark never landed: the tombstone is
+        # still owed, and the disk now refuses it.
+        write_confirmation_evidence(
+            root,
+            replace(read_confirmation_evidence(root), lifecycle_state="provisioned"),
+        )
+        evidence_dir.chmod(0o555)
+        service.force_retire_clerk(
+            clerk_id=boot.clerk_id, operator=OPERATOR, change_ref=CHANGE_REF
+        )
+        for _ in range(100):
+            if stops:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
+
+        beat = boot.heartbeat
+        assert beat is not None and not beat.done()  # alive: the tombstone is owed
+        assert boot.retired and boot.draining
+        assert stops == [1]
+        assert boot.retirement is not None and not boot.retirement.tombstone_written
+
+        evidence_dir.chmod(0o755)
+        await asyncio.wait_for(asyncio.shield(beat), timeout=5.0)
+        assert beat.exception() is None
+        marked = read_confirmation_evidence(root)
+        assert marked is not None and marked.lifecycle_state == "draining"
+        await close_fleet_lane(boot)
+    finally:
+        if evidence_dir is not None:
+            evidence_dir.chmod(0o755)
+        service.close()
+
+
+async def test_a_retirement_first_heard_at_confirmation_is_learned(tmp_path: Path) -> None:
+    """Symmetric with the drain lesson at confirmation (#2155)."""
+
+    class _RefusingConfirmation(_RetiredPresence):
+        async def confirm(self, **_kwargs):
+            raise FleetLaneRetired("Clerk x is retired; a retired lane confirms nothing.")
+
+    boot = _stub_boot(tmp_path, _RefusingConfirmation())
+    with pytest.raises(FleetBootRefused, match="retired"):
+        await confirm_binding(
+            boot,
+            external_account_id=ACCOUNT,
+            binding_generation=1,
+            effective_profile_id="prof_1",
+            effective_revision=2,
+        )
+    assert boot.retired and boot.draining
 
 
 class _RetiredPresence:
@@ -590,6 +829,37 @@ async def test_remote_presence_keeps_a_plain_not_found_in_the_unavailability_fam
             )
     finally:
         server.stop()
+
+
+async def test_a_retired_lane_restarting_on_an_unwritable_volume_still_refuses_its_boot(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The boot-time site: a failed tombstone is logged, and the boot still
+    closes the lane and refuses rather than escaping as a raw OSError."""
+    service = _service(control_dir, clock)
+    evidence_dir: Path | None = None
+    try:
+        provisioned, root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        await close_fleet_lane(boot)
+        drained = service.drain_clerk(clerk_id=provisioned.clerk.clerk_id)
+        assert drained.drain_deadline_at_ms is not None
+        clock.advance(drained.drain_deadline_at_ms - clock() + 1)
+        service.force_retire_clerk(
+            clerk_id=provisioned.clerk.clerk_id, operator=OPERATOR, change_ref=CHANGE_REF
+        )
+        evidence_dir = confirmation_evidence_path(root).parent
+        evidence_dir.chmod(0o555)
+
+        with pytest.raises(FleetBootRefused, match="retired"):
+            await open_fleet_lane(
+                settings=_lane_settings(control_dir, provisioned), volume_root=root
+            )
+    finally:
+        if evidence_dir is not None:
+            evidence_dir.chmod(0o755)
+        service.close()
 
 
 async def test_a_retired_lane_restarting_refuses_its_boot_and_marks_its_evidence(

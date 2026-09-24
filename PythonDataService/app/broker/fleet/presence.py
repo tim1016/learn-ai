@@ -27,11 +27,13 @@ from __future__ import annotations
 
 import hmac
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from app.broker.fleet.errors import FleetControlError
+from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired, FleetControlError
 from app.broker.fleet.internal_http import (
     build_internal_client,
     enforce_private_http_target,
@@ -90,6 +92,23 @@ class FleetLaneRetired(FleetControlError):
 
     reason = "fleet_lane_retired"
     status_code = 404
+
+
+@contextmanager
+def _lane_lessons() -> Iterator[None]:
+    """Translate the coordinator's typed lane refusals for the in-process transport.
+
+    The same translation the wire transport performs on the refusal's reason
+    (``RemotePresence._post``): one lane-learnable type per lesson across
+    both transports, neither of them the unavailability family FR-066's
+    offline fallback catches.
+    """
+    try:
+        yield
+    except ClerkLaneDraining as exc:
+        raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
+    except ClerkLaneRetired as exc:
+        raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
 
 
 def _superseded_beat(clerk_id: str, agent_instance_id: str) -> FleetPresenceError:
@@ -234,9 +253,7 @@ class LocalPresence:
         fleet_protocol_version: int,
     ) -> SessionInfo:
         """Register through the service; the epoch is theirs to assign."""
-        from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired
-
-        try:
+        with _lane_lessons():
             session = self._service.register_agent_session(
                 clerk_id=clerk_id,
                 worker_key=worker_key,
@@ -246,13 +263,6 @@ class LocalPresence:
                 adapter_version=adapter_version,
                 fleet_protocol_version=fleet_protocol_version,
             )
-        except ClerkLaneDraining as exc:
-            # Same translation the wire transport performs on the refusal's
-            # reason: one type across both transports, neither of them the
-            # unavailability family FR-066's offline fallback catches.
-            raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
-        except ClerkLaneRetired as exc:
-            raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
         return SessionInfo(
             agent_instance_id=session.agent_instance_id,
             routing_epoch=session.routing_epoch,
@@ -287,9 +297,7 @@ class LocalPresence:
         lane-learnable type on both transports, so ``confirm_binding`` can
         mark the volume's evidence wherever the drain is first heard.
         """
-        from app.broker.fleet.errors import ClerkLaneDraining, ClerkLaneRetired
-
-        try:
+        with _lane_lessons():
             return self._service.confirm_assignment(
                 broker=broker,
                 clerk_id=clerk_id,
@@ -300,10 +308,6 @@ class LocalPresence:
                 effective_profile_id=effective_profile_id,
                 effective_revision=effective_revision,
             )
-        except ClerkLaneDraining as exc:
-            raise FleetLaneDraining(exc.message, next_step=exc.next_step) from exc
-        except ClerkLaneRetired as exc:
-            raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
 
     async def observe(
         self,
@@ -316,9 +320,7 @@ class LocalPresence:
         reported_summary: dict[str, object] | None = None,
     ) -> str | None:
         """Observe through the service, translating the retirement lesson."""
-        from app.broker.fleet.errors import ClerkLaneRetired
-
-        try:
+        with _lane_lessons():
             observation = self._service.observe_session(
                 clerk_id=clerk_id,
                 agent_instance_id=agent_instance_id,
@@ -327,8 +329,6 @@ class LocalPresence:
                 reported_state=reported_state,
                 reported_summary=reported_summary,
             )
-        except ClerkLaneRetired as exc:
-            raise FleetLaneRetired(exc.message, next_step=exc.next_step) from exc
         if not observation.touched:
             raise _superseded_beat(clerk_id, agent_instance_id)
         return observation.lifecycle_state.value

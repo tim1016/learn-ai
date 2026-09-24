@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrokerV2PanelService } from './broker-v2-panel.service';
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { POLL_REQUEST_TIMEOUT_MS } from '../../../../services/poll-timeout';
-import type { PanelAction } from './broker-v2-panel.types';
+import type { PanelAction, PanelActionRequest } from './broker-v2-panel.types';
 import { provideFleetDirectory } from '../../../../fleet/fleet-directory-testing';
 
 const CLERK = 'clrk_spec';
@@ -453,6 +453,67 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
       .expectOne(ACTIONS_URL)
       .flush({ action_id: 'resume', receipt_id: 'r-resume', recorded_at_ms: 1, applied: true });
     await expect(resume).resolves.toMatchObject({ receipt_id: 'r-resume' });
+  });
+
+  const request = (actionId: PanelActionRequest['action_id']): PanelActionRequest => ({
+    action_id: actionId,
+    revision: 1,
+    concurrency_token: 'tok',
+    idempotency_key: 'command-key-1',
+    reason: null,
+  });
+  const done = (actionId: string) => ({
+    action_id: actionId,
+    receipt_id: `r-${actionId}`,
+    recorded_at_ms: 1,
+    applied: true,
+  });
+
+  it.each([
+    'stop',
+    'flatten_stop',
+    'stop_bot_decisions',
+    'cancel_verified_working_orders',
+    'execute_safe_flatten',
+    'reconcile_now',
+  ] as const)('sends the quiesce action %s on the operation a draining lane routes', async (actionId) => {
+    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request(actionId));
+    http.expectOne(QUIESCE_URL).flush(done(actionId));
+    await expect(pending).resolves.toMatchObject({ action_id: actionId });
+  });
+
+  it.each(['resume', 'continue', 'pause', 'resolve_execution_coverage', 'retire'] as const)(
+    'sends %s on /actions, which a draining lane refuses',
+    async (actionId) => {
+      const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request(actionId));
+      http.expectOne(ACTIONS_URL).flush(done(actionId));
+      await expect(pending).resolves.toMatchObject({ action_id: actionId });
+    },
+  );
+
+  it('falls back to /actions under a derived key when the quiesce route is not deployed yet', async () => {
+    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop'));
+    http
+      .expectOne(QUIESCE_URL)
+      .flush({ detail: 'Not Found' }, { status: 404, statusText: 'Not Found' });
+    await tick();
+
+    const fallback = http.expectOne(ACTIONS_URL);
+    expect(fallback.request.body.idempotency_key).toBe('command-key-1:actions');
+    expect(fallback.request.body.command_context.idempotency_key).toBe('command-key-1:actions');
+    fallback.flush(done('stop'));
+    await expect(pending).resolves.toMatchObject({ receipt_id: 'r-stop' });
+  });
+
+  it.each([
+    ['a typed fleet refusal', { reason: 'clerk_not_found', message: 'No clerk carries this identity.' }],
+    ['a typed panel refusal', { detail: { message: 'Unknown bot.' } }],
+  ])('never falls back on %s', async (_label, body) => {
+    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop'));
+    http.expectOne(QUIESCE_URL).flush(body, { status: 404, statusText: 'Not Found' });
+
+    await expect(pending).rejects.toMatchObject({ status: 404 });
+    http.expectNone(ACTIONS_URL);
   });
 
   it('rejects a bot action whose interaction owner did not freeze a durable key', async () => {

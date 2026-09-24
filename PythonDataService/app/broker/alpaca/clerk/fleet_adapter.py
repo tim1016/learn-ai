@@ -418,6 +418,9 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_ACTION,
             idempotency=_DURABLE,
             account=True,
+            # Every leg is flatten_stop or execute_safe_flatten
+            # (CohortFlattenActionId): reductions only.
+            drain_admission=_QUIESCE,
         ),
         _op(
             "bots_deploy_read",
@@ -441,11 +444,15 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             idempotency=_DURABLE,
             account=True,
         ),
-        # The panel's stop and flatten-and-stop, split from bot_panel_action
-        # because that one operation also resumes and continues bots: a route
-        # layer that cannot read the body cannot tell the two apart, so the
-        # quiesce half gets its own operation and a draining lane routes it
-        # (#2351). The lane's handler admits only those two action ids.
+        # The panel's quiesce actions (vocabulary.QUIESCE_ACTION_IDS: stop,
+        # flatten-and-stop and the SQLite recovery stop/cancel/flatten/
+        # reconcile), split from bot_panel_action because that one operation
+        # also resumes and continues bots: a route layer that cannot read the
+        # body cannot tell them apart, so the quiesce half gets its own
+        # operation and a draining lane routes it (#2351). Its request schema
+        # admits only those ids. The custody recovery-execute operations stay
+        # refused while draining: they accept every recovery id, including
+        # resolve_execution_coverage, which can lift a hold.
         _op(
             "bot_panel_quiesce_action",
             "POST",
@@ -679,9 +686,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path=(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/recovery-actions/execute"
             ),
-            # Every action recovery_execution dispatches stops decisions,
-            # cancels verified working orders, flattens or reconciles.
-            drain_admission=_QUIESCE,
         ),
         _op(
             "custody_bot_recovery_check",
@@ -705,7 +709,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
                 "recovery-actions/execute"
             ),
-            drain_admission=_QUIESCE,
         ),
         _op(
             "custody_historical_recovery_prepare",

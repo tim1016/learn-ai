@@ -27818,12 +27818,16 @@
       },
       "PanelQuiesceActionRequest": {
         "additionalProperties": false,
-        "description": "Execute one presented action that only stops a bot or reduces exposure.\n\nThe same request as :class:`PanelActionRequest`, narrowed to the quiesce\nactions a draining lane still routes (#2351): the action set is closed at\nthe schema, so a resume or continue sent here refuses before it runs.",
+        "description": "Execute one presented action that stops a bot, reduces exposure or reconciles.\n\nThe same request as :class:`PanelActionRequest`, narrowed to the quiesce\nactions a draining lane still routes (#2351, ``QUIESCE_ACTION_IDS``): the\naction set is closed at the schema, so a resume or continue sent here\nrefuses before it runs.",
         "properties": {
           "action_id": {
             "enum": [
               "stop",
-              "flatten_stop"
+              "flatten_stop",
+              "stop_bot_decisions",
+              "cancel_verified_working_orders",
+              "execute_safe_flatten",
+              "reconcile_now"
             ],
             "title": "Action Id",
             "type": "string"
@@ -50639,7 +50643,7 @@
     },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions/quiesce": {
       "post": {
-        "description": "The panel's stop and flatten-and-stop, on an operation of their own.\n\nA draining lane routes this operation and refuses ``/actions`` (#2351,\nADR 0063 \u00a72): the request schema admits only the two actions that stop a\nbot or reduce its exposure, and the execution is the one every panel\naction shares.",
+        "description": "The panel's quiesce actions, on an operation of their own.\n\nA draining lane routes this operation and refuses ``/actions`` (#2351,\nADR 0063 \u00a72): the request schema admits only the actions that stop a bot,\nreduce its exposure or reconcile, and the execution is the one every\npanel action shares.",
         "operationId": "run_quiesce_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_quiesce_post",
         "parameters": [
           {
@@ -50738,7 +50742,7 @@
             "description": "The performer began but did not return a terminal command receipt."
           }
         },
-        "summary": "Execute one presented stop or flatten-and-stop action (\u00a711, #2351)",
+        "summary": "Execute one presented quiesce action: stop, flatten or reconcile (\u00a711, #2351)",
         "tags": [
           "broker-v2-panel"
         ]
