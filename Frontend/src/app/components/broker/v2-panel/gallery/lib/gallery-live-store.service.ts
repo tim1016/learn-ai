@@ -12,6 +12,7 @@ import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types'
 import type {
   GalleryBarsPage,
   GalleryBotView,
+  GalleryFeedView,
   GalleryLiveSnapshot,
   GalleryLiveStatus,
   GalleryLiveUpdate,
@@ -22,9 +23,9 @@ import type {
 
 const FALLBACK_POLL_MS = 5_000;
 /**
- * How old the newest adopted frame's ``as_of_ms`` may get before a live wall
- * reads stale (#2330, #2326): twice the slowest delivery interval (the REST
- * poll; the stream polls every ~1s), so ordinary jitter never flips it.
+ * How long a live wall may go without adopting a new frame before it reads
+ * stale (#2330, #2326): twice the slowest delivery interval (the REST poll;
+ * the stream polls every ~1s), so ordinary jitter never flips it.
  */
 const FRAME_STALE_AFTER_MS = 2 * FALLBACK_POLL_MS;
 
@@ -118,10 +119,33 @@ function mergeMarkersByRef(
   return [...byKey.values()];
 }
 
-function upsertBots(existing: readonly GalleryBotView[], deltas: readonly GalleryBotView[]): GalleryBotView[] {
+/**
+ * A bot view as a lane may send it: a lane still on a build from before
+ * #2330 omits ``feed``, and the fleet protocol does not refuse that lane.
+ */
+type LaneBotView = Omit<GalleryBotView, 'feed'> & { readonly feed?: GalleryFeedView };
+
+/**
+ * A lane that does not report its IBKR line cannot prove it is delivering,
+ * so its tile says so and the wall never reads ``Live`` over it (fail
+ * closed). Client-authored because the lane has no copy to send.
+ */
+const UNREPORTED_FEED: GalleryFeedView = {
+  state: 'ERRORED',
+  headline: 'Feed state unknown',
+  detail: "This bot's lane runs an older build that does not report its IBKR feed. Restart the lane on the current build.",
+  attention_required: true,
+  last_error: null,
+};
+
+function withReportedFeed(bot: LaneBotView): GalleryBotView {
+  return bot.feed === undefined ? { ...bot, feed: UNREPORTED_FEED } : { ...bot, feed: bot.feed };
+}
+
+function upsertBots(existing: readonly GalleryBotView[], deltas: readonly LaneBotView[]): GalleryBotView[] {
   if (deltas.length === 0) return [...existing];
   const bySid = new Map(existing.map((bot) => [bot.sid, bot]));
-  for (const delta of deltas) bySid.set(delta.sid, delta);
+  for (const delta of deltas) bySid.set(delta.sid, withReportedFeed(delta));
   return [...bySid.values()];
 }
 
@@ -259,14 +283,14 @@ export class GalleryLiveStore {
     this.epoch = snapshot.stream_epoch;
     this.surfaceVersion = snapshot.surface_version;
     this.resolutionState.set(snapshot.resolution);
-    this.botsState.set([...snapshot.bots]);
+    this.botsState.set(snapshot.bots.map(withReportedFeed));
     this.barsState.set(
       new Map(snapshot.symbols.map((entry) => [entry.symbol, [...(entry.bars ?? [])]])),
     );
     this.markersState.set(
       new Map(Object.entries(snapshot.markers ?? {}).map(([sid, markers]) => [sid, [...markers]])),
     );
-    this.trackFrameAge(snapshot.as_of_ms);
+    this.trackFrameAge();
   }
 
   /** Incremental merge — per-symbol bars, per-sid markers, bot upserts/removals. */
@@ -275,7 +299,7 @@ export class GalleryLiveStore {
     // (possible if the bootstrap fetch and a live-stream update race).
     if (this.epoch === '' || update.surface_version <= this.surfaceVersion) return;
     this.surfaceVersion = update.surface_version;
-    this.trackFrameAge(update.as_of_ms);
+    this.trackFrameAge();
 
     if (update.symbols.length > 0) {
       this.barsState.update((current) => {
@@ -305,21 +329,18 @@ export class GalleryLiveStore {
   }
 
   /**
-   * Arm the frame-age check for the newest adopted frame. Display-only: the
-   * client clock is used for nothing but this frame's age against the
-   * server's ``as_of_ms``, and a newer frame re-arms it.
+   * Arm the frame-age check for the newest adopted frame; a newer frame
+   * re-arms it. Measured as local elapsed time since receipt, never as the
+   * browser clock minus the lane's ``as_of_ms``: the two clocks are
+   * independent, and skew beyond the threshold would mark every fresh frame
+   * stale (browser ahead) or hide a silent stream (browser behind).
    */
-  private trackFrameAge(asOfMs: number): void {
+  private trackFrameAge(): void {
     this.clearFrameAge();
-    const remainingMs = asOfMs + FRAME_STALE_AFTER_MS - Date.now();
-    if (remainingMs <= 0) {
-      this.frameStaleState.set(true);
-      return;
-    }
     this.frameAgeTimer = setTimeout(() => {
       this.frameAgeTimer = null;
       this.frameStaleState.set(true);
-    }, remainingMs);
+    }, FRAME_STALE_AFTER_MS);
   }
 
   private clearFrameAge(): void {

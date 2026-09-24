@@ -122,6 +122,30 @@ describe('GalleryLiveStore', () => {
   });
 
   describe('ingest merge semantics (the jsdom-free testability seam)', () => {
+    // #2403 review: a lane on a pre-#2330 build sends no `feed`; the fleet
+    // protocol does not refuse it, and a tile must not dereference nothing.
+    it('gives a bot from a lane that reports no feed an attention-required unknown feed, on snapshot and update', () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const { feed: _dropped, ...preFeed } = bot('sid-old');
+      const legacy = preFeed as GalleryBotView;
+
+      store.ingestSnapshot(snapshot({ bots: [legacy, bot('sid-1')] }));
+      store.ingestUpdate({
+        surface_version: 2,
+        as_of_ms: Date.now(),
+        symbols: [],
+        markers_delta: {},
+        bots_delta: [{ ...legacy, sid: 'sid-old-2' }],
+        removed_sids: [],
+      });
+
+      const bySid = new Map(store.bots().map((b) => [b.sid, b.feed]));
+      for (const sid of ['sid-old', 'sid-old-2']) {
+        expect(bySid.get(sid)).toMatchObject({ headline: 'Feed state unknown', attention_required: true });
+      }
+      expect(bySid.get('sid-1')?.state).toBe('LIVE');
+    });
+
     it('merges snapshot then update: bots upsert by sid, removed_sids drop, bars replace the forming bar and append', () => {
       const store = TestBed.inject(GalleryLiveStore);
 
@@ -291,7 +315,14 @@ describe('GalleryLiveStore', () => {
       expect(store.status()).toBe('live');
     });
 
-    it('reads stale at once when the frame it adopts is already old', async () => {
+    // #2403 review: frame age is local elapsed time since receipt, so a
+    // browser clock skewed from the lane's neither flags fresh frames nor
+    // hides a silent stream.
+    it.each([
+      ['ahead of', -60_000],
+      ['behind', 60_000],
+    ])('measures frame age from receipt when the browser clock is 60 s %s the lane', async (_label, skewMs) => {
+      vi.useFakeTimers();
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);
 
@@ -300,8 +331,10 @@ describe('GalleryLiveStore', () => {
       await starting;
       const source = StubEventSource.instances[0];
       source.emit('open');
-      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2, as_of_ms: Date.now() - 60_000 })));
+      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2, as_of_ms: Date.now() + skewMs })));
+      expect(store.status()).toBe('live');
 
+      await vi.advanceTimersByTimeAsync(11_000);
       expect(store.status()).toBe('stale');
     });
 
