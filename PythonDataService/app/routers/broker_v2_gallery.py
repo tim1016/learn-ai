@@ -35,6 +35,11 @@ account has zero non-retired bots (a bot no longer drops out of
 ``reset`` event mirror ``broker_v2_panel.py``'s ``/live-stream`` reconnect
 handling: a reconnecting client's remembered epoch is compared once against
 the hub's current epoch before entering the loop.
+
+Every frame fits the fleet coordinator's per-event cap (#2328): a frame
+whose inline bars would exceed it sends them first as ``bars`` pages (see
+``_capped_frames``). A frame that cannot fit even then ends the stream with
+a ``refused`` event, never an oversized frame for the coordinator to abort.
 """
 
 from __future__ import annotations
@@ -49,7 +54,13 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.schemas.broker_v2_gallery import GalleryLiveSnapshot, GallerySymbolBars
+from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
+from app.schemas.broker_v2_gallery import (
+    GalleryBarsPage,
+    GalleryLiveSnapshot,
+    GalleryLiveUpdate,
+    GallerySymbolBars,
+)
 from app.schemas.broker_v2_panel import ChartFillMarker, PanelAction
 from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
 from app.services.broker_v2_panel.gallery_hub import (
@@ -71,6 +82,19 @@ _POLL_INTERVAL_S = 1.0
 # window collapse to one real catalog fetch + one real fill-source fan-out
 # instead of N of each (GalleryHub.__init__'s `io_cache_ttl_ms` docstring).
 _GALLERY_IO_CACHE_TTL_MS = 800
+# The fleet coordinator relays this stream and aborts it on any single event
+# over its per-event cap, after the 200 has gone out (#2328). No frame this
+# lane emits may exceed it.
+_MAX_EVENT_BYTES = DEFAULT_MAX_EVENT_BYTES
+# Bytes held back from that cap for framing added after this router: the
+# lane's ``FleetIdentityMiddleware`` (``agent_identity._FrameInjector``)
+# appends ``x-fleet-*`` provenance lines to every event (~115 B for a
+# typical clerk id, epoch and generation). 8 KB covers any realistic
+# identity with a wide margin, so a frame that fits here still fits there.
+_FLEET_FRAMING_RESERVE_BYTES = 8_192
+# Bars per ``bars`` page. A serialized 5 s ``ChartBar`` is ~145 B, so a page
+# is ~145 KB: far under the cap, whatever the ring-buffer depth.
+_BARS_PER_PAGE = 1_000
 
 _HUB_CACHE: dict[tuple[str, str], GalleryHub] = {}
 
@@ -194,7 +218,96 @@ def _marker_event_keys(markers: dict[str, list[ChartFillMarker]]) -> dict[str, s
     return {sid: {marker.event_key for marker in sid_markers} for sid, sid_markers in markers.items() if sid_markers}
 
 
+def _frame_budget_bytes() -> int:
+    """The most bytes one frame may carry when it leaves this router: the
+    coordinator's cap less the lane's framing reserve."""
+    return _MAX_EVENT_BYTES - _FLEET_FRAMING_RESERVE_BYTES
+
+
+class _OversizedFrameError(Exception):
+    """A frame is over the frame budget even with its bars paged out."""
+
+    def __init__(self, event: str, size: int, budget: int) -> None:
+        super().__init__(f"gallery {event} frame is {size} bytes; the budget is {budget}")
+        self.event = event
+        self.size = size
+        self.budget = budget
+
+
+def _sse_frame(event: str, data: str, *, event_id: str | None = None) -> str:
+    id_line = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{id_line}event: {event}\ndata: {data}\n\n"
+
+
+def _capped_frames(
+    event: str, event_id: str, payload: GalleryLiveSnapshot | GalleryLiveUpdate
+) -> list[str]:
+    """``payload`` as SSE frames that each fit ``_frame_budget_bytes`` (#2328).
+
+    A frame that already fits goes out whole. Otherwise every symbol's bars
+    move into ``bars`` pages (``GalleryBarsPage``) sent first, and the frame
+    itself follows with each symbol's ``bars`` empty and its
+    ``paged_bar_count`` set, so the client can prove it staged every page.
+    A frame still over the budget after that raises ``_OversizedFrameError``:
+    it is never handed to the coordinator to be cut off mid-stream.
+    """
+    budget = _frame_budget_bytes()
+    whole = _sse_frame(event, payload.model_dump_json(), event_id=event_id)
+    if len(whole.encode()) <= budget:
+        return [whole]
+    pages = [
+        _sse_frame(
+            "bars",
+            GalleryBarsPage(
+                surface_version=payload.surface_version,
+                symbol=entry.symbol,
+                bars=entry.bars[start : start + _BARS_PER_PAGE],
+            ).model_dump_json(),
+        )
+        for entry in payload.symbols
+        for start in range(0, len(entry.bars), _BARS_PER_PAGE)
+    ]
+    head = payload.model_copy(
+        update={
+            "symbols": [
+                GallerySymbolBars(symbol=entry.symbol, paged_bar_count=len(entry.bars))
+                for entry in payload.symbols
+            ]
+        }
+    )
+    frames = [*pages, _sse_frame(event, head.model_dump_json(), event_id=event_id)]
+    for frame in frames:
+        size = len(frame.encode())
+        if size > budget:
+            raise _OversizedFrameError(event, size, budget)
+    return frames
+
+
 async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
+    """The gallery stream, ended by a named ``refused`` event when a frame
+    cannot fit the coordinator's cap. The client stops reconnecting and says
+    the wall is not live; it never sees an open stream that carries no
+    data (#2328)."""
+    try:
+        async for frame in _gallery_frames(hub, cursor=cursor):
+            yield frame
+    except _OversizedFrameError as exc:
+        logger.error(
+            "[GALLERY] stream frame exceeds the fleet event cap; refusing the stream",
+            extra={"event": exc.event, "bytes": exc.size, "max_bytes": exc.budget},
+        )
+        payload = json.dumps(
+            {
+                "reason": "frame_too_large",
+                "event": exc.event,
+                "bytes": exc.size,
+                "max_bytes": exc.budget,
+            }
+        )
+        yield _sse_frame("refused", payload)
+
+
+async def _gallery_frames(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
     snapshot = await hub.build_snapshot()
     epoch = snapshot.stream_epoch
     current_id = f"{epoch}:{snapshot.surface_version}"
@@ -202,7 +315,8 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     if cursor is not None and requested_epoch != epoch:
         payload = json.dumps({"reason": "epoch_changed", "cursor": current_id})
         yield f"event: reset\ndata: {payload}\n\n"
-    yield f"id: {current_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+    for frame in _capped_frames("snapshot", current_id, snapshot):
+        yield frame
 
     since_bar_ms = _latest_bar_start_ms(snapshot.symbols)
     # This stream's own delivered-fills cursor per sid — a set of event_keys,
@@ -248,8 +362,8 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
         changed = has_new_bars or bool(update.bots_delta) or bool(update.removed_sids)
         now = time.monotonic()
         if changed:
-            event_id = f"{epoch}:{update.surface_version}"
-            yield f"id: {event_id}\nevent: update\ndata: {update.model_dump_json()}\n\n"
+            for frame in _capped_frames("update", f"{epoch}:{update.surface_version}", update):
+                yield frame
             last_emit = now
         elif now - last_emit >= _KEEPALIVE_INTERVAL_S:
             yield ": keepalive\n\n"

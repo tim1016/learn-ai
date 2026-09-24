@@ -60,6 +60,7 @@ interface FakeGalleryStore {
   markersBySid: ReturnType<typeof signal<ReadonlyMap<string, readonly ChartFillMarker[]>>>;
   resolution: ReturnType<typeof signal<GalleryResolution>>;
   status: ReturnType<typeof signal<GalleryLiveStatus>>;
+  refusalReason: ReturnType<typeof signal<string | null>>;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
 }
@@ -68,6 +69,7 @@ function fakeGalleryStore(overrides: {
   bots?: GalleryBotView[];
   resolution?: GalleryResolution;
   status?: GalleryLiveStatus;
+  refusalReason?: string | null;
 } = {}): FakeGalleryStore {
   return {
     bots: signal<GalleryBotView[]>(overrides.bots ?? []),
@@ -75,6 +77,7 @@ function fakeGalleryStore(overrides: {
     markersBySid: signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map()),
     resolution: signal<GalleryResolution>(overrides.resolution ?? '5s'),
     status: signal<GalleryLiveStatus>(overrides.status ?? 'connecting'),
+    refusalReason: signal<string | null>(overrides.refusalReason ?? null),
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn(),
   };
@@ -183,6 +186,15 @@ describe('BotGalleryPageComponent', () => {
 
     expect(screen.getAllByText('Delayed').length).toBeGreaterThan(0);
     expect(screen.getByText('SPY')).toBeTruthy();
+    expect(screen.queryByText(/Stream refused/)).toBeNull();
+  });
+
+  it('names the lane refusal reason, through the receipt label pipe, when the stream was refused (#2328)', async () => {
+    const store = fakeGalleryStore({ status: 'stale', bots: [bot()], refusalReason: 'frame_too_large' });
+
+    await renderPage(store);
+
+    expect(screen.getByText('Stream refused: Frame Too Large')).toBeTruthy();
   });
 
   it('has no page-level toolbar or title — the dock owns the whole view', async () => {

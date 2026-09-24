@@ -56,6 +56,39 @@ export interface GalleryLiveUpdate {
 }
 
 /**
+ * One page of a symbol's bars, sent as the SSE `bars` event ahead of the
+ * `snapshot`/`update` frame with the same `surface_version` (#2328).
+ *
+ * The fleet coordinator aborts a stream on any event over its per-event cap,
+ * so a frame whose bars would exceed it ships them in pages first and then
+ * carries those symbols with empty `bars`. The store stages the pages and
+ * folds them into that frame before applying it. SSE-only; pinned to
+ * `app.schemas.broker_v2_gallery.GalleryBarsPage` by the same parametrized
+ * `test_live_update_fields_match_the_pinned_frontend_type`.
+ */
+export interface GalleryBarsPage {
+  readonly surface_version: number;
+  readonly symbol: string;
+  readonly bars: readonly ChartBar[];
+}
+
+/**
+ * The SSE `refused` event payload: the lane cannot send a frame under the
+ * coordinator's cap and has ended the stream (#2328). The store stops
+ * reconnecting, never reports the wall as live, and exposes `reason` (a
+ * backend reason code, rendered through the `receiptLabel` pipe).
+ *
+ * No Pydantic model backs it; `broker_v2_gallery.py` builds it inline, pinned
+ * by `tests/routers/test_broker_v2_gallery.py::test_gallery_stream_refuses_loudly_when_a_frame_cannot_fit_the_cap`.
+ */
+export interface GalleryRefusedEvent {
+  readonly reason: string;
+  readonly event: string;
+  readonly bytes: number;
+  readonly max_bytes: number;
+}
+
+/**
  * The SSE `reset` event payload — the epoch changed; re-bootstrap.
  *
  * No Pydantic model backs this payload; `broker_v2_gallery.py`'s router

@@ -10,18 +10,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from decimal import Decimal
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
+from app.broker.fleet.agent_identity import _FrameInjector
+from app.broker.fleet.internal_http import SseEvent, iter_sse_events
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.config import settings
 from app.main import app
 from app.routers import broker_v2_gallery
+from app.schemas.broker_v2_gallery import (
+    GalleryBotView,
+    GalleryLiveSnapshot,
+    GalleryPrimaryAction,
+    GallerySymbolBars,
+)
 from app.schemas.broker_v2_panel import PanelAction
 from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
+from app.services.broker_v2_panel.chart_projection_service import aggregator_bars_to_chart_bars
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
 from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
+from app.services.live_bar_aggregator import _RING_BUFFER_SIZE_5S
 
 _BROKER = "alpaca"
 _ACCOUNT_ID = "PA3"
@@ -387,3 +400,263 @@ async def test_panel_primary_action_source_returns_authoritative_resume_action(
     )
 
     assert action is resume
+
+
+# ---- #2328: every stream event fits the fleet coordinator's per-event cap ----
+
+
+def _five_second_bar(symbol: str, index: int) -> IbkrMinuteBar:
+    start_ms = 1_790_000_000_000 + index * 5_000
+    return IbkrMinuteBar(
+        symbol=symbol,
+        start_ms=start_ms,
+        end_ms=start_ms + 5_000,
+        open=Decimal("512.34"),
+        high=Decimal("512.61"),
+        low=Decimal("512.02"),
+        close=Decimal("512.47"),
+        volume=12_345,
+        fetched_at_ms=start_ms + 5_000,
+    )
+
+
+class _FullFiveSecondBufferAggregator(_FakeAggregator):
+    """Every symbol holds a FULL 5 s ring buffer, as on a normal RTH afternoon.
+
+    ``snapshot_5s`` slices ``since_ms`` the way the real aggregator does
+    (``start_ms > since_ms``), so update polls stay incremental.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._buffers: dict[str, list[IbkrMinuteBar]] = {}
+
+    async def ensure_subscribed_5s(self, symbol: str) -> None:
+        self._buffers.setdefault(
+            symbol, [_five_second_bar(symbol, i) for i in range(_RING_BUFFER_SIZE_5S)]
+        )
+
+    def snapshot_5s(self, symbol: str, since_ms: int | None = None) -> list[object]:
+        bars = self._buffers.get(symbol, [])
+        return list(bars) if since_ms is None else [b for b in bars if b.start_ms > since_ms]
+
+
+def _five_second_hub(rows: list[_Cat2]) -> GalleryHub:
+    return GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FullFiveSecondBufferAggregator(),
+        resolution="5s",
+    )
+
+
+# A realistic lane identity: the lane's FleetIdentityMiddleware stamps these
+# as ``x-fleet-*`` lines onto every event AFTER the router has sized it.
+_LANE_IDENTITY = {
+    "broker": "alpaca",
+    "clerk_id": "clrk_0123456789abcdef",
+    "routing_epoch": 1_234,
+    "binding_generation": 56,
+}
+
+
+async def _relay_through_coordinator(frames, *, until: str) -> list[SseEvent]:
+    """Relay lane frames the way production does: through the lane's
+    provenance injector (``_FrameInjector``), then the coordinator's own SSE
+    parser (``iter_sse_events`` at its production default cap). Collects
+    events up to and including the first one named ``until``."""
+    injector = _FrameInjector(lambda: _LANE_IDENTITY)
+
+    async def _chunks():
+        async for frame in frames:
+            for injected in injector.push(frame.encode() if isinstance(frame, str) else frame):
+                yield injected
+
+    chunks = _chunks()
+    events: list[SseEvent] = []
+    try:
+        async for event in iter_sse_events(chunks):
+            events.append(event)
+            if event.event == until:
+                break
+    finally:
+        await chunks.aclose()
+    return events
+
+
+async def _events_through_coordinator(hub: GalleryHub, *, until: str) -> list[SseEvent]:
+    """The router's real stream for ``hub``, relayed as production relays it."""
+    response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
+    try:
+        return await _relay_through_coordinator(response.body_iterator, until=until)
+    finally:
+        await response.body_iterator.aclose()
+
+
+def _assembled_bars(events: list[SseEvent], frame_event: str) -> dict[str, int]:
+    """Bars per symbol a client assembles for ``frame_event``: its own inline
+    bars plus every ``bars`` page staged for the same ``surface_version``."""
+    frame = next(e for e in reversed(events) if e.event == frame_event)
+    payload = json.loads(frame.data)
+    counts = {entry["symbol"]: len(entry["bars"]) for entry in payload["symbols"]}
+    for event in events:
+        if event.event != "bars":
+            continue
+        page = json.loads(event.data)
+        if page["surface_version"] == payload["surface_version"]:
+            counts[page["symbol"]] = counts.get(page["symbol"], 0) + len(page["bars"])
+    # A paged head declares each symbol's paged total; the client checks the
+    # staged pages against it, so the relay must deliver exactly that many.
+    for entry in payload["symbols"]:
+        if entry.get("paged_bar_count") is not None:
+            assert counts[entry["symbol"]] == entry["paged_bar_count"]
+    return counts
+
+
+async def test_gallery_stream_snapshot_of_full_five_second_buffers_fits_the_coordinator_cap() -> None:
+    """#2328: two symbols' full 5 s buffers (~1.16 MB inline) used to ship as
+    ONE ``snapshot`` event, which the coordinator's 1 MB per-event cap killed
+    after the 200. The wall then froze behind a flickering Live. Every event
+    must now pass the coordinator's parser, and the client must still
+    assemble every buffered bar."""
+    hub = _five_second_hub(
+        [_Cat2("Aug11-02", "SPY", True, 1.0, 0.0, 1), _Cat2("Aug11-03", "QQQ", True, 1.0, 0.0, 1)]
+    )
+
+    events = await asyncio.wait_for(_events_through_coordinator(hub, until="snapshot"), timeout=30.0)
+
+    assert _assembled_bars(events, "snapshot") == {
+        "SPY": _RING_BUFFER_SIZE_5S,
+        "QQQ": _RING_BUFFER_SIZE_5S,
+    }
+
+
+async def test_gallery_stream_update_for_newly_shown_symbols_fits_the_coordinator_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A symbol that joins the wall mid-stream has no bar cursor yet, so its
+    first update carries its whole buffer. Two at once used to exceed the
+    cap exactly like the snapshot did."""
+    monkeypatch.setattr(broker_v2_gallery, "_POLL_INTERVAL_S", 0.0)
+    rows = [_Cat2("Aug11-01", "DIA", True, 1.0, 0.0, 1)]
+    hub = _five_second_hub(rows)
+    original_build_update = hub.build_update
+
+    async def _build_update_after_two_new_bots(*args, **kwargs):
+        rows.extend(
+            [_Cat2("Aug11-02", "SPY", True, 1.0, 0.0, 1), _Cat2("Aug11-03", "QQQ", True, 1.0, 0.0, 1)]
+        )
+        return await original_build_update(*args, **kwargs)
+
+    monkeypatch.setattr(hub, "build_update", _build_update_after_two_new_bots)
+
+    events = await asyncio.wait_for(_events_through_coordinator(hub, until="update"), timeout=30.0)
+
+    assembled = _assembled_bars(events, "update")
+    assert assembled["SPY"] == _RING_BUFFER_SIZE_5S
+    assert assembled["QQQ"] == _RING_BUFFER_SIZE_5S
+
+
+async def test_gallery_stream_refuses_loudly_when_a_frame_cannot_fit_the_cap(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A frame that is still over the cap once its bars are paged out (here,
+    a roster alone larger than a shrunken cap) must never be sent for the
+    coordinator to kill silently. The lane emits a small, named ``refused``
+    event, logs an error, and ends the stream."""
+    # A 2,000-byte frame budget once the framing reserve is held back.
+    monkeypatch.setattr(
+        broker_v2_gallery,
+        "_MAX_EVENT_BYTES",
+        broker_v2_gallery._FLEET_FRAMING_RESERVE_BYTES + 2_000,
+    )
+    rows = [_Cat2(f"Aug11-{i:02d}", "SPY", True, 1.0, 0.0, 1) for i in range(20)]
+    hub = _five_second_hub(rows)
+    response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
+
+    with caplog.at_level(logging.ERROR, logger=broker_v2_gallery.__name__):
+        # Finite: the stream ends right after refusing.
+        frames = await asyncio.wait_for(
+            _collect(response.body_iterator), timeout=10.0
+        )
+
+    assert len(frames) == 1
+    assert frames[0].startswith("event: refused\n")
+    payload = _frame_payload(frames[0])
+    # No Pydantic model backs this payload; `GalleryRefusedEvent` in
+    # gallery.types.ts is pinned to exactly these keys.
+    assert set(payload.keys()) == {"reason", "event", "bytes", "max_bytes"}
+    assert payload["reason"] == "frame_too_large"
+    assert payload["event"] == "snapshot"
+    assert payload["bytes"] > payload["max_bytes"] == 2_000
+    assert any(
+        record.levelno == logging.ERROR and "[GALLERY]" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def _collect(iterator) -> list[str]:
+    return [frame async for frame in iterator]
+
+
+def _snapshot_frame_of_exact_size(target_bytes: int) -> GalleryLiveSnapshot:
+    """A real snapshot whose whole ``snapshot`` frame is exactly
+    ``target_bytes``, padded through the bot label."""
+    bars = aggregator_bars_to_chart_bars([_five_second_bar("SPY", i) for i in range(6_000)])
+
+    def _build(label: str) -> GalleryLiveSnapshot:
+        return GalleryLiveSnapshot(
+            stream_epoch="alpaca:PA3:nonce",
+            surface_version=1,
+            as_of_ms=1_790_000_000_000,
+            resolution="5s",
+            bots=[
+                GalleryBotView(
+                    sid="Aug11-02",
+                    symbol="SPY",
+                    label=label,
+                    running=True,
+                    phase="ON_DUTY",
+                    desired_state="running",
+                    needs_attention=False,
+                    realized_pnl_today=None,
+                    open_pnl=None,
+                    day_pnl=None,
+                    session_change_pct=None,
+                    fills_today=None,
+                    primary_action=GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True),
+                )
+            ],
+            symbols=[GallerySymbolBars(symbol="SPY", bars=bars)],
+        )
+
+    def _frame_size(snapshot: GalleryLiveSnapshot) -> int:
+        frame = broker_v2_gallery._sse_frame(
+            "snapshot", snapshot.model_dump_json(), event_id="alpaca:PA3:nonce:1"
+        )
+        return len(frame.encode())
+
+    unpadded = _frame_size(_build(""))
+    assert unpadded < target_bytes, "shrink the bar count so padding can reach the target"
+    snapshot = _build("x" * (target_bytes - unpadded))
+    assert _frame_size(snapshot) == target_bytes
+    return snapshot
+
+
+async def test_gallery_frame_just_under_the_cap_still_fits_after_lane_framing() -> None:
+    """A frame that fits the coordinator cap on its own, but not once the
+    lane's ``_FrameInjector`` appends its ``x-fleet-*`` provenance lines,
+    must still be paged. Without the framing reserve this exact frame went
+    out whole and the coordinator aborted the stream: #2328 again, inside a
+    ~115-byte window."""
+    snapshot = _snapshot_frame_of_exact_size(broker_v2_gallery._MAX_EVENT_BYTES - 50)
+    frames = broker_v2_gallery._capped_frames("snapshot", "alpaca:PA3:nonce:1", snapshot)
+
+    async def _frames():
+        for frame in frames:
+            yield frame
+
+    events = await asyncio.wait_for(_relay_through_coordinator(_frames(), until="snapshot"), timeout=30.0)
+
+    assert _assembled_bars(events, "snapshot") == {"SPY": 6_000}

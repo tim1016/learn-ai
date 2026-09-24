@@ -77,6 +77,11 @@
   font-size: var(--fs-sm);
 }
 
+.gallery-page__stale-reason {
+  display: block;
+  margin-top: var(--space-1);
+}
+
 .gallery-page__dock {
   flex: 1;
   min-height: 0;
