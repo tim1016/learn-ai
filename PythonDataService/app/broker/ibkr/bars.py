@@ -72,6 +72,12 @@ REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
+# At most this many of the window's new requests may re-request a line IBKR
+# dropped at 1101 (#2393). Every 1101 kills every open line, so a flapping link
+# re-requests all of them each time; without a cap a storm would spend the
+# whole 60-per-600 s allowance the username shares and starve every fresh
+# subscription and reconnect. Half the budget stays reserved for those.
+_REALTIME_BAR_MAX_LOST_LINE_REQUESTS = 30
 _REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
 
 
@@ -80,14 +86,17 @@ class IBKRBarSubscriptionStalled(IBKRBarStreamError):
 
 
 class IBKRBarInterrupted(IBKRBarStreamError):
-    """A broker line stopped for a survivable reason: socket down, 1100 soft loss, or reconnect.
+    """A broker line stopped for a survivable reason: socket down, 1100 soft loss, 1101 data loss, or reconnect.
 
     Consumers with a continuity policy recover from this; everyone else treats it
     as the fatal ``IBKRBarStreamError`` it subclasses.
     """
 
     def __init__(
-        self, message: str, *, cause: Literal["socket_down", "soft_loss_1100", "generation_changed"]
+        self,
+        message: str,
+        *,
+        cause: Literal["socket_down", "soft_loss_1100", "data_lost_1101", "generation_changed"],
     ) -> None:
         super().__init__(message)
         self.cause = cause
@@ -106,6 +115,11 @@ class _RealtimeBarRequestPacer:
     request budget. The pacer intentionally waits instead of surfacing a
     broker pacing violation; callers remain cancellable while waiting.
 
+    A request that replaces a line IBKR dropped at 1101 is also counted against
+    ``max_lost_line_requests`` in the same window, and past that cap it is
+    refused outright rather than paced: waiting would still spend the shared
+    budget, just later.
+
     Reference: https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/
       ("Request Real Time Bars").
     """
@@ -114,29 +128,51 @@ class _RealtimeBarRequestPacer:
         self,
         *,
         max_requests: int = _REALTIME_BAR_MAX_NEW_REQUESTS,
+        max_lost_line_requests: int = _REALTIME_BAR_MAX_LOST_LINE_REQUESTS,
         window_s: float = _REALTIME_BAR_REQUEST_WINDOW_S,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if max_requests < 1:
             raise ValueError("max_requests must be positive")
+        if max_lost_line_requests < 1:
+            raise ValueError("max_lost_line_requests must be positive")
         if window_s <= 0:
             raise ValueError("window_s must be positive")
         self._max_requests = max_requests
+        self._max_lost_line_requests = max_lost_line_requests
         self._window_s = window_s
         self._clock = clock
         self._sleep = sleep
         self._request_times: deque[float] = deque()
+        self._lost_line_request_times: deque[float] = deque()
 
-    async def acquire(self) -> None:
+    async def acquire(self, *, replaces_lost_line: bool = False) -> None:
         delayed = False
         while True:
             now = self._clock()
             cutoff = now - self._window_s
-            while self._request_times and self._request_times[0] <= cutoff:
-                self._request_times.popleft()
+            for times in (self._request_times, self._lost_line_request_times):
+                while times and times[0] <= cutoff:
+                    times.popleft()
+            if replaces_lost_line and len(self._lost_line_request_times) >= self._max_lost_line_requests:
+                logger.error(
+                    "Refusing to re-request another IBKR real-time-bar line lost at 1101",
+                    extra={
+                        "action": "ibkr_realtime_bar_lost_line_budget_exhausted",
+                        "max_lost_line_requests": self._max_lost_line_requests,
+                        "window_s": self._window_s,
+                    },
+                )
+                raise IBKRBarStreamError(
+                    f"IBKR dropped real-time-bar lines at 1101 so often that {self._max_lost_line_requests} "
+                    f"were re-requested in the last {self._window_s:g}s; refusing another so the "
+                    "connection's shared request budget stays available."
+                )
             if len(self._request_times) < self._max_requests:
                 self._request_times.append(now)
+                if replaces_lost_line:
+                    self._lost_line_request_times.append(now)
                 return
 
             wait_s = max(0.0, self._request_times[0] + self._window_s - now)
@@ -170,8 +206,16 @@ class _RealtimeBarSubscription:
     client: IbkrClient
     bars: list[object]
     generation: int
+    #: The client's 1101 count when this line was requested; a later 1101
+    #: means IBKR dropped it, on the same socket (#2393).
+    data_loss_epoch: int
     consumer_count: int = 1
     invalidated: bool = False
+
+    @property
+    def data_lost(self) -> bool:
+        """Whether an IBKR 1101 has dropped this line since it was requested."""
+        return self.data_loss_epoch != self.client.data_loss_epoch
 
 
 @dataclass
@@ -186,6 +230,7 @@ class _RealtimeBarLease:
     multiplexed: bool
     consumer_count: int
     generation: int
+    data_loss_epoch: int
     _released: bool = False
 
     @property
@@ -230,6 +275,9 @@ class _RealtimeBarSubscriptionRegistry:
         self._default_max_active = default_max_active
         self._subscriptions: dict[_SubscriptionKey, _RealtimeBarSubscription] = {}
         self._pending: dict[_SubscriptionKey, asyncio.Future[None]] = {}
+        # Lines IBKR dropped at 1101 that no request has replaced yet. The
+        # request that replaces one is paced against the lost-line cap.
+        self._lost_lines: set[_SubscriptionKey] = set()
 
     async def acquire(
         self,
@@ -259,6 +307,13 @@ class _RealtimeBarSubscriptionRegistry:
             )
 
             existing = self._subscriptions.get(key)
+            if existing is not None and existing.data_lost:
+                # IBKR dropped this list at 1101 and will never append to it
+                # again; multiplexing onto it would hand the consumer a line
+                # that is silent by construction. A peer still holding it is
+                # interrupted by its own liveness gate.
+                self._evict_lost_line(key, existing)
+                existing = None
             if existing is not None:
                 start_index = len(existing.bars)
                 existing.consumer_count += 1
@@ -271,6 +326,7 @@ class _RealtimeBarSubscriptionRegistry:
                     multiplexed=True,
                     consumer_count=existing.consumer_count,
                     generation=existing.generation,
+                    data_loss_epoch=existing.data_loss_epoch,
                 )
 
             pending = self._pending.get(key)
@@ -303,7 +359,7 @@ class _RealtimeBarSubscriptionRegistry:
                 # so the pacer is only ever entered under a live generation and
                 # never spends budget on a dead key. It can still move during a
                 # real pacing sleep, which is what the check below catches.
-                await self._pacer.acquire()
+                await self._pacer.acquire(replaces_lost_line=key in self._lost_lines)
                 if _client_generation(client) != generation:
                     # The socket was replaced while we waited on the pacer:
                     # requesting bars now would file them under a dead key.
@@ -322,8 +378,14 @@ class _RealtimeBarSubscriptionRegistry:
                     what_to_show,
                     useRTH=use_rth,
                 )
+                self._lost_lines.discard(key)
                 subscription = _RealtimeBarSubscription(
-                    client=client, bars=bars, generation=generation
+                    client=client,
+                    bars=bars,
+                    generation=generation,
+                    # Read with no await since the request: the line is live
+                    # under exactly this epoch.
+                    data_loss_epoch=client.data_loss_epoch,
                 )
                 self._subscriptions[key] = subscription
                 return _RealtimeBarLease(
@@ -335,6 +397,7 @@ class _RealtimeBarSubscriptionRegistry:
                     multiplexed=False,
                     consumer_count=1,
                     generation=generation,
+                    data_loss_epoch=subscription.data_loss_epoch,
                 )
             finally:
                 self._pending.pop(key, None)
@@ -343,6 +406,11 @@ class _RealtimeBarSubscriptionRegistry:
 
     def _evict_older_generations(self, client: IbkrClient, generation: int) -> None:
         """Drop registry entries whose socket is gone; never send a cancel for them."""
+        self._lost_lines = {
+            key
+            for key in self._lost_lines
+            if key.client_id != id(client) or key.generation >= generation
+        }
         stale = [
             key
             for key in self._subscriptions
@@ -359,6 +427,43 @@ class _RealtimeBarSubscriptionRegistry:
                     "con_id": key.con_id,
                 },
             )
+
+    def _evict_lost_line(self, key: _SubscriptionKey, subscription: _RealtimeBarSubscription) -> None:
+        """Retire a line IBKR dropped at 1101, on the socket that still owns its reqId."""
+        self._subscriptions.pop(key, None)
+        subscription.invalidated = True
+        self._cancel_on_own_socket(key, subscription, reason="lost at 1101")
+        logger.info(
+            "Evicted real-time-bar subscription IBKR dropped at 1101",
+            extra={
+                "action": "ibkr_realtime_bar_lost_line_evicted",
+                "generation": key.generation,
+                "data_loss_epoch": subscription.data_loss_epoch,
+                "con_id": key.con_id,
+                "consumer_count": subscription.consumer_count,
+            },
+        )
+
+    def _cancel_on_own_socket(
+        self,
+        key: _SubscriptionKey,
+        subscription: _RealtimeBarSubscription,
+        *,
+        reason: str,
+    ) -> None:
+        """Cancel ``subscription`` now that no consumer will read it.
+
+        Only ever on the socket that issued it (callers drop a previous
+        generation's line first). A line IBKR dropped at 1101 is cancelled
+        too -- same socket, so its reqId is still its own -- and is remembered
+        so the request that replaces it counts against the lost-line cap.
+        """
+        if subscription.data_lost:
+            self._lost_lines.add(key)
+        try:
+            subscription.client.ib.cancelRealTimeBars(subscription.bars)
+        except Exception as exc:
+            logger.debug("cancelRealTimeBars raised on %s subscription: %s", reason, exc)
 
     def _dropped_as_stale(
         self,
@@ -396,10 +501,7 @@ class _RealtimeBarSubscriptionRegistry:
             return False
 
         self._subscriptions.pop(key, None)
-        try:
-            subscription.client.ib.cancelRealTimeBars(subscription.bars)
-        except Exception as exc:
-            logger.debug("cancelRealTimeBars raised on shared-subscription shutdown: %s", exc)
+        self._cancel_on_own_socket(key, subscription, reason="shared-subscription shutdown")
         return True
 
     def invalidate(
@@ -416,10 +518,7 @@ class _RealtimeBarSubscriptionRegistry:
 
         self._subscriptions.pop(key, None)
         subscription.invalidated = True
-        try:
-            subscription.client.ib.cancelRealTimeBars(subscription.bars)
-        except Exception as exc:
-            logger.debug("cancelRealTimeBars raised on stalled-subscription invalidation: %s", exc)
+        self._cancel_on_own_socket(key, subscription, reason="stalled-subscription invalidation")
         return True
 
 
@@ -547,7 +646,7 @@ def _check_realtime_subscription_liveness(
     last_progress_at: float,
     last_source_ms: int | None,
 ) -> tuple[float, bool, bool]:
-    """Fail closed on a stale-generation, disconnected, invalidated, or stalled line."""
+    """Fail closed on a stale-generation, disconnected, data-lost, invalidated, or stalled line."""
     if lease.generation != _client_generation(client):
         raise IBKRBarInterrupted(
             f"IBKR connection was re-established while streaming {symbol} 5-second bars; "
@@ -567,6 +666,14 @@ def _check_realtime_subscription_liveness(
             f"IBKR connectivity lost (code 1100) while streaming {symbol} 5-second bars; "
             "halting rather than streaming a dead feed.",
             cause="soft_loss_1100",
+        )
+    if lease.data_loss_epoch != client.data_loss_epoch:
+        # Before ``invalidated``: a re-acquirer that evicted this dropped line
+        # marks it invalidated, and this is the cause that explains it.
+        raise IBKRBarInterrupted(
+            f"IBKR reported 1101 (connectivity restored, data lost) while streaming {symbol} "
+            "5-second bars; this line was dropped and must be requested again.",
+            cause="data_lost_1101",
         )
     if lease.invalidated:
         raise IBKRBarSubscriptionStalled(
@@ -773,9 +880,16 @@ async def _iter_leased_raw_bars(
         ),
     )
     last_progress_at = time.monotonic()
+    delivered = False
 
     def _observe(raw_bar) -> _LeasedBar:
-        nonlocal last_progress_at, last_source_ms
+        nonlocal last_progress_at, last_source_ms, delivered
+        if not delivered:
+            delivered = True
+            if lease.data_loss_epoch:
+                # A line requested after a 1101 is what proves data flows
+                # again; the recovery callbacks alone never did (#2393).
+                client.note_realtime_bar_delivered(lease.data_loss_epoch)
         recorder.record(
             source=f"{evidence_source}.bar",
             symbol=sym,

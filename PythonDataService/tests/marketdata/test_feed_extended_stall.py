@@ -73,6 +73,8 @@ class _Client:
         self.ib = transport
         self.connection_lost = False
         self.connection_generation = 1
+        # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.
+        self.data_loss_epoch = 0
         self.connected_account = None
         self.settings = SimpleNamespace(feed_continuity_enabled=True)
 

@@ -286,6 +286,17 @@ class IbkrClient:
         self._connection_generation: int = 0
         self._connectivity_lost_count: int = 0
         self._subscriptions_stale: bool = False
+        # Monotonic count of IBKR 1101s ("restored, data lost") this process
+        # has seen. 1101 keeps the socket, so it cannot move the connection
+        # generation, but every real-time-bar line open before it is dead on
+        # IBKR's side: each lease records the epoch its line was requested
+        # under, and a lease from an earlier epoch is interrupted (#2393).
+        self._data_loss_epoch: int = 0
+        # Whether the latest 1101 found real-time-bar lines open. Such lines
+        # are replaced by fresh requests, and ``subscriptions_stale`` stays
+        # set until one of them delivers a bar -- recovery callbacks alone do
+        # not prove that data flows again.
+        self._fresh_bar_owed: bool = False
         self._data_farm_degraded: bool = False
         self._last_ibkr_code: int | None = None
         self._last_ibkr_message: str | None = None
@@ -321,7 +332,8 @@ class IbkrClient:
           still report True here because the API socket stays open.
         * ``1101`` / ``1102`` — connectivity restored. Clear the flag.
           ``1101`` additionally means market-data subscriptions were lost and
-          must be recreated.
+          must be recreated: it advances ``data_loss_epoch``, which fences
+          every real-time-bar line opened before it (#2393).
         * ``2103`` / ``2105`` and ``2104`` / ``2106`` — market/historical
           data-farm degraded/restored signals. These do not necessarily mean
           account/order connectivity is gone, so they publish a degraded state
@@ -399,15 +411,31 @@ class IbkrClient:
                 self._last_event_ms = now_ms_utc()
             self._connection_lost = False
             if errorCode in _SUBSCRIPTIONS_STALE_CODES:
-                self._subscriptions_stale = True
+                self._mark_data_lost()
             logger.info(
                 "IBKR connectivity restored",
                 extra={
                     "error_code": errorCode,
                     "error": errorString,
                     "action": "connection_restored",
+                    "data_loss_epoch": self._data_loss_epoch,
                 },
             )
+
+    def _mark_data_lost(self) -> None:
+        """Fence every real-time-bar line open now: IBKR dropped them all (1101)."""
+        self._data_loss_epoch += 1
+        self._subscriptions_stale = True
+        lines_lost = len(self._ib.realtimeBars())
+        self._fresh_bar_owed = lines_lost > 0
+        logger.warning(
+            "IBKR 1101 dropped every market-data subscription; real-time-bar lines are fenced",
+            extra={
+                "action": "realtime_bar_lines_lost",
+                "data_loss_epoch": self._data_loss_epoch,
+                "lines_lost": lines_lost,
+            },
+        )
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -547,6 +575,7 @@ class IbkrClient:
         self._connection_generation += 1
         self.mark_recovery_succeeded()
         self._subscriptions_stale = False
+        self._fresh_bar_owed = False
         self._data_farm_degraded = False
         # State transition (anything → connected) — stamp at the mutation
         # site so ``health()`` stays a pure read.
@@ -590,9 +619,25 @@ class IbkrClient:
         self._last_probe_error = None
 
     def mark_recovery_succeeded(self) -> None:
-        self._subscriptions_stale = False
+        # A 1101 that dropped real-time-bar lines is recovered only when a bar
+        # arrives on a replacement line (``note_realtime_bar_delivered``); the
+        # recovery callbacks restart chart streams, not every bot's lease.
+        if not self._fresh_bar_owed:
+            self._subscriptions_stale = False
         self._last_recovery_ms = now_ms_utc()
         self._recovery_error = None
+
+    def note_realtime_bar_delivered(self, data_loss_epoch: int) -> None:
+        """Clear ``subscriptions_stale`` once a line requested after the latest 1101 delivers."""
+        if data_loss_epoch != self._data_loss_epoch or not self._subscriptions_stale:
+            return
+        self._subscriptions_stale = False
+        self._fresh_bar_owed = False
+        self._last_event_ms = now_ms_utc()
+        logger.info(
+            "IBKR real-time bars flowing again after 1101",
+            extra={"action": "realtime_bar_lines_restored", "data_loss_epoch": data_loss_epoch},
+        )
 
     def mark_recovery_failed(self, exc: Exception) -> None:
         self._recovery_error = f"{type(exc).__name__}: {exc}"
@@ -633,6 +678,11 @@ class IbkrClient:
     def connection_generation(self) -> int:
         """Number of successful connects this process has made; fences stale leases."""
         return self._connection_generation
+
+    @property
+    def data_loss_epoch(self) -> int:
+        """Number of IBKR 1101s seen; fences real-time-bar lines opened before the latest."""
+        return self._data_loss_epoch
 
     @property
     def connectivity_lost_count(self) -> int:

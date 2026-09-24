@@ -153,6 +153,13 @@ class AutoReconnectMonitor:
         # failing resubscribe doesn't spam every poll cycle. ``0`` lets the
         # first stale observation fire immediately on detection.
         self._last_subscription_recovery_ms: int = 0
+        # The client's 1101 count the recovery callbacks last completed for.
+        # ``subscriptions_stale`` now stays set until a replacement real-time
+        # bar line delivers (#2393), which in PRE/POST can be minutes; keying
+        # the callbacks on the stale flag would re-run ``resubscribe_all``
+        # every interval meanwhile and spend the shared reqRealTimeBars budget
+        # on chart restarts. Each 1101 is recovered exactly once.
+        self._recovered_data_loss_epoch: int = 0
         # Durable outage anchor (#2080). Set on the first failed connect of
         # an outage; unlike ``_last_transition_ms``, a later open-breaker
         # probe does NOT re-stamp it, so a long blackout reports its real
@@ -332,19 +339,25 @@ class AutoReconnectMonitor:
         self._advance_recovery("wait_expired")
         await self._attempt_reconnect_loop(force=True)
 
+    def _data_loss_unrecovered(self) -> bool:
+        """Whether the client has seen a 1101 the recovery callbacks have not yet run for."""
+        return getattr(self._client, "data_loss_epoch", 0) != self._recovered_data_loss_epoch
+
     async def _recover_subscriptions_if_stale(self) -> bool:
-        """Run recovery callbacks when the client reports stale subscriptions.
+        """Run recovery callbacks once for each IBKR 1101 the client reports.
 
         After IBKR code 1101 (``connectivity restored, data lost``) the
         socket stays open and ``is_connected()`` returns True, but active
         market-data subscriptions are gone. The reconnect loop never fires
         in that state, so charts would freeze until manual intervention
         unless ``resubscribe_all`` (registered via ``recovery_callbacks``)
-        runs here.
+        runs here. Bot leases are not restarted here: the bar liveness gate
+        interrupts each of them on the same 1101 and its continuity loop
+        requests a fresh line.
 
         Returns True iff an attempt was made this tick.
         """
-        if not getattr(self._client, "subscriptions_stale", False):
+        if not self._data_loss_unrecovered():
             return False
         now_ms = self._now_ms()
         interval_ms = int(self._subscription_recovery_interval_s * 1000)
@@ -355,10 +368,9 @@ class AutoReconnectMonitor:
         from app.broker.ibkr.client import get_client_lifecycle_lock
 
         async with get_client_lifecycle_lock():
-            # Re-check inside the lock — an operator's manual /reconnect
-            # may have run while we were waiting on the lock, clearing
-            # ``subscriptions_stale`` as part of its successful connect.
-            if not getattr(self._client, "subscriptions_stale", False):
+            # Re-check inside the lock — a reconnect attempt may have run the
+            # same callbacks while we were waiting on the lock.
+            if not self._data_loss_unrecovered():
                 return False
             if not self._client.is_connected() or self._client.connection_lost:
                 return False
@@ -592,6 +604,9 @@ class AutoReconnectMonitor:
 
     async def _run_recovery_callbacks(self) -> bool:
         """Run post-connect recovery before the monitor reports healthy."""
+        # Read before the callbacks: a 1101 that lands while they run is a
+        # later loss, and the next tick recovers it.
+        data_loss_epoch = getattr(self._client, "data_loss_epoch", 0)
         self._begin_recovery()
         try:
             for callback in self._recovery_callbacks:
@@ -611,6 +626,7 @@ class AutoReconnectMonitor:
         mark_succeeded = getattr(self._client, "mark_recovery_succeeded", None)
         if mark_succeeded is not None:
             mark_succeeded()
+        self._recovered_data_loss_epoch = data_loss_epoch
         self._end_recovery(success=True)
         return True
 

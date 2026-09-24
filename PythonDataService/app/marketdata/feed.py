@@ -165,7 +165,7 @@ ContinuityEventKind = Literal["interruption", "recovered", "gap", "substituted",
 ``refused``      — a substitution was asked for and denied; the bar stays missing.
 """
 
-InterruptionCause = Literal["socket_down", "soft_loss_1100", "stall", "generation_changed"]
+InterruptionCause = Literal["socket_down", "soft_loss_1100", "data_lost_1101", "stall", "generation_changed"]
 """Why delivery stopped, in the vocabulary the broker boundary can prove."""
 
 DecisionSession = Literal["rth", "extended"]

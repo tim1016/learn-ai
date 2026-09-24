@@ -77,6 +77,8 @@ class _PolygonReplayClient:
         # The replay never reconnects, but the generation fence the live path
         # runs on every loop iteration is unconditional, so it needs a value.
         self.connection_generation = 1
+        # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.
+        self.data_loss_epoch = 0
 
     def require_connected(self) -> None:
         return

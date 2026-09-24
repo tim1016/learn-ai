@@ -482,6 +482,8 @@ class _FakeClient:
         # The generation fence is unconditional on the real client, so every
         # fake that reaches it carries one too.
         self.connection_generation = 1
+        # The 1101 data-loss fence is unconditional too (#2393); nothing here sends a 1101.
+        self.data_loss_epoch = 0
 
     def require_connected(self) -> None:
         return
@@ -1247,7 +1249,7 @@ async def test_acquire_restarts_when_generation_moves_during_pacing(
     contract = SimpleNamespace(conId=1, symbol="SPY", secType="STK")
     registry = bars_mod._REALTIME_BAR_SUBSCRIPTIONS
 
-    async def _bump_generation() -> None:
+    async def _bump_generation(*, replaces_lost_line: bool = False) -> None:
         client.connection_generation = 2
 
     monkeypatch.setattr(registry._pacer, "acquire", _bump_generation)
@@ -1284,7 +1286,7 @@ async def test_active_line_cap_ignores_a_pending_line_from_a_previous_generation
     reached_pacer = asyncio.Event()
     unblock_pacer = asyncio.Event()
 
-    async def _gated_acquire() -> None:
+    async def _gated_acquire(*, replaces_lost_line: bool = False) -> None:
         if reached_pacer.is_set():
             return
         reached_pacer.set()
