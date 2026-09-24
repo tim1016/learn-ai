@@ -890,7 +890,8 @@ async def _iter_leased_raw_bars(
     last_source_ms: int | None = None,
     on_source_bar: Callable[[int], None] | None = None,
     request_deadline_ms: int | None = None,
-) -> AsyncIterator[_LeasedBar]:
+    idle_ticks: bool = False,
+) -> AsyncIterator[_LeasedBar | None]:
     """Yield raw 5-second bars off one leased ``reqRealTimeBars`` line.
 
     Everything both public streams do around the bar itself lives here: the
@@ -906,6 +907,10 @@ async def _iter_leased_raw_bars(
     where it was. Pass ``last_source_ms`` when an earlier generation of this
     stream already advanced it, and ``request_deadline_ms`` when a continuity
     deadline bounds how long acquiring the line may wait.
+
+    ``idle_ticks`` yields ``None`` on each idle poll of a line that just
+    passed the liveness gate, so a consumer can act on the wall clock while no
+    print arrives (the sparse-minute emit, #2376).
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
@@ -1012,6 +1017,8 @@ async def _iter_leased_raw_bars(
                     connection_lost=connection_lost,
                     message=no_bar_message,
                 )
+                if idle_ticks:
+                    yield None
                 await asyncio.sleep(0.1)
                 continue
             raw_bar = bars[index]
@@ -1130,16 +1137,20 @@ async def stream_minute_bars(
                 last_source_ms=assembler.last_source_ms,
                 on_source_bar=on_source_bar,
                 request_deadline_ms=request_deadline_ms,
+                idle_ticks=True,
             )
         ) as leased_bars:
             async for leased in leased_bars:
-                emitted = assembler.feed(
-                    leased.raw,
-                    symbol=sym,
-                    generation=leased.generation,
-                    venue=leased.venue,
-                    use_rth=use_rth,
-                )
+                if leased is None:
+                    emitted = assembler.emit_if_elapsed(now_ms_utc())
+                else:
+                    emitted = assembler.feed(
+                        leased.raw,
+                        symbol=sym,
+                        generation=leased.generation,
+                        venue=leased.venue,
+                        use_rth=use_rth,
+                    )
                 if emitted is not None:
                     yield emitted
     finally:

@@ -20,7 +20,11 @@ from app.broker.ibkr.bars import (
     stream_minute_bars,
     stream_raw_5s_bars,
 )
-from app.broker.ibkr.minute_assembler import LiveBarCounters, aggregate_realtime_bar
+from app.broker.ibkr.minute_assembler import (
+    SPARSE_MINUTE_EMIT_GRACE_MS,
+    LiveBarCounters,
+    aggregate_realtime_bar,
+)
 
 
 def _bar(second: int, open_: str, high: str, low: str, close: str, volume: int):
@@ -1444,3 +1448,68 @@ async def test_shared_assembler_stitches_one_minute_across_two_stream_calls() ->
     assert emitted.start_ms == int(datetime(2026, 5, 4, 14, 30, 0, tzinfo=UTC).timestamp() * 1000)
     assert emitted.contribution_count == 12
     assert emitted.spans_interruption is True
+
+
+# ── #2376: the healthy line's idle poll emits a sparse extended-hours minute ──
+
+
+def _sparse_pre_prints(minute_start_ms: int) -> list[SimpleNamespace]:
+    return [_raw_print(minute_start_ms + second * 1_000) for second in (0, 15, 30)]
+
+
+@pytest.mark.asyncio
+async def test_a_sparse_pre_minute_is_emitted_on_time_with_no_next_print(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before #2376 this minute waited for the next print and was refused DECISION_LATE."""
+    minute_start_ms = _et_ms(2026, 9, 22, 8, 0)
+    now = {"ms": minute_start_ms + 60_000 + 5_000}  # inside the grace
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now["ms"])
+    client = _FakeClient()
+    client.ib.bars = _sparse_pre_prints(minute_start_ms)
+    stream = stream_minute_bars(
+        client, "SPY", use_rth=False, stall_timeout_s=3_600.0, assembler=MinuteAssembler()
+    )
+    pending = asyncio.ensure_future(stream.__anext__())
+    try:
+        await asyncio.sleep(0.25)  # idle polls inside the grace emit nothing
+        assert not pending.done()
+
+        now["ms"] = minute_start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS
+        emitted = await asyncio.wait_for(pending, timeout=2.0)
+    finally:
+        if not pending.done():
+            pending.cancel()
+        await stream.aclose()
+
+    assert emitted.start_ms == minute_start_ms
+    assert emitted.contribution_count == 3
+    assert emitted.session_phase == "PRE"
+
+
+@pytest.mark.asyncio
+async def test_a_print_after_the_timer_emit_does_not_abort_the_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    minute_start_ms = _et_ms(2026, 9, 22, 8, 0)
+    now = {"ms": minute_start_ms + 60_000 + SPARSE_MINUTE_EMIT_GRACE_MS}
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: now["ms"])
+    client = _FakeClient()
+    client.ib.bars = _sparse_pre_prints(minute_start_ms)
+    assembler = MinuteAssembler()
+    stream = stream_minute_bars(
+        client, "SPY", use_rth=False, stall_timeout_s=3_600.0, assembler=assembler
+    )
+    try:
+        first = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        # The minute's 55 s print lands after the emit, then the next minute.
+        client.ib.bars.append(_raw_print(minute_start_ms + 55_000))
+        client.ib.bars.append(_raw_print(minute_start_ms + 60_000))
+        now["ms"] = minute_start_ms + 120_000 + SPARSE_MINUTE_EMIT_GRACE_MS
+        second = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+    finally:
+        await stream.aclose()
+
+    assert first.start_ms == minute_start_ms
+    assert second.start_ms == minute_start_ms + 60_000
+    assert assembler.counters.ignored_late_print_after_emit == 1
