@@ -243,7 +243,16 @@ async def test_retained_feed_refuses_a_continuity_policy_that_is_not_its_runs(tm
         ]
 
         assert [bar.session_phase for bar in yielded] == ["RTH"]
-        assert source.continuity_seen is policy
+        # The source gets the run's own clock, authority and session; only the
+        # sink is wrapped, so the startup join can see where the stream joined
+        # (#2410) while every event still lands in the run's own evidence.
+        seen = source.continuity_seen
+        assert seen is not None
+        assert (seen.session, seen.next_trigger_ms, seen.substitution_grant) == (
+            policy.session,
+            policy.next_trigger_ms,
+            policy.substitution_grant,
+        )
     finally:
         ledger.close(checkpoint=False)
 
@@ -314,8 +323,9 @@ async def test_retained_warmup_bars_keep_their_continuity_provenance(
     continuity event explains it -- has to survive the rebuild. Dropping it
     would let a resumed run's evidence claim every warmup bar was ordinary.
     """
-    # Resumed the instant the retained bar closed: no hole to fill (#2314).
-    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: _T0 + 60_000)
+    # Resumed with the stream taking over the minute the retained bar
+    # closed: no hole to fill (#2314, #2410).
+    del monkeypatch
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
         ledger.append(
@@ -329,7 +339,7 @@ async def test_retained_warmup_bars_keep_their_continuity_provenance(
             run_id="run-x",
         )
         feed = _RetainedSourceBarFeed(
-            _FakeFeed([], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION
+            _FakeFeed([_bar(_T0 + 60_000)], mode="hold"), ledger, run_id="run-x", session=_RTH_SESSION
         )
 
         warmup = await feed.recent_closed_bars("SPY", use_rth=True)
@@ -427,7 +437,7 @@ async def test_warmup_bars_fetched_from_the_source_are_journalled_to_this_run(
     ``evidence_seq``; a warmup bar appended without ``run_id`` lands in the
     journal anonymously, so the run that actually consumed it cannot claim it.
     """
-    source = _FakeFeed([], mode="finite")
+    source = _FakeFeed([_bar(_T0 + 60_000)], mode="hold")
     source.recent_closed_bars = _serving_warmup([_bar(_T0)])  # type: ignore[method-assign]
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:

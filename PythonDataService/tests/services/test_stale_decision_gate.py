@@ -306,3 +306,46 @@ async def test_a_late_exit_still_reaches_the_clerk_and_carries_its_lateness(
     assert clerk.calls[1]["decision_evidence"].decision_lateness_ms == 45_000
     (late_log,) = [r for r in caplog.records if getattr(r, "action", None) == "bot_decision_late"]
     assert (late_log.exempt, late_log.intent, late_log.lateness_ms) == ("exit", "EXIT", 45_000)
+
+
+@pytest.mark.asyncio
+async def test_an_entry_that_fell_due_while_the_run_prepared_is_refused_not_caught_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2410: bars the stream delivered during startup preparation are held, then decided.
+
+    The run's warmup opens the stream first and holds its bars until warmup is
+    done. A bucket those held bars complete is judged on its own close like
+    any other: past the allowance, the ENTER is refused as ``DECISION_LATE``
+    and no order reaches the Clerk -- a catch-up entry is never submitted.
+    """
+    from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy
+    from app.services.source_bar_ledger import SourceBarLedger
+
+    bars = [_green_bar(_DECISION_MINUTE_MS), _quiet_line_minute(_DECISION_MINUTE_MS)]
+    decision_close_ms = bars[-1].end_ms
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    ledger = SourceBarLedger(
+        artifacts_root=tmp_path / "bars", account_id=paper_evidence_account_id_for_strategy(_SID)
+    )
+    _pin_wall_clock(monkeypatch, decision_close_ms + 45_000)
+    set_alpaca_clerk(clerk)
+    try:
+        await bot_trade_strategy.run_trade_bot(
+            _rth_binding(), _FakeFeed(bars, mode="finite"), source_bars=ledger
+        )
+        receipts = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=50)
+        startup = ledger.startup_join(run_id="run-current")
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+        ledger.close(checkpoint=False)
+
+    assert startup is not None and startup.ready_at_ms is not None  # the bars really were held
+    assert clerk.calls == [], "a decision that fell due during preparation reached the Clerk"
+    facts = json.loads(receipts[-1].facts_json)
+    assert (receipts[-1].outcome, facts["reason_code"]) == ("blocked", "DECISION_LATE")

@@ -19,6 +19,7 @@ const RESUMED_AT_MS = 1_790_000_000_000;
 const FENCE: LaneFence = { bindingGeneration: 2, routingEpoch: 6 };
 
 type WarmupJoin = NonNullable<BotPanelView['warmup_join']>;
+type StartupJoin = NonNullable<BotPanelView['startup_join']>;
 
 /** A stopped roster row: like production, it carries no routine Resume of its own. */
 const STOPPED = fakeCatalogBot({
@@ -43,6 +44,23 @@ function join(overrides: Partial<WarmupJoin>): WarmupJoin {
     filled_start_ms: RESUMED_AT_MS - 10_000_000,
     filled_end_ms: RESUMED_AT_MS,
     warmed_from_history_only: false,
+    reason_code: null,
+    ...overrides,
+  };
+}
+
+function startup(overrides: Partial<StartupJoin>): StartupJoin {
+  return {
+    run_id: 'run-2',
+    state: 'ready',
+    label: 'Ready: warmup met the live stream',
+    explanation: 'Warmup and live bars are contiguous.',
+    opened_at_ms: RESUMED_AT_MS + 100,
+    live_from_ms: RESUMED_AT_MS + 60_000,
+    joined_minute_start_ms: RESUMED_AT_MS,
+    deadline_ms: RESUMED_AT_MS + 245_000,
+    missing_start_ms: null,
+    missing_end_ms: null,
     reason_code: null,
     ...overrides,
   };
@@ -135,7 +153,9 @@ describe('DeployResumeBotsComponent (#2314)', () => {
 
   it('resumes through the frozen fence and shows the window the warmup filled', async () => {
     vi.useFakeTimers();
-    const service = lane(() => Promise.resolve(resumedPanel({ warmup_join: join({}) })));
+    const service = lane(() =>
+      Promise.resolve(resumedPanel({ warmup_join: join({}), startup_join: startup({}) })),
+    );
     const { fixture } = await renderSection(service);
     await settle(fixture);
 
@@ -165,7 +185,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     vi.useFakeTimers();
     const prior = join({ run_id: 'run-1', label: 'Warmed on its retained bars', state: 'contiguous' });
     const stale = resumedPanel({ warmup_join: prior });
-    const fresh = resumedPanel({ warmup_join: join({ run_id: 'run-2' }) });
+    const fresh = resumedPanel({ warmup_join: join({ run_id: 'run-2' }), startup_join: startup({}) });
     // The list reload after Resume and the first warmup poll both read the stale panel.
     let reads = 0;
     const service = lane(() => Promise.resolve(reads++ < 2 ? stale : fresh), stoppedPanel(prior));
@@ -207,6 +227,91 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     expect(screen.getByRole('link', { name: 'Open bot control' }).getAttribute('href')).toBe(
       '/brokers/alpaca/clerks/clrk_deploy/accounts/PA9/bots/ema-spy',
     );
+  });
+
+  it('shows the resumed run preparing, with the time remaining before refusal, until it is ready', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(RESUMED_AT_MS + 65_000);
+    let reads = 0;
+    const filling = resumedPanel({
+      startup_join: startup({
+        state: 'filling',
+        label: 'Preparing: filling the minutes before the live stream from IBKR history',
+      }),
+    });
+    const ready = resumedPanel({ startup_join: startup({}) });
+    const service = lane(() => Promise.resolve(reads++ < 2 ? filling : ready));
+    const { fixture } = await renderSection(service);
+    await settle(fixture);
+
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
+    await settle(fixture, 2_000);
+
+    expect(screen.getByText(/Preparing: filling the minutes/)).toBeTruthy();
+    expect(screen.getByText('Time remaining before refusal')).toBeTruthy();
+    // 245 s after the resume less the 67 s now elapsed.
+    expect(screen.getByText('2:58')).toBeTruthy();
+
+    await settle(fixture, 2_000);
+    expect(screen.getByText('Ready: warmup met the live stream')).toBeTruthy();
+    expect(screen.queryByText('Time remaining before refusal')).toBeNull();
+  });
+
+  it('keeps following a filling run until the backend deadline, however long it is configured', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(RESUMED_AT_MS);
+    const filling = resumedPanel({
+      startup_join: startup({
+        state: 'filling',
+        label: 'Preparing: filling the minutes before the live stream from IBKR history',
+        deadline_ms: RESUMED_AT_MS + 600_000,
+      }),
+    });
+    const service = lane(() => Promise.resolve(filling));
+    const { fixture } = await renderSection(service);
+    await settle(fixture);
+
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
+    await settle(fixture, 2_000 * 100);
+
+    // Past the 45 reads the page gives a stream that has not joined, still inside the deadline.
+    expect(service.getPanel.mock.calls.length).toBeGreaterThan(90);
+    expect(screen.queryByText(/still preparing/)).toBeNull();
+  });
+
+  it('says a refused resume left a position it is not managing', async () => {
+    vi.useFakeTimers();
+    const base = fakeBotPanelView();
+    const refused = resumedPanel({
+      startup_join: startup({ state: 'refused', label: 'Refused: warmup history unavailable' }),
+      health: {
+        ...base.health,
+        running: false,
+        duty_outcome: {
+          kind: 'CRASHED',
+          reason_code: 'WARMUP_HISTORY_UNAVAILABLE',
+          label: 'Refused: warmup history unavailable',
+          explanation: 'IB Gateway did not return the warmup history the run needs.',
+          recorded_at_ms: RESUMED_AT_MS + 200_000,
+          run_id: 'run-2',
+          exposure_notices: [
+            {
+              kind: 'position_unmanaged',
+              label: 'Bot is not managing this position',
+              explanation: 'The Clerk attributes 3 SPY to this bot.',
+            },
+          ],
+        },
+      },
+    });
+    const { fixture } = await renderSection(lane(() => Promise.resolve(refused)));
+    await settle(fixture);
+
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
+    await settle(fixture, 2_000);
+
+    expect(screen.getByRole('alert').textContent).toContain('Bot is not managing this position');
+    expect(screen.getByText('The Clerk attributes 3 SPY to this bot.')).toBeTruthy();
   });
 
   it('shows a refused Resume command without following a warmup', async () => {

@@ -183,6 +183,24 @@ class BotCatalogView(BaseModel):
 # ── §7 Panel view (single bot control panel) ─────────────────────────────────
 
 
+class ExposureNoticeView(BaseModel):
+    """What a startup refusal left behind at the broker (#2410).
+
+    A refused run manages nothing, so the refusal says so whenever something
+    could still move money: ``position_unmanaged`` for a nonzero position the
+    Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
+    currently vouch for that position, and ``entry_order_working`` for an entry
+    order still working that can open one. Nothing is cancelled or flattened on
+    the operator's behalf.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["position_unmanaged", "position_unverified", "entry_order_working"]
+    label: str
+    explanation: str
+
+
 class DutyOutcomeView(BaseModel):
     """Typed terminal duty fact shown on the bot-health card (§7.2)."""
 
@@ -194,6 +212,7 @@ class DutyOutcomeView(BaseModel):
     explanation: str
     recorded_at_ms: int | None
     run_id: str | None
+    exposure_notices: list[ExposureNoticeView] = Field(default_factory=list)
 
 
 class BotHealthCard(BaseModel):
@@ -307,6 +326,33 @@ class WarmupJoinView(BaseModel):
     filled_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     filled_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     warmed_from_history_only: bool
+    reason_code: WarmupRefusalReason | None
+
+
+class StartupJoinView(BaseModel):
+    """Where the current run is in joining its warmup to its live stream (#2410).
+
+    ``waiting_for_stream``: subscribed, no print yet -- nothing to repair, and
+    no deadline running. ``filling``: the stream joined; history through
+    ``live_from_ms`` is being fetched, and the run is refused if that is not
+    done by ``deadline_ms``. ``history_joined``: warmup history reaches the
+    stream and the strategy is being rebuilt. ``ready``: the run takes live
+    bars. ``refused``: the fill failed; ``missing_start_ms``..``missing_end_ms``
+    is the interval history did not return, when it could be named.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    state: Literal["waiting_for_stream", "filling", "history_joined", "ready", "refused"]
+    label: str
+    explanation: str
+    opened_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    live_from_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    joined_minute_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    deadline_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    missing_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    missing_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     reason_code: WarmupRefusalReason | None
 
 
@@ -602,6 +648,9 @@ class BotPanelView(BaseModel):
     # ``None`` for a fresh run, a run whose ledger is unreadable, or a run
     # that has not reached warmup yet.
     warmup_join: WarmupJoinView | None = None
+    # ``None`` for a run that predates the startup record (#2410) or whose
+    # ledger is unreadable.
+    startup_join: StartupJoinView | None = None
     mission_verdict: MissionVerdictView
     execution_policy: str
     health: BotHealthCard

@@ -76,7 +76,12 @@ class LateDecision:
     allowance_ms: int
 
 
-def late_decision(policy: ContinuityPolicy | None, decision_bar_close_ms: int) -> LateDecision | None:
+def late_decision(
+    policy: ContinuityPolicy | None,
+    decision_bar_close_ms: int,
+    *,
+    observed_at_ms: int | None = None,
+) -> LateDecision | None:
     """Whether deciding on a bar that closed at ``decision_bar_close_ms`` *now* is too late.
 
     The one lateness rule on the decision path, read against the one clock
@@ -84,17 +89,20 @@ def late_decision(policy: ContinuityPolicy | None, decision_bar_close_ms: int) -
     ``DELIVERY_ALLOWANCE_MS`` when the run has none). Provenance plays no
     part: a minute held by the assembler until the next print, or a bucket a
     reconnect delivered late, is as stale as the wall clock says it is,
-    whichever connection produced it (#2303, #2345).
+    whichever connection produced it (#2303, #2345). ``observed_at_ms`` judges
+    an earlier instant instead of now -- only delivery admission passes it.
     """
     allowance_ms = DELIVERY_ALLOWANCE_MS if policy is None else policy.delivery_allowance_ms
-    observed_at_ms = now_ms_utc()
+    observed_at_ms = now_ms_utc() if observed_at_ms is None else observed_at_ms
     lateness_ms = observed_at_ms - decision_bar_close_ms
     if lateness_ms <= allowance_ms:
         return None
     return LateDecision(observed_at_ms=observed_at_ms, lateness_ms=lateness_ms, allowance_ms=allowance_ms)
 
 
-async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar) -> None:
+async def admit_on_delivery(
+    policy: ContinuityPolicy | None, bar: MarketDataBar, *, delivered_at_ms: int | None = None
+) -> None:
     """Refuse a recovered decision bar that arrived after its allowance.
 
     A bar assembled across an interruption is a real decision input, so it is
@@ -113,10 +121,15 @@ async def admit_on_delivery(policy: ContinuityPolicy | None, bar: MarketDataBar)
     is, at the runner's custody boundary, by :func:`late_decision` -- the same
     rule this function applies. A bar the consumer does not decide on cannot
     be a late decision.
+
+    ``delivered_at_ms`` is when the stream delivered a bar the run held while
+    it prepared (#2410): that bar is admitted on the terms it arrived on, not
+    faulted for the preparation the run chose. Whether the run may still
+    *decide* on it is the runner's per-decision lateness gate, as for any bar.
     """
     if policy is None or bar.provenance == "realtime" or not policy.is_trigger_ms(bar.end_ms):
         return
-    late = late_decision(policy, bar.end_ms)
+    late = late_decision(policy, bar.end_ms, observed_at_ms=delivered_at_ms)
     if late is None:
         return
     # Through the same typed wrapper the feed writes with: a sink that cannot

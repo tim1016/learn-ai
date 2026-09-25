@@ -55,6 +55,8 @@ export type BotCatalogView = components['schemas']['BotCatalogView'];
 // ── §7 Panel view ────────────────────────────────────────────────────────────
 
 export type DutyOutcomeView = components['schemas']['DutyOutcomeView'];
+export type ExposureNoticeView = components['schemas']['ExposureNoticeView'];
+export type StartupJoinView = components['schemas']['StartupJoinView'];
 export type BotHealthCard = components['schemas']['BotHealthCard'];
 export type ChannelHealthView = components['schemas']['ChannelHealthView'];
 export type FeedContinuityEventView = components['schemas']['FeedContinuityEventView'];

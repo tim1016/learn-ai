@@ -4347,6 +4347,16 @@
               }
             ]
           },
+          "startup_join": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StartupJoinView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
             "type": "string"
@@ -13758,6 +13768,13 @@
             "title": "Explanation",
             "type": "string"
           },
+          "exposure_notices": {
+            "items": {
+              "$ref": "#/components/schemas/ExposureNoticeView"
+            },
+            "title": "Exposure Notices",
+            "type": "array"
+          },
           "kind": {
             "enum": [
               "ON_DUTY",
@@ -15653,6 +15670,35 @@
           "countdown_state_persistable"
         ],
         "title": "ExitEligibilityContract",
+        "type": "object"
+      },
+      "ExposureNoticeView": {
+        "description": "What a startup refusal left behind at the broker (#2410).\n\nA refused run manages nothing, so the refusal says so whenever something\ncould still move money: ``position_unmanaged`` for a nonzero position the\nClerk attributes to this bot, ``position_unverified`` when the Clerk cannot\ncurrently vouch for that position, and ``entry_order_working`` for an entry\norder still working that can open one. Nothing is cancelled or flattened on\nthe operator's behalf.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "position_unmanaged",
+              "position_unverified",
+              "entry_order_working"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "explanation"
+        ],
+        "title": "ExposureNoticeView",
         "type": "object"
       },
       "ExposureSlice": {
@@ -37505,6 +37551,136 @@
           "lifecycle_run_id"
         ],
         "title": "StartRunRequest",
+        "type": "object"
+      },
+      "StartupJoinView": {
+        "description": "Where the current run is in joining its warmup to its live stream (#2410).\n\n``waiting_for_stream``: subscribed, no print yet -- nothing to repair, and\nno deadline running. ``filling``: the stream joined; history through\n``live_from_ms`` is being fetched, and the run is refused if that is not\ndone by ``deadline_ms``. ``history_joined``: warmup history reaches the\nstream and the strategy is being rebuilt. ``ready``: the run takes live\nbars. ``refused``: the fill failed; ``missing_start_ms``..``missing_end_ms``\nis the interval history did not return, when it could be named.",
+        "properties": {
+          "deadline_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline Ms"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "joined_minute_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Joined Minute Start Ms"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "live_from_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live From Ms"
+          },
+          "missing_end_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing End Ms"
+          },
+          "missing_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Start Ms"
+          },
+          "opened_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Opened At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "WARMUP_HISTORY_UNAVAILABLE",
+                  "RESUME_HOLE_AFTER_HOURS",
+                  "RESUME_HOLE_UNFILLED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "waiting_for_stream",
+              "filling",
+              "history_joined",
+              "ready",
+              "refused"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "state",
+          "label",
+          "explanation",
+          "opened_at_ms",
+          "live_from_ms",
+          "joined_minute_start_ms",
+          "deadline_ms",
+          "missing_start_ms",
+          "missing_end_ms",
+          "reason_code"
+        ],
+        "title": "StartupJoinView",
         "type": "object"
       },
       "StaticAction": {

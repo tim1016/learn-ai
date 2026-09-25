@@ -9352,6 +9352,7 @@ export interface components {
             /** Revision */
             revision: number;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
+            startup_join?: components["schemas"]["StartupJoinView"] | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Strategy Key */
@@ -13434,6 +13435,8 @@ export interface components {
         DutyOutcomeView: {
             /** Explanation */
             explanation: string;
+            /** Exposure Notices */
+            exposure_notices?: components["schemas"]["ExposureNoticeView"][];
             /**
              * Kind
              * @enum {string}
@@ -14193,6 +14196,28 @@ export interface components {
              * @enum {string}
              */
             rule?: "fixed_bar_count_countdown" | "level_true";
+        };
+        /**
+         * ExposureNoticeView
+         * @description What a startup refusal left behind at the broker (#2410).
+         *
+         *     A refused run manages nothing, so the refusal says so whenever something
+         *     could still move money: ``position_unmanaged`` for a nonzero position the
+         *     Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
+         *     currently vouch for that position, and ``entry_order_working`` for an entry
+         *     order still working that can open one. Nothing is cancelled or flattened on
+         *     the operator's behalf.
+         */
+        ExposureNoticeView: {
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "position_unmanaged" | "position_unverified" | "entry_order_working";
+            /** Label */
+            label: string;
         };
         /**
          * ExposureSlice
@@ -23922,6 +23947,45 @@ export interface components {
             lifecycle_run_id: string;
             /** Operator Reason */
             operator_reason?: string | null;
+        };
+        /**
+         * StartupJoinView
+         * @description Where the current run is in joining its warmup to its live stream (#2410).
+         *
+         *     ``waiting_for_stream``: subscribed, no print yet -- nothing to repair, and
+         *     no deadline running. ``filling``: the stream joined; history through
+         *     ``live_from_ms`` is being fetched, and the run is refused if that is not
+         *     done by ``deadline_ms``. ``history_joined``: warmup history reaches the
+         *     stream and the strategy is being rebuilt. ``ready``: the run takes live
+         *     bars. ``refused``: the fill failed; ``missing_start_ms``..``missing_end_ms``
+         *     is the interval history did not return, when it could be named.
+         */
+        StartupJoinView: {
+            /** Deadline Ms */
+            deadline_ms: number | null;
+            /** Explanation */
+            explanation: string;
+            /** Joined Minute Start Ms */
+            joined_minute_start_ms: number | null;
+            /** Label */
+            label: string;
+            /** Live From Ms */
+            live_from_ms: number | null;
+            /** Missing End Ms */
+            missing_end_ms: number | null;
+            /** Missing Start Ms */
+            missing_start_ms: number | null;
+            /** Opened At Ms */
+            opened_at_ms: number;
+            /** Reason Code */
+            reason_code: ("WARMUP_HISTORY_UNAVAILABLE" | "RESUME_HOLE_AFTER_HOURS" | "RESUME_HOLE_UNFILLED") | null;
+            /** Run Id */
+            run_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "waiting_for_stream" | "filling" | "history_joined" | "ready" | "refused";
         };
         /**
          * StaticAction

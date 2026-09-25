@@ -8,8 +8,9 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import nullcontext
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -44,7 +45,9 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.marketdata.feed import (
+    ContinuityEventRef,
     ContinuityPolicy,
+    FeedContinuityEvent,
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
@@ -65,8 +68,8 @@ from app.services.market_liveness import (
     market_data_bars_live,
     market_liveness_fact,
 )
-from app.services.retained_tail_join import warmup_rows_after_join
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.startup_join import LiveStartBuffer, warm_through_seam
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -74,6 +77,7 @@ if TYPE_CHECKING:
     from app.services.bot_runner import BrokerBotBinding
 
 logger = logging.getLogger(__name__)
+_MINUTE_MS = 60_000
 
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
@@ -198,6 +202,13 @@ class _RetainedSourceBarFeed:
     Also the run's continuity boundary (#1921): it hands the source the policy
     this run was constructed with, and admits -- or refuses -- each recovered
     bar on delivery, before the observation reaches the ledger or the session.
+
+    And the run's startup join (#2410): warmup opens the live stream first and
+    ends exactly where that stream takes over, so the two meet without a hole
+    (see ``startup_join``). The stream warmup opens is read later, by the live
+    loop, so the run holds this feed as an async context: leaving it closes
+    that stream however the run ended, including between warmup and its first
+    live bar.
     """
 
     def __init__(
@@ -213,7 +224,19 @@ class _RetainedSourceBarFeed:
         self._ledger = ledger
         self._run_id = run_id
         self._session = session
-        self._continuity = continuity
+        self._authored_continuity = continuity
+        # The policy handed to the source records every continuity fact
+        # through the run's own sink, then shows it to the startup buffer:
+        # the stream reports the minute it joined partway through as a
+        # ``stream_joined`` gap, and that is where warmup must end (#2410).
+        self._continuity = (
+            None
+            if continuity is None
+            else replace(continuity, record_event=self._showing_live(continuity.record_event))
+        )
+        self._live: LiveStartBuffer | None = None
+        # Bars held through preparation, whose mode is judged at handoff.
+        self._held_keys: set[tuple[str, int, int]] = set()
         self.feed_id = source.feed_id
         # The one place every retained run records the session it decided
         # under, beside the bars and continuity facts that session governs.
@@ -223,6 +246,39 @@ class _RetainedSourceBarFeed:
         # run, and a replay generated on demand or during boot repair must
         # not need an authority to be active at all.
         ledger.record_decision_session(session, run_id=run_id, recorded_at_ms=now_ms_utc())
+
+    async def __aenter__(self) -> _RetainedSourceBarFeed:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        if self._live is not None:
+            await self._live.aclose()
+
+    def _showing_live(
+        self, record: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
+    ) -> Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]:
+        async def _record(event: FeedContinuityEvent) -> ContinuityEventRef:
+            ref = await record(event)
+            if self._live is not None:
+                self._live.note_event(event)
+            return ref
+
+        return _record
+
+    async def _retain(self, bar: MarketDataBar, delivered_at_ms: int | None) -> None:
+        await admit_on_delivery(self._continuity, bar, delivered_at_ms=delivered_at_ms)
+        self._ledger.append(bar, run_id=self._run_id)
+
+    def _open_live(self, symbol: str) -> LiveStartBuffer:
+        """Subscribe now and hold every delivered bar until the run asks for it."""
+        live = LiveStartBuffer(
+            self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity),
+            symbol=symbol,
+            retain=self._retain,
+        )
+        self._live = live
+        live.start()
+        return live
 
     @property
     def capability_account_id(self) -> str | None:
@@ -234,8 +290,17 @@ class _RetainedSourceBarFeed:
         return bool(getattr(self._source, "observe_only", False))
 
     def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
-        """Forward the immutable mode captured by the outer runtime feed."""
-        return _evaluation_mode_for(self._source, bar)
+        """Forward the immutable mode captured by the outer runtime feed.
+
+        A bar held through startup preparation was captured when the stream
+        delivered it, not when the run first saw it; the run sees it at
+        handoff, so a pause pressed in between governs it (#2410).
+        """
+        captured = _evaluation_mode_for(self._source, bar)
+        if (bar.symbol, bar.start_ms, bar.end_ms) not in self._held_keys:
+            return captured
+        self._held_keys.discard((bar.symbol, bar.start_ms, bar.end_ms))
+        return EvaluationMode.OBSERVE_ONLY if self.observe_only else EvaluationMode.DECIDE
 
     def _require_own_session(self, use_rth: bool) -> RunDecisionSession:
         """The run's own session, refusing a caller that asks for a different one.
@@ -264,28 +329,42 @@ class _RetainedSourceBarFeed:
         # parameter satisfies the MarketDataFeed Protocol; honouring a
         # *different* policy would silently retarget the run's evidence, so a
         # caller in the wrapper chain may only pass the one it was built with.
-        if continuity is not None and continuity is not self._continuity:
+        if continuity is not None and continuity is not self._authored_continuity:
             raise ValueError(
                 "_RetainedSourceBarFeed streams under the continuity policy its run was "
                 "constructed with; a caller may not substitute a different one."
             )
         session = self._require_own_session(use_rth)
+        # Warmup opened the stream before it fetched history, so the bars
+        # held since then come first; they were never retained or decided on.
+        prepared = self._live is not None
+        live = self._live if self._live is not None else self._open_live(symbol)
+        if live.symbol != symbol:
+            raise ValueError(
+                f"warmup opened the live stream for {live.symbol}; the run may not stream {symbol} on it."
+            )
         # Capture first, then apply the sealed session policy locally. Asking
         # the provider for RTH-only data would make the authority ledger
         # depend on a lossy upstream filter and prevent a later program from
         # replaying its own session rule over the same observations.
-        async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity):
-            await admit_on_delivery(self._continuity, bar)
-            self._ledger.append(bar, run_id=self._run_id)
-            if session.includes(bar):
-                yield bar
-            else:
-                # The session only consumes (and pops) a captured evaluation
-                # mode for bars it actually evaluates, and it never sees a bar
-                # we filter here. Consume the mode ourselves so an upstream
-                # PauseAwareFeed's captured-mode map cannot grow unbounded over
-                # a long-running paper session.
-                self.evaluation_mode_for(bar)
+        try:
+            await live.release()
+            if prepared:
+                self._ledger.mark_startup_ready(run_id=self._run_id, at_ms=now_ms_utc())
+            async for bar, held in live.bars():
+                if held:
+                    self._held_keys.add((bar.symbol, bar.start_ms, bar.end_ms))
+                if session.includes(bar):
+                    yield bar
+                else:
+                    # The session only consumes (and pops) a captured evaluation
+                    # mode for bars it actually evaluates, and it never sees a bar
+                    # we filter here. Consume the mode ourselves so an upstream
+                    # PauseAwareFeed's captured-mode map cannot grow unbounded over
+                    # a long-running paper session.
+                    self.evaluation_mode_for(bar)
+        finally:
+            await live.aclose()
 
     async def recent_closed_bars(
         self,
@@ -294,53 +373,28 @@ class _RetainedSourceBarFeed:
         use_rth: bool = True,
         lookback_days: int = 5,
     ) -> list[MarketDataBar]:
+        """Open the live stream, then warm up exactly through where it takes over (#2410).
+
+        The run waits for its stream to join -- there is nothing to repair
+        before the first print -- then warms through the seam under one fixed
+        deadline (``startup_join.warm_through_seam``). The startup record is
+        opened here, before the subscription, so the panel can say the run is
+        waiting for its stream rather than show nothing.
+        """
         session = self._require_own_session(use_rth)
-        retained = self._ledger.bars(provider=self.feed_id, symbol=symbol)
-        if retained:
-            # Recovery must rebuild the session from the precise observations
-            # that drove its first run. A provider's corrected history is new
-            # information, not safe warmup input for an already-running bot --
-            # except across the hole after the last retained bar, which no run
-            # observed and which is filled from history or refused (#2314).
-            warmup_rows = await warmup_rows_after_join(
-                self._source,
-                self._ledger,
-                run_id=self._run_id,
-                session=session,
-                symbol=symbol,
-                retained=retained,
-                lookback_days=lookback_days,
-                now_ms=now_ms_utc(),
-            )
-            return [
-                MarketDataBar(
-                    symbol=row.symbol,
-                    start_ms=row.start_ms,
-                    end_ms=row.end_ms,
-                    open=row.open,
-                    high=row.high,
-                    low=row.low,
-                    close=row.close,
-                    volume=row.volume,
-                    fetched_at_ms=row.fetched_at_ms,
-                    feed_id=row.provider,
-                    session_phase=row.session_phase,
-                    # Carry the continuity chain through the rebuild (ruling
-                    # P4): a resumed run must not warm up on bars that claim
-                    # to be ordinary when a reconnect produced them.
-                    provenance=row.provenance,
-                    authorization_id=row.authorization_id,
-                    continuity_event_ref=row.continuity_event_ref,
-                )
-                for row in warmup_rows
-                if session.includes(row)
-            ]
-        bars = await self._source.recent_closed_bars(
-            symbol, use_rth=False, lookback_days=lookback_days
+        if self._live is not None:
+            raise RuntimeError("a run warms up once; its live stream is already open")
+        self._ledger.record_startup_opened(run_id=self._run_id, at_ms=now_ms_utc())
+        warmup = await warm_through_seam(
+            self._open_live(symbol),
+            self._source,
+            self._ledger,
+            run_id=self._run_id,
+            session=session,
+            symbol=symbol,
+            lookback_days=lookback_days,
         )
-        for bar in bars:
-            self._ledger.append_history(bar, run_id=self._run_id)
-        return [bar for bar in bars if session.includes(bar)]
+        return [bar for bar in warmup if session.includes(bar)]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)
@@ -848,8 +902,10 @@ async def run_trade_bot(
     continuity = (
         None if source_bars is None else continuity_policy_for(binding, source_bars, session=session)
     )
-    run_feed = (
-        feed
+    # The retained feed owns the live stream its warmup opens; leaving the
+    # context closes it however the run ends (#2410).
+    run_feed_scope = (
+        nullcontext(feed)
         if source_bars is None
         else _RetainedSourceBarFeed(
             feed,
@@ -859,150 +915,151 @@ async def run_trade_bot(
             continuity=continuity,
         )
     )
-    async for evaluation in strategy_evaluations(
-        binding,
-        run_feed,
-        captured_decisions=captured_decision_outcomes(decision_receipts),
-        quarantine_receipts=decision_receipts,
-        session=session,
-    ):
-        if len(evaluation.intents) > 1:
-            raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
-        if evaluation.crash_recovered:
-            # FR-016: DISCARD was already applied when replay staged this
-            # candidate (see `_warm_up_signal_strategy`) -- record the
-            # crash-window evidence and never route it to custody.
-            _settle_evaluation(evaluation, Settlement.DISCARD)
-            _append_decision_receipt(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                outcome="candidate_uncaptured_at_crash",
-                reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
-            )
-            continue
-        if not evaluation.intents:
-            _append_decision_receipt(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                outcome="no_action",
-                reason_code="NO_ACTION",
-            )
-            _settle_evaluation(evaluation, Settlement.COMMIT)
-            continue
-        intent = evaluation.intents[0]
-        decision_id = evaluation.evaluation_id
-        if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
-            _discard_evaluation(evaluation)
-            _append_decision_receipt(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                outcome="blocked",
-                reason_code="PAUSED_OBSERVE_ONLY",
-            )
-            continue
-        lateness = _screen_late_decision(
-            decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
-        )
-        if lateness.refused:
-            continue
-        # The liveness gate applies only to ENTER — creating new exposure.
-        # EXIT is deliberately exempt and always reaches the Clerk unblocked:
-        # an emergency risk-reduction close must never be held hostage by
-        # missing/stale liveness evidence (#1671 AC3). If a distinct
-        # cancellation primitive is ever added, it must be exempted the
-        # same way for the same reason.
-        if intent.kind is SignalIntentKind.ENTER:
-            liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-            if _liveness_blocks_entry(binding, capability_account_id, liveness, session, feed):
-                # Settle the staged candidate as refused. The strategy has not
-                # taken the position — it mutates position custody only in
-                # ``commit_signal_decision``, which never ran — so DISCARD is
-                # the entire disposition. (#1671 AC6 predates the staged
-                # protocol and described undoing an emission-time mutation;
-                # since #1730 there is no such mutation to undo.)
+    async with run_feed_scope as run_feed:
+        async for evaluation in strategy_evaluations(
+            binding,
+            run_feed,
+            captured_decisions=captured_decision_outcomes(decision_receipts),
+            quarantine_receipts=decision_receipts,
+            session=session,
+        ):
+            if len(evaluation.intents) > 1:
+                raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
+            if evaluation.crash_recovered:
+                # FR-016: DISCARD was already applied when replay staged this
+                # candidate (see `_warm_up_signal_strategy`) -- record the
+                # crash-window evidence and never route it to custody.
+                _settle_evaluation(evaluation, Settlement.DISCARD)
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="candidate_uncaptured_at_crash",
+                    reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                )
+                continue
+            if not evaluation.intents:
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="no_action",
+                    reason_code="NO_ACTION",
+                )
+                _settle_evaluation(evaluation, Settlement.COMMIT)
+                continue
+            intent = evaluation.intents[0]
+            decision_id = evaluation.evaluation_id
+            if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
                 _discard_evaluation(evaluation)
                 _append_decision_receipt(
                     decision_receipts,
                     binding=binding,
                     evaluation=evaluation,
                     outcome="blocked",
-                    reason_code=liveness.reason_code,
-                    liveness=liveness,
-                )
-                logger.warning(
-                    "Trade bot blocked new exposure on live market-liveness evidence",
-                    extra={
-                        "action": "bot_market_liveness_blocked",
-                        "strategy_instance_id": binding.strategy_instance_id,
-                        "strategy_key": binding.strategy_key,
-                        "symbol": binding.symbol,
-                        "market_liveness_state": liveness.state,
-                        "reason_code": liveness.reason_code,
-                    },
+                    reason_code="PAUSED_OBSERVE_ONLY",
                 )
                 continue
-        logger.info(
-            "Trade bot decision",
-            extra={
-                "action": "bot_decision",
-                "strategy_instance_id": binding.strategy_instance_id,
-                "strategy_key": binding.strategy_key,
-                "decision": intent.kind,
-                "symbol": binding.symbol,
-                "bar_end_ms": intent.bar_close_ms,
-            },
-        )
-        retained, decision_evidence = _decision_bar_evidence(
-            binding,
-            evaluation,
-            intent,
-            source_bars=source_bars,
-            decision_lateness_ms=lateness.exempt_lateness_ms,
-        )
-        try:
-            receipt = await clerk.execute_for_instance(
-                strategy_instance_id=binding.strategy_instance_id,
-                run_id=binding.run_id,
-                decision_id=decision_id,
-                purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
-                action_plan=binding.action_plan,
-                quantity=binding.quantity,
-                use_rth=binding.use_rth,
-                capability_account_id=capability_account_id,
-                retained_source_bar=retained,
-                decision_evidence=decision_evidence,
+            lateness = _screen_late_decision(
+                decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
             )
-        except AdmissionBlockedError as exc:
-            _dispose_transient_exit_refusal(
-                decision_receipts, binding=binding, evaluation=evaluation, exc=exc
+            if lateness.refused:
+                continue
+            # The liveness gate applies only to ENTER — creating new exposure.
+            # EXIT is deliberately exempt and always reaches the Clerk unblocked:
+            # an emergency risk-reduction close must never be held hostage by
+            # missing/stale liveness evidence (#1671 AC3). If a distinct
+            # cancellation primitive is ever added, it must be exempted the
+            # same way for the same reason.
+            if intent.kind is SignalIntentKind.ENTER:
+                liveness = market_liveness_fact(binding.symbol, now_ms_utc())
+                if _liveness_blocks_entry(binding, capability_account_id, liveness, session, feed):
+                    # Settle the staged candidate as refused. The strategy has not
+                    # taken the position — it mutates position custody only in
+                    # ``commit_signal_decision``, which never ran — so DISCARD is
+                    # the entire disposition. (#1671 AC6 predates the staged
+                    # protocol and described undoing an emission-time mutation;
+                    # since #1730 there is no such mutation to undo.)
+                    _discard_evaluation(evaluation)
+                    _append_decision_receipt(
+                        decision_receipts,
+                        binding=binding,
+                        evaluation=evaluation,
+                        outcome="blocked",
+                        reason_code=liveness.reason_code,
+                        liveness=liveness,
+                    )
+                    logger.warning(
+                        "Trade bot blocked new exposure on live market-liveness evidence",
+                        extra={
+                            "action": "bot_market_liveness_blocked",
+                            "strategy_instance_id": binding.strategy_instance_id,
+                            "strategy_key": binding.strategy_key,
+                            "symbol": binding.symbol,
+                            "market_liveness_state": liveness.state,
+                            "reason_code": liveness.reason_code,
+                        },
+                    )
+                    continue
+            logger.info(
+                "Trade bot decision",
+                extra={
+                    "action": "bot_decision",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "strategy_key": binding.strategy_key,
+                    "decision": intent.kind,
+                    "symbol": binding.symbol,
+                    "bar_end_ms": intent.bar_close_ms,
+                },
             )
-            continue
-        if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
-            # A distinct failure mode from the liveness gate above: that one
-            # catches evidence already stale *before* the Clerk was reached,
-            # this one catches evidence that changed *while* the intent awaited
-            # the Clerk's sole-writer intake lock. The disposition is identical
-            # and for the same reason — the candidate was never committed, so
-            # refusing it leaves nothing to unwind. (#1671 AC6 / #1708 review
-            # finding 1 described compensating rollbacks; the staged protocol
-            # in #1730 removed the emission-time mutation they compensated.)
-            _discard_evaluation(evaluation)
-        else:
-            _settle_evaluation(evaluation, Settlement.COMMIT)
-        logger.info(
-            "Trade bot effect accepted",
-            extra={
-                "action": "bot_effect_accepted",
-                "strategy_instance_id": binding.strategy_instance_id,
-                "strategy_key": binding.strategy_key,
-                "purpose": intent.kind,
-                "effect_state": receipt.state.value,
-                "order_refs": receipt.child_order_refs,
-            },
-        )
+            retained, decision_evidence = _decision_bar_evidence(
+                binding,
+                evaluation,
+                intent,
+                source_bars=source_bars,
+                decision_lateness_ms=lateness.exempt_lateness_ms,
+            )
+            try:
+                receipt = await clerk.execute_for_instance(
+                    strategy_instance_id=binding.strategy_instance_id,
+                    run_id=binding.run_id,
+                    decision_id=decision_id,
+                    purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
+                    action_plan=binding.action_plan,
+                    quantity=binding.quantity,
+                    use_rth=binding.use_rth,
+                    capability_account_id=capability_account_id,
+                    retained_source_bar=retained,
+                    decision_evidence=decision_evidence,
+                )
+            except AdmissionBlockedError as exc:
+                _dispose_transient_exit_refusal(
+                    decision_receipts, binding=binding, evaluation=evaluation, exc=exc
+                )
+                continue
+            if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+                # A distinct failure mode from the liveness gate above: that one
+                # catches evidence already stale *before* the Clerk was reached,
+                # this one catches evidence that changed *while* the intent awaited
+                # the Clerk's sole-writer intake lock. The disposition is identical
+                # and for the same reason — the candidate was never committed, so
+                # refusing it leaves nothing to unwind. (#1671 AC6 / #1708 review
+                # finding 1 described compensating rollbacks; the staged protocol
+                # in #1730 removed the emission-time mutation they compensated.)
+                _discard_evaluation(evaluation)
+            else:
+                _settle_evaluation(evaluation, Settlement.COMMIT)
+            logger.info(
+                "Trade bot effect accepted",
+                extra={
+                    "action": "bot_effect_accepted",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "strategy_key": binding.strategy_key,
+                    "purpose": intent.kind,
+                    "effect_state": receipt.state.value,
+                    "order_refs": receipt.child_order_refs,
+                },
+            )
 
 
 _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
@@ -1262,126 +1319,126 @@ async def run_dry_run_bot(
     )
     session = require_decision_session(binding, window=clerk.program_leg_policy.window)
     continuity = continuity_policy_for(binding, source_bars, session=session)
-    retained_feed = _RetainedSourceBarFeed(
+    async with _RetainedSourceBarFeed(
         feed,
         source_bars,
         run_id=binding.run_id,
         session=session,
         continuity=continuity,
-    )
-    async for evaluation in strategy_evaluations(
-        binding,
-        retained_feed,
-        captured_decisions=captured_decision_outcomes(decision_receipts),
-        quarantine_receipts=decision_receipts,
-        session=session,
-    ):
-        if len(evaluation.intents) > 1:
-            raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
-        if evaluation.crash_recovered:
-            # FR-016: DISCARD was already applied when replay staged this
-            # candidate -- record the crash-window evidence and never route
-            # it to the synthetic authority's custody either.
-            _settle_evaluation(evaluation, Settlement.DISCARD)
-            _append_decision_receipt(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                outcome="candidate_uncaptured_at_crash",
-                reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+    ) as retained_feed:
+        async for evaluation in strategy_evaluations(
+            binding,
+            retained_feed,
+            captured_decisions=captured_decision_outcomes(decision_receipts),
+            quarantine_receipts=decision_receipts,
+            session=session,
+        ):
+            if len(evaluation.intents) > 1:
+                raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
+            if evaluation.crash_recovered:
+                # FR-016: DISCARD was already applied when replay staged this
+                # candidate -- record the crash-window evidence and never route
+                # it to the synthetic authority's custody either.
+                _settle_evaluation(evaluation, Settlement.DISCARD)
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="candidate_uncaptured_at_crash",
+                    reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
+                )
+                continue
+            if not evaluation.intents:
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="no_action",
+                    reason_code="NO_ACTION",
+                )
+                _settle_evaluation(evaluation, Settlement.COMMIT)
+                continue
+            intent = evaluation.intents[0]
+            if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
+                _discard_evaluation(evaluation)
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="blocked",
+                    reason_code="PAUSED_OBSERVE_ONLY",
+                )
+                logger.info(
+                    "Dry-run candidate discarded while paused in observe-only mode",
+                    extra={
+                        "action": "dry_run_paused_observe_only",
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "run_id": binding.run_id,
+                        "intent": intent.kind.value,
+                        "bar_end_ms": intent.bar_close_ms,
+                    },
+                )
+                continue
+            lateness = _screen_late_decision(
+                decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
             )
-            continue
-        if not evaluation.intents:
-            _append_decision_receipt(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                outcome="no_action",
-                reason_code="NO_ACTION",
+            if lateness.refused:
+                continue
+            side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
+            retained, decision_evidence = _decision_bar_evidence(
+                binding,
+                evaluation,
+                intent,
+                source_bars=source_bars,
+                decision_lateness_ms=lateness.exempt_lateness_ms,
             )
+            receipt = await clerk.execute_for_instance(
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                decision_id=evaluation.evaluation_id,
+                purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
+                action_plan=binding.action_plan,
+                quantity=binding.quantity,
+                use_rth=binding.use_rth,
+                capability_account_id=market_data_capability_account_id(feed),
+                retained_source_bar=retained,
+                decision_evidence=decision_evidence,
+            )
+            if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+                _discard_evaluation(evaluation)
+                continue
             _settle_evaluation(evaluation, Settlement.COMMIT)
-            continue
-        intent = evaluation.intents[0]
-        if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
-            _discard_evaluation(evaluation)
-            _append_decision_receipt(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                outcome="blocked",
-                reason_code="PAUSED_OBSERVE_ONLY",
+            if retained is None:
+                raise RuntimeError(
+                    "A synthetic effect was accepted without its exact retained decision-bar evidence."
+                )
+            order_ref = receipt.child_order_refs[0] if receipt.child_order_refs else (
+                f"simulated:{binding.run_id}:{evaluation.evaluation_id}"
+            )
+            journal.append(
+                DryRunActivity(
+                    seq=journal.next_seq(),
+                    strategy_instance_id=binding.strategy_instance_id,
+                    run_id=binding.run_id,
+                    authority_account_id=account_id,
+                    authority_kind="synthetic",
+                    recorded_at_ms=intent.bar_close_ms,
+                    bar_ref=retained.bar_ref,
+                    intent=intent.kind.value,
+                    order_ref=order_ref,
+                    symbol=binding.symbol,
+                    side=side,
+                    quantity=float(binding.quantity),
+                    fill_price=float(retained.close),
+                )
             )
             logger.info(
-                "Dry-run candidate discarded while paused in observe-only mode",
+                "Dry-run simulated fill",
                 extra={
-                    "action": "dry_run_paused_observe_only",
+                    "action": "dry_run_simulated_fill",
                     "strategy_instance_id": binding.strategy_instance_id,
                     "run_id": binding.run_id,
                     "intent": intent.kind.value,
-                    "bar_end_ms": intent.bar_close_ms,
+                    "order_ref": order_ref,
                 },
             )
-            continue
-        lateness = _screen_late_decision(
-            decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
-        )
-        if lateness.refused:
-            continue
-        side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
-        retained, decision_evidence = _decision_bar_evidence(
-            binding,
-            evaluation,
-            intent,
-            source_bars=source_bars,
-            decision_lateness_ms=lateness.exempt_lateness_ms,
-        )
-        receipt = await clerk.execute_for_instance(
-            strategy_instance_id=binding.strategy_instance_id,
-            run_id=binding.run_id,
-            decision_id=evaluation.evaluation_id,
-            purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
-            action_plan=binding.action_plan,
-            quantity=binding.quantity,
-            use_rth=binding.use_rth,
-            capability_account_id=market_data_capability_account_id(feed),
-            retained_source_bar=retained,
-            decision_evidence=decision_evidence,
-        )
-        if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
-            _discard_evaluation(evaluation)
-            continue
-        _settle_evaluation(evaluation, Settlement.COMMIT)
-        if retained is None:
-            raise RuntimeError(
-                "A synthetic effect was accepted without its exact retained decision-bar evidence."
-            )
-        order_ref = receipt.child_order_refs[0] if receipt.child_order_refs else (
-            f"simulated:{binding.run_id}:{evaluation.evaluation_id}"
-        )
-        journal.append(
-            DryRunActivity(
-                seq=journal.next_seq(),
-                strategy_instance_id=binding.strategy_instance_id,
-                run_id=binding.run_id,
-                authority_account_id=account_id,
-                authority_kind="synthetic",
-                recorded_at_ms=intent.bar_close_ms,
-                bar_ref=retained.bar_ref,
-                intent=intent.kind.value,
-                order_ref=order_ref,
-                symbol=binding.symbol,
-                side=side,
-                quantity=float(binding.quantity),
-                fill_price=float(retained.close),
-            )
-        )
-        logger.info(
-            "Dry-run simulated fill",
-            extra={
-                "action": "dry_run_simulated_fill",
-                "strategy_instance_id": binding.strategy_instance_id,
-                "run_id": binding.run_id,
-                "intent": intent.kind.value,
-                "order_ref": order_ref,
-            },
-        )

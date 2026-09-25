@@ -27,11 +27,14 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
+from app.marketdata.feed import WARMUP_REFUSAL_REASONS
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
+    BotHealthCard,
     BotPanelView,
+    ExposureNoticeView,
     MissionVerdictView,
     PanelAction,
     ReadinessCheckView,
@@ -129,6 +132,7 @@ def adapt_sqlite_panel(
     )
     return panel.model_copy(
         update={
+            "health": _with_startup_refusal_notices(panel, projection),
             "updated_at_ms": projection.generated_at_ms,
             "revision": projection.control_revision,
             "mission_verdict": _mission_verdict(panel, projection),
@@ -299,11 +303,7 @@ def adapt_sqlite_catalog(
         if projection is None:
             adapted.append(row.model_copy(update=economic_updates))
             continue
-        needs_attention = row.needs_attention or bool(
-            projection.holds
-            or projection.uncertainties
-            or projection.authority_health != "healthy"
-        )
+        needs_attention = row.needs_attention or _clerk_needs_attention(projection)
         adapted.append(
             row.model_copy(
                 update={
@@ -431,7 +431,7 @@ def _sqlite_catalog_explanation(
     exactly as much, and the exposure itself stays visible in ``exposure``
     and ``needs_attention``.
     """
-    if projection.holds or projection.uncertainties or projection.authority_health != "healthy":
+    if _clerk_needs_attention(projection):
         return "SQLite Account Clerk evidence requires operator attention."
     if row.phase == "RETIRED":
         return "Retired; no further runs can start."
@@ -620,7 +620,7 @@ def _mission_verdict(
     projection: ClerkProjection,
 ) -> MissionVerdictView:
     guidance = projection.guidance
-    if projection.authority_health != "healthy" or projection.uncertainties or projection.holds:
+    if _clerk_needs_attention(projection):
         state = "blocked"
         label = "Mission blocked"
     elif panel.health.running:
@@ -641,6 +641,110 @@ def _mission_verdict(
     )
 
 
+def _clerk_needs_attention(projection: ClerkProjection) -> bool:
+    """Whether this SQLite cut asks for the operator: unhealthy authority, an uncertainty, or a hold."""
+    return projection.authority_health != "healthy" or bool(projection.uncertainties) or bool(projection.holds)
+
+
+def _clerk_vouches_for_positions(projection: ClerkProjection) -> bool:
+    """Whether the Clerk's attributed positions can be taken as what the bot holds.
+
+    Narrower than ``_clerk_needs_attention``: a hold blocks new exposure but
+    leaves what is held known, while an unhealthy authority or an open
+    uncertainty means the attribution itself may be wrong.
+    """
+    return projection.authority_health == "healthy" and not projection.uncertainties
+
+
+def _is_working(order: ProjectedOrder) -> bool:
+    """An order the broker acknowledged and has not finished."""
+    return order.broker_order_id is not None and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
+
+
+_TERMINAL_BROKER_STATES = frozenset({"filled", "canceled", "expired", "rejected", "replaced", "done_for_day"})
+
+
+def _may_still_fill(order: ProjectedOrder) -> bool:
+    """Any order the broker has not finished, including one it has not yet acknowledged.
+
+    Wider than the working-order list on purpose: ``held``, ``pending_replace``,
+    ``accepted_for_bidding`` and an order captured but not yet acknowledged can
+    all still fill into a position the refused run will not manage.
+    """
+    return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
+
+
+def _with_startup_refusal_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:
+    """Say what a startup refusal left at the broker, from this SQLite cut (#2410).
+
+    A run refused while it prepared never managed anything. The owner's rule:
+    say so whenever money can still move. The Clerk's attributed position is
+    trusted only when it can vouch for it (``_clerk_vouches_for_positions``);
+    otherwise the position is reported unverified rather than guessed. A
+    working entry order is reported separately, because a flat bot can still
+    be filled into a position nobody manages. Nothing is cancelled or
+    flattened here.
+    """
+    health = panel.health
+    outcome = health.duty_outcome
+    if health.running or outcome is None or outcome.reason_code not in WARMUP_REFUSAL_REASONS:
+        return health
+    sid = panel.strategy_instance_id
+    notices: list[ExposureNoticeView] = []
+    if not _clerk_vouches_for_positions(projection):
+        notices.append(_POSITION_UNVERIFIED)
+    else:
+        held = [
+            position
+            for position in projection.positions
+            if position.strategy_instance_id == sid and position_quantity_is_nonzero(position.attributed_qty)
+        ]
+        if held:
+            positions = ", ".join(f"{position.attributed_qty:g} {position.symbol}" for position in held)
+            notices.append(
+                ExposureNoticeView(
+                    kind="position_unmanaged",
+                    label="Bot is not managing this position",
+                    explanation=(
+                        f"The Clerk attributes {positions} to this bot. The refused run placed no "
+                        "exit and will not place one: manage or close the position from the "
+                        "broker, or resume once the refusal's cause is fixed."
+                    ),
+                )
+            )
+    if any(
+        order.role == "ENTRY" and _may_still_fill(order)
+        for operation in projection.operations
+        if operation.strategy_instance_id == sid
+        for order in operation.orders
+    ):
+        notices.append(_ENTRY_ORDER_WORKING)
+    if not notices:
+        return health
+    return health.model_copy(
+        update={"duty_outcome": outcome.model_copy(update={"exposure_notices": notices})}
+    )
+
+
+_POSITION_UNVERIFIED = ExposureNoticeView(
+    kind="position_unverified",
+    label="Position could not be verified; check the broker",
+    explanation=(
+        "The Clerk cannot currently vouch for what this bot holds -- its authority is not "
+        "healthy or an account or order state is uncertain. The refused run manages nothing, "
+        "so check the position and any working orders at the broker."
+    ),
+)
+_ENTRY_ORDER_WORKING = ExposureNoticeView(
+    kind="entry_order_working",
+    label="An entry order is still working",
+    explanation=(
+        "An entry order this bot placed is still working at the broker. If it fills, the "
+        "refused bot will not manage the position it opens. Cancel it if you do not want it."
+    ),
+)
+
+
 def _working_orders(
     panel: BotPanelView,
     projection: ClerkProjection,
@@ -651,8 +755,7 @@ def _working_orders(
         _working_order_view(panel, order, strict=strict)
         for operation in projection.operations
         for order in operation.orders
-        if order.broker_order_id is not None
-        and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
+        if _is_working(order)
     ]
 
 

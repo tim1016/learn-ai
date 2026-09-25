@@ -78,7 +78,7 @@ from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.channel_health import evaluate_channel_health
-from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity
+from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity, build_startup_join
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
@@ -91,7 +91,7 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     build_sqlite_catalog,
 )
-from app.services.source_bar_ledger import RetainedContinuityEvent, SourceBarLedger
+from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedStartupJoin, SourceBarLedger
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -2895,3 +2895,137 @@ def test_warmup_join_projection_names_the_filled_window() -> None:
     assert (view.state, view.label) == ("filled", "Filled 10 missing bars from IBKR history")
     assert view.warmed_from_history_only is False
     assert build_warmup_join(None) is None
+
+
+# ── startup join (#2410) ─────────────────────────────────────────────────────
+
+
+def _startup(**fields: object) -> RetainedStartupJoin:
+    return RetainedStartupJoin.model_validate({"run_id": "r1", "opened_at_ms": _NOW - 90_000, **fields})
+
+
+_SEAM = {"live_from_ms": _NOW - 60_000, "joined_minute_start_ms": _NOW - 120_000, "deadline_ms": _NOW + 120_000}
+
+
+@pytest.mark.parametrize(
+    ("fields", "state"),
+    [
+        ({}, "waiting_for_stream"),
+        (_SEAM, "filling"),
+        ({**_SEAM, "history_joined_at_ms": _NOW - 50_000}, "history_joined"),
+        ({**_SEAM, "history_joined_at_ms": _NOW - 50_000, "ready_at_ms": _NOW - 49_000}, "ready"),
+    ],
+)
+def test_a_running_bot_shows_which_startup_step_it_is_in(fields: dict[str, object], state: str) -> None:
+    view = build_startup_join(_startup(**fields), running=True)
+
+    assert view is not None and view.state == state
+    assert view.label.startswith("Preparing" if state != "ready" else "Ready")
+
+
+def test_a_startup_refusal_names_what_history_did_not_return() -> None:
+    record = _startup(
+        **_SEAM,
+        refused_at_ms=_NOW,
+        reason_code="WARMUP_HISTORY_UNAVAILABLE",
+        missing_start_ms=_NOW - 120_000,
+        missing_end_ms=_NOW - 60_000,
+    )
+
+    view = build_startup_join(record, running=False)
+
+    assert view is not None and view.state == "refused"
+    assert (view.missing_start_ms, view.missing_end_ms) == (_NOW - 120_000, _NOW - 60_000)
+    # The reason is the duty outcome's to state; this view does not repeat it.
+    assert view.label == "Refused while preparing"
+
+
+def test_a_stopped_run_that_was_never_refused_shows_no_preparation() -> None:
+    assert build_startup_join(_startup(**_SEAM), running=False) is None
+    assert build_startup_join(None, running=True) is None
+
+
+def _refused_panel(reason_code: str = "RESUME_HOLE_UNFILLED") -> BotPanelView:
+    status = _status(running=False).model_copy(
+        update={
+            "duty_outcome": BotDutyOutcomeView(
+                kind="CRASHED", reason_code=reason_code, recorded_at_ms=_NOW - 10, run_id="r1"
+            )
+        }
+    )
+    return _panel(status, _clerk_status(), [], exposure={})
+
+
+def _entry_order(broker_state: str = "new") -> ProjectedOrder:
+    return ProjectedOrder(
+        order_ref="order:entry",
+        client_order_id="client:entry",
+        broker_order_id="broker:entry",
+        role="ENTRY",
+        broker_state=broker_state,
+        submitted_at_ms=_NOW - 400,
+        updated_at_ms=_NOW - 300,
+        symbol="SPY",
+        side="buy",
+        quantity=1.0,
+        filled_quantity=0.0,
+    )
+
+
+def _held(quantity: float) -> tuple[ProjectedPosition, ...]:
+    return (ProjectedPosition(strategy_instance_id=SID, symbol="SPY", attributed_qty=quantity, updated_at_ms=_NOW - 200),)
+
+
+def _notices(panel: BotPanelView, projection: ClerkProjection) -> list[tuple[str, str]]:
+    outcome = adapt_sqlite_panel(panel, projection).health.duty_outcome
+    assert outcome is not None
+    return [(notice.kind, notice.label) for notice in outcome.exposure_notices]
+
+
+def test_a_startup_refusal_with_a_position_says_the_bot_is_not_managing_it() -> None:
+    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+
+    outcome = adapt_sqlite_panel(_refused_panel(), projection).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert (notice.kind, notice.label) == ("position_unmanaged", "Bot is not managing this position")
+    assert "3 SPY" in notice.explanation
+
+
+def test_a_confirmed_flat_refusal_says_nothing_about_a_position() -> None:
+    assert _notices(_refused_panel(), _rail_projection(orders=())) == []
+
+
+def test_a_flat_refusal_with_a_working_entry_order_warns_it_can_still_fill() -> None:
+    notices = _notices(_refused_panel(), _rail_projection(orders=(_entry_order(),)))
+
+    assert notices == [("entry_order_working", "An entry order is still working")]
+
+
+def test_a_refusal_the_clerk_cannot_vouch_for_says_the_position_is_unverified() -> None:
+    projection = replace(_rail_projection(orders=()), positions=_held(3.0), authority_health="degraded_to_mirror")
+
+    assert _notices(_refused_panel(), projection) == [
+        ("position_unverified", "Position could not be verified; check the broker")
+    ]
+
+
+def test_exposure_notices_are_only_for_startup_refusals() -> None:
+    projection = replace(_rail_projection(orders=(_entry_order(),)), positions=_held(3.0))
+
+    assert _notices(_refused_panel("FEED_DEATH"), projection) == []
+
+
+@pytest.mark.parametrize("broker_state", ["held", "pending_replace", "accepted_for_bidding", None])
+def test_an_entry_order_the_broker_has_not_finished_is_warned_about(broker_state: str | None) -> None:
+    """Review P2: any non-terminal state can still fill, including an order not yet acknowledged."""
+    order = replace(_entry_order(), broker_state=broker_state)
+
+    assert _notices(_refused_panel(), _rail_projection(orders=(order,))) == [
+        ("entry_order_working", "An entry order is still working")
+    ]
+
+
+def test_a_finished_entry_order_is_not_warned_about() -> None:
+    assert _notices(_refused_panel(), _rail_projection(orders=(_entry_order("canceled"),))) == []

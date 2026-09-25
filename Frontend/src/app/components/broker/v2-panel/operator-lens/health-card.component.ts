@@ -9,23 +9,29 @@ import type {
   BotHealthCard,
   PanelAction,
   PanelActionTrigger,
+  StartupJoinView,
 } from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { ExposureNoticesComponent } from '../startup-join/exposure-notices.component';
+import { StartupJoinStatusComponent } from '../startup-join/startup-join-status.component';
 
 /**
  * Bot health card (spec §7.2).
  *
- * Phase, desired state, duty outcome (kind + backend reason), and the terminal
- * Retire action. Activity clocks are promoted into the shared run-timing strip.
+ * Phase, desired state, the run's startup preparation (#2410), duty outcome
+ * (kind + backend reason, and what a startup refusal left at the broker), and
+ * the terminal Retire action. Activity clocks are promoted into the shared run-timing strip.
  *
  */
 @Component({
   selector: 'app-health-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    ExposureNoticesComponent,
     KeyValuePipe,
     PanelActionButtonComponent,
+    StartupJoinStatusComponent,
     TimestampDisplayComponent,
   ],
   templateUrl: './health-card.component.html',
@@ -33,6 +39,8 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
 })
 export class HealthCardComponent {
   readonly health = input.required<BotHealthCard>();
+  /** Where the current run is in joining warmup to its live stream (#2410). */
+  readonly startupJoin = input<StartupJoinView | null>(null);
   /**
    * The presented registration-exit actions: `retire` for a provably dead
    * registration (#1795), `archive` for one the operator is finished with

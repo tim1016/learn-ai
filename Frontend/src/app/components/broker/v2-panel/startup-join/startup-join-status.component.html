@@ -1,0 +1,46 @@
+@let join = view();
+<div
+  class="startup-join"
+  [class.startup-join--refused]="join.state === 'refused'"
+  [class.startup-join--ready]="join.state === 'ready'"
+>
+  <p class="startup-join__label">{{ join.label }}</p>
+  <p class="startup-join__explanation">{{ join.explanation }}</p>
+  <dl class="startup-join__facts">
+    @if (join.joined_minute_start_ms !== null) {
+      <div>
+        <dt>Joined partway through</dt>
+        <dd><app-timestamp-display [value]="join.joined_minute_start_ms" mode="et" /></dd>
+      </div>
+    }
+    @if (join.live_from_ms !== null) {
+      <div>
+        <dt>Live stream from</dt>
+        <dd><app-timestamp-display [value]="join.live_from_ms" mode="et" /></dd>
+      </div>
+    }
+    @if (remainingLabel(); as remaining) {
+      <div>
+        <dt>Time remaining before refusal</dt>
+        <dd>
+          <span class="startup-join__countdown">{{ remaining }}</span>
+          @if (join.deadline_ms !== null) {
+            <span class="startup-join__sub">
+              refused at <app-timestamp-display [value]="join.deadline_ms" mode="et" />
+            </span>
+          }
+        </dd>
+      </div>
+    }
+    @if (join.missing_start_ms !== null && join.missing_end_ms !== null) {
+      <div>
+        <dt>History missing</dt>
+        <dd>
+          <app-timestamp-display [value]="join.missing_start_ms" mode="et" />
+          to
+          <app-timestamp-display [value]="join.missing_end_ms" mode="et" />
+        </dd>
+      </div>
+    }
+  </dl>
+</div>
