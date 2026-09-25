@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 )
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
-    confirmed_flatten_reference_price,
+    priced_reduction_reference_price,
     resolve_exit,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -342,7 +342,7 @@ async def test_a_replaced_leg_reports_no_slippage_against_the_price_it_never_use
         OrderType.MARKET, OrderSide.SELL, False,
     )
     assert resolved.reducing_order_ref is not None
-    assert confirmed_flatten_reference_price(repo, resolved.reducing_order_ref) is None
+    assert priced_reduction_reference_price(repo, resolved.reducing_order_ref) is None
 
 
 async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(

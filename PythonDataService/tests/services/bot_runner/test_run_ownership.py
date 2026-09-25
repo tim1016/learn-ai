@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -98,6 +99,7 @@ async def test_a_running_bot_is_never_retired_by_the_sweep(tmp_path: Path) -> No
         run_ownership=clerk.run_ownership,
         max_passes=3,
         sleep=lambda _delay: asyncio.sleep(0),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     set_alpaca_clerk(clerk)
     try:

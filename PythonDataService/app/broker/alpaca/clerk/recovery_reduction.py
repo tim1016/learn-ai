@@ -70,8 +70,11 @@ from app.services.session_authority import (
     TRADEABLE_EXTENDED_PHASES,
     SessionAuthorityState,
     order_session_state_at_ms,
+    scheduled_exchange_phase_at_ms,
+    scheduled_extended_session_bounds,
     session_state_at_ms,
 )
+from app.utils.session_anchors import et_date_at_ms
 
 # Where the live bid/ask comes from: ``(symbol, now_ms) -> quote or None``.
 # Injected so the pricing seam is a pure function and a test can state the
@@ -187,16 +190,31 @@ RECOVERY_SESSION_CHANGED = LegRefusal(
 )
 
 
-NO_SESSION_OPEN_REASON_CODE = "NO_SESSION_OPEN"
-
-
 def no_session_open(opens_at_ms: int | None) -> LegRefusal:
     """No session the active authority trades is open now."""
     return LegRefusal(
-        reason_code=NO_SESSION_OPEN_REASON_CODE,
+        reason_code="NO_SESSION_OPEN",
         explanation="No trading session is open now, so no reduction can be sent.",
         next_step="Flatten again once the next session opens.",
         available_at_ms=opens_at_ms,
+    )
+
+
+def extended_hours_pricing_unavailable(regular_open_ms: int | None) -> LegRefusal:
+    """The calendar's pre-market or after-hours is open, but this authority declares no window to price in.
+
+    A synthetic authority, or a broker that declares no extended-hours window,
+    trades only the regular session. Outside it the calendar may still say
+    PRE or POST, so "no session is open" would be false (#2440 review).
+    """
+    return LegRefusal(
+        reason_code="EXTENDED_HOURS_PRICING_UNAVAILABLE",
+        explanation=(
+            "Extended-hours pricing is unavailable to this Clerk: an extended-hours session "
+            "is open, but this Clerk declares no extended-hours window, so no limit can be priced."
+        ),
+        next_step="Flatten again once the regular session opens.",
+        available_at_ms=regular_open_ms,
     )
 
 
@@ -364,7 +382,10 @@ def price_recovery_reduction(
 ) -> RecoveryReductionPricing:
     """How a reduction of ``side`` would go out right now, for the operator to confirm.
 
-    Raises ``ProgramLegRefused`` when none can: no open session, no allowance
+    The session is the one a leg sent now reaches the broker in
+    (:func:`send_arrival_ms`), so the ticket proposes what the send will
+    accept a moment later. Raises ``ProgramLegRefused`` when none can: no open
+    session, no extended-hours window to price in, no allowance
     to suggest a price from, no live quote, or a quote that prices to zero.
     """
     state = _tradeable_state(now_ms=now_ms, policy=policy)
@@ -407,7 +428,9 @@ def recovery_reduction_shape(
 
     The confirmed quote must be one the Clerk could have served: no later
     than the quote it holds now, and no more than ten seconds old. A client
-    cannot vouch for freshness the server cannot see.
+    cannot vouch for freshness the server cannot see. The quote's age is
+    measured at ``now_ms``; the session at the send instant
+    (:func:`send_arrival_ms`).
     """
     state = _tradeable_state(now_ms=now_ms, policy=policy)
     if state.phase == "RTH":
@@ -554,9 +577,9 @@ def price_automatic_recovery_reduction(
     ``None`` is the regular session's answer: inside 09:30–16:00 the re-drive
     is the market DAY leg a recovery EXIT with no recorded shape already
     builds — the same fact ``confirmed_shape=None`` encodes downstream, and
-    the two session notions agree (``_tradeable_state`` refuses every phase
-    ``regular_session_open`` does not call RTH), so the arm needs no guard of
-    its own.
+    the two session notions agree (both judge :func:`send_arrival_ms`, and
+    ``_tradeable_state`` refuses every phase :func:`market_leg_sendable` does
+    not call RTH), so the arm needs no guard of its own.
 
     Raises ``ProgramLegRefused`` when no priceable reduction exists: no open
     session, no allowance, no live quote, or an unpriceable anchor (all from
@@ -618,10 +641,25 @@ def reducing_leg_verdict(
     :func:`send_arrival_ms`, so a leg within :data:`EXIT_SEND_GUARD_BAND_MS` of
     its bound is already past it.
     """
-    arrival_ms = send_arrival_ms(now_ms)
     if extended_hours:
-        return "send" if valid_until_ms is not None and arrival_ms < valid_until_ms else "expired"
-    return "send" if regular_session_open(arrival_ms) else "wait"
+        return (
+            "send"
+            if valid_until_ms is not None and send_arrival_ms(now_ms) < valid_until_ms
+            else "expired"
+        )
+    return "send" if market_leg_sendable(now_ms) else "wait"
+
+
+def market_leg_sendable(now_ms: int) -> bool:
+    """May a market DAY leg sent at ``now_ms`` go out: does it reach the broker inside the regular session?
+
+    Alpaca queues a market DAY order that arrives outside the regular session
+    for the next open, so outside it every reducing leg is a priced limit.
+    Judged at :func:`send_arrival_ms`. The one question the send-time rule,
+    the watchdog's choice to price a re-drive, and the runtime's
+    unpriced-exit warning all ask (#2440 review).
+    """
+    return regular_session_open(send_arrival_ms(now_ms))
 
 
 def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
@@ -646,15 +684,23 @@ def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
 def reducing_leg_session_end_ms(
     *, extended_hours: bool, valid_until_ms: int | None, sent_at_ms: int
 ) -> int | None:
-    """When the session a sent reducing leg was sendable in ends, or ``None`` when none can be named.
+    """When the broker stops working a sent reducing leg, or ``None`` when no end can be named.
 
-    An extended-hours limit's own bound; a market leg's regular close on the
-    day it was sent (the canonical calendar's, so 13:00 on an early-close
-    day). Read by the sweep's end-of-session alarm
-    (:data:`REDUCING_ORDER_PAST_SESSION_GRACE_MS`).
+    Read by the end-of-session alarm (:data:`REDUCING_ORDER_PAST_SESSION_GRACE_MS`),
+    so it is the broker's expiry, not the Clerk's send bound. Every
+    extended-hours leg the Clerk sends is a DAY limit, and Alpaca keeps a DAY
+    extended-hours limit working through the regular session until that day's
+    after-hours close (#2440 review): a limit sent at 04:00 is still live at
+    09:35, so its 09:30 send bound (``valid_until_ms``) would alarm on the
+    owner's own pre-market re-drive. Its end is the canonical calendar's
+    after-hours close of the ET day it was sent (17:00 on an early-close day);
+    ``valid_until_ms`` only when that day has no scheduled session. A market
+    leg's end is the regular close of the day it was sent (13:00 on an
+    early-close day).
     """
     if extended_hours:
-        return valid_until_ms
+        scheduled = scheduled_extended_session_bounds(et_date_at_ms(sent_at_ms))
+        return valid_until_ms if scheduled is None else scheduled.close_ms
     state = session_state_at_ms(now_ms=sent_at_ms)
     return state.next_transition_ms if state.phase == "RTH" else None
 
@@ -698,11 +744,11 @@ def evaluate_proposed_limit(
     recomputes them (AGENTS.md § "Python owns all math").
     """
     side = proposal.side
-    touch = Decimal(str(proposal.quote.bid if side is OrderSide.SELL else proposal.quote.ask))
+    touch = Decimal(str(reduction_touch(side, bid=proposal.quote.bid, ask=proposal.quote.ask)))
     if touch <= 0:
         raise ValueError(f"quote touch must be positive; got {touch}")
     through = touch - limit_price if side is OrderSide.SELL else limit_price - touch
-    touch_size = proposal.quote.bid_size if side is OrderSide.SELL else proposal.quote.ask_size
+    touch_size = reduction_touch(side, bid=proposal.quote.bid_size, ask=proposal.quote.ask_size)
     outside_band = proposal.band_limit_price is not None and (
         limit_price < proposal.band_limit_price
         if side is OrderSide.SELL
@@ -716,6 +762,16 @@ def evaluate_proposed_limit(
         thin_book=touch_size is not None and abs(quantity) > touch_size,
         resting=through < 0,
     )
+
+
+def reduction_touch[T](side: OrderSide, *, bid: T, ask: T) -> T:
+    """The side of the book a reduction of ``side`` is priced and measured against: the bid for a sell, the ask for a cover.
+
+    One selection for every price, size and reference that follows the
+    touch — the suggested limit's anchor, a proposed limit's reach, and the
+    reference a priced leg's realized slippage is measured from.
+    """
+    return bid if side is OrderSide.SELL else ask
 
 
 def _signed_against_reference(side: OrderSide, reference_price: float, fill_price: float) -> float:
@@ -746,7 +802,7 @@ def _band_limit_price(
 
 def _through_the_book(side: OrderSide, quote: TopOfBookQuote, allowance_bps: Decimal) -> Decimal:
     """The price ``allowance_bps`` past the bid (sell) or ask (cover), marketably rounded."""
-    anchor = quote.bid if side is OrderSide.SELL else quote.ask
+    anchor = reduction_touch(side, bid=quote.bid, ask=quote.ask)
     try:
         return marketable_limit_price(
             side=side, anchor=Decimal(str(anchor)), allowance_bps=allowance_bps
@@ -756,11 +812,26 @@ def _through_the_book(side: OrderSide, quote: TopOfBookQuote, allowance_bps: Dec
 
 
 def _tradeable_state(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthorityState:
-    """The session now, or a refusal naming the next open when none is tradeable."""
-    state = flatten_session(now_ms=now_ms, policy=policy)
-    if state.phase != "RTH" and state.phase not in TRADEABLE_EXTENDED_PHASES:
-        raise ProgramLegRefused(no_session_open(state.next_transition_ms))
-    return state
+    """The session a leg sent at ``now_ms`` reaches the broker in, or a refusal naming why none is tradeable.
+
+    Judged at :func:`send_arrival_ms`, exactly as :func:`reducing_leg_verdict`
+    judges a leg about to be sent, so every pricing entry point here — the
+    operator's ticket, the watchdog's re-drive, the send-time re-price — and
+    the send-time rule agree on one instant (#2440 review). Callers pass the
+    real ``now_ms``; only the session is judged later, never a quote's age.
+
+    The refusal is the truth about that instant: with no declared window the
+    authority trades only the regular session, and while the calendar's
+    pre-market or after-hours is open that is "no extended-hours pricing",
+    not "no session open" (:func:`extended_hours_pricing_unavailable`).
+    """
+    arrival_ms = send_arrival_ms(now_ms)
+    state = flatten_session(now_ms=arrival_ms, policy=policy)
+    if state.phase == "RTH" or state.phase in TRADEABLE_EXTENDED_PHASES:
+        return state
+    if policy.window is None and scheduled_exchange_phase_at_ms(arrival_ms) in TRADEABLE_EXTENDED_PHASES:
+        raise ProgramLegRefused(extended_hours_pricing_unavailable(state.next_transition_ms))
+    raise ProgramLegRefused(no_session_open(state.next_transition_ms))
 
 
 def _extended_phase(state: SessionAuthorityState) -> ExtendedPhase:
@@ -769,7 +840,6 @@ def _extended_phase(state: SessionAuthorityState) -> ExtendedPhase:
 
 __all__ = [
     "EXIT_SEND_GUARD_BAND_MS",
-    "NO_SESSION_OPEN_REASON_CODE",
     "RECOVERY_BAND_ALLOWANCE_MULTIPLE",
     "RECOVERY_LIMIT_OUTSIDE_BAND",
     "RECOVERY_LIMIT_SESSION_ENDED",
@@ -790,7 +860,9 @@ __all__ = [
     "RecoveryReductionPricing",
     "ReducingLegVerdict",
     "RegularSessionReduction",
+    "extended_hours_pricing_unavailable",
     "flatten_session",
+    "market_leg_sendable",
     "next_redrive_at_ms",
     "no_session_open",
     "price_automatic_recovery_reduction",
@@ -799,6 +871,7 @@ __all__ = [
     "recovery_reduction_shape",
     "reducing_leg_session_end_ms",
     "reducing_leg_verdict",
+    "reduction_touch",
     "regular_session_open",
     "send_arrival_ms",
 ]

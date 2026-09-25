@@ -421,7 +421,7 @@ async def test_an_open_failed_enter_filled_fence_blocks_quiet_until_a_clean_swee
     assert blocked.broker_work_ended and blocked.intents_resolved
     assert not blocked.account_flat
 
-    swept = await reconcile_account(repo, read=_ReconcileRead(), trade=_ReconcileTrade())
+    swept = await reconcile_account(repo, read=_ReconcileRead(), trade=_ReconcileTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert swept.verdict == "clean"
     assert (

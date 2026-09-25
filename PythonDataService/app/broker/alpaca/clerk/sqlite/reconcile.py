@@ -10,10 +10,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 from weakref import WeakKeyDictionary
 
-from app.broker.alpaca.clerk.recovery_reduction import (
-    UNPRICEABLE_RECOVERY,
-    RecoveryPricing,
-)
+from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolReader,
@@ -875,7 +872,7 @@ async def reconcile_account(
     trade: BrokerTradePort,
     trigger: Trigger = "AUTOMATIC",
     intake: ReentrantAsyncLock | None = None,
-    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    pricing: RecoveryPricing,
     run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Serialize snapshot-to-verdict passes for one live account authority.
@@ -883,7 +880,10 @@ async def reconcile_account(
     ``pricing`` is what the stuck-EXIT watchdog prices its extended-hours
     re-drive limits from (#2229), and what an EXIT this pass creates a
     reduction for is re-priced from when its recorded leg can no longer be
-    sent (#2440); the degraded default defers rather than guessing a price.
+    sent (#2440). It has no default: the facade passes its authority's
+    ``recovery_pricing``, and a caller with nothing to price from names
+    :data:`~recovery_reduction.UNPRICEABLE_RECOVERY`, which defers rather
+    than guessing a price.
 
     ``run_ownership`` is the Clerk facade's book of which in-process runner
     holds each ACTIVE run (#2369). With it, the pass retires every ACTIVE run
@@ -1017,7 +1017,7 @@ async def _reconcile_account_serialized(
     trade: BrokerTradePort,
     trigger: Trigger,
     intake: ReentrantAsyncLock,
-    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    pricing: RecoveryPricing,
     run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""

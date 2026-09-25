@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLegPolicy
+from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg, ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryShape,
@@ -31,11 +31,11 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     RecoveryRunActiveError,
+    _accept_exit_capture,
     accept_exit,
     accept_recovery_exit,
     resolve_accepted_exit,
     resolve_exit,
-    submit_exit,
 )
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
@@ -500,6 +500,36 @@ async def test_active_exit_fences_a_concurrent_new_enter(
         )
 
     assert raised.value.decision.reason_code == "EXIT_IN_PROGRESS"
+
+
+def test_an_exit_never_records_both_a_program_leg_and_a_recovery_price(repo: ClerkSqliteRepository) -> None:
+    """A deciding program's leg or a recovery price is the one recorded leg (#2440 review): never both."""
+    shape = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=99.80,
+        extended_hours=True,
+        side=OrderSide.SELL,
+    )
+    quote = TopOfBookQuote(
+        symbol="SPY", bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=repo.clock()
+    )
+
+    with pytest.raises(ValueError, match="never both"):
+        _accept_exit_capture(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="exit-both",
+            entry_order_ref="learn-ai/spy-bot/v1:any",
+            resolve_run_id=lambda _target: RUN_ID,
+            decision_receipt=None,
+            program_leg=ProgramLeg(shape, valid_until_ms=POST_CLOSE_MS),
+            confirmed_shape=ConfirmedRecoveryShape(
+                shape=shape, valid_until_ms=POST_CLOSE_MS, reference_quote=quote, quantity=10
+            ),
+        )
+    assert repo.active_exit_for_strategy(SID) is None
 
 
 async def test_accept_exit_rejects_an_unknown_entry_order_ref(repo: ClerkSqliteRepository) -> None:
@@ -1508,7 +1538,22 @@ async def test_same_process_overlapping_exit_resolvers_submit_one_reduction(
     )
 
 
-async def test_in_flight_duplicate_submit_exit_returns_existing_snapshot(
+async def _accept_and_resolve_exit(
+    repo: ClerkSqliteRepository, *, decision_id: str, entry_order_ref: str, trade: _FakeTrade
+) -> ExitSubmission:
+    """One program EXIT as the runtime drives it: ``accept_exit``, then ``resolve_accepted_exit``."""
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id=decision_id,
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_order_ref,
+    )
+    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+
+async def test_in_flight_duplicate_exit_returns_existing_snapshot(
     repo: ClerkSqliteRepository,
 ) -> None:
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
@@ -1534,28 +1579,14 @@ async def test_in_flight_duplicate_submit_exit_returns_existing_snapshot(
 
     trade = BlockingTrade()
     first = asyncio.create_task(
-        submit_exit(
-            repo,
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=SID,
-            decision_id="exit-in-flight-retry",
-            lifecycle_run_id=RUN_ID,
-            entry_order_ref=entry_ref,
-            trade=trade,
-            pricing=UNPRICEABLE_RECOVERY,
+        _accept_and_resolve_exit(
+            repo, decision_id="exit-in-flight-retry", entry_order_ref=entry_ref, trade=trade
         )
     )
     await trade.submit_started.wait()
 
-    duplicate = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-in-flight-retry",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=trade,
-        pricing=UNPRICEABLE_RECOVERY,
+    duplicate = await _accept_and_resolve_exit(
+        repo, decision_id="exit-in-flight-retry", entry_order_ref=entry_ref, trade=trade
     )
 
     assert duplicate.created is False
@@ -1605,7 +1636,7 @@ async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_ente
         assert transition["effect_operation_id"] == enter_effect_id_before
 
 
-async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSqliteRepository) -> None:
+async def test_an_accepted_exit_drives_the_full_happy_path_in_one_resolve(repo: ClerkSqliteRepository) -> None:
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     trade = _FakeTrade(
         submit_result=_broker_order(
@@ -1613,16 +1644,7 @@ async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSql
         )
     )
 
-    result = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=trade,
-        pricing=UNPRICEABLE_RECOVERY,
-    )
+    result = await _accept_and_resolve_exit(repo, decision_id="exit-1", entry_order_ref=entry_ref, trade=trade)
 
     assert isinstance(result, ExitSubmission)
     assert result.reducing_order_ref is not None
@@ -1649,22 +1671,15 @@ async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSql
     assert repo.position(SID, "SPY") == pytest.approx(0.0)
 
 
-async def test_submit_exit_on_a_duplicate_decision_still_advances_the_state_machine(
+async def test_an_exit_on_a_duplicate_decision_still_advances_the_state_machine(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Unlike submit_enter, submit_exit has no 'skip resolve' branch for a
-    duplicate accept — resolve_exit is safe to call every time."""
+    """Unlike submit_enter, an EXIT has no 'skip resolve' branch for a
+    duplicate accept — resolve_accepted_exit is safe to call every time."""
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     stalled_trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    first = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=stalled_trade,
-        pricing=UNPRICEABLE_RECOVERY,
+    first = await _accept_and_resolve_exit(
+        repo, decision_id="exit-1", entry_order_ref=entry_ref, trade=stalled_trade
     )
     effect = repo.effect_operation(first.effect_operation_id)  # type: ignore[arg-type]
     assert effect is not None and effect.state == "unknown"
@@ -1674,15 +1689,8 @@ async def test_submit_exit_on_a_duplicate_decision_still_advances_the_state_mach
             _broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell")
         ]
     )
-    second = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=resuming_trade,
-        pricing=UNPRICEABLE_RECOVERY,
+    second = await _accept_and_resolve_exit(
+        repo, decision_id="exit-1", entry_order_ref=entry_ref, trade=resuming_trade
     )
     assert not second.created  # accept_exit itself sees the transport retry
     assert resuming_trade.submit_calls == []  # never re-submitted a duplicate reducing order

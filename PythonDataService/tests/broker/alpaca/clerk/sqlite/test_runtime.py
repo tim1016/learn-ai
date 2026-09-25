@@ -1139,6 +1139,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
         intake=intake,
         max_passes=1,
         on_result=facade.publish_reconciliation,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     projection = await facade.custody_snapshot_projection("sid-1")
@@ -1179,6 +1180,7 @@ async def test_recovery_evaluation_observation_tracks_the_published_sweep(
         intake=intake,
         max_passes=1,
         on_result=facade.publish_sweep_reconciliation,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     after = facade.recovery_evaluation_observation()

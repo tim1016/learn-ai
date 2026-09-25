@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
-    confirmed_flatten_reference_price,
+    priced_reduction_reference_price,
     resolve_exit,
 )
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
@@ -499,7 +499,7 @@ async def test_a_leg_the_clerk_prices_at_send_records_who_priced_it_and_its_refe
         created.reference_quote_observed_at_ms,
     ) == ("clerk", 100.00, 100.05, _at(16, 1))
     # A fill of it is measured from the bid it was priced against.
-    assert confirmed_flatten_reference_price(repo, resolved.reducing_order_ref) == 100.00
+    assert priced_reduction_reference_price(repo, resolved.reducing_order_ref) == 100.00
 
 
 async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confirmation(
@@ -770,6 +770,82 @@ async def test_a_reducing_order_still_working_past_its_session_tells_the_operato
     assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
 
 
+@pytest.mark.parametrize(
+    ("day", "sent_at", "quiet_at", "alarm_at"),
+    [
+        pytest.param(date(2026, 9, 3), (4, 0), ((9, 35), (20, 4)), (20, 6), id="ordinary-day"),
+        pytest.param(_EARLY_CLOSE_DAY, (8, 0), ((9, 35), (17, 4)), (17, 6), id="half-day"),
+    ],
+)
+async def test_a_pre_market_limit_working_into_the_regular_session_is_no_alarm_until_the_after_hours_close(
+    tmp_path: Path,
+    day: date,
+    sent_at: tuple[int, int],
+    quiet_at: tuple[tuple[int, int], ...],
+    alarm_at: tuple[int, int],
+) -> None:
+    """#2440 review: Alpaca keeps a DAY extended-hours limit working until that day's after-hours close.
+
+    The owner's own 04:00 re-drive is a pre-market limit whose send bound is
+    09:30; judged against that bound, the still-working alarm fired at 09:35
+    on every re-drive that had not filled yet. The alarm is bounded by the
+    broker's expiry — the calendar's after-hours close of the day it was
+    sent, 17:00 on a half-day — and raises exactly once past it.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_at(_at(*sent_at, day=day)),
+        lease_ttl_ms=300_000,
+    )
+    try:
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+        effect_operation_id = _accept_program_exit(
+            repo,
+            entry_ref,
+            shape=LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            ),
+            valid_until_ms=_at(9, 30, day=day),
+        )
+        sent = await resolve_exit(
+            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+        )
+        assert sent.reducing_order_ref is not None
+
+        def still_working() -> _FakeTrade:
+            return _FakeTrade(
+                lookup_results=[_broker_order("placeholder", side="sell", status="accepted")]
+            )
+
+        for quiet in quiet_at:
+            _walk_clock_to(repo, _at(*quiet, day=day))
+            await resolve_exit(
+                repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch()
+            )
+            assert _exit_not_flat(repo) is None, f"alarmed at {quiet} while the broker still works the limit"
+
+        _walk_clock_to(repo, _at(*alarm_at, day=day))
+        await resolve_exit(
+            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch()
+        )
+        assert _exit_not_flat(repo) is not None
+        writes = _raised_episode_writes(repo)
+        _walk_clock_to(repo, _at(alarm_at[0], alarm_at[1] + 1, day=day))
+        await resolve_exit(
+            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch()
+        )
+        assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
+    finally:
+        repo.close()
+
+
 async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_attempt(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -981,4 +1057,5 @@ async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
     episode = _exit_not_flat(repo)
     assert episode is not None
     assert "Extended-hours pricing is unavailable" in episode["explanation"]
+    assert "No trading session is open" not in episode["explanation"]
     assert _next_attempt_at_ms(episode) == _at(9, 30, day=date(2026, 9, 3))

@@ -413,7 +413,10 @@ class ExitReducingOrderCreatedFacts:
 
     def reference_price(self) -> float | None:
         """The bid (sell) or ask (cover) a send-time-priced leg's fills are measured from."""
-        return self.reference_bid if self.side.lower() == "sell" else self.reference_ask
+        from app.broker.alpaca.clerk.recovery_reduction import reduction_touch
+        from app.broker.contract.models import OrderSide
+
+        return reduction_touch(OrderSide(self.side.lower()), bid=self.reference_bid, ask=self.reference_ask)
 
     def to_facts_json(self) -> str:
         return canonicalize(_omit_defaults(asdict(self), _REDUCING_ORDER_DEFAULTS))

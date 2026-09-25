@@ -54,6 +54,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     RecoveryPricing,
     RecoveryReductionPricing,
     flatten_session,
+    market_leg_sendable,
     price_recovery_reduction,
     recovery_reduction_shape,
 )
@@ -996,11 +997,14 @@ class SqliteAlpacaClerkFacade:
                     explanation=exc.explanation,
                     next_step=exc.next_step,
                 )
-            if program_leg.unpriced is not None:
+            if program_leg.unpriced is not None and not market_leg_sendable(self._repo.clock()):
                 # Loud, as an extended run's refusal is, but not a refusal: a
                 # refused EXIT would never reduce. The send-time rule re-prices
                 # this market leg off the live touch if it is sent after the
-                # close, or folds it for the operator (#2440 review).
+                # close, or folds it for the operator (#2440 review). Only
+                # when that price is needed now: mid-session the market leg
+                # goes out as decided, and a missing after-hours anchor there
+                # is no warning (#2440 review).
                 logger.warning(
                     "a regular-hours EXIT has no after-hours price; its market leg is "
                     "judged again when it is sent",

@@ -126,8 +126,13 @@ def _accept_exit_capture(
     (``accept_recovery_exit``), which is why crash/stop-held exposure can be
     driven to flat after ``runtime.recover()`` retired every active run.
     """
+    if program_leg is not None and confirmed_shape is not None:
+        raise ValueError("an EXIT records a deciding program's leg or a recovery price, never both")
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
+    # The one recorded leg: its shape and the end of the session it was priced
+    # for. A recovery price also carries its quote, quantity and author.
+    recorded = confirmed_shape if confirmed_shape is not None else program_leg
     idempotency_key, payload_hash, command_id, effect_idempotency_key = _exit_identity(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -171,14 +176,8 @@ def _accept_exit_capture(
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
         ).with_reducing_shape(
-            (None if program_leg is None else program_leg.shape)
-            if confirmed_shape is None
-            else confirmed_shape.shape,
-            valid_until_ms=(
-                (None if program_leg is None else program_leg.valid_until_ms)
-                if confirmed_shape is None
-                else confirmed_shape.valid_until_ms
-            ),
+            None if recorded is None else recorded.shape,
+            valid_until_ms=None if recorded is None else recorded.valid_until_ms,
             reference_quote=None if confirmed_shape is None else confirmed_shape.reference_quote,
             confirmed_quantity=None if confirmed_shape is None else confirmed_shape.quantity,
             # Who set the price (#2229): an operator confirmed it, or the
@@ -351,30 +350,6 @@ def accept_recovery_exit(
     )
 
 
-async def submit_exit(
-    repo: ClerkSqliteRepository,
-    *,
-    account_id: str,
-    strategy_instance_id: str,
-    decision_id: str,
-    lifecycle_run_id: str,
-    entry_order_ref: str,
-    trade: BrokerTradePort,
-    pricing: RecoveryPricing,
-    decision_receipt: AtomicDecisionReceipt | None = None,
-) -> ExitSubmission:
-    accepted = accept_exit(
-        repo,
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-        decision_id=decision_id,
-        lifecycle_run_id=lifecycle_run_id,
-        entry_order_ref=entry_order_ref,
-        decision_receipt=decision_receipt,
-    )
-    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing)
-
-
 async def resolve_accepted_exit(
     repo: ClerkSqliteRepository,
     *,
@@ -452,4 +427,4 @@ def _reducing_order_ref(
     return reducing.order_ref if reducing is not None else None
 
 
-__all__ = ["ExitSubmission", "accept_exit", "resolve_accepted_exit", "resolve_exit", "submit_exit"]
+__all__ = ["ExitSubmission", "accept_exit", "resolve_accepted_exit", "resolve_exit"]

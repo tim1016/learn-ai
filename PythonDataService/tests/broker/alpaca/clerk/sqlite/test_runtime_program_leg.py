@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -169,14 +170,18 @@ async def _exit(
     retained_source_bar: RetainedSourceBar | None,
     live_envelope: LiveEnvelopeGate | None = None,
     send_delay_ms: int = 0,
+    decided_at_ms: int | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
     """Drive one EXIT through the facade, after a filled ENTER, and report the port and the receipt.
 
     ``send_delay_ms`` puts the Clerk's clock that long after the decision bar's
     close: a live EXIT reaches the Clerk seconds after its bar closes, never at
-    the closing instant itself.
+    the closing instant itself. ``decided_at_ms`` pins the decision instant
+    when there is no bar to read it from.
     """
-    decision_clock = _decision_clock(retained_source_bar)
+    decision_clock = (
+        _decision_clock(retained_source_bar) if decided_at_ms is None else (lambda: decided_at_ms)
+    )
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID,
         artifacts_root=tmp_path,
@@ -417,6 +422,43 @@ async def test_a_regular_hours_exit_decided_inside_the_session_keeps_the_market_
         None,
         False,
     )
+
+
+@pytest.mark.parametrize(
+    ("decided_at", "warned"),
+    [
+        pytest.param((15, 30), False, id="mid-session-the-market-leg-goes-out-as-decided"),
+        pytest.param((16, 0), True, id="after-the-close-an-after-hours-price-is-needed"),
+    ],
+)
+async def test_a_regular_hours_exit_warns_it_is_unpriced_only_when_a_price_is_needed(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    decided_at: tuple[int, int],
+    warned: bool,
+) -> None:
+    """#2440 review: ``regular_hours_exit_unpriced`` means an after-hours price was needed and missing.
+
+    With no retained decision bar the EXIT can never be shaped as an
+    after-hours limit, so it always carries ``unpriced``. Mid-session that is
+    no warning — the market leg goes out as decided — and the warning used to
+    fire on every such EXIT anyway. It fires only when the market leg cannot
+    be sent at the send instant.
+    """
+    decided_at_ms = to_ms_utc(datetime(_DAY.year, _DAY.month, _DAY.day, *decided_at, tzinfo=_ET))
+
+    with caplog.at_level(logging.WARNING):
+        await _exit(
+            tmp_path,
+            use_rth=True,
+            policy=_EXTENDED_POLICY,
+            retained_source_bar=None,
+            decided_at_ms=decided_at_ms,
+            send_delay_ms=2_000,
+        )
+
+    unpriced = [r for r in caplog.records if getattr(r, "action", None) == "regular_hours_exit_unpriced"]
+    assert [r.reason_code for r in unpriced] == (["EXTENDED_ANCHOR_UNAVAILABLE"] if warned else [])
 
 
 @pytest.mark.parametrize(

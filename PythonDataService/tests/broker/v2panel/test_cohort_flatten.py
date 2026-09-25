@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
@@ -265,6 +266,7 @@ def cohort_lease_lost_api(tmp_path):
         trade=port,  # type: ignore[arg-type]
         intake=facade.intake,
         on_lease_revived=_on_lease_revived,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     set_active_clerk_runtime(
         ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, sweep=sweep)

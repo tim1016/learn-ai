@@ -41,10 +41,9 @@ from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegRefused
 from app.broker.alpaca.clerk.recovery_reduction import (
-    UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryShape,
     RecoveryPricing,
-    regular_session_open,
+    market_leg_sendable,
 )
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
@@ -136,7 +135,7 @@ async def redrive_or_escalate_stale_exits(
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     broker_symbol: BrokerSymbolReader,
-    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
 ) -> None:
     """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate.
@@ -145,10 +144,12 @@ async def redrive_or_escalate_stale_exits(
     against the Clerk's current attribution (#2343). It has no default: a
     caller without a broker snapshot cannot re-drive.
 
-    ``pricing`` is what an extended-hours re-drive prices from (#2229); the
-    degraded :data:`UNPRICEABLE_RECOVERY` default defers outside the regular
-    session rather than guessing a price, so a caller with no declared window
-    — a paper authority, a test — behaves exactly as before.
+    ``pricing`` is what an extended-hours re-drive prices from (#2229): the
+    authority's own ``recovery_pricing``. It has no default either — the
+    re-drive and the notice's next-attempt time must come from the same
+    seam; a caller with nothing to price from names
+    :data:`~recovery_reduction.UNPRICEABLE_RECOVERY`, which defers outside
+    the regular session rather than guessing a price.
 
     ``off_loop`` moves the episode/entry scans onto a worker thread and the
     escalation/acceptance folds through the fence's sanctioned hop (#1993);
@@ -253,12 +254,15 @@ async def redrive_or_escalate_stale_exits(
             continue
         confirmed_shape = None
         quote_spread = None
-        if not regular_session_open(now_ms):
+        if not market_leg_sendable(now_ms):
             # Owner decision 2026-09-19 (evening, #2229): an extended-hours
             # re-drive prices a limit itself instead of waiting for the open.
             # A refusal (no session, no allowance, no live quote, or a spread
             # past the cap) defers — the episode stays raised and the entry
-            # stays free. Read here, on the event loop (#2440 review).
+            # stays free. Read here, on the event loop (#2440 review). Both
+            # this choice and the price are judged at the send instant, as
+            # the send-time rule judges the leg, so a re-drive the rule would
+            # refuse is refused here, before an attempt is burned.
             touch = pricing.read(cause.symbol, now_ms)
             try:
                 priced = touch.price(

@@ -126,12 +126,26 @@ def test_no_open_session_refuses_and_names_the_next_open(now_ms: int, opens_at_m
     assert excinfo.value.refusal.available_at_ms == opens_at_ms
 
 
-def test_an_authority_with_no_extended_window_waits_for_the_regular_open() -> None:
+@pytest.mark.parametrize(
+    ("now_ms", "reason_code", "opens_at_ms"),
+    [
+        # 07:00 and 16:01: the calendar's pre-market / after-hours is open, so
+        # "no session is open" would be false (#2440 review) — what is
+        # missing is a window to price an extended-hours limit in.
+        (_at(7), "EXTENDED_HOURS_PRICING_UNAVAILABLE", _at(9, 30)),
+        (_at(16, 1), "EXTENDED_HOURS_PRICING_UNAVAILABLE", _at(9, 30, day=date(2026, 9, 3))),
+        # 21:00: nothing is scheduled, so no session is open.
+        (_at(21), "NO_SESSION_OPEN", _at(9, 30, day=date(2026, 9, 3))),
+    ],
+)
+def test_an_authority_with_no_extended_window_waits_for_the_regular_open(
+    now_ms: int, reason_code: str, opens_at_ms: int
+) -> None:
     with pytest.raises(ProgramLegRefused) as excinfo:
-        price_recovery_reduction(side=OrderSide.SELL, now_ms=_at(7), policy=ProgramLegPolicy.regular_only(), quote=None)
+        price_recovery_reduction(side=OrderSide.SELL, now_ms=now_ms, policy=ProgramLegPolicy.regular_only(), quote=None)
 
-    assert _refusal(excinfo) == "NO_SESSION_OPEN"
-    assert excinfo.value.refusal.available_at_ms == _at(9, 30)
+    assert _refusal(excinfo) == reason_code
+    assert excinfo.value.refusal.available_at_ms == opens_at_ms
 
 
 def test_extended_session_without_a_live_quote_refuses_rather_than_guessing() -> None:

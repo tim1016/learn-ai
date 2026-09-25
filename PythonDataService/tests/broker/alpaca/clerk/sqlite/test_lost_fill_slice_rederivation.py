@@ -202,7 +202,7 @@ async def _open_enter(repo: ClerkSqliteRepository, trade: _Trade, *, decision_id
     assert order is not None and order.broker_order_id is not None
     open0 = _broker_order(ref, order_id=order.broker_order_id, status="accepted", quantity=5.0)
     trade.broker_state[ref] = open0
-    await reconcile_account(repo, read=_FakeRead(orders=[open0]), trade=trade)
+    await reconcile_account(repo, read=_FakeRead(orders=[open0]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
     return ref, order.broker_order_id, sub.effect_operation_id
 
 
@@ -228,7 +228,7 @@ async def _sweep_until_settled(
     positions = [_position("SPY", quantity=broker_qty)] if broker_qty else []
     for _ in range(passes):
         clock.advance(15_000)
-        result = await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade)
+        result = await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade, pricing=UNPRICEABLE_RECOVERY)
         verdicts.append(result.verdict)
     return verdicts
 
@@ -475,7 +475,8 @@ async def test_late_stale_rest_ack_does_not_hide_a_short_canceled_order(
     trade.lookup_calls.clear()
     clock.advance(15_000)
     await reconcile_account(
-        repo, read=_FakeRead(positions=[_position("SPY", quantity=5.0)]), trade=trade
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=5.0)]), trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert trade.lookup_calls == [ref]
@@ -560,7 +561,8 @@ async def _exit_with_open_reducing(
     open0 = _broker_order(red, order_id=bo, side="sell", status="accepted", quantity=10.0)
     trade.broker_state[red] = open0
     await reconcile_account(
-        repo, read=_FakeRead(orders=[open0], positions=[_position("SPY", quantity=10.0)]), trade=trade
+        repo, read=_FakeRead(orders=[open0], positions=[_position("SPY", quantity=10.0)]), trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     return accepted.effect_operation_id, red, bo
 
@@ -631,7 +633,7 @@ async def test_rest_reporting_less_than_the_websocket_settles_exit_not_flat_with
         # 1 s apart: 20 sweeps stay inside EXIT_NOT_FLAT's 120 s redrive age,
         # so the watchdog's re-drive does not enter the row count.
         clock.advance(1_000)
-        await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade)
+        await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade, pricing=UNPRICEABLE_RECOVERY)
         counts.append(_transition_count(repo))
 
     effect = repo.effect_operation(exit_id)
@@ -690,7 +692,7 @@ async def test_unknown_exit_after_a_filled_submit_response_refreshes_with_bounde
     counts = []
     for _ in range(20):
         clock.advance(1_000)
-        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
         counts.append(_transition_count(repo))
 
     effect = repo.effect_operation(accepted.effect_operation_id)

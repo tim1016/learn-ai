@@ -10,6 +10,7 @@ import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
@@ -464,6 +465,7 @@ async def test_a_shadow_sweep_pass_journals_the_trading_day(tmp_path: Path) -> N
         trade=ports.trade,
         intake=facade.intake,
         on_result=lambda result: recorder.record(publish(result)),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         assert await sweep._run_one_pass() is True

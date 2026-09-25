@@ -16,7 +16,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     realized_slippage_cost,
 )
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
-from app.broker.alpaca.clerk.sqlite.exit_resolution import confirmed_flatten_reference_price
+from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
@@ -803,14 +803,15 @@ def _recent_fill_view(
     authority at all while its sibling decision row carries one — the exact
     asymmetry the single-authority guard exists to make impossible.
 
-    A fill of an operator-confirmed extended-hours flatten also carries its
-    realized slippage from the quote the limit was priced against (#2007).
+    A fill of a priced reducing leg — an operator's confirmed extended-hours
+    flatten (#2007), or a limit the Clerk priced itself (#2229, #2440) — also
+    carries its realized slippage from the quote the limit was priced against.
     """
     kind = authority_kind_for_account(authority_account_id)
     reference_price = (
         None
         if repository is None
-        else confirmed_flatten_reference_price(repository, fill.order_ref)
+        else priced_reduction_reference_price(repository, fill.order_ref)
     )
     return RecentFillView(
         order_ref=fill.order_ref,
