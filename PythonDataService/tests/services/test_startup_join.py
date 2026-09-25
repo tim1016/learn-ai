@@ -273,6 +273,30 @@ async def test_the_bars_the_stream_delivers_after_release_are_retained_before_th
     assert [row.start_ms for row in live_rows] == [_LIVE_FROM, _LIVE_FROM + _MIN]
 
 
+@pytest.mark.asyncio
+async def test_after_release_the_stream_is_read_only_as_fast_as_the_run_consumes_it(
+    ledger: SourceBarLedger,
+) -> None:
+    """One bar in flight, as before: the feed must not believe a bar was consumed
+    while the strategy has not decided on it (the fleet runner waits on exactly that)."""
+    feed = _JoiningFeed(live=[_bar(_LIVE_FROM + i * _MIN) for i in range(5)], history=[_history(_J - 5 * _MIN, _J)])
+    run_feed = _run_feed(feed, ledger)
+
+    await run_feed.recent_closed_bars("SPY", use_rth=True)
+    stream = run_feed.stream_bars("SPY", use_rth=True)
+    first = await anext(stream)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    yielded_while_deciding = feed.live_yielded
+    second = await anext(stream)
+    await stream.aclose()
+
+    assert (first.start_ms, second.start_ms) == (_LIVE_FROM, _LIVE_FROM + _MIN)
+    assert yielded_while_deciding <= feed.live_yielded
+    # Everything read before release was held; after it, the run pulls one at a time.
+    assert feed.live_yielded <= yielded_while_deciding + 1
+
+
 # ── the deadline ─────────────────────────────────────────────────────────────
 
 
@@ -423,10 +447,10 @@ async def test_a_feed_that_dies_during_preparation_fails_the_run_with_its_own_er
 
     retained: list[MarketDataBar] = []
 
-    async def _retain(bar: MarketDataBar) -> None:
+    async def _retain(bar: MarketDataBar, _at: int | None) -> None:
         retained.append(bar)
 
-    buffer = LiveStartBuffer(_dies(), retain=_retain)
+    buffer = LiveStartBuffer(_dies(), symbol="SPY", retain=_retain)
     buffer.start()
 
     with pytest.raises(MarketDataFeedError, match="socket gone"):
@@ -435,29 +459,41 @@ async def test_a_feed_that_dies_during_preparation_fails_the_run_with_its_own_er
 
 
 @pytest.mark.asyncio
-async def test_the_stream_is_closed_when_the_run_that_opened_it_ends_before_reading_it() -> None:
+async def test_leaving_the_run_feed_closes_a_stream_warmup_opened_but_the_run_never_read(
+    ledger: SourceBarLedger,
+) -> None:
+    """A run that fails between warmup and its first live bar must not leave the subscription open."""
     closed = asyncio.Event()
 
-    async def _stream() -> AsyncIterator[MarketDataBar]:
-        try:
-            yield _bar(_J)
-            await asyncio.Event().wait()
-        finally:
-            closed.set()
+    class _ClosingFeed(_JoiningFeed):
+        async def stream_bars(self, symbol, *, use_rth=True, continuity=None):  # type: ignore[no-untyped-def]
+            try:
+                async for bar in super().stream_bars(symbol, use_rth=use_rth, continuity=continuity):
+                    yield bar
+            finally:
+                closed.set()
 
-    async def _retain(_bar: MarketDataBar) -> None:
-        return None
-
-    async def _run_that_fails_after_warmup() -> None:
-        buffer = LiveStartBuffer(_stream(), retain=_retain)
-        buffer.start()
-        await buffer.seam()
-        raise RuntimeError("replay failed")
+    feed = _ClosingFeed(live=[_bar(_LIVE_FROM)], history=[_history(_J - 5 * _MIN, _J)])
 
     with pytest.raises(RuntimeError, match="replay failed"):
-        await asyncio.create_task(_run_that_fails_after_warmup())
+        async with _run_feed(feed, ledger) as run_feed:
+            await run_feed.recent_closed_bars("SPY", use_rth=True)
+            raise RuntimeError("replay failed")
 
     await asyncio.wait_for(closed.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_the_run_reads_its_live_stream_once_and_only_for_its_symbol(ledger: SourceBarLedger) -> None:
+    feed = _JoiningFeed(live=[_bar(_LIVE_FROM)], history=[_history(_J - 5 * _MIN, _J)])
+
+    async with _run_feed(feed, ledger) as run_feed:
+        await run_feed.recent_closed_bars("SPY", use_rth=True)
+        with pytest.raises(ValueError, match="may not stream QQQ"):
+            await anext(run_feed.stream_bars("QQQ", use_rth=True))
+        await _first_live(run_feed, 1)
+        with pytest.raises(RuntimeError, match="released once"):
+            await anext(run_feed.stream_bars("SPY", use_rth=True))
 
 
 # ── the record ───────────────────────────────────────────────────────────────
@@ -510,3 +546,107 @@ def test_contradictory_startup_evidence_is_unrepresentable(fields: dict[str, obj
 
     with pytest.raises(ValidationError):
         RetainedStartupJoin.model_validate({"run_id": "r", "opened_at_ms": 1, **fields})
+
+
+# ── review fixes ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_bar_held_through_preparation_is_admitted_on_its_delivery_not_killed_at_release(
+    ledger: SourceBarLedger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review P1: release happens up to the budget later; judging delivery then refused the run."""
+    import app.services.feed_continuity_policy as fcp
+
+    recovered = _bar(_LIVE_FROM).model_copy(update={"provenance": "realtime_across_reconnect"})
+    feed = _JoiningFeed(live=[recovered], history=[_history(_J - 5 * _MIN, _J)])
+    monkeypatch.setattr(startup_join, "now_ms_utc", lambda: recovered.end_ms + 1_000)  # delivered on time
+    monkeypatch.setattr(fcp, "now_ms_utc", lambda: recovered.end_ms + 90_000)  # released 90 s later
+    run_feed = _run_feed(feed, ledger)
+
+    await run_feed.recent_closed_bars("SPY", use_rth=True)
+    live = await _first_live(run_feed, 1)
+
+    assert [bar.start_ms for bar in live] == [_LIVE_FROM]
+    assert all(event.kind != "refused" for event in ledger.events(run_id="run-1"))
+
+
+@pytest.mark.asyncio
+async def test_a_pause_pressed_while_the_run_prepared_governs_the_bars_it_held(
+    ledger: SourceBarLedger,
+) -> None:
+    """Review P1: a held bar's mode was captured when the pump pulled it, before the pause."""
+    from app.engine.strategy.signal_program import EvaluationMode
+    from app.services.bot_runtime import PauseAwareFeed
+
+    gate = asyncio.Event()
+    gate.set()  # running when the stream delivers the bar
+    source = _JoiningFeed(live=[_bar(_LIVE_FROM)], history=[_history(_J - 5 * _MIN, _J)])
+    run_feed = _run_feed(PauseAwareFeed(source, gate), ledger)  # type: ignore[arg-type]
+
+    await run_feed.recent_closed_bars("SPY", use_rth=True)
+    gate.clear()  # the operator pauses before the run takes the held bar
+    (bar,) = await _first_live(run_feed, 1)
+
+    assert run_feed.evaluation_mode_for(bar) is EvaluationMode.OBSERVE_ONLY
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_dies_after_the_seam_ends_preparation_with_its_own_error(
+    ledger: SourceBarLedger,
+) -> None:
+    """Review P2: the deadline kept asking history for a dead stream, then called it a history refusal."""
+
+    class _DiesAfterJoining(_JoiningFeed):
+        async def stream_bars(self, symbol, *, use_rth=True, continuity=None):  # type: ignore[no-untyped-def]
+            await continuity.record_event(
+                FeedContinuityEvent(
+                    kind="gap",
+                    cause="stream_joined",
+                    feed_id=self.feed_id,
+                    symbol=symbol,
+                    observed_at_ms=_LIVE_FROM,
+                    window_start_ms=_J,
+                    window_end_ms=_LIVE_FROM,
+                )
+            )
+            raise MarketDataFeedError("socket gone", reason="SOCKET_GONE_TEST")
+            yield _bar(_LIVE_FROM)  # pragma: no cover - makes this an async generator
+
+    feed = _DiesAfterJoining(live=[], history=[_history(_J - 5 * _MIN, _J - _MIN)])  # joined minute never arrives
+    run_feed = _run_feed(feed, ledger)
+
+    with pytest.raises(MarketDataFeedError, match="socket gone"):
+        await run_feed.recent_closed_bars("SPY", use_rth=True)
+
+    assert feed.fetches <= 1
+    record = ledger.startup_join(run_id="run-1")
+    assert record is not None and record.refused_at_ms is None and record.ready_at_ms is None
+
+
+@pytest.mark.asyncio
+async def test_closing_the_stream_does_not_swallow_the_callers_own_cancellation() -> None:
+    """Review P2: a Stop landing while the stream shuts down must still stop the run."""
+    shutting_down = asyncio.Event()
+
+    async def _slow_to_close() -> AsyncIterator[MarketDataBar]:
+        try:
+            yield _bar(_J)
+            await asyncio.Event().wait()
+        finally:
+            shutting_down.set()
+            await asyncio.sleep(0.2)
+
+    async def _retain(_bar: MarketDataBar, _at: int | None) -> None:
+        return None
+
+    buffer = LiveStartBuffer(_slow_to_close(), symbol="SPY", retain=_retain)
+    buffer.start()
+    await buffer.seam()
+
+    closing = asyncio.create_task(buffer.aclose())
+    await shutting_down.wait()
+    closing.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await closing

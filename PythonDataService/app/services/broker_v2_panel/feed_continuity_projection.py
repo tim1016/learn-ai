@@ -252,13 +252,19 @@ _STARTUP_JOIN_COPY: dict[str, tuple[str, str]] = {
         "Warmup history now reaches the live stream. The bot is replaying it and will take "
         "live bars next.",
     ),
+    "refused": (
+        "Refused while preparing",
+        "The run never traded. Why it was refused, and what that left at the broker, is under "
+        "its duty outcome.",
+    ),
     "ready": (
         "Ready: warmup met the live stream",
         "Warmup and live bars are contiguous. The bot trades the next on-time decision; any "
         "decision that fell due while it prepared was refused as late, never caught up.",
     ),
 }
-"""Operator copy for each startup-join state; a refusal reads ``WARMUP_REFUSAL_COPY``."""
+"""Operator copy for each startup-join state. A refusal's reason is stated once, on
+the duty outcome (``WARMUP_REFUSAL_COPY``); this view adds only what it could not fill."""
 
 
 def build_startup_join(
@@ -272,9 +278,8 @@ def build_startup_join(
     if join is None:
         return None
     if join.refused_at_ms is not None:
-        assert join.reason_code is not None  # the store's CHECK pairs them
         state = "refused"
-        label, explanation = WARMUP_REFUSAL_COPY[join.reason_code]
+        label, explanation = _STARTUP_JOIN_COPY[state]
     elif not running:
         return None
     else:

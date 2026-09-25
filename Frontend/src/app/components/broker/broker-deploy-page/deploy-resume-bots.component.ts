@@ -38,13 +38,15 @@ import { StartupJoinStatusComponent } from '../v2-panel/startup-join/startup-joi
 type WarmupJoinView = NonNullable<BotPanelView['warmup_join']>;
 
 /**
- * How often, and for how long, a resumed bot is re-read until it is ready or
- * has ended. Five minutes covers a minute waiting for the stream to join plus
- * the 180 s startup-join budget (#2410); a bot still waiting past that (a
- * symbol with no print yet) is left to its own panel.
+ * How often a resumed bot is re-read until it is ready or has ended, and how
+ * long to wait for its stream to join before leaving it to its own panel (a
+ * symbol with no print yet). Once the stream has joined, the page follows the
+ * run through the backend's own startup deadline, whatever it is configured
+ * to (#2410), plus a margin for the refusal to be recorded.
  */
 const WARMUP_POLL_MS = 2_000;
-const WARMUP_POLL_LIMIT = 150;
+const WARMUP_POLL_LIMIT = 45;
+const DEADLINE_MARGIN_MS = 30_000;
 
 /**
  * A stopped bot, the Resume its panel presents, and the runs its panel already
@@ -223,7 +225,12 @@ export class DeployResumeBotsComponent {
     priorRunIds: readonly string[],
   ): Promise<void> {
     let readAny = false;
-    for (let attempt = 0; attempt < WARMUP_POLL_LIMIT; attempt++) {
+    let followUntilMs: number | null = null;
+    for (
+      let attempt = 0;
+      attempt < WARMUP_POLL_LIMIT || (followUntilMs !== null && Date.now() < followUntilMs);
+      attempt++
+    ) {
       await new Promise((resolve) => setTimeout(resolve, WARMUP_POLL_MS));
       if (this.destroyed || seq !== this.resumeSeq) return;
       let panel: BotPanelView;
@@ -245,6 +252,7 @@ export class DeployResumeBotsComponent {
       const join = ownView(panel.warmup_join, priorRunIds);
       const startup = ownView(panel.startup_join, priorRunIds);
       const settled = endedSinceResume || startup?.state === 'ready';
+      if (startup?.deadline_ms != null) followUntilMs = startup.deadline_ms + DEADLINE_MARGIN_MS;
       this.outcome.update((current) =>
         current === null || current.sid !== sid
           ? current

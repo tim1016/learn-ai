@@ -2936,7 +2936,8 @@ def test_a_startup_refusal_names_what_history_did_not_return() -> None:
 
     assert view is not None and view.state == "refused"
     assert (view.missing_start_ms, view.missing_end_ms) == (_NOW - 120_000, _NOW - 60_000)
-    assert view.label == "Refused: warmup history unavailable"
+    # The reason is the duty outcome's to state; this view does not repeat it.
+    assert view.label == "Refused while preparing"
 
 
 def test_a_stopped_run_that_was_never_refused_shows_no_preparation() -> None:
@@ -3014,3 +3015,17 @@ def test_exposure_notices_are_only_for_startup_refusals() -> None:
     projection = replace(_rail_projection(orders=(_entry_order(),)), positions=_held(3.0))
 
     assert _notices(_refused_panel("FEED_DEATH"), projection) == []
+
+
+@pytest.mark.parametrize("broker_state", ["held", "pending_replace", "accepted_for_bidding", None])
+def test_an_entry_order_the_broker_has_not_finished_is_warned_about(broker_state: str | None) -> None:
+    """Review P2: any non-terminal state can still fill, including an order not yet acknowledged."""
+    order = replace(_entry_order(), broker_state=broker_state)
+
+    assert _notices(_refused_panel(), _rail_projection(orders=(order,))) == [
+        ("entry_order_working", "An entry order is still working")
+    ]
+
+
+def test_a_finished_entry_order_is_not_warned_about() -> None:
+    assert _notices(_refused_panel(), _rail_projection(orders=(_entry_order("canceled"),))) == []

@@ -41,10 +41,21 @@ from app.config import settings
 from app.marketdata.feed import (
     RESUME_HOLE_UNFILLED,
     WARMUP_HISTORY_UNAVAILABLE,
+    WARMUP_REFUSAL_REASONS,
     FeedContinuityEvent,
     MarketDataBar,
+    MarketDataFeed,
     MarketDataFeedError,
+    WarmupMinutesMissing,
 )
+from app.services.decision_session import RunDecisionSession
+from app.services.retained_tail_join import (
+    join_fresh_warmup,
+    join_retained_tail,
+    record_refused_resume_join,
+    retain_resume_join,
+)
+from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -96,18 +107,28 @@ class StartupDeadline:
             deadline_ms=known_at_ms + settings.STARTUP_JOIN_BUDGET_MS,
         )
 
-    async def run(self, attempt: Callable[[], Awaitable[T]], *, symbol: str) -> T:
+    async def run(
+        self,
+        attempt: Callable[[], Awaitable[T]],
+        *,
+        symbol: str,
+        abort: Callable[[], None] = lambda: None,
+    ) -> T:
         """Run ``attempt`` after the settle time, retrying until the deadline.
 
         A retryable refusal (history not there yet) is asked again every
         ``_RETRY_MS``; any other refusal propagates at once. An attempt still in
         flight at the deadline is cancelled rather than allowed to extend it.
         The refusal that ends the budget is the last attempt's, so the run's
-        record names what was still missing.
+        record names what was still missing. ``abort`` raises when the join is
+        moot -- the live stream it would meet has died -- and is asked before
+        every attempt and after every failure, so that failure is the run's
+        outcome, not a history refusal waited out to the deadline.
         """
         await _sleep_until(self.not_before_ms)
         attempts = 0
         while True:
+            abort()
             attempts += 1
             remaining_ms = self.deadline_ms - now_ms_utc()
             try:
@@ -118,6 +139,7 @@ class StartupDeadline:
                     reason=WARMUP_HISTORY_UNAVAILABLE,
                 ) from exc
             except MarketDataFeedError as exc:
+                abort()
                 if exc.reason not in RETRYABLE_REASONS or now_ms_utc() + _RETRY_MS >= self.deadline_ms:
                     raise
                 logger.warning(
@@ -156,19 +178,30 @@ class LiveStartBuffer:
     the ledger's single causal order over bars and continuity events: an event
     the feed records while producing a bar is journaled after every bar
     delivered before it.
+
+    Once released, the pump also asks the stream for the next bar only when
+    the run asks for one, so exactly one bar is in flight -- the same pull the
+    run's live loop had before it held anything. Reading ahead would tell the
+    feed a bar was consumed while the strategy had not yet decided on it.
     """
 
     def __init__(
         self,
         bars: AsyncIterator[MarketDataBar],
         *,
-        retain: Callable[[MarketDataBar], Awaitable[None]],
+        symbol: str,
+        retain: Callable[[MarketDataBar, int | None], Awaitable[None]],
     ) -> None:
+        self.symbol = symbol
         self._source = bars
         self._retain = retain
-        self._unretained: deque[MarketDataBar] = deque()
-        self._retained: deque[MarketDataBar] = deque()
+        # Held bars keep the instant the stream delivered them, which is what
+        # their delivery admission is judged against.
+        self._unretained: deque[tuple[MarketDataBar, int]] = deque()
+        # Each retained bar says whether it was held through preparation.
+        self._retained: deque[tuple[MarketDataBar, bool]] = deque()
         self._released = False
+        self._demand = asyncio.Event()
         self._changed = asyncio.Event()
         self._joined_minute_start_ms: int | None = None
         self._failure: BaseException | None = None
@@ -176,18 +209,7 @@ class LiveStartBuffer:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
-        """Start pumping; the pump never outlives the task that started it.
-
-        The run opens its stream in warmup but only reads it later, in its
-        live loop. A run that ends in between -- a replay error, a Stop during
-        preparation -- must not leave the subscription open, so the pump is
-        cancelled when its owning task finishes, however it finishes.
-        """
-        task = asyncio.create_task(self._pump(), name="live-start-buffer")
-        self._task = task
-        owner = asyncio.current_task()
-        if owner is not None:
-            owner.add_done_callback(lambda _owner: task.cancel())
+        self._task = asyncio.create_task(self._pump(), name="live-start-buffer")
 
     def note_event(self, event: FeedContinuityEvent) -> None:
         """Remember the minute the stream joined partway through, if this is that fact."""
@@ -214,31 +236,43 @@ class LiveStartBuffer:
                     joined_minute_start_ms=self._joined_minute_start_ms,
                 )
             if self._unretained:
-                return StreamSeam(live_from_ms=self._unretained[0].start_ms)
+                return StreamSeam(live_from_ms=self._unretained[0][0].start_ms)
             if self._ended:
-                self._raise_failure()
+                self.raise_if_failed()
                 raise MarketDataFeedError("the live stream ended before it said where it takes over")
             await self._wait()
 
+    @property
+    def released(self) -> bool:
+        """Whether the run has taken this stream; it is read once."""
+        return self._released
+
     async def release(self) -> None:
         """Retain every held bar in delivery order; the pump retains the rest as they come."""
+        if self._released:
+            raise RuntimeError("a run's live stream is released once")
+        # A stream that died while the run prepared is the run's outcome; it
+        # must not be released, stamped ready, and only then fail.
+        self.raise_if_failed()
         while self._unretained:
-            bar = self._unretained.popleft()
-            await self._retain(bar)
-            self._retained.append(bar)
+            bar, delivered_at_ms = self._unretained.popleft()
+            await self._retain(bar, delivered_at_ms)
+            self._retained.append((bar, True))
         # No await between the loop's last check and this flip, so a bar the
         # pump takes after it is retained by the pump, never held.
         self._released = True
 
-    async def bars(self) -> AsyncIterator[MarketDataBar]:
-        """Every retained bar, in delivery order. Call after :meth:`release`."""
+    async def bars(self) -> AsyncIterator[tuple[MarketDataBar, bool]]:
+        """Every retained bar in delivery order, and whether it was held. Call after :meth:`release`."""
         while True:
             while self._retained:
                 yield self._retained.popleft()
             if self._ended:
-                self._raise_failure()
+                self.raise_if_failed()
                 return
-            await self._wait()
+            self._changed.clear()
+            self._demand.set()
+            await self._changed.wait()
 
     async def aclose(self) -> None:
         task = self._task
@@ -248,26 +282,41 @@ class LiveStartBuffer:
         try:
             await task
         except asyncio.CancelledError:
-            if not task.cancelled():
+            # The pump's own cancellation is the point; the caller's -- a Stop
+            # landing while the stream shuts down -- must still propagate.
+            current = asyncio.current_task()
+            if not task.cancelled() or (current is not None and current.cancelling()):
                 raise
 
     async def _wait(self) -> None:
         self._changed.clear()
         await self._changed.wait()
 
-    def _raise_failure(self) -> None:
+    def raise_if_failed(self) -> None:
+        """Raise the stream's own failure, if it has failed."""
         if self._failure is not None:
             raise self._failure
 
     async def _pump(self) -> None:
         try:
             async with aclosing(self._source) as source:
-                async for bar in source:
+                while True:
                     if self._released:
-                        await self._retain(bar)
-                        self._retained.append(bar)
+                        await self._demand.wait()
+                        self._demand.clear()
+                    try:
+                        bar = await anext(source)
+                    except StopAsyncIteration:
+                        break
+                    if self._released:
+                        # Retained as it is delivered: admitted against now.
+                        await self._retain(bar, None)
+                        self._retained.append((bar, False))
+                        # This bar answers the run's outstanding ask, even one
+                        # made while it was already in flight.
+                        self._demand.clear()
                     else:
-                        self._unretained.append(bar)
+                        self._unretained.append((bar, now_ms_utc()))
                     self._changed.set()
         except asyncio.CancelledError:
             raise
@@ -279,9 +328,93 @@ class LiveStartBuffer:
             self._changed.set()
 
 
+async def warm_through_seam(
+    live: LiveStartBuffer,
+    source: MarketDataFeed,
+    ledger: SourceBarLedger,
+    *,
+    run_id: str,
+    session: RunDecisionSession,
+    symbol: str,
+    lookback_days: int,
+) -> list[MarketDataBar]:
+    """Wait for the stream to join, then warm exactly through its seam; every step is stamped.
+
+    A run with retained bars (a resume) joins them to the seam (#2314); one
+    without warms on the sealed lookback. Either join is retried under the
+    run's one deadline, and only its final answer is recorded -- history not
+    published yet is not the run's verdict. A refusal is stamped with the
+    interval history did not return, when it can say, before it is raised.
+    Returns every warmup bar, unfiltered; the caller applies its session.
+    """
+    seam = await live.seam()
+    deadline = StartupDeadline.for_seam(seam, known_at_ms=now_ms_utc())
+    ledger.record_startup_seam(
+        run_id=run_id,
+        live_from_ms=seam.live_from_ms,
+        joined_minute_start_ms=seam.joined_minute_start_ms,
+        deadline_ms=deadline.deadline_ms,
+    )
+    retained = ledger.bars(provider=source.feed_id, symbol=symbol)
+    try:
+        if retained:
+            join = await deadline.run(
+                lambda: join_retained_tail(
+                    source,
+                    symbol=symbol,
+                    session=session,
+                    retained_end_ms=retained[-1].end_ms,
+                    now_ms=seam.live_from_ms,
+                    lookback_days=lookback_days,
+                    joined_minute_start_ms=seam.joined_minute_start_ms,
+                ),
+                symbol=symbol,
+                abort=live.raise_if_failed,
+            )
+            rows = retain_resume_join(ledger, run_id=run_id, retained=retained, join=join)
+            warmup = [row.to_market_bar() for row in rows]
+        else:
+            warmup = await deadline.run(
+                lambda: join_fresh_warmup(
+                    source,
+                    symbol=symbol,
+                    session=session,
+                    live_from_ms=seam.live_from_ms,
+                    joined_minute_start_ms=seam.joined_minute_start_ms,
+                    lookback_days=lookback_days,
+                ),
+                symbol=symbol,
+                abort=live.raise_if_failed,
+            )
+            for bar in warmup:
+                ledger.append_history(bar, run_id=run_id)
+    except MarketDataFeedError as exc:
+        if exc.reason in WARMUP_REFUSAL_REASONS:
+            if retained:
+                record_refused_resume_join(
+                    ledger,
+                    run_id=run_id,
+                    retained_end_ms=retained[-1].end_ms,
+                    joined_at_ms=seam.live_from_ms,
+                    reason_code=exc.reason,
+                )
+            missing = exc if isinstance(exc, WarmupMinutesMissing) else None
+            ledger.mark_startup_refused(
+                run_id=run_id,
+                at_ms=now_ms_utc(),
+                reason_code=exc.reason,
+                missing_start_ms=None if missing is None else missing.missing_start_ms,
+                missing_end_ms=None if missing is None else missing.missing_end_ms,
+            )
+        raise
+    ledger.mark_startup_history_joined(run_id=run_id, at_ms=now_ms_utc())
+    return warmup
+
+
 __all__ = [
     "RETRYABLE_REASONS",
     "LiveStartBuffer",
     "StartupDeadline",
     "StreamSeam",
+    "warm_through_seam",
 ]

@@ -126,6 +126,30 @@ class RetainedSourceBar(BaseModel):
             continuity_event_ref=bar.continuity_event_ref,
         )
 
+    def to_market_bar(self) -> MarketDataBar:
+        """The observation this row retains, provenance and continuity chain included.
+
+        A run warms on these rows with their provenance; dropping it would let a
+        rebuilt run -- or its replay -- treat a reconnect-produced or history
+        bar as an ordinary live one (ruling P4, #2314).
+        """
+        return MarketDataBar(
+            symbol=self.symbol,
+            start_ms=self.start_ms,
+            end_ms=self.end_ms,
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            volume=self.volume,
+            fetched_at_ms=self.fetched_at_ms,
+            feed_id=self.provider,
+            session_phase=self.session_phase,
+            provenance=self.provenance,
+            authorization_id=self.authorization_id,
+            continuity_event_ref=self.continuity_event_ref,
+        )
+
 
 class RetainedContinuityEvent(FeedContinuityEvent):
     """One durable continuity fact, with its row identity and journal position.

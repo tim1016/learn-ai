@@ -177,25 +177,7 @@ def to_trade_bar(bar: RetainedSourceBar) -> TradeBar:
 
 
 def to_market_bar(bar: RetainedSourceBar) -> MarketDataBar:
-    return MarketDataBar(
-        symbol=bar.symbol,
-        start_ms=bar.start_ms,
-        end_ms=bar.end_ms,
-        open=bar.open,
-        high=bar.high,
-        low=bar.low,
-        close=bar.close,
-        volume=bar.volume,
-        fetched_at_ms=bar.fetched_at_ms,
-        feed_id=bar.provider,
-        session_phase=bar.session_phase,
-        # The live run warmed on these rows with their provenance; dropping it
-        # would replay a history bucket as live-decided and flag its candidate
-        # as a crash artifact the live journal never recorded (#2314).
-        provenance=bar.provenance,
-        authorization_id=bar.authorization_id,
-        continuity_event_ref=bar.continuity_event_ref,
-    )
+    return bar.to_market_bar()
 
 
 def replay_provider_for(ledger: SourceBarLedger, symbol: str) -> str:

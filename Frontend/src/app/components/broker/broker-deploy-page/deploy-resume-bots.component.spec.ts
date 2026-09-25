@@ -257,6 +257,28 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     expect(screen.queryByText('Time remaining before refusal')).toBeNull();
   });
 
+  it('keeps following a filling run until the backend deadline, however long it is configured', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(RESUMED_AT_MS);
+    const filling = resumedPanel({
+      startup_join: startup({
+        state: 'filling',
+        label: 'Preparing: filling the minutes before the live stream from IBKR history',
+        deadline_ms: RESUMED_AT_MS + 600_000,
+      }),
+    });
+    const service = lane(() => Promise.resolve(filling));
+    const { fixture } = await renderSection(service);
+    await settle(fixture);
+
+    await user().click(screen.getByRole('button', { name: 'Resume' }));
+    await settle(fixture, 2_000 * 100);
+
+    // Past the 45 reads the page gives a stream that has not joined, still inside the deadline.
+    expect(service.getPanel.mock.calls.length).toBeGreaterThan(90);
+    expect(screen.queryByText(/still preparing/)).toBeNull();
+  });
+
   it('says a refused resume left a position it is not managing', async () => {
     vi.useFakeTimers();
     const base = fakeBotPanelView();
@@ -327,7 +349,7 @@ describe('DeployResumeBotsComponent (#2314)', () => {
     await settle(fixture);
 
     await user().click(screen.getByRole('button', { name: 'Resume' }));
-    await settle(fixture, 2_000 * 150);
+    await settle(fixture, 2_000 * 45);
 
     expect(screen.getByText(/could not read the bot after Resume/)).toBeTruthy();
   });

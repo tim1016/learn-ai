@@ -26,8 +26,9 @@ where that warmup began so the replay proof replays the same bars.
 "The present" is the live stream's seam (#2410): the run subscribes before it
 warms up, and both joins here -- a resumed run's, and a fresh run's
 (:func:`join_fresh_warmup`) -- run exactly through where that stream takes
-over, owing the minute it joined partway through. ``startup_join`` orchestrates
-the wait, the settle time and the deadline these joins are retried under.
+over, owing the minute it joined partway through. Each is a single attempt;
+``startup_join.warm_through_seam`` retries them under the run's deadline and
+records the outcome.
 """
 
 from __future__ import annotations
@@ -40,17 +41,16 @@ from app.marketdata.feed import (
     RESUME_HOLE_AFTER_HOURS,
     RESUME_HOLE_UNFILLED,
     WARMUP_HISTORY_UNAVAILABLE,
-    WARMUP_REFUSAL_REASONS,
     MarketDataBar,
     MarketDataFeed,
     MarketDataFeedError,
     WarmupMinutesMissing,
+    WarmupRefusalReason,
     warmup_window_start_ms,
 )
 from app.services.decision_session import RunDecisionSession
 from app.services.session_authority import declared_session_bounds
 from app.services.source_bar_ledger import RetainedSourceBar, RetainedWarmupJoin, SourceBarLedger
-from app.services.startup_join import StartupDeadline, StreamSeam
 from app.utils.session_anchors import et_date_at_ms
 
 _MINUTE_MS = 60_000
@@ -139,8 +139,8 @@ def require_owed_minutes(
             f"IBKR history returned {len(owed) - len(missing)} of the {len(owed)} {symbol} "
             f"minutes the run owes (first missing closes at {missing[0]}); {consequence}",
             reason=reason,
-            first_missing_end_ms=missing[0],
-            last_missing_end_ms=missing[-1],
+            missing_start_ms=missing[0] - _MINUTE_MS,
+            missing_end_ms=missing[-1],
         )
 
 
@@ -149,10 +149,14 @@ async def join_fresh_warmup(
     *,
     symbol: str,
     session: RunDecisionSession,
-    seam: StreamSeam,
+    live_from_ms: int,
+    joined_minute_start_ms: int | None,
     lookback_days: int,
 ) -> list[MarketDataBar]:
-    """A fresh run's warmup: the sealed lookback of history, through the seam and no further.
+    """One attempt at a fresh run's warmup: the sealed lookback, through the seam and no further.
+
+    ``live_from_ms`` is where the live stream takes over; ``joined_minute_start_ms``
+    the minute it joined partway through, if it did (``StreamSeam``).
 
     History closing after the seam is the live stream's, which delivers it;
     keeping it here too would feed that minute twice. The one minute owed is
@@ -163,12 +167,10 @@ async def join_fresh_warmup(
     the source's own coverage rule, exactly as before.
     """
     history = await source.recent_closed_bars(symbol, use_rth=False, lookback_days=lookback_days)
-    bars = [bar for bar in history if bar.end_ms <= seam.live_from_ms]
+    bars = [bar for bar in history if bar.end_ms <= live_from_ms]
     require_owed_minutes(
         bars,
-        owed_joined_minute_end(
-            session, joined_minute_start_ms=seam.joined_minute_start_ms, after_ms=0
-        ),
+        owed_joined_minute_end(session, joined_minute_start_ms=joined_minute_start_ms, after_ms=0),
         symbol=symbol,
         reason=WARMUP_HISTORY_UNAVAILABLE,
         consequence="the run's first decisions would rest on indicators that skipped them",
@@ -285,56 +287,21 @@ async def join_retained_tail(
     )
 
 
-async def warmup_rows_after_join(
-    source: MarketDataFeed,
+def retain_resume_join(
     ledger: SourceBarLedger,
     *,
     run_id: str,
-    session: RunDecisionSession,
-    symbol: str,
     retained: Sequence[RetainedSourceBar],
-    lookback_days: int,
-    seam: StreamSeam,
-    deadline: StartupDeadline,
+    join: RetainedTailJoin,
 ) -> list[RetainedSourceBar]:
-    """Join a resumed run's retained bars to its live stream's seam, record it, and return what it warms on.
+    """Retain a resumed run's fill with the join that explains it, and return what it warms on.
 
-    The join is retried under the run's startup ``deadline`` (#2410), and only
-    its final answer is recorded: history not published yet is not the run's
-    verdict. The backfill and its join commit in one ledger transaction; a
-    refusal is recorded before it is raised, so the run's evidence says why it
-    never decided. The rows returned are every retained row plus the backfill
-    that open at or after the instance's warm floor: a hole that outran the
-    lookback (this run's, or an earlier run's) warmed from history alone, and
-    nothing before that point is replayed again.
+    The backfill and its join commit in one ledger transaction. The rows
+    returned are every retained row plus the backfill that open at or after
+    the instance's warm floor: a hole that outran the lookback (this run's, or
+    an earlier run's) warmed from history alone, and nothing before that
+    point is replayed again.
     """
-    retained_end_ms = retained[-1].end_ms
-    joined_at_ms = seam.live_from_ms
-    try:
-        join = await deadline.run(
-            lambda: join_retained_tail(
-                source,
-                symbol=symbol,
-                session=session,
-                retained_end_ms=retained_end_ms,
-                now_ms=joined_at_ms,
-                lookback_days=lookback_days,
-                joined_minute_start_ms=seam.joined_minute_start_ms,
-            ),
-            symbol=symbol,
-        )
-    except MarketDataFeedError as exc:
-        if exc.reason in WARMUP_REFUSAL_REASONS:
-            ledger.record_warmup_join(
-                RetainedWarmupJoin(
-                    run_id=run_id,
-                    outcome="refused",
-                    retained_end_ms=retained_end_ms,
-                    joined_at_ms=joined_at_ms,
-                    reason_code=exc.reason,
-                )
-            )
-        raise
     filled_window = (
         {}
         if not join.filled
@@ -349,14 +316,34 @@ async def warmup_rows_after_join(
         RetainedWarmupJoin(
             run_id=run_id,
             outcome="filled" if join.filled else "contiguous",
-            retained_end_ms=retained_end_ms,
-            joined_at_ms=joined_at_ms,
+            retained_end_ms=join.retained_end_ms,
+            joined_at_ms=join.joined_at_ms,
             warm_from_ms=join.warm_from_ms,
             **filled_window,
         ),
     )
     floor_ms = ledger.warm_floor_ms(run_id=run_id)
     return [row for row in (*retained, *filled) if floor_ms is None or row.start_ms >= floor_ms]
+
+
+def record_refused_resume_join(
+    ledger: SourceBarLedger,
+    *,
+    run_id: str,
+    retained_end_ms: int,
+    joined_at_ms: int,
+    reason_code: WarmupRefusalReason,
+) -> None:
+    """Record why a resumed run's hole could not be joined, so its evidence says why it never decided."""
+    ledger.record_warmup_join(
+        RetainedWarmupJoin(
+            run_id=run_id,
+            outcome="refused",
+            retained_end_ms=retained_end_ms,
+            joined_at_ms=joined_at_ms,
+            reason_code=reason_code,
+        )
+    )
 
 
 __all__ = [
@@ -366,6 +353,7 @@ __all__ = [
     "join_retained_tail",
     "owed_joined_minute_end",
     "owed_regular_minute_ends",
+    "record_refused_resume_join",
     "require_owed_minutes",
-    "warmup_rows_after_join",
+    "retain_resume_join",
 ]

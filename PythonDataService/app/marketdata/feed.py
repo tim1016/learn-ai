@@ -78,17 +78,15 @@ Warming across the hole would decide on indicators that skipped it."""
 class WarmupMinutesMissing(MarketDataFeedError):
     """A warmup refusal that can name the minutes history did not return (#2410).
 
-    ``first_missing_end_ms``..``last_missing_end_ms`` are the closes of the
-    first and last owed minutes absent from what history returned, so the
-    run's record can say exactly which interval it could not fill.
+    ``missing_start_ms``..``missing_end_ms`` runs from the open of the first
+    owed minute absent from what history returned to the close of the last,
+    so the run's record can say exactly which interval it could not fill.
     """
 
-    def __init__(
-        self, message: str, *, reason: str, first_missing_end_ms: int, last_missing_end_ms: int
-    ) -> None:
+    def __init__(self, message: str, *, reason: str, missing_start_ms: int, missing_end_ms: int) -> None:
         super().__init__(message, reason=reason)
-        self.first_missing_end_ms = first_missing_end_ms
-        self.last_missing_end_ms = last_missing_end_ms
+        self.missing_start_ms = missing_start_ms
+        self.missing_end_ms = missing_end_ms
 
 
 def warmup_window_start_ms(lookback_days: int, *, now_ms: int) -> int:
