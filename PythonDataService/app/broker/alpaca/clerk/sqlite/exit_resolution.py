@@ -662,9 +662,11 @@ def _raise_if_working_past_session(
     keeps custody of the order. The
     EXIT is not failed and its entry not released — the order may still
     execute — so the watchdog finds no free entry and re-drives nothing. The
-    copy holds no clock value, so a later pass re-raises it unchanged.
+    copy holds no clock value, so a later pass re-raises it unchanged. The
+    session is dated from the latest send: an order proven absent after a
+    lost submit is legitimately sent again, possibly the next day.
     """
-    submitted = repo.first_order_transition(
+    submitted = repo.last_order_transition(
         order_ref=reducing.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
     )
     if submitted is None:
@@ -1752,7 +1754,9 @@ def priced_reduction_reference_price(repo: ClerkSqliteRepository, order_ref: str
         return None
     created = _reducing_order_facts(repo, order_ref)
     if created.priced_by is not None:
-        return created.reference_price()
+        return reduction_touch(
+            OrderSide(created.side.lower()), bid=created.reference_bid, ask=created.reference_ask
+        )
     facts = _accepted_facts(repo, order.effect_operation_id)
     confirmed = facts.reducing_shape()
     if confirmed is None:

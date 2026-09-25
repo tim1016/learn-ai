@@ -165,7 +165,7 @@ def test_after_the_close_on_an_authority_with_no_window_the_button_says_what_the
     assert blocker.condition.id == "EXTENDED_HOURS_PRICING_UNAVAILABLE"
     assert blocker.headline == verdict.explanation
     assert blocker.detail == verdict.next_step
-    assert "No trading session is open" not in blocker.headline
+    assert "No trading session would be open" not in blocker.headline
     assert blocker.disposition == "wait"
     assert blocker.primary_move is None
     assert blocker.condition.evidence == {"available_at_ms": verdict.available_at_ms}

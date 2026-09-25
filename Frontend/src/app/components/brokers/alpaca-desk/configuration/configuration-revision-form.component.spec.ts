@@ -62,8 +62,11 @@ describe('ConfigurationRevisionFormComponent', () => {
       within(offsets).getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
     ).toBeTruthy();
     expect(screen.queryByRole('spinbutton', { name: 'Daily loss fraction' })).toBeNull();
-    const note = within(offsets).getByText(/an exit the\s+exit offset/);
-    expect(note.textContent).toMatch(/a short cover goes\s+the exit offset above it/);
+    const note = within(offsets).getByText(/an exit the\s+exit\s+offset/);
+    expect(note.textContent).toMatch(/a short entry goes the\s+entry offset below it/);
+    expect(note.textContent).toMatch(/a short cover the exit offset above it/);
+    expect(note.textContent).toMatch(/decision bar's close for an order placed as the bot decides/);
+    expect(note.textContent).toMatch(/the live bid \(sell\)\s+or ask \(buy\) for an exit priced later/);
     expect(note.textContent).toMatch(/will not Start until both are\s+set/);
     expect(note.textContent).toMatch(/will not Resume while it holds no position/);
     expect(note.textContent).toMatch(/a run still holding a position\s+always resumes/);

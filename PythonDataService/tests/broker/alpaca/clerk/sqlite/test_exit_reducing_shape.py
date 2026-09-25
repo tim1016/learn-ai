@@ -185,7 +185,7 @@ def test_a_reducing_order_row_written_before_send_time_pricing_parses_and_hashes
     parsed = ExitReducingOrderCreatedFacts.from_facts_json(written_before)
 
     assert parsed.priced_by is None
-    assert parsed.reference_price() is None
+    assert parsed.reference_bid is None and parsed.reference_ask is None
     assert parsed.to_facts_json() == written_before
 
 
@@ -211,7 +211,6 @@ def test_a_leg_the_clerk_priced_at_send_carries_its_provenance_in_the_reducing_f
         '"valid_until_ms":1700096400000}'
     )
     assert ExitReducingOrderCreatedFacts.from_facts_json(priced.to_facts_json()) == priced
-    assert priced.reference_price() == 100.00  # the bid, for a sell
 
 
 async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitted_identically(

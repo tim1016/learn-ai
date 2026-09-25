@@ -113,7 +113,11 @@ class AlpacaSettings(BaseSettings):
     # revision's own pair (``paper_xh_allowances``, #2440), bound here by
     # ``profile/runtime_context.py`` — the ``live_`` prefix names where they
     # came from first, not a live-only value. Neither is required on paper;
-    # unset means "not configured", which admission refuses, never zero.
+    # unset means "not configured", never zero. Admission refuses it for an
+    # extended-hours run and, where a window is declared, for a regular-hours
+    # run's Start or the Resume of a flat one; a regular-hours run still
+    # holding a position resumes, and its after-close exit is then held back
+    # (``run_admission``, #2440).
     # Upper-bounded because 10 000 bps is 100 %: a sell allowance at or past it
     # floors the marketable anchor to zero or below, which is not a price. The
     # anchor refuses such a leg too (`EXTENDED_ANCHOR_UNPRICEABLE`); this stops

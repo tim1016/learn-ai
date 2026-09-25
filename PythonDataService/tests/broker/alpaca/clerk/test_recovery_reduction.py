@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     realized_slippage_bps,
     realized_slippage_cost,
     recovery_reduction_shape,
+    reducing_leg_session_end_ms,
     reducing_leg_verdict,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
@@ -379,6 +380,37 @@ def test_a_confirmed_limit_is_never_sent_past_the_session_it_was_priced_in(
     now_ms: int, valid_until_ms: int | None, verdict: str
 ) -> None:
     assert reducing_leg_verdict(extended_hours=True, valid_until_ms=valid_until_ms, now_ms=now_ms) == verdict
+
+
+_HALF_DAY = date(2026, 11, 27)  # the day after Thanksgiving: the regular close is 13:00
+_SATURDAY = date(2026, 9, 5)
+
+
+@pytest.mark.parametrize(
+    ("extended_hours", "valid_until_ms", "sent_at_ms", "ends_at_ms"),
+    [
+        pytest.param(False, None, _at(9, 29) + 56_000, _at(16), id="market-sent-in-the-guard-band-before-the-open"),
+        pytest.param(False, None, _at(10, day=_HALF_DAY), _at(13, day=_HALF_DAY), id="market-on-a-half-day"),
+        pytest.param(False, None, _at(10, day=_SATURDAY), None, id="market-on-a-day-with-no-session"),
+        pytest.param(True, _at(9, 30), _at(7), _at(20), id="pre-market-limit-works-to-the-after-hours-close"),
+        pytest.param(True, _at(20), _at(10, day=_SATURDAY), _at(20), id="limit-on-a-day-with-no-session"),
+    ],
+)
+def test_a_sent_reducing_leg_ends_when_the_broker_stops_working_it(
+    extended_hours: bool, valid_until_ms: int | None, sent_at_ms: int, ends_at_ms: int | None
+) -> None:
+    """#2440 review: a market leg sent at 09:29:56 reaches the broker in the regular session.
+
+    It is sent on purpose inside the 5 s guard band before the open, so the
+    instant it was sent is pre-market; its end is still that day's regular
+    close, read from the calendar day rather than the send instant's phase.
+    """
+    assert (
+        reducing_leg_session_end_ms(
+            extended_hours=extended_hours, valid_until_ms=valid_until_ms, sent_at_ms=sent_at_ms
+        )
+        == ends_at_ms
+    )
 
 
 # --- realized slippage ------------------------------------------------------

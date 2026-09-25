@@ -55,6 +55,11 @@ class MarketDataAdmissionFact(BaseModel):
     extended_phase_proven: bool = False
 
 
+ExtendedHoursAdmissionState = Literal[
+    "NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"
+]
+
+
 class ExtendedHoursAdmissionFact(BaseModel):
     """Whether the active authority can clock and price a run outside regular hours (ADR 0059 D5).
 
@@ -66,7 +71,7 @@ class ExtendedHoursAdmissionFact(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"]
+    state: ExtendedHoursAdmissionState
     observed_at_ms: int = Field(ge=0)
 
 
