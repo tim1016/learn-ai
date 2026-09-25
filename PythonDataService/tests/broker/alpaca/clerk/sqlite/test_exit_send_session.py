@@ -43,7 +43,10 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_NOT_FLAT_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+)
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
@@ -561,6 +564,12 @@ def _next_attempt_at_ms(episode: dict) -> int | None:
     return json.loads(episode["facts_json"]).get("next_attempt_at_ms")
 
 
+def _open_unknown_outcome(repo: ClerkSqliteRepository) -> dict | None:
+    return repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=ORDER_OUTCOME_UNKNOWN_REASON_CODE, strategy_instance_id=SID
+    )
+
+
 async def test_a_market_leg_judged_within_the_guard_band_of_the_close_goes_out_as_an_after_hours_limit(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -761,6 +770,82 @@ async def test_a_reducing_order_still_working_past_its_session_tells_the_operato
     assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
 
 
+async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_attempt(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2440 review M1: the working-order alarm never overwrites the send-time rule's notice.
+
+    A market exit's submit is lost at 15:59; the Clerk restarts and resumes
+    at 16:10. The send-time rule refuses to replay the market leg after the
+    close: the EXIT fails, the entry is released, and the operator is told
+    the exit could not be sent and when the watchdog next tries. That order
+    never reached Alpaca, so nothing may then call it "still working", tell
+    the operator to cancel it at the broker, or drop the next attempt.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch())
+
+    _walk_clock_to(repo, _at(16, 10))  # past the regular close by more than the 5 min alarm grace
+    resumed = _FakeTrade(lookup_results=[None])
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch())
+
+    assert resumed.submit_calls == []
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_order(entry_ref) is None
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert episode["headline"] == (
+        "An exit could not be sent after its session ended; the position is still open"
+    )
+    assert "still working" not in episode["explanation"]
+    assert "cancel it there" not in episode["next_step"]
+    # The watchdog's next try: its 120 s re-drive age, inside after-hours.
+    assert _next_attempt_at_ms(episode) == _at(16, 12)
+    assert _open_unknown_outcome(repo) is None
+
+
+async def test_a_failed_lookup_past_the_session_raises_no_working_order_alarm(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2440 review M1: a lost lookup says nothing about the order, so it cannot be "still working".
+
+    An after-hours limit sent at 17:13, bound by 20:00; at 20:06 the exact
+    lookup fails. The order's outcome is unknown — that episode is what the
+    operator sees — and no ``EXIT_NOT_FLAT`` claims it is working at the broker.
+    """
+    _walk_clock_to(repo, _at(17, 13))
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(
+        repo,
+        entry_ref,
+        shape=LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=99.80,
+            extended_hours=True,
+            side=OrderSide.SELL,
+        ),
+        valid_until_ms=_at(20, 0),
+    )
+    sent = await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+    )
+    assert sent.reducing_order_ref is not None
+
+    _walk_clock_to(repo, _at(20, 6))
+    unobservable = _FakeTrade(lookup_error=BrokerUnavailable("down"))
+    await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch()
+    )
+
+    assert _exit_not_flat(repo) is None, "a failed lookup raised the still-working alarm"
+    assert _open_unknown_outcome(repo) is not None
+    assert repo.active_exit_for_order(entry_ref) is not None
+
+
 async def test_a_reducing_order_the_broker_refuses_tells_the_operator(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -809,14 +894,21 @@ async def test_a_lost_submit_is_never_resent_into_a_flat_position(
 
     Resending the recorded SELL 10 then would sell into a flat — or short —
     position. In the session and out of it alike, the EXIT proves
-    attributed-flat instead, recorded against the EXIT's primary entry exactly
-    as every other attributed-flat fold is.
+    attributed-flat instead — against the reducing order it would have
+    resent, because the lost submit left that exact identity's outcome
+    unknown, and only proof recorded against it closes the episode (#2440
+    review). Cited against the entry, the unknown outcome stayed open with
+    nothing left to resolve it, blocking new exposure and the lane's quiet
+    drain.
     """
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch())
+    first = await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch()
+    )
     assert len(lost.submit_calls) == 1
+    assert _open_unknown_outcome(repo) is not None
 
     # The attribution moved to flat while the order was lost (a correction,
     # an operator's own reduction) — the resume must read it, not the past.
@@ -831,7 +923,8 @@ async def test_a_lost_submit_is_never_resent_into_a_flat_position(
     flat = repo.first_effect_transition(
         effect_operation_id=effect_operation_id, transition_kind="EXIT_ATTRIBUTED_FLAT"
     )
-    assert flat is not None and flat["order_ref"] == entry_ref
+    assert flat is not None and flat["order_ref"] == first.reducing_order_ref
+    assert _open_unknown_outcome(repo) is None, "the lost submit's unknown outcome was stranded"
 
 
 async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(

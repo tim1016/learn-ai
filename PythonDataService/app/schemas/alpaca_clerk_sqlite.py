@@ -238,6 +238,9 @@ class ProjectedUncertaintyResponse(BaseModel):
     # watchdog's next re-drive, #2440): int64 ms UTC for the shared timestamp
     # display, never prose. ``None`` when nothing is scheduled.
     next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # The episode's recorded facts could not be read: its next attempt is
+    # unknown, not unscheduled (#2440 review). The row itself still projects.
+    facts_unreadable: bool = False
 
 
 class ProjectedReconciliationResponse(BaseModel):

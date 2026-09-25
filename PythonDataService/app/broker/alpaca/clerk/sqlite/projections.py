@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import sqlite3
 import threading
 from collections.abc import Iterable, Iterator
@@ -71,6 +72,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.utils.timestamps import Clock, now_ms_utc
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_OPERATION_LIMIT, MAX_OPERATION_LIMIT = 50, 100
 DEFAULT_RECEIPT_LIMIT, CURRENT_STATE_LIMIT = 20, 100
 DEFAULT_TIMELINE_PAGE_SIZE, MAX_TIMELINE_PAGE_SIZE = 25, 100
@@ -78,6 +81,52 @@ DEFAULT_TIMELINE_PAGE_SIZE, MAX_TIMELINE_PAGE_SIZE = 25, 100
 
 _json_string_tuple = partial(projection_helpers.json_string_tuple, error_type=ProjectionReadError)
 timeline_sequences = projection_helpers.timeline_sequences
+
+
+def _projected_uncertainty(row: sqlite3.Row, *, now_ms: int) -> ProjectedUncertainty:
+    """One open episode, projected from its columns and the facts only they cannot carry.
+
+    The facts carry one thing the columns do not — when the Clerk next tries
+    (#2440). A row whose facts cannot be read is still projected, flagged
+    ``facts_unreadable`` with no next attempt, and logged at error level: one
+    bad row fails loudly on its own and never blanks the whole custody read
+    (#2440 review).
+    """
+    try:
+        next_attempt_at_ms = UncertaintyRaisedFacts.from_facts_json(row["facts_json"]).next_attempt_at_ms
+        facts_unreadable = False
+    except (TypeError, ValueError):
+        logger.error(
+            "an open uncertainty's recorded facts cannot be read; projecting it without them",
+            extra={
+                "action": "uncertainty_facts_unreadable",
+                "uncertainty_id": row["uncertainty_id"],
+                "reason_code": row["reason_code"],
+                "strategy_instance_id": row["strategy_instance_id"],
+            },
+            exc_info=True,
+        )
+        next_attempt_at_ms = None
+        facts_unreadable = True
+    return ProjectedUncertainty(
+        uncertainty_id=row["uncertainty_id"],
+        scope=row["scope"],
+        severity=row["severity"],
+        blocks_new_exposure=bool(row["blocks_new_exposure"]),
+        allows_reduction=bool(row["allows_reduction"]),
+        custody_owner=row["custody_owner"],
+        strategy_instance_id=row["strategy_instance_id"],
+        reason_code=row["reason_code"],
+        headline=row["headline"],
+        explanation=row["explanation"],
+        operator_impact=row["operator_impact"],
+        next_step=row["next_step"],
+        observed_at_ms=row["observed_at_ms"],
+        evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
+        evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
+        next_attempt_at_ms=next_attempt_at_ms,
+        facts_unreadable=facts_unreadable,
+    )
 
 
 class SqliteClerkProjectionReader:
@@ -736,29 +785,7 @@ class SqliteClerkProjectionReader:
             f"FROM uncertainties WHERE {where} ORDER BY observed_at_ms DESC",
             params,
         ).fetchall()
-        return tuple(
-            ProjectedUncertainty(
-                uncertainty_id=row["uncertainty_id"],
-                scope=row["scope"],
-                severity=row["severity"],
-                blocks_new_exposure=bool(row["blocks_new_exposure"]),
-                allows_reduction=bool(row["allows_reduction"]),
-                custody_owner=row["custody_owner"],
-                strategy_instance_id=row["strategy_instance_id"],
-                reason_code=row["reason_code"],
-                headline=row["headline"],
-                explanation=row["explanation"],
-                operator_impact=row["operator_impact"],
-                next_step=row["next_step"],
-                observed_at_ms=row["observed_at_ms"],
-                evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
-                evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
-                next_attempt_at_ms=UncertaintyRaisedFacts.from_facts_json(
-                    row["facts_json"]
-                ).next_attempt_at_ms,
-            )
-            for row in rows
-        )
+        return tuple(_projected_uncertainty(row, now_ms=now_ms) for row in rows)
 
     def _execution_coverage_conflicts(
         self,

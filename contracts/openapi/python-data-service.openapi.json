@@ -29766,6 +29766,11 @@
             "title": "Explanation",
             "type": "string"
           },
+          "facts_unreadable": {
+            "default": false,
+            "title": "Facts Unreadable",
+            "type": "boolean"
+          },
           "headline": {
             "title": "Headline",
             "type": "string"

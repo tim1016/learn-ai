@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -215,6 +218,70 @@ def test_bot_uncertainty_does_not_leak_to_another_bot_projection(tmp_path: Path)
     assert unaffected is not None
     assert unaffected.uncertainties == ()
     assert unaffected.guidance.may_create_exposure is True
+
+
+def test_one_unreadable_uncertainty_is_projected_as_unreadable_without_failing_the_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2440 review: one episode whose facts cannot be read fails loudly, but only itself.
+
+    The custody read parses each open episode's facts for when the Clerk next
+    tries. A row it cannot parse — damaged, or written by a later schema —
+    used to fail the whole read, blanking every episode on the page. It is
+    now projected from its own columns, flagged unreadable, and logged at
+    error level; every other episode reads as before.
+    """
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=SID,
+        reason_code="EXIT_NOT_FLAT",
+        headline="An exit could not be sent after its session ended",
+        explanation="10 SPY is still held.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Let the automatic re-drive reduce it.",
+        evidence_refs=("order:exit",),
+        next_attempt_at_ms=1_788_422_400_000,
+    )
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=SID,
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        headline="SPY order outcome is unknown",
+        explanation="Alpaca has not proven the exact order terminal.",
+        operator_impact="Only SPY bot entries are paused.",
+        next_step="The Clerk will reconcile automatically.",
+        evidence_refs=("order:spy",),
+    )
+    repo._conn.execute(
+        "UPDATE uncertainties SET facts_json = ? WHERE reason_code = 'ORDER_OUTCOME_UNKNOWN'",
+        ('{"written_by_a_later_schema":true}',),
+    )
+    repo._conn.commit()
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        with caplog.at_level(logging.ERROR):
+            snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert snapshot is not None
+    by_reason = {item.reason_code: item for item in snapshot.uncertainties}
+    readable = by_reason["EXIT_NOT_FLAT"]
+    assert (readable.next_attempt_at_ms, readable.facts_unreadable) == (1_788_422_400_000, False)
+    unreadable = by_reason["ORDER_OUTCOME_UNKNOWN"]
+    assert (unreadable.next_attempt_at_ms, unreadable.facts_unreadable) == (None, True)
+    assert unreadable.headline == "SPY order outcome is unknown"
+    assert unreadable.blocks_new_exposure is True
+    (logged,) = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "uncertainty_facts_unreadable"
+    ]
+    assert logged.levelno == logging.ERROR
+    assert logged.__dict__["uncertainty_id"] == unreadable.uncertainty_id
 
 
 def test_timeline_cursor_is_stable_while_new_transitions_append(tmp_path: Path) -> None:

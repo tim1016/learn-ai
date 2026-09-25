@@ -517,6 +517,9 @@ class ExternalOrderAcknowledgedFacts:
         return cls(**json.loads(facts_json))
 
 
+_UNCERTAINTY_RAISED_DEFAULTS: Mapping[str, Any] = {"next_attempt_at_ms": None}
+
+
 @dataclass(frozen=True)
 class UncertaintyRaisedFacts:
     """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
@@ -545,10 +548,7 @@ class UncertaintyRaisedFacts:
     next_attempt_at_ms: int | None = None
 
     def to_facts_json(self) -> str:
-        payload = asdict(self)
-        if payload["next_attempt_at_ms"] is None:
-            del payload["next_attempt_at_ms"]
-        return canonicalize(payload)
+        return canonicalize(_omit_defaults(asdict(self), _UNCERTAINTY_RAISED_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> UncertaintyRaisedFacts:

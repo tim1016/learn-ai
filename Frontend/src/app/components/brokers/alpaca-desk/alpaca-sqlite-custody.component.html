@@ -50,6 +50,8 @@
                 Next automatic attempt:
                 <app-timestamp-display [value]="nextAttemptAtMs" mode="et" />
               </span>
+            } @else if (uncertainty.facts_unreadable) {
+              <span>Next automatic attempt: unknown; this notice's record could not be read.</span>
             }
             @if (uncertainty.reason_code === unfoldableReasonCode) {
               <app-unfoldable-order-review

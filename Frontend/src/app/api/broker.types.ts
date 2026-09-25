@@ -20513,6 +20513,11 @@ export interface components {
             evidence_refs: string[];
             /** Explanation */
             explanation: string;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /** Next Attempt At Ms */

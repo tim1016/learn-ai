@@ -20,8 +20,8 @@ can price it, or its order already has a broker identity, nothing is sent and
 the EXIT folds releasably through ``EXIT_NOT_FLAT`` — the operator-visible
 episode, never a silent queue, carrying when the watchdog next tries. A
 broker's outright refusal of the reducing order raises the same episode, and
-so does a sent reducing order still working well past its session
-(:func:`_raise_if_working_past_session`). What it is re-priced from is the one pricing
+so does a reducing order the broker still reports working well past its
+session (:func:`_raise_if_working_past_session`). What it is re-priced from is the one pricing
 seam the caller names (every caller passes its authority's
 ``recovery_pricing``); the live touch is read on the event loop, and only for
 a leg that must be re-priced. A leg the Clerk priced this way records who
@@ -34,7 +34,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from typing import Literal, NamedTuple
+from dataclasses import dataclass
+from typing import ClassVar, NamedTuple
 
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
@@ -93,6 +94,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
 )
+from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
@@ -115,16 +117,24 @@ from app.services.session_authority import scheduled_exchange_phase_at_ms
 
 logger = logging.getLogger(__name__)
 
+_REDRIVE_NEXT_STEP = (
+    "Flatten with a priced limit now, or let the automatic re-drive reduce it at the "
+    "next attempt shown with this notice."
+)
+"""What the operator can do about an EXIT that folded with exposure the watchdog re-drives.
+
+Shared by every such fold that carries ``next_attempt_at_ms`` — a leg the
+send-time rule could not send, a broker's refusal, an extended-hours limit
+that ended unfilled — so the notice's next step always points at the time it
+shows."""
+
 PROGRAM_EXIT_SESSION_ENDED = LegRefusal(
     reason_code="PROGRAM_EXIT_SESSION_ENDED",
     explanation=(
         "The session this exit's order was shaped for ended before the order could go "
         "out, and nothing is queued for the next open."
     ),
-    next_step=(
-        "Flatten with a priced limit now, or let the automatic re-drive reduce it at the "
-        "next attempt shown with this notice."
-    ),
+    next_step=_REDRIVE_NEXT_STEP,
 )
 """The deciding program's EXIT the send-time rule could not send (#2440).
 
@@ -354,9 +364,6 @@ def _finalize_claimed_exit(
     refreshed = repo.order(submitted_reducing.order_ref)
     assert refreshed is not None
     if not _is_terminal(refreshed.broker_state):
-        _raise_if_working_past_session(
-            repo, effect_operation_id=effect_operation_id, symbol=state.symbol, reducing=refreshed
-        )
         return _snapshot(repo, effect_operation_id)
     final_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
     if not position_quantity_is_nonzero(final_qty):
@@ -410,7 +417,7 @@ def _finalize_claimed_exit(
             f"without flattening the position; {final_qty:g} {state.symbol} is still held."
         )
         next_step = (
-            f"{PROGRAM_EXIT_SESSION_ENDED.next_step} Nothing was queued for the next open."
+            f"{_REDRIVE_NEXT_STEP} Nothing was queued for the next open."
         )
         next_attempt_at_ms = _next_redrive_at_ms(repo, pricing)
     else:
@@ -602,19 +609,51 @@ def _next_redrive_at_ms(repo: ClerkSqliteRepository, pricing: RecoveryPricing) -
     )
 
 
-def _raise_if_working_past_session(
+def _fold_observed_reducing_order(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
-    symbol: str,
+    reducing: OrderResource,
+    observed: BrokerOrder,
+    simulated_authority: bool,
+) -> None:
+    """Fold the broker's exact answer for the reducing order, and alarm if it outlived its session.
+
+    A later pass's exact lookup finding the order still working is the one
+    proof it outlived its session, so :func:`_raise_if_working_past_session`
+    runs only here: never for an order whose submit was lost or whose lookup
+    failed — an unknown outcome, not a working order — and never once the
+    EXIT has an outcome. An EXIT already folded for the operator (a
+    resubmission the send-time rule refused, say) keeps that notice and when
+    the watchdog next tries (#2440 review).
+    """
+    fold_order_evidence(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=observed,
+        simulated_authority=simulated_authority,
+    )
+    refreshed = repo.order(reducing.order_ref)
+    assert refreshed is not None
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    if _is_terminal(refreshed.broker_state) or effect.state not in NONTERMINAL_EFFECT_STATES:
+        return
+    _raise_if_working_past_session(repo, effect=effect, reducing=refreshed)
+
+
+def _raise_if_working_past_session(
+    repo: ClerkSqliteRepository,
+    *,
+    effect: EffectOperationResource,
     reducing: OrderResource,
 ) -> None:
-    """Tell the operator, once, that a sent reducing order outlived its session (#2440 review).
+    """Tell the operator, once, that a reducing order seen working outlived its session (#2440 review).
 
     Acceptance criterion 4 — an exit unfilled at the end of after-hours is
     told to the operator — otherwise rests on the broker ending the DAY
     extended-hours limit at the after-hours close and saying so. The Clerk
-    does not rely on it: a reducing order still working
+    does not rely on it: a reducing order the broker still reports working
     :data:`~recovery_reduction.REDUCING_ORDER_PAST_SESSION_GRACE_MS` after its
     session ended (its own bound, or the regular close for a market leg)
     raises ``EXIT_NOT_FLAT`` while the EXIT keeps custody of the order. The
@@ -626,20 +665,16 @@ def _raise_if_working_past_session(
         order_ref=reducing.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
     )
     if submitted is None:
-        return  # never sent: nothing can be working at the broker
+        return  # no recorded send to date its session from
     created = _reducing_order_facts(repo, reducing.order_ref)
-    valid_until_ms = created.valid_until_ms
-    if created.extended_hours and valid_until_ms is None:
-        valid_until_ms = _accepted_facts(repo, effect_operation_id).reducing_valid_until_ms
     session_end_ms = reducing_leg_session_end_ms(
         extended_hours=created.extended_hours,
-        valid_until_ms=valid_until_ms,
+        valid_until_ms=_created_leg_valid_until_ms(repo, effect.effect_operation_id, created),
         sent_at_ms=submitted["recorded_at_ms"],
     )
     if session_end_ms is None or repo.clock() < session_end_ms + REDUCING_ORDER_PAST_SESSION_GRACE_MS:
         return
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
+    symbol = created.symbol
     held = repo.position(effect.strategy_instance_id, symbol)
     if not position_quantity_is_nonzero(held):
         return
@@ -670,7 +705,7 @@ def _raise_if_working_past_session(
                 "action": "reducing_order_working_past_session",
                 "account_id": repo.account_id,
                 "strategy_instance_id": effect.strategy_instance_id,
-                "effect_operation_id": effect_operation_id,
+                "effect_operation_id": effect.effect_operation_id,
                 "order_ref": reducing.order_ref,
                 "session_end_ms": session_end_ms,
             },
@@ -762,7 +797,7 @@ def _leg_to_create(
             return None
         return _SendableLeg(shape, valid_until_ms, clerk_price=None)
 
-    def fold(refusal: LegRefusal | None) -> None:
+    def fold(not_repriced: _NotRepriced) -> None:
         _fold_unsendable_leg(
             repo,
             effect_operation_id=effect_operation_id,
@@ -770,20 +805,12 @@ def _leg_to_create(
             symbol=symbol,
             remaining_qty=remaining_qty,
             verdict=verdict,
-            refusal=refusal,
-            priced_by=facts.reducing_priced_by,
-            cause=(
-                "confirmed_for_other_side"
-                if operator_priced and recorded is not None and shape != recorded
-                else "confirmed"
-                if operator_priced
-                else "unpriced"
-            ),
+            not_repriced=not_repriced,
             pricing=pricing,
         )
 
     if operator_priced:
-        fold(None)
+        fold(_OperatorConfirmed(other_side=recorded is not None and shape != recorded))
         return None
     assert touch is not None  # answered _TOUCH_NEEDED above otherwise
     try:
@@ -794,7 +821,7 @@ def _leg_to_create(
             now_ms=send_arrival_ms(now_ms),
         )
     except ProgramLegRefused as exc:
-        fold(exc.refusal)
+        fold(_Unpriced(exc.refusal))
         return None
     resent = (
         _SendableLeg(regular_session_shape(reducing_side), None, clerk_price=None)
@@ -829,30 +856,23 @@ def _created_leg_may_be_sent(
     Nothing is sent to reduce a position that is already flat, in the session
     or out of it: a resubmission after an outage or a restart would otherwise
     sell into a flat — or short — position, so the EXIT proves attributed-flat
-    instead, exactly as it does before a reduction is created. The order
-    already carries its client identity, so its leg is never re-priced here:
-    it is replayed exactly or not at all. No longer sendable, it is not sent —
-    the EXIT folds releasably for the operator.
+    instead. The proof cites the reducing order being judged: a lost submit
+    left that exact identity's outcome unknown, and only proof recorded
+    against it closes that episode (#2440 review). The order already carries
+    its client identity, so its leg is never re-priced here: it is replayed
+    exactly or not at all. No longer sendable, it is not sent — the EXIT
+    folds releasably for the operator.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     remaining_qty = repo.position(effect.strategy_instance_id, created.symbol)
     if not position_quantity_is_nonzero(remaining_qty):
-        entries = [
-            order
-            for order in repo.orders_for_effect_operation(effect_operation_id)
-            if order.role == "ENTRY"
-        ]
-        _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
+        _fold_attributed_flat(repo, effect_operation_id, order_ref)
         return False
-    valid_until_ms = None
-    if created.extended_hours:
-        valid_until_ms = created.valid_until_ms
-        if valid_until_ms is None:
-            # Created before the order carried its own bound (#2440).
-            valid_until_ms = _accepted_facts(repo, effect_operation_id).reducing_valid_until_ms
     verdict = reducing_leg_verdict(
-        extended_hours=created.extended_hours, valid_until_ms=valid_until_ms, now_ms=repo.clock()
+        extended_hours=created.extended_hours,
+        valid_until_ms=_created_leg_valid_until_ms(repo, effect_operation_id, created),
+        now_ms=repo.clock(),
     )
     if verdict == "send":
         return True
@@ -863,18 +883,35 @@ def _created_leg_may_be_sent(
         symbol=created.symbol,
         remaining_qty=remaining_qty,
         verdict=verdict,
-        refusal=None,
         # Who priced the order being judged: the Clerk's own record when it
         # priced the leg at creation, otherwise the acceptance's.
-        priced_by=(
-            created.priced_by
-            if created.priced_by is not None
-            else _accepted_facts(repo, effect_operation_id).reducing_priced_by
+        not_repriced=_Created(
+            priced_by=(
+                created.priced_by
+                if created.priced_by is not None
+                else _accepted_facts(repo, effect_operation_id).reducing_priced_by
+            )
         ),
-        cause="created",
         pricing=pricing,
     )
     return False
+
+
+def _created_leg_valid_until_ms(
+    repo: ClerkSqliteRepository,
+    effect_operation_id: str,
+    created: ExitReducingOrderCreatedFacts,
+) -> int | None:
+    """Until when a created reducing leg may be sent: an extended-hours limit's bound, else ``None``.
+
+    The order's own recorded bound, or — for an order created before it
+    carried one (#2440) — the bound its EXIT's acceptance recorded.
+    """
+    if not created.extended_hours:
+        return None
+    if created.valid_until_ms is not None:
+        return created.valid_until_ms
+    return _accepted_facts(repo, effect_operation_id).reducing_valid_until_ms
 
 
 def _operator_priced(facts: ExitAcceptedFacts) -> bool:
@@ -888,15 +925,46 @@ def _operator_priced(facts: ExitAcceptedFacts) -> bool:
     return facts.reducing_confirmed_quantity is not None and facts.reducing_priced_by is None
 
 
-type _UnsendableCause = Literal["unpriced", "confirmed", "confirmed_for_other_side", "created"]
-"""Why an unsendable leg was not replaced by one priced for now.
+@dataclass(frozen=True)
+class _Unpriced:
+    """A price for now was tried and refused; ``refusal`` says why.
 
-``unpriced`` — a re-price was tried and refused (``refusal`` says why).
-``confirmed`` — an operator confirmed the price; the Clerk never replaces it.
-``confirmed_for_other_side`` — an operator's limit priced for the side the
-position no longer needs, which became a market leg outside the regular
-session. ``created`` — the order already carries its client identity, so it
-is resubmitted as created or not at all; nothing was re-priced."""
+    Only a leg nobody confirmed is re-priced: a deciding program's, a market
+    reduction, or a limit the Clerk priced itself for an automatic re-drive.
+    """
+
+    refusal: LegRefusal
+    cause: ClassVar[str] = "unpriced"
+
+
+@dataclass(frozen=True)
+class _OperatorConfirmed:
+    """An operator confirmed the price, and the Clerk never replaces it (#2007).
+
+    ``other_side``: the limit was priced for the side the position no longer
+    needs, so side reconciliation made it a market leg, which is not sent
+    outside the regular session.
+    """
+
+    other_side: bool
+    cause: ClassVar[str] = "confirmed"
+
+
+@dataclass(frozen=True)
+class _Created:
+    """The order already carries its client identity: resubmitted as created or not at all.
+
+    ``priced_by`` is who priced that order: ``"clerk"``, or ``None`` for the
+    price its EXIT's acceptance recorded (an operator's, or a deciding
+    program's).
+    """
+
+    priced_by: str | None
+    cause: ClassVar[str] = "created"
+
+
+type _NotRepriced = _Unpriced | _OperatorConfirmed | _Created
+"""Why an unsendable leg was not replaced by one priced for now: the fact its fold's copy is chosen from."""
 
 
 def _fold_unsendable_leg(
@@ -907,9 +975,7 @@ def _fold_unsendable_leg(
     symbol: str,
     remaining_qty: float,
     verdict: ReducingLegVerdict,
-    refusal: LegRefusal | None,
-    priced_by: str | None,
-    cause: _UnsendableCause,
+    not_repriced: _NotRepriced,
     pricing: RecoveryPricing,
 ) -> None:
     """Fold an EXIT whose leg can no longer be sent, releasably, through ``EXIT_NOT_FLAT``.
@@ -918,12 +984,9 @@ def _fold_unsendable_leg(
     what the operator sees on the bot page and in the lane's attention bell,
     and it is what the stuck-EXIT watchdog re-drives — pricing a limit itself
     in an extended session (#2229), at the time the episode carries (owner
-    decision 2026-09-25: the notice says when the sell will be tried).
-    ``refusal`` is why no price for now could replace the leg, when one was
-    tried; ``cause`` says whether one was. ``priced_by`` is who priced the leg
-    that could not be sent (``"clerk"``, or ``None`` for an operator's
-    confirmation): a trader is never told a price was confirmed that nobody
-    confirmed.
+    decision 2026-09-25: the notice says when the sell will be tried). The
+    copy is chosen from ``not_repriced`` alone, so a trader is never told a
+    price was confirmed that nobody confirmed.
     """
     logger.info(
         "an EXIT's reducing leg could not be sent in its session; folded releasably",
@@ -932,11 +995,13 @@ def _fold_unsendable_leg(
             "account_id": repo.account_id,
             "effect_operation_id": effect_operation_id,
             "verdict": verdict,
-            "cause": cause,
-            "reason_code": None if refusal is None else refusal.reason_code,
+            "cause": not_repriced.cause,
+            "reason_code": (
+                not_repriced.refusal.reason_code if isinstance(not_repriced, _Unpriced) else None
+            ),
         },
     )
-    why_not_repriced = _why_not_repriced(cause, refusal, arrival_ms=send_arrival_ms(repo.clock()))
+    why_not_repriced = _why_not_repriced(not_repriced, arrival_ms=send_arrival_ms(repo.clock()))
     held = f"{remaining_qty:g} {symbol} remains attributed to this strategy"
 
     def fold(*, summary_code: str, reason: str, headline: str, explanation: str, next_step: str) -> None:
@@ -968,56 +1033,57 @@ def _fold_unsendable_leg(
             next_step=PROGRAM_EXIT_SESSION_ENDED.next_step,
         )
         return
-    if cause == "confirmed_for_other_side":
+
+    def fold_expired_limit(subject: str, reason: str) -> None:
         fold(
-            summary_code=RECOVERY_MARKET_WAIT_ENDED.reason_code,
-            reason=(
-                "The confirmed limit was priced for the other side of the position; outside "
-                "the regular session the market reduction it became is not sent."
-            ),
-            headline="A confirmed flatten limit no longer fits the position",
-            explanation=(
-                f"The limit confirmed for {symbol} was priced for the other side of the "
-                "position, and outside the regular session the market reduction it became "
-                f"is not sent; {held}, and nothing is queued for the next open."
-            ),
-            next_step=RECOVERY_LIMIT_QUANTITY_CHANGED.next_step,
+            summary_code=RECOVERY_LIMIT_SESSION_ENDED.reason_code,
+            reason=reason,
+            headline="A recovery flatten limit expired unsent",
+            explanation=f"{subject} for {symbol} was not sent before its session ended; {held}.",
+            next_step=RECOVERY_LIMIT_SESSION_ENDED.next_step,
         )
-        return
-    if verdict == "wait":
-        fold(
-            summary_code=RECOVERY_MARKET_WAIT_ENDED.reason_code,
-            reason=RECOVERY_MARKET_WAIT_ENDED.explanation,
-            headline="An unpriced recovery reduction waited past the regular session",
-            explanation=(
-                f"The regular session ended while {remaining_qty:g} {symbol} waited "
-                "under a market reduction nothing had priced; it is not queued to "
-                "the next open."
-            ),
-            next_step=RECOVERY_MARKET_WAIT_ENDED.next_step,
-        )
-        return
-    if priced_by == "clerk":
-        subject = "The Clerk-priced limit"
-        reason = (
-            "The session this limit was priced in ended before it could be sent; a "
-            "price is never carried into another session."
-        )
-    else:
-        subject = "The limit confirmed"
-        reason = RECOVERY_LIMIT_SESSION_ENDED.explanation
-    fold(
-        summary_code=RECOVERY_LIMIT_SESSION_ENDED.reason_code,
-        reason=reason,
-        headline="A recovery flatten limit expired unsent",
-        explanation=f"{subject} for {symbol} was not sent before its session ended; {held}.",
-        next_step=RECOVERY_LIMIT_SESSION_ENDED.next_step,
-    )
+
+    match not_repriced:
+        case _OperatorConfirmed(other_side=True):
+            fold(
+                summary_code=RECOVERY_MARKET_WAIT_ENDED.reason_code,
+                reason=(
+                    "The confirmed limit was priced for the other side of the position; outside "
+                    "the regular session the market reduction it became is not sent."
+                ),
+                headline="A confirmed flatten limit no longer fits the position",
+                explanation=(
+                    f"The limit confirmed for {symbol} was priced for the other side of the "
+                    "position, and outside the regular session the market reduction it became "
+                    f"is not sent; {held}, and nothing is queued for the next open."
+                ),
+                next_step=RECOVERY_LIMIT_QUANTITY_CHANGED.next_step,
+            )
+        case _ if verdict == "wait":
+            fold(
+                summary_code=RECOVERY_MARKET_WAIT_ENDED.reason_code,
+                reason=RECOVERY_MARKET_WAIT_ENDED.explanation,
+                headline="An unpriced recovery reduction waited past the regular session",
+                explanation=(
+                    f"The regular session ended while {remaining_qty:g} {symbol} waited "
+                    "under a market reduction nothing had priced; it is not queued to "
+                    "the next open."
+                ),
+                next_step=RECOVERY_MARKET_WAIT_ENDED.next_step,
+            )
+        case _Created(priced_by="clerk") | _Unpriced():
+            # A recovery limit re-priced, and refused, was one nobody confirmed:
+            # the Clerk's own automatic re-drive price.
+            fold_expired_limit(
+                "The Clerk-priced limit",
+                "The session this limit was priced in ended before it could be sent; a "
+                "price is never carried into another session.",
+            )
+        case _OperatorConfirmed() | _Created():
+            fold_expired_limit("The limit confirmed", RECOVERY_LIMIT_SESSION_ENDED.explanation)
 
 
-def _why_not_repriced(
-    cause: _UnsendableCause, refusal: LegRefusal | None, *, arrival_ms: int
-) -> str:
+def _why_not_repriced(not_repriced: _NotRepriced, *, arrival_ms: int) -> str:
     """The sentence an unsendable leg's episode ends with: why nothing priced for now replaced it.
 
     Empty where the rest of the copy already says it (an operator's price is
@@ -1026,19 +1092,21 @@ def _why_not_repriced(
     synthetic authority, or one with no declared window — refuses that way at
     16:01 while after-hours is open, so the copy says what failed instead.
     """
-    if cause == "created":
-        return (
-            "Its order was already created, and a created order is sent as it was "
-            "created or not at all."
-        )
-    if refusal is None:
-        return ""
-    if (
-        refusal.reason_code == NO_SESSION_OPEN_REASON_CODE
-        and scheduled_exchange_phase_at_ms(arrival_ms) != "CLOSED"
-    ):
-        return "Extended-hours pricing is unavailable to this Clerk, so no limit was priced in its place."
-    return refusal.explanation
+    match not_repriced:
+        case _Created():
+            return (
+                "Its order was already created, and a created order is sent as it was "
+                "created or not at all."
+            )
+        case _OperatorConfirmed():
+            return ""
+        case _Unpriced(refusal) if (
+            refusal.reason_code == NO_SESSION_OPEN_REASON_CODE
+            and scheduled_exchange_phase_at_ms(arrival_ms) != "CLOSED"
+        ):
+            return "Extended-hours pricing is unavailable to this Clerk, so no limit was priced in its place."
+        case _Unpriced(refusal):
+            return refusal.explanation
 
 
 def _confirmed_quantity_still_holds(
@@ -1465,10 +1533,11 @@ async def _refresh_or_resume_reducing_order(
         return
     if observed is not None:
         await run(
-            lambda: fold_order_evidence(
+            lambda: _fold_observed_reducing_order(
                 repo,
                 effect_operation_id=effect_operation_id,
-                order=observed,
+                reducing=reducing,
+                observed=observed,
                 simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
             )
         )
@@ -1666,7 +1735,7 @@ def _fold_submit_refused(
             f"{created.symbol}, so nothing was sent; {held:g} {created.symbol} is still "
             "held. The broker's reason is on the order's evidence."
         ),
-        next_step=PROGRAM_EXIT_SESSION_ENDED.next_step,
+        next_step=_REDRIVE_NEXT_STEP,
         next_attempt_at_ms=_next_redrive_at_ms(repo, pricing),
     )
 

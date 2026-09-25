@@ -116,6 +116,9 @@ class ProjectedUncertainty:
     # When the Clerk will next try to resolve this on its own, when it can say
     # (the stuck-EXIT watchdog's next re-drive, #2440).
     next_attempt_at_ms: int | None = None
+    # The episode's recorded facts could not be read, so what only they carry
+    # (``next_attempt_at_ms``) is unknown, not absent (#2440 review).
+    facts_unreadable: bool = False
 
 
 @dataclass(frozen=True)
