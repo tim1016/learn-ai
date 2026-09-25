@@ -715,23 +715,46 @@ def _factor_file_over_captured_sessions(
     """Plan, price, and build the factor file over the symbol's captured sessions.
 
     Pure CPU and file I/O, so callers run it off the event loop (#1943). Only
-    the minute zips of the sessions that price a corporate action (and the
-    two anchor sessions) are read — a handful, not the whole history.
+    the minute zips of the sessions that price a corporate action and of the
+    two anchor sessions are read — a handful, not the whole history.
 
     A reference session without a readable regular-session close (a day
     captured with extended-hours bars only, or a zip that no longer reads)
     is re-planned as unpriced: its span ends there and the action it would
     have priced is left out, so only reads crossing that session are refused
     — never the whole symbol. Each one is logged.
+
+    An anchor session without one still needs a positive reference price
+    for its row. The zips from it inward are read one at a time up to the
+    nearest session that has a close, the one the builder would take for
+    the anchor from every session's closes
+    (``factor_files.build_factor_file_bytes``), so an actionless symbol
+    whose first and last captures are extended-hours only still builds.
     """
     captured = [r.trading_date for r in source_trade_records if r.trading_date]
     plan = plan_factor_file(captured, splits, dividends)
-    wanted = {*plan.reference_sessions, *plan.anchor_sessions}
+    read = {*plan.reference_sessions, *plan.anchor_sessions}
     closes, unreadable = factor_file_reference_closes(
-        [r for r in source_trade_records if r.trading_date in wanted],
+        [r for r in source_trade_records if r.trading_date in read],
         lake_root=lake_root,
         fallback_date=fallback_date,
     )
+    first_anchor, last_anchor = plan.anchor_sessions
+    inside = sorted(
+        (r for r in source_trade_records if r.trading_date and first_anchor <= r.trading_date <= last_anchor),
+        key=lambda r: r.trading_date or fallback_date,
+    )
+    for inward in (inside, inside[::-1]):  # from each anchor toward the other
+        for record in inward:
+            if record.trading_date not in read:
+                read.add(record.trading_date)
+                session_closes, session_unreadable = factor_file_reference_closes(
+                    [record], lake_root=lake_root, fallback_date=fallback_date
+                )
+                closes.update(session_closes)
+                unreadable.extend(session_unreadable)
+            if record.trading_date in closes:
+                break
     for failure in unreadable:
         logger.warning(
             "data_lake.ensure_data: factor file for %s cannot read %s: %s",
@@ -902,14 +925,19 @@ async def _process_factor_file_artifact(
                     "lease_timeout",
                     "factor_file sources changed while this build ran; retry rebuilds from the current sources",
                 )
+            # The same judgement must hold at the refresh: a sibling can
+            # still publish between that read and this one. The refresh
+            # takes the row only while it holds the contract judged above.
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=existing.id,
                 worker_id=_WORKER_ID,
                 lease_ttl_ms=_LEASE_TTL_MS,
+                expected_data_contract_hash=existing.data_contract_hash,
             )
             if prior is None:
                 return _failure(
-                    "lease_timeout", "factor_file rebuild raced with another worker; retry on a later ensure_data call"
+                    "lease_timeout",
+                    "factor_file row changed after this build read it; retry rebuilds from the current sources",
                 )
             artifact_id, lease_generation, outcome = existing.id, prior.new_lease_generation, "refreshed"
         else:

@@ -340,9 +340,14 @@ class FakeCatalog:
             last_error=row["last_error"],
         )
 
-    async def refresh_complete_artifact(self, artifact_id, worker_id, lease_ttl_ms) -> catalog_client.PriorArtifactMetadata | None:
+    async def refresh_complete_artifact(
+        self, artifact_id, worker_id, lease_ttl_ms, *, expected_data_contract_hash=None
+    ) -> catalog_client.PriorArtifactMetadata | None:
         row = self.rows.get(artifact_id)
         if row is None or row["status"] != "complete":
+            return None
+        # The real WHERE clause's compare-and-swap on the contract the caller read.
+        if expected_data_contract_hash is not None and row["data_contract_hash"] != expected_data_contract_hash:
             return None
         return catalog_client.PriorArtifactMetadata(
             prior_file_path=row["file_path"],

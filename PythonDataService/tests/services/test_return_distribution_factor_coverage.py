@@ -99,8 +99,12 @@ def _minute_aggs(days_without_regular_session: frozenset[date]):
     return _respond
 
 
+_TWO_FOR_ONE_SPLIT = {"ticker": SYMBOL, "execution_date": SPLIT_DAY.isoformat(), "split_from": 1, "split_to": 2}
+
+
 def _mock_provider(
     *,
+    splits: tuple[dict[str, object], ...] = (_TWO_FOR_ONE_SPLIT,),
     dividends: tuple[dict[str, object], ...] = (),
     days_without_regular_session: frozenset[date] = frozenset(),
 ) -> None:
@@ -109,20 +113,7 @@ def _mock_provider(
         side_effect=_minute_aggs(days_without_regular_session)
     )
     respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "status": "OK",
-                "results": [
-                    {
-                        "ticker": SYMBOL,
-                        "execution_date": SPLIT_DAY.isoformat(),
-                        "split_from": 1,
-                        "split_to": 2,
-                    }
-                ],
-            },
-        )
+        return_value=httpx.Response(200, json={"status": "OK", "results": list(splits)})
     )
     respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/dividends.*")).mock(
         return_value=httpx.Response(200, json={"status": "OK", "results": list(dividends)})
@@ -271,6 +262,31 @@ async def test_an_unpriced_session_in_the_lead_in_the_returns_never_read_does_no
     assert outcome.capture.status == "not_attempted"
     assert outcome.result.adjustment == "split_and_dividend"
     assert _split_day_close_to_close_pct(outcome) == pytest.approx(0.0, abs=1e-12, rel=0)
+
+
+@respx.mock
+async def test_an_actionless_symbol_whose_first_and_last_sessions_have_no_close_is_studied(
+    lake_root: Path,
+) -> None:
+    """Codex P2 on #2481: no corporate action at all, and the first and last
+    captured sessions hold pre-market bars only. The factor build read only
+    those two sessions, found no close to anchor its rows on, and failed, so
+    the capture failed and the study was refused (409) although every
+    returned day lay in one covered span. The anchor rows take the nearest
+    close inward, and the study runs adjusted."""
+    _mock_provider(splits=(), days_without_regular_session=frozenset({WIDE_START, WIDE_END}))
+
+    wide = await run_materialization.materialize_symbol_history(symbol=SYMBOL, start=WIDE_START, end=WIDE_END)
+    assert wide.status == "complete", wide.detail
+    assert read_recorded_factor_file(lake_root, market="usa", symbol=SYMBOL).spans == (
+        SessionRun(WIDE_START, WIDE_END),
+    )
+    assert _factor_rows(lake_root) == ["20240415,1,1,100", "20240712,1,1,50"]
+
+    outcome = await _study()
+
+    assert outcome.capture.status == "not_attempted"
+    assert outcome.result.adjustment == "split_and_dividend"
 
 
 @respx.mock

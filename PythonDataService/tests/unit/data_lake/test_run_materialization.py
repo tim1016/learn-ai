@@ -26,7 +26,7 @@ import respx
 from app.data_lake import catalog_client, run_materialization
 from app.data_lake.ensure_data import ensure_data, minute_bar_identity
 from app.data_lake.factor_files import FactorFileNotCoveringError, SessionRun, read_recorded_factor_file
-from app.data_lake.path_policy import lake_subpath
+from app.data_lake.path_policy import LeanFactorFilePath, lake_subpath
 from app.data_lake.run_materialization import (
     EngineRunMaterialization,
     LakeMaterializationError,
@@ -631,6 +631,58 @@ async def test_a_factor_file_build_older_than_the_current_sources_publishes_noth
 
     assert retried.overall_status == "complete", retried.failures
     assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, _THIRD_DAY),)
+
+
+def _a_wider_capture_publishes_before_this_refresh(monkeypatch) -> None:
+    """Between this build's re-read of the sources (which still finds its
+    snapshot current) and its refresh of the stale row, a sibling capture of
+    TRADING_DAY..WIDER_WINDOW_END rebuilds and publishes the factor file."""
+    real_refresh = catalog_client.refresh_complete_artifact
+    sibling_ran = False
+
+    async def _refresh_after_the_sibling(**kwargs):
+        nonlocal sibling_ran
+        if not sibling_ran:
+            sibling_ran = True
+            sibling = await ensure_data(_history_spec(end=WIDER_WINDOW_END))
+            assert sibling.overall_status == "complete", sibling.failures
+        return await real_refresh(**kwargs)
+
+    monkeypatch.setattr(catalog_client, "refresh_complete_artifact", _refresh_after_the_sibling)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_factor_file_refresh_never_replaces_a_file_a_sibling_published_after_the_re_read(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    """Codex P1 on #2481: the re-read closed the window up to the claim, not
+    up to the refresh. The file on disk predates coverage records (as every
+    file does on deploy), so this capture over TRADING_DAY rebuilds it; a
+    sibling capture over two sessions publishes between this build's re-read
+    and its refresh. The refresh takes the row only while it still holds
+    the contract this build judged, so the sibling's wider file stands and
+    this build reports ``lease_timeout``, which the capture waits out."""
+    mock_launcher()
+    _mock_polygon()
+    _mock_no_corporate_actions()
+    first = await ensure_data(_history_spec())
+    assert first.overall_status == "complete", first.failures
+    lake_root = tmp_lake / lake_subpath("raw")
+    lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol="SPY").coverage_record_path().parts).unlink()
+    _a_wider_capture_publishes_before_this_refresh(monkeypatch)
+
+    result = await ensure_data(_history_spec())
+
+    (factor_failure,) = [f for f in result.failures if f.artifact_kind == "factor_file"]
+    assert factor_failure.reason == "lease_timeout", factor_failure.detail
+    assert run_materialization._is_blocked_by_a_sibling_fetch(result, resolution="minute")
+    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),), "the sibling's file stands"
+
+    retried = await ensure_data(_history_spec())
+
+    assert retried.overall_status == "complete", retried.failures
+    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),)
 
 
 @pytest.mark.asyncio

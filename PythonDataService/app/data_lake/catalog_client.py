@@ -1517,6 +1517,8 @@ async def refresh_complete_artifact(
     artifact_id: int,
     worker_id: str,
     lease_ttl_ms: int,
+    *,
+    expected_data_contract_hash: str | None = None,
 ) -> PriorArtifactMetadata | None:
     """Force-refresh transition: 'complete' → 'fetching' for a re-fetch or rebuild.
 
@@ -1532,6 +1534,13 @@ async def refresh_complete_artifact(
     publish_under_lease calls target the right generation. Returns None
     when the row isn't currently 'complete' (refresh has no work to do —
     e.g. a race with another worker).
+
+    ``expected_data_contract_hash`` makes the transition a compare-and-swap
+    on the row the caller judged: it is taken only while its
+    DataContractHash is still the one the caller read, and None comes back
+    otherwise. The factor-file rebuild passes it (#2481 review): a sibling
+    that published another source set between that read and this refresh
+    keeps its file, instead of having an older build published over it.
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -1543,6 +1552,7 @@ async def refresh_complete_artifact(
                "AttemptCount" = "AttemptCount" + 1
          WHERE "Id" = $1
            AND "Status" = 'complete'
+           AND ($4::text IS NULL OR "DataContractHash" = $4)
         RETURNING "FilePath", "FileSha256", "LeaseGeneration";
     """
     async with connection() as conn:
@@ -1551,6 +1561,7 @@ async def refresh_complete_artifact(
             artifact_id,
             worker_id,
             now_ms + lease_ttl_ms,
+            expected_data_contract_hash,
         )
     if row is None:
         return None

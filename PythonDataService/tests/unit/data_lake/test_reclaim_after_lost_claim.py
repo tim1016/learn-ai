@@ -7,6 +7,10 @@ SQL on Postgres (skipped when ``POSTGRES_URL`` is unset) and against
 that every PR-gated ``ensure_data`` test drives is held to the answers the
 SQL gives: an expired lease is stealable, a spent retry budget is terminal,
 and a row another worker took a moment ago is contention.
+
+A factor file's lost claim against a *complete* row takes the other path, a
+refresh of that row; its compare-and-swap on the contract the caller read
+is held to the SQL the same way (the refresh scenarios at the end).
 """
 
 from __future__ import annotations
@@ -284,3 +288,91 @@ async def clean_artifacts():
 @_EACH_KIND
 async def test_reclaim_after_lost_claim_on_postgres(scenario, kind: str, clean_artifacts) -> None:
     await scenario(_Postgres(), kind)
+
+
+# ---------------------------------------------------------------------------
+# The refresh a lost claim takes against a complete factor file (#2481 review)
+# ---------------------------------------------------------------------------
+
+_SIBLINGS_CONTRACT = "b" * 64
+
+
+async def _complete(artifact_id: int, lease_generation: int, data_contract_hash: str | None = None) -> None:
+    assert await catalog_client.complete_artifact(
+        artifact_id=artifact_id,
+        row_count=0,
+        first_bar_start_ms=0,
+        last_bar_start_ms=0,
+        file_size_bytes=1,
+        file_sha256="f" * 64,
+        lease_generation=lease_generation,
+        data_contract_hash=data_contract_hash,
+    )
+
+
+async def _a_complete_factor_file_as_read(identity: ArtifactIdentity) -> tuple[int, str]:
+    """A complete factor-file row, and the contract a caller read off it."""
+    artifact_id = await _claim(identity, "w-orig")
+    await _complete(artifact_id, catalog_client.INITIAL_LEASE_GENERATION)
+    read = await catalog_client.select_complete_corp_action_artifact(identity)
+    assert read is not None
+    return artifact_id, read.data_contract_hash
+
+
+async def _refresh(artifact_id: int, worker_id: str, contract_read: str):
+    return await catalog_client.refresh_complete_artifact(
+        artifact_id=artifact_id,
+        worker_id=worker_id,
+        lease_ttl_ms=_TTL_MS,
+        expected_data_contract_hash=contract_read,
+    )
+
+
+async def _a_refresh_over_the_contract_it_read_takes_the_lease(catalog: Catalog) -> None:
+    artifact_id, contract_read = await _a_complete_factor_file_as_read(_identity("factor_file"))
+
+    prior = await _refresh(artifact_id, "w-new", contract_read)
+
+    assert prior is not None and prior.new_lease_generation == 2
+    assert await catalog.lease(artifact_id) == ("fetching", "w-new", 2, 2)
+
+
+async def _a_refresh_over_a_row_a_sibling_republished_is_refused(catalog: Catalog) -> None:
+    """Codex P1 on #2481: this caller reads the complete row and judges its
+    contract stale; before it refreshes, a sibling rebuilds the row onto a
+    wider source set and publishes it. A refresh gated on ``'complete'``
+    alone took the sibling's row, and the caller published its older build
+    over it. Gated on the contract the caller read, it is refused, and the
+    sibling's row stands."""
+    identity = _identity("factor_file")
+    artifact_id, contract_read = await _a_complete_factor_file_as_read(identity)
+    sibling = await _refresh(artifact_id, "w-sibling", contract_read)
+    assert sibling is not None
+    await _complete(artifact_id, sibling.new_lease_generation, _SIBLINGS_CONTRACT)
+
+    prior = await _refresh(artifact_id, "w-new", contract_read)
+
+    assert prior is None
+    assert await catalog.lease(artifact_id) == ("complete", None, 2, 2)
+    current = await catalog_client.select_complete_corp_action_artifact(identity)
+    assert current is not None and current.data_contract_hash == _SIBLINGS_CONTRACT
+
+
+_REFRESH_SCENARIOS = pytest.mark.parametrize(
+    "scenario",
+    [
+        _a_refresh_over_the_contract_it_read_takes_the_lease,
+        _a_refresh_over_a_row_a_sibling_republished_is_refused,
+    ],
+    ids=lambda scenario: scenario.__name__.strip("_"),
+)
+
+
+@_REFRESH_SCENARIOS
+async def test_refresh_complete_artifact_in_memory(scenario, monkeypatch: pytest.MonkeyPatch) -> None:
+    await scenario(_InMemory(install_fake_catalog(monkeypatch)))
+
+
+@_REFRESH_SCENARIOS
+async def test_refresh_complete_artifact_on_postgres(scenario, clean_artifacts) -> None:
+    await scenario(_Postgres())

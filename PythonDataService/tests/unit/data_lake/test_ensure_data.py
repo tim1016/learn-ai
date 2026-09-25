@@ -691,6 +691,48 @@ def test_an_unpriceable_reference_session_breaks_one_span_not_the_file(
     assert any(getattr(r, "action", None) == "factor_file_span_broken" for r in caplog.records)
 
 
+def test_an_actionless_file_whose_anchor_sessions_have_no_close_anchors_on_the_nearest_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 on #2481: no corporate action falls inside the span, and the
+    first and last captured sessions hold extended-hours bars only. The
+    build read just those two zips, found no close, and refused
+    (``FactorFileReferenceError``), so the capture failed and every study of
+    the symbol was refused (409). Each anchor row takes the nearest session
+    inward that has a close, the one a read of every session gave it before
+    #2452 (first anchor: the earliest close; last: the nearest earlier one),
+    reading one more zip at a time: 07-03 is never opened."""
+    from app.data_lake import derived_daily
+    from app.data_lake.ensure_data import _factor_file_over_captured_sessions
+
+    first, last = _CAPTURED[0], _CAPTURED[-1]
+    _write_one_bar_day(tmp_path, first, 8, 0, "99")
+    _write_one_bar_day(tmp_path, date(2024, 7, 2), 15, 59, "101")
+    _write_one_bar_day(tmp_path, date(2024, 7, 3), 15, 59, "102")
+    _write_one_bar_day(tmp_path, date(2024, 7, 5), 15, 59, "103")
+    _write_one_bar_day(tmp_path, last, 17, 0, "104")
+    sources = [_minute_source(i, day, f"{i:064x}") for i, day in enumerate(_CAPTURED, start=1)]
+    real_read = derived_daily.read_minute_trade_bars
+    opened: list[str] = []
+
+    def _recording_read(file_path: str, lake_root: Path):
+        opened.append(file_path)
+        return real_read(file_path, lake_root)
+
+    monkeypatch.setattr(derived_daily, "read_minute_trade_bars", _recording_read)
+
+    payload, plan = _factor_file_over_captured_sessions(
+        "SPY", [], [], sources, lake_root=tmp_path, fallback_date=first
+    )
+
+    assert plan.spans == (SessionRun(first, last),)
+    assert payload == b"20240701,1,1,101\n20240708,1,1,103\n"
+    assert sorted(opened) == sorted(
+        f"equity/usa/minute/spy/{day:%Y%m%d}_trade.zip"
+        for day in (first, date(2024, 7, 2), date(2024, 7, 5), last)
+    )
+
+
 def test_a_vouched_for_factor_file_that_does_not_parse_is_logged_and_rebuilt(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

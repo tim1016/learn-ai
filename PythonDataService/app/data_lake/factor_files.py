@@ -133,9 +133,13 @@ def build_factor_file_bytes(
     ``daily_closes`` maps session dates to their regular-trading-hours
     close (the caller derives it from the captured minute bars, see
     ``derived_daily.factor_file_reference_closes``). It must hold every
-    ``plan.reference_sessions`` close; the anchor sessions' closes are used
-    when present. The returned bytes are ASCII CSV without a header row,
-    which is what LEAN expects.
+    ``plan.reference_sessions`` close. An anchor row carries its session's
+    close, else the nearest earlier close in ``daily_closes``, else the
+    earliest; a caller that reads only a handful of sessions therefore
+    supplies, for an anchor without a close, the nearest session inward
+    that has one, and the anchor resolves as it would from every captured
+    close. The returned bytes are ASCII CSV without a header row, which is
+    what LEAN expects.
 
     Raises ``FactorFileReferenceError`` when a reference session has no
     close, or a non-positive one. A missing close is refused rather than
@@ -149,11 +153,10 @@ def build_factor_file_bytes(
             f"{', '.join(d.isoformat() for d in missing)}, the session(s) before a corporate "
             "action's ex-date; its reference price cannot be established"
         )
-    # Only the reference and anchor sessions' closes: every reference
-    # session is present and is the scheduled session right before its
-    # ex-date, so the largest close before an ex-date is exactly it.
-    wanted = {*plan.reference_sessions, *plan.anchor_sessions}
-    closes: dict[date, Decimal] = {d: Decimal(v) for d, v in daily_closes.items() if d in wanted}
+    # Every reference session is present and is the scheduled session right
+    # before its ex-date, so the largest close before an ex-date is exactly
+    # it, whichever other sessions ``daily_closes`` holds.
+    closes: dict[date, Decimal] = {d: Decimal(v) for d, v in daily_closes.items()}
     session_dates: list[date] = sorted(closes)
 
     # Walk corporate actions newest-to-oldest, accumulating the cumulative
@@ -222,7 +225,7 @@ def _anchor_reference(d: date, closes: Mapping[date, Decimal], session_dates: li
         return closes[d]
     if not session_dates:
         raise FactorFileReferenceError(
-            "no regular-session close was read for any anchor or reference session; "
+            "no captured session has a readable regular-session close; "
             "cannot anchor the factor file with a reference price"
         )
     idx = bisect_left(session_dates, d)
@@ -396,7 +399,8 @@ class FactorFilePlan:
     construction, and one whose close cannot be read is re-planned as
     unpriced rather than handed to the build. ``anchor_sessions`` are the
     first and last captured sessions, whose closes the two anchor rows
-    carry when available (LEAN does not dividend-process an anchor row).
+    carry when available, else the nearest close inward (LEAN does not
+    dividend-process an anchor row, but refuses a zero reference price).
     """
 
     spans: tuple[SessionRun, ...]
