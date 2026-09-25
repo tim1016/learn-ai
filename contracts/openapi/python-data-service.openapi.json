@@ -28161,6 +28161,30 @@
         "title": "PanelQuiesceActionRequest",
         "type": "object"
       },
+      "PaperXhAllowancesPayload": {
+        "additionalProperties": false,
+        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far past the decision bar's close an extended-hours or after-close\nlimit is placed: a buy ``xh_entry_bps`` above it, a sell ``xh_exit_bps``\nbelow it (a cover uses the exit allowance, above). A regular-hours run's\nEXIT on the day's last bar goes out after the close as such a limit, so\nStart and Resume of a regular-hours run refuse ``EXTENDED_HOURS_ALLOWANCE_UNSET``\nuntil both are set (#2440, owner decision 2026-09-25).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at arming. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
+        "properties": {
+          "xh_entry_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Xh Entry Bps",
+            "type": "number"
+          },
+          "xh_exit_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Xh Exit Bps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "xh_entry_bps",
+          "xh_exit_bps"
+        ],
+        "title": "PaperXhAllowancesPayload",
+        "type": "object"
+      },
       "ParamPropertySchema": {
         "description": "One parameter's JSON-schema leaf metadata.",
         "properties": {
@@ -29016,6 +29040,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/LiveEnvelopePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paper_xh_allowances": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaperXhAllowancesPayload"
               },
               {
                 "type": "null"
@@ -32819,6 +32853,16 @@
                 "type": "null"
               }
             ]
+          },
+          "paper_xh_allowances": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaperXhAllowancesPayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -32913,6 +32957,16 @@
               }
             ]
           },
+          "paper_xh_allowances": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaperXhAllowancesPayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "profile_id": {
             "title": "Profile Id",
             "type": "string"
@@ -32936,6 +32990,7 @@
           "endpoint_mode",
           "account_pin",
           "live_envelope",
+          "paper_xh_allowances",
           "content_sha256",
           "complete",
           "author_owner_id",

@@ -32,9 +32,10 @@ rather than assumed:
   ``PUT /selection``; an Apply that names no generation cannot be idempotent
   or fenced, so it carries the same field.
 
-Two refusal reasons also go beyond §6's table, both documented at their
-definitions in ``app/broker_configuration/errors.py``:
-``display_name_conflict`` (409) and ``live_envelope_invalid`` (422).
+Three refusal reasons also go beyond §6's table, each documented at its
+definition in ``app/broker_configuration/errors.py``:
+``display_name_conflict`` (409), ``live_envelope_invalid`` (422) and
+``paper_allowances_invalid`` (422).
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.broker_configuration.envelope import ValidatedLiveEnvelope
+from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 from app.broker_configuration.records import (
     AccountNickname,
     AlpacaDeskState,
@@ -108,6 +109,36 @@ class LiveEnvelopePayload(BaseModel):
     @classmethod
     def from_record(cls, envelope: ValidatedLiveEnvelope | None) -> LiveEnvelopePayload | None:
         return None if envelope is None else cls(**envelope.to_mapping())
+
+
+class PaperXhAllowancesPayload(BaseModel):
+    """A paper revision's own extended-hours allowances, in basis points.
+
+    How far past the decision bar's close an extended-hours or after-close
+    limit is placed: a buy ``xh_entry_bps`` above it, a sell ``xh_exit_bps``
+    below it (a cover uses the exit allowance, above). A regular-hours run's
+    EXIT on the day's last bar goes out after the close as such a limit, so
+    Start and Resume of a regular-hours run refuse ``EXTENDED_HOURS_ALLOWANCE_UNSET``
+    until both are set (#2440, owner decision 2026-09-25).
+
+    Paper only, and only the two: a live revision carries its pair inside
+    ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
+    value (``loss_usd``, a session count) offered here rather than dropping it,
+    and ``strict=True`` refuses ``true`` or ``"5"`` for the reason
+    ``LiveEnvelopePayload`` states. The bounds restate the envelope's; the
+    domain itself lives in ``ValidatedPaperAllowances``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    xh_entry_bps: float = Field(ge=0, lt=10_000, allow_inf_nan=False)
+    xh_exit_bps: float = Field(ge=0, lt=10_000, allow_inf_nan=False)
+
+    @classmethod
+    def from_record(
+        cls, allowances: ValidatedPaperAllowances | None
+    ) -> PaperXhAllowancesPayload | None:
+        return None if allowances is None else cls(**allowances.to_mapping())
 
 
 class OwnerResponse(_Response):
@@ -335,6 +366,7 @@ class RevisionResponse(_Response):
     account_pin: str | None
     account_pinned_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     live_envelope: LiveEnvelopePayload | None
+    paper_xh_allowances: PaperXhAllowancesPayload | None
     content_sha256: str
     complete: bool
     author_owner_id: str
@@ -351,6 +383,7 @@ class RevisionResponse(_Response):
             account_pin=revision.account_pin,
             account_pinned_at_ms=revision.account_pinned_at_ms,
             live_envelope=LiveEnvelopePayload.from_record(revision.live_envelope),
+            paper_xh_allowances=PaperXhAllowancesPayload.from_record(revision.paper_xh_allowances),
             content_sha256=revision.content_sha256,
             complete=revision.complete,
             author_owner_id=revision.author_owner_id,
@@ -368,11 +401,17 @@ class ProfileDetailResponse(_Response):
 
 
 class RevisionContentRequest(_ClosedRequest):
-    """The configured content of a revision. ``live`` requires the envelope."""
+    """The configured content of a revision. ``live`` requires the envelope.
+
+    ``paper_xh_allowances`` is for a paper revision without an envelope only;
+    the service refuses it beside an envelope or on a live revision
+    (``paper_allowances_invalid``), so a revision's allowances live in one place.
+    """
 
     credential_slot: str = _SLOT
     endpoint_mode: Literal["paper", "live"]
     live_envelope: LiveEnvelopePayload | None = None
+    paper_xh_allowances: PaperXhAllowancesPayload | None = None
 
 
 class ProfileCreateRequest(RevisionContentRequest):
@@ -540,6 +579,7 @@ __all__ = [
     "ObservedAccountResponse",
     "OwnerPatchRequest",
     "OwnerResponse",
+    "PaperXhAllowancesPayload",
     "ProfileCloneRequest",
     "ProfileCreateRequest",
     "ProfileDetailResponse",

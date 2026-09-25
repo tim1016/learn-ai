@@ -184,7 +184,14 @@ def test_the_schema_stores_floats_as_real_and_counts_as_integer(clerk_dir: Path)
 
     assert "NUMERIC" not in declared_types
 
-    for column in ("live_loss_fraction", "live_loss_usd", "live_xh_entry_bps", "live_xh_exit_bps"):
+    for column in (
+        "live_loss_fraction",
+        "live_loss_usd",
+        "live_xh_entry_bps",
+        "live_xh_exit_bps",
+        "paper_xh_entry_bps",
+        "paper_xh_exit_bps",
+    ):
         assert columns[column] == "REAL", column
     for column in ("live_shadow_sessions", "live_arming_max_sessions"):
         assert columns[column] == "INTEGER", column

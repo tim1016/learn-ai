@@ -19860,6 +19860,30 @@ export interface components {
             revision: number;
         };
         /**
+         * PaperXhAllowancesPayload
+         * @description A paper revision's own extended-hours allowances, in basis points.
+         *
+         *     How far past the decision bar's close an extended-hours or after-close
+         *     limit is placed: a buy ``xh_entry_bps`` above it, a sell ``xh_exit_bps``
+         *     below it (a cover uses the exit allowance, above). A regular-hours run's
+         *     EXIT on the day's last bar goes out after the close as such a limit, so
+         *     Start and Resume of a regular-hours run refuse ``EXTENDED_HOURS_ALLOWANCE_UNSET``
+         *     until both are set (#2440, owner decision 2026-09-25).
+         *
+         *     Paper only, and only the two: a live revision carries its pair inside
+         *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
+         *     value (``loss_usd``, a session count) offered here rather than dropping it,
+         *     and ``strict=True`` refuses ``true`` or ``"5"`` for the reason
+         *     ``LiveEnvelopePayload`` states. The bounds restate the envelope's; the
+         *     domain itself lives in ``ValidatedPaperAllowances``.
+         */
+        PaperXhAllowancesPayload: {
+            /** Xh Entry Bps */
+            xh_entry_bps: number;
+            /** Xh Exit Bps */
+            xh_exit_bps: number;
+        };
+        /**
          * ParamPropertySchema
          * @description One parameter's JSON-schema leaf metadata.
          */
@@ -20260,6 +20284,7 @@ export interface components {
              */
             endpoint_mode: "paper" | "live";
             live_envelope?: components["schemas"]["LiveEnvelopePayload"] | null;
+            paper_xh_allowances?: components["schemas"]["PaperXhAllowancesPayload"] | null;
         };
         /** ProfileDetailResponse */
         ProfileDetailResponse: {
@@ -21696,6 +21721,7 @@ export interface components {
             /** Expected Revision */
             expected_revision: number;
             live_envelope?: components["schemas"]["LiveEnvelopePayload"] | null;
+            paper_xh_allowances?: components["schemas"]["PaperXhAllowancesPayload"] | null;
         };
         /** RevisionListResponse */
         RevisionListResponse: {
@@ -21724,6 +21750,7 @@ export interface components {
              */
             endpoint_mode: "paper" | "live";
             live_envelope: components["schemas"]["LiveEnvelopePayload"] | null;
+            paper_xh_allowances: components["schemas"]["PaperXhAllowancesPayload"] | null;
             /** Profile Id */
             profile_id: string;
             /** Revision */

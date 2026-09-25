@@ -84,6 +84,19 @@ _ABSENT_ENVELOPE_SETTINGS: Final[dict[str, None]] = {
     settings_field: None for _, settings_field in ENVELOPE_SETTINGS_FIELDS
 }
 
+# The two envelope fields a paper revision may carry on its own (#2440, owner
+# decision 2026-09-25), and the settings fields they bind. A paper binding's
+# pair reaches the pricing policy through exactly these settings —
+# ``ExtendedHoursAllowances.from_settings`` reads them for a paper or ``sim:``
+# authority, just as a pre-cutover paper worker read them from the
+# environment — so no pricing code learns a second source. Selected from the
+# envelope's own table so the settings names cannot drift from it; the key
+# pair is pinned equal to ``app/broker_configuration/envelope.py``'s
+# ``ALLOWANCE_FIELDS`` by ``tests/broker/alpaca/profile/test_runtime_context.py``.
+PAPER_ALLOWANCE_SETTINGS_FIELDS: Final[tuple[tuple[str, str], ...]] = tuple(
+    pair for pair in ENVELOPE_SETTINGS_FIELDS if pair[0] in ("xh_entry_bps", "xh_exit_bps")
+)
+
 
 def is_exactly_int(value: object) -> bool:
     """Whether ``value`` is an ``int`` and nothing that merely behaves like one.
@@ -142,6 +155,27 @@ def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float |
     return values
 
 
+def _paper_allowance_settings(paper_xh_allowances: Mapping[str, object]) -> dict[str, float]:
+    """A paper revision's own pair as ``AlpacaSettings`` keyword arguments.
+
+    The same key and type checks as the envelope's, for the same reason: a
+    stored value that is not a real number must refuse, not coerce.
+    """
+    expected = {field for field, _ in PAPER_ALLOWANCE_SETTINGS_FIELDS}
+    if set(paper_xh_allowances) != expected:
+        raise RevisionIncomplete(
+            "its paper allowances must be exactly "
+            + " and ".join(sorted(expected))
+        )
+    values: dict[str, float] = {}
+    for field, settings_field in PAPER_ALLOWANCE_SETTINGS_FIELDS:
+        value = paper_xh_allowances[field]
+        if not _is_real_number(value):
+            raise RevisionIncomplete(f"its {field} is not stored as a number")
+        values[settings_field] = float(value)
+    return values
+
+
 @dataclass(frozen=True)
 class AlpacaRuntimeContext:
     """One resolved, immutable broker binding.
@@ -192,6 +226,7 @@ def resolve_runtime_context(
     endpoint_mode: EndpointMode,
     credential_slot: str,
     live_envelope: Mapping[str, object] | None = None,
+    paper_xh_allowances: Mapping[str, object] | None = None,
     account_pin: str | None = None,
     profile_id: str | None = None,
     revision: int | None = None,
@@ -204,6 +239,11 @@ def resolve_runtime_context(
     ``live`` endpoint mode without a complete envelope is refused as
     ``revision_incomplete`` (422) — the profile-world equivalent of today's
     ``_enforce_mode_agreement`` startup refusal, and never a process crash.
+
+    ``paper_xh_allowances`` is a paper revision's own extended-hours pair
+    (#2440), accepted only beside no envelope. It binds the two allowance
+    settings and nothing else: the context's ``live_envelope`` stays ``None``,
+    so a paper binding never composes a live envelope out of its allowances.
 
     Raises ``CredentialSlotUnknown`` (422) / ``CredentialSlotUnavailable``
     (409) from the slot resolver, and :class:`RevisionIncomplete` (422) for a
@@ -222,12 +262,23 @@ def resolve_runtime_context(
             "carries none"
         )
 
+    if paper_xh_allowances is not None and (endpoint_mode != "paper" or live_envelope is not None):
+        # The store's CHECK refuses this row; a caller handing the pair in
+        # beside an envelope would otherwise leave two answers to one price.
+        raise RevisionIncomplete(
+            "its extended-hours allowances are in two places; a live revision carries "
+            "them in its envelope and a paper revision beside none"
+        )
+
     credentials = resolve_credentials(credential_slot, environment=environment)
-    envelope_settings = (
-        _ABSENT_ENVELOPE_SETTINGS
-        if live_envelope is None
-        else _envelope_settings(live_envelope)
-    )
+    envelope_settings: Mapping[str, float | int | None] = _ABSENT_ENVELOPE_SETTINGS
+    if live_envelope is not None:
+        envelope_settings = _envelope_settings(live_envelope)
+    elif paper_xh_allowances is not None:
+        envelope_settings = {
+            **_ABSENT_ENVELOPE_SETTINGS,
+            **_paper_allowance_settings(paper_xh_allowances),
+        }
 
     try:
         settings = AlpacaSettings(
@@ -263,6 +314,7 @@ def resolve_runtime_context(
 
 __all__ = [
     "LIVE_ENVELOPE_FIELDS",
+    "PAPER_ALLOWANCE_SETTINGS_FIELDS",
     "AlpacaRuntimeContext",
     "EndpointMode",
     "is_exactly_int",

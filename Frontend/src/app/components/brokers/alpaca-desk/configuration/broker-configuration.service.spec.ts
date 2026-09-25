@@ -130,6 +130,7 @@ describe('BrokerConfigurationService', () => {
           credential_slot: 'default',
           endpoint_mode: 'paper',
           live_envelope: null,
+          paper_xh_allowances: null,
         }),
     },
     {
@@ -159,6 +160,7 @@ describe('BrokerConfigurationService', () => {
           credential_slot: 'default',
           endpoint_mode: 'paper',
           live_envelope: null,
+          paper_xh_allowances: null,
         }),
     },
     {
@@ -279,6 +281,7 @@ describe('BrokerConfigurationService', () => {
         xh_entry_bps: 11,
         xh_exit_bps: 17.5,
       },
+      paper_xh_allowances: null,
     });
 
     const request = http.expectOne(`${BASE}/configuration/profiles/profile-1/revisions`);
@@ -343,6 +346,7 @@ describe('BrokerConfigurationService', () => {
       credential_slot: 'default',
       endpoint_mode: 'paper',
       live_envelope: null,
+      paper_xh_allowances: null,
     });
 
     const request = http.expectOne(`${BASE}/configuration/profiles`);
