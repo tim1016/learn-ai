@@ -153,6 +153,7 @@ class _FakeDeployRegistry:
 
 @pytest.fixture()
 def deploy_app(
+    no_golden_validations,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[FastAPI, _FakeDeployRegistry]]:
@@ -189,14 +190,6 @@ def deploy_app(
         lambda _registry: validation_entries,
     )
 
-    async def no_golden_validations(_symbol: str | None) -> dict[str, tuple[object, ...]]:
-        return {}
-
-    monkeypatch.setattr(
-        panel_deploy,
-        "_current_golden_validation_scopes",
-        no_golden_validations,
-    )
     clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
@@ -253,4 +246,17 @@ def _accepted_deploy_entry() -> StrategyValidationEntry:
         entry
         for entry in load_strategy_validation_entries(strategy_registry_seeds())
         if entry.strategy_key == "ema_crossover_signal"
+    )
+
+
+@pytest.fixture
+def no_golden_validations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No external research database in the deploy HTTP harness."""
+    async def no_golden_validations(_symbol: str | None) -> dict[str, tuple[object, ...]]:
+        return {}
+
+    monkeypatch.setattr(
+        panel_deploy,
+        "_current_golden_validation_scopes",
+        no_golden_validations,
     )

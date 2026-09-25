@@ -8,6 +8,7 @@ from typing import Literal, NoReturn, cast
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -219,7 +220,9 @@ def _seed_historical_conflict(tmp_path: Path) -> tuple[ClerkSqliteRepository, st
 def _recovery_action(
     repo: ClerkSqliteRepository,
 ) -> tuple[RecoveryPolicyContext, RecoveryCapability]:
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    reader = SqliteClerkProjectionReader.from_repository(
+        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+    )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
     finally:
@@ -243,7 +246,9 @@ def test_timeline_filters_bind_one_historical_conflict_and_cursor_scope(tmp_path
             "WHERE transition_kind = 'UNCERTAINTY_RAISED'"
         ).fetchone()
         assert row is not None
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             by_bot = reader.timeline_page(strategy_instance_id=SID)
             by_order = reader.timeline_page(order_ref=row["order_ref"], page_size=1)
@@ -309,7 +314,9 @@ def test_timeline_uncertainty_filter_includes_refreshed_episode(tmp_path: Path) 
             next_step="Review the exact retained evidence.",
             cause_facts=cause,
         ) != "unchanged"
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             page = reader.timeline_page(uncertainty_id=uncertainty_id)
         finally:
@@ -390,7 +397,9 @@ async def test_timeline_execution_filter_includes_a_correction_of_that_execution
             "SELECT sequence FROM custody_transitions WHERE transition_kind = 'EXECUTION_CORRECTED'"
         ).fetchone()
         assert correction_row is not None
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             page = reader.timeline_page(execution_id=EXECUTION_ID)
         finally:
@@ -449,7 +458,9 @@ async def test_historical_exact_execution_recovery_prepares_confirms_and_replays
             (EXECUTION_ID, "activity_recovery"),
         ]
         assert repo.position(SID, "SPY") == pytest.approx(5.0, abs=1e-9, rel=0)
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             refreshed = reader.recovery_context(strategy_instance_id=SID)
         finally:

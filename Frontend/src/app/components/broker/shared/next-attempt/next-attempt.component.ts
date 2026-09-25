@@ -9,30 +9,25 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
  */
 export interface NextAttemptFacts {
   readonly next_attempt_at_ms?: number | null;
-  readonly next_attempt_overdue?: boolean;
   readonly exit_working?: boolean;
   readonly facts_unreadable?: boolean;
 }
 
 type NextAttemptLine =
   | { readonly kind: 'working' }
-  | { readonly kind: 'at'; readonly atMs: number; readonly overdue: boolean }
+  | { readonly kind: 'at'; readonly atMs: number }
   | { readonly kind: 'unknown' };
 
 /**
- * When the Clerk next tries, on its own, to resolve a condition it raised —
+ * When an automatic recovery attempt is session-eligible —
  * the stuck-EXIT watchdog's re-drive of an `EXIT_NOT_FLAT` (#2440). One
  * rendering for every surface that shows it: the account desk, the bot page's
  * verdict and the lane's attention bell.
  *
- * The backend projects it on every read: while an exit is in progress no
- * attempt is due, so that is said instead of a time — never "overdue", which
- * would read as a failed automatic sell and invite a second, manual one. A
- * time is the watchdog's real next try; "overdue since" only when it could
- * have sent by now. A record that could not be read is an unknown attempt,
- * not an absent one. Rendered in ET: a session-clock instant, like the
- * pre-market open it usually names. Nothing renders when there is nothing to
- * say.
+ * The backend owns session eligibility. A timestamp is the
+ * earliest retry opportunity, not a promised submission: quotes or custody
+ * evidence may still prevent it. An active exit takes precedence over the
+ * timestamp. Session eligibility renders in ET.
  */
 @Component({
   selector: 'app-next-attempt',
@@ -45,12 +40,12 @@ type NextAttemptLine =
       @if (shown.kind === 'working') {
         An exit is in progress; no automatic attempt is due while it works.
       } @else if (shown.kind === 'at') {
-        Next automatic attempt: @if (shown.overdue) {overdue since }<app-timestamp-display
+        Automatic retry: allowed from <app-timestamp-display
           [value]="shown.atMs"
           mode="et"
         />
       } @else {
-        Next automatic attempt: unknown; this notice's record could not be read.
+        Automatic retry: eligibility unknown; this notice's record could not be read.
       }
     }
   `,
@@ -64,7 +59,7 @@ export class NextAttemptComponent {
       return { kind: 'working' };
     }
     if (facts.next_attempt_at_ms != null) {
-      return { kind: 'at', atMs: facts.next_attempt_at_ms, overdue: facts.next_attempt_overdue ?? false };
+      return { kind: 'at', atMs: facts.next_attempt_at_ms };
     }
     return facts.facts_unreadable ? { kind: 'unknown' } : null;
   });

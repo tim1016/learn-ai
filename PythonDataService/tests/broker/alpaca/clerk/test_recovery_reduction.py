@@ -752,3 +752,16 @@ def test_a_sell_band_past_one_hundred_percent_is_unbounded_not_unpriceable() -> 
     )
     evaluation = evaluate_proposed_limit(proposal=pricing, limit_price=deep, quantity=10)
     assert evaluation.outside_band is False
+
+
+@pytest.mark.parametrize("day", [date(2026, 9, 2), date(2026, 11, 27), date(2026, 11, 2), date(2026, 3, 9)])
+@pytest.mark.parametrize("allowances", [True, False])
+def test_redrive_window_opened_at_ms_uses_the_arrival_day_and_effective_allowances(day: date, allowances: bool) -> None:
+    from app.broker.alpaca.clerk.recovery_reduction import redrive_window_opened_at_ms
+
+    policy = _POLICY if allowances else ProgramLegPolicy(window=_WINDOW, allowances=None)
+    opening = _at(4, day=day) if allowances else _at(9, 30, day=day)
+    # Start at the first eligible send, not midnight or the prior day's record.
+    expected = opening - 5_000
+    assert redrive_window_opened_at_ms(now_ms=expected, policy=policy) == expected
+    assert redrive_window_opened_at_ms(now_ms=_at(12, day=day), policy=policy) == expected

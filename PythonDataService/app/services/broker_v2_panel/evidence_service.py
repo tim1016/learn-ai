@@ -315,7 +315,7 @@ def _read_active_sqlite_evidence(
         raise RuntimeError("Active SQLite Clerk account does not match the requested account")
     if cursor is not None and not isinstance(cursor, str):
         raise ValueError("SQLite evidence requires its opaque cursor")
-    reader = SqliteClerkProjectionReader.from_repository(clerk.repository)
+    reader = SqliteClerkProjectionReader.from_facade(clerk)
     try:
         effect_operation_id = (
             transaction_ref

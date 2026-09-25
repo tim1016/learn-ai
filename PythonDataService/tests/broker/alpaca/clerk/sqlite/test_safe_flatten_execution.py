@@ -269,7 +269,9 @@ async def _reconciled_flatten_plan(repo: ClerkSqliteRepository):
         trigger="OPERATOR_RECONCILE_NOW",
         pricing=UNPRICEABLE_RECOVERY,
     )
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    reader = SqliteClerkProjectionReader.from_repository(
+        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+    )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
     finally:
@@ -371,7 +373,9 @@ async def test_execute_safe_flatten_presented_for_stopped_bot_with_exposure(
         trigger="OPERATOR_RECONCILE_NOW",
         pricing=UNPRICEABLE_RECOVERY,
     )
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    reader = SqliteClerkProjectionReader.from_repository(
+        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+    )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
     finally:
@@ -394,7 +398,9 @@ def _unfoldable_open_order() -> BrokerOrder:
 
 
 def _flatten_catalog(repo: ClerkSqliteRepository) -> dict[str, Any]:
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    reader = SqliteClerkProjectionReader.from_repository(
+        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+    )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
     finally:
@@ -521,7 +527,9 @@ async def test_execute_safe_flatten_blocked_while_a_run_is_active(
         trigger="OPERATOR_RECONCILE_NOW",
         pricing=UNPRICEABLE_RECOVERY,
     )
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    reader = SqliteClerkProjectionReader.from_repository(
+        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+    )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
     finally:
@@ -553,7 +561,9 @@ async def test_execute_recovery_action_dispatches_safe_flatten(
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
     async def current_context() -> RecoveryPolicyContext:
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
         finally:
@@ -699,7 +709,9 @@ async def test_execute_safe_flatten_unavailable_for_account_scope(
         trigger="OPERATOR_RECONCILE_NOW",
         pricing=UNPRICEABLE_RECOVERY,
     )
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    reader = SqliteClerkProjectionReader.from_repository(
+        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+    )
     try:
         account_context = reader.recovery_context(strategy_instance_id=None)
     finally:
@@ -863,7 +875,9 @@ async def _stopped_facade_at(
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
     async def current_context() -> RecoveryPolicyContext:
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
         finally:

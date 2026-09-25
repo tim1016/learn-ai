@@ -166,14 +166,11 @@ async def test_other_brokers_are_404() -> None:
 async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
     tmp_path: Path,
 ) -> None:
-    """#2440 review: the bell says when the watchdog next tries, and never promises a past time.
+    """The bell uses the same authority-owned eligibility as the desk and panel.
 
-    The route reads each episode through the one projection the bot page and
-    the desk read, priced from the lane authority's own seam: a promise the
-    watchdog could have kept by now is overdue; once no session is open, the
-    time is the watchdog's real next try — the pre-market send this lane's
-    declared window prices. An episode with unreadable facts still rings,
-    without a symbol or a time, and says so.
+    An elapsed time remains eligibility without a guessed retry status. A
+    closed session advances it to this authority's next permitted window.
+    An unreadable episode still rings without a symbol or a time.
     """
     wednesday_after_hours = to_ms_utc(datetime(2026, 9, 2, 17, 0, tzinfo=_ET))
     repo, clock = _repo_with_two_episodes(tmp_path, start_ms=wednesday_after_hours)
@@ -224,14 +221,8 @@ async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
 
     assert response.status_code == 200
     by_sid = {item["strategy_instance_id"]: item for item in response.json()["items"]}
-    assert (by_sid["ema-1"]["next_attempt_at_ms"], by_sid["ema-1"]["next_attempt_overdue"]) == (
-        wednesday_after_hours + 3_600_000,
-        False,
-    )
-    assert (by_sid["ema-2"]["next_attempt_at_ms"], by_sid["ema-2"]["next_attempt_overdue"]) == (
-        wednesday_after_hours - 60_000,
-        True,
-    )
+    assert by_sid["ema-1"]["next_attempt_at_ms"] == wednesday_after_hours + 3_600_000
+    assert by_sid["ema-2"]["next_attempt_at_ms"] == wednesday_after_hours - 60_000
     unreadable = by_sid["ema-3"]
     assert (
         unreadable["symbol"],
@@ -242,7 +233,30 @@ async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
     overnight_ema_2 = next(
         item for item in overnight.json()["items"] if item["strategy_instance_id"] == "ema-2"
     )
-    assert (overnight_ema_2["next_attempt_at_ms"], overnight_ema_2["next_attempt_overdue"]) == (
-        to_ms_utc(datetime(2026, 9, 3, 3, 59, 55, tzinfo=_ET)),
-        False,
+    assert overnight_ema_2["next_attempt_at_ms"] == to_ms_utc(datetime(2026, 9, 3, 3, 59, 55, tzinfo=_ET))
+    assert "next_attempt_overdue" not in overnight_ema_2
+
+
+@pytest.mark.asyncio
+async def test_attention_without_facade_retains_notice_but_cannot_invent_retry_time(tmp_path: Path) -> None:
+    clock = _Clock()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="ema-1", symbol="SPY", config_hash="h1")
+    raise_uncertainty(
+        repo, strategy_instance_id="ema-1", reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        headline="Exit is not flat", explanation="Position remains", operator_impact="Entry blocked",
+        next_step="Reconcile", cause_facts={"symbol": "SPY"}, severity="blocking",
+        next_attempt_at_ms=clock.now_ms + 60_000,
     )
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite", _sqlite_repository=repo, account_id=ACCOUNT,
+    ))
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/brokers/alpaca/attention")
+        item, = response.json()["items"]
+        assert item["symbol"] == "SPY"
+        assert item["next_attempt_at_ms"] is None
+        assert "next_attempt_overdue" not in item
+    finally:
+        repo.close()

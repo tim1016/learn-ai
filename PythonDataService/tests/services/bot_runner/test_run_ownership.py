@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.services.bot_runner import BotTaskRegistry
+from tests._helpers.bot_runner.custody import admission_guard_for
 from tests.services.test_bot_runner_ema_resume import (
     _STRATEGY_INSTANCE_ID,
     _first_resumed_bar,
@@ -42,7 +43,7 @@ def _compose(
         feed_resolver=lambda: feed,
         restart_policy=RestartIntensityPolicy(threshold=100),
         boot_recovery_required=False,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
         market_liveness=_tradable_market_liveness,
     )
     return repo, clerk, broker, registry

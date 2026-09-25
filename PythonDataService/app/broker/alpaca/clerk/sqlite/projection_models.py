@@ -116,15 +116,10 @@ class ProjectedUncertainty:
     # The symbol the episode's cause names, when it names one (an
     # EXIT_NOT_FLAT does); the lane's attention bell shows it.
     symbol: str | None = None
-    # When the Clerk will next try to resolve this on its own, when it can say
-    # (the stuck-EXIT watchdog's next re-drive, #2440) — and never once the
-    # watchdog has escalated to EXIT_STUCK and stopped re-driving, nor while
-    # an exit is working (``exit_working``).
+    # Earliest session eligibility for automatic recovery (int64 ms UTC).
+    # No time while an exit works or automatic recovery has stopped.
+    # Eligibility alone does not establish that a retry can be sent.
     next_attempt_at_ms: int | None = None
-    # The watchdog could have tried by now and the episode is still open: the
-    # time shown is the one the notice promised, past due — never a future
-    # promise (#2440 review).
-    next_attempt_overdue: bool = False
     # An exit for this strategy is in progress, so no automatic attempt is due
     # while it works: the watchdog skips a strategy whose EXIT is active
     # (#2440 review).
@@ -251,7 +246,6 @@ class ProjectionGuidance:
     # ``ProjectedUncertainty`` projects it (#2440): the bot page shows it
     # beside ``next_step``.
     next_attempt_at_ms: int | None = None
-    next_attempt_overdue: bool = False
     exit_working: bool = False
     facts_unreadable: bool = False
 

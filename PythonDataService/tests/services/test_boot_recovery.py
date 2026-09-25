@@ -147,8 +147,9 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     assert view.running is False
     assert view.phase == "ON_DUTY"  # the stale record, rendered as-is, not repaired
     assert view.duty_outcome is None
-    with pytest.raises(BootRecoveryIncompleteError, match="lifecycle authority"):
+    with pytest.raises(BootRecoveryIncompleteError) as denied:
         await rebooted.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    assert denied.value.admission_decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
 
 
 async def test_boot_sweep_records_why_a_binding_was_left_unprojected(
@@ -1072,13 +1073,16 @@ async def test_a_native_bindings_genuine_identity_refusal_still_aborts_the_sweep
         await registry.run_boot_recovery()
 
 
-async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path) -> None:
+async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``sim:`` binding is excluded by where it routes, not by how its id reads.
 
     Its custody id never equals the primary's, so an account comparison alone
     would call every Dry Run bot foreign. The registry routes it to its own
     per-instance authority, and that is what decides.
     """
+    from tests._helpers.bot_runner.custody import configure_execution_allowances
+
+    configure_execution_allowances(monkeypatch)
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()

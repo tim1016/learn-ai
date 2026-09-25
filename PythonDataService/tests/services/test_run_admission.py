@@ -469,7 +469,11 @@ def test_holding_resume_of_a_regular_hours_run_without_an_exit_allowance_resumes
 
     assert decision.allowed is True
     assert decision.reason_code == "RESUME_ADMITTED"
-    assert decision.explanation.endswith(EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE)
+    if mode == "dry_run":
+        assert "late exit folds for operator recovery" in decision.explanation
+        assert "does not retry from a live quote" in decision.explanation
+    else:
+        assert decision.explanation.endswith(EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE)
 
 
 def _admitted_without_allowance_logs(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:

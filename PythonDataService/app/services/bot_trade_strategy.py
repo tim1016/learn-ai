@@ -24,11 +24,6 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     DecisionOutcome,
     SqliteDecisionReceipts,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty import (
-    AdmissionBlockedError,
-    RefusalClass,
-    classify_admission_refusal,
-)
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
@@ -1019,24 +1014,18 @@ async def run_trade_bot(
                 source_bars=source_bars,
                 decision_lateness_ms=lateness.exempt_lateness_ms,
             )
-            try:
-                receipt = await clerk.execute_for_instance(
-                    strategy_instance_id=binding.strategy_instance_id,
-                    run_id=binding.run_id,
-                    decision_id=decision_id,
-                    purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
-                    action_plan=binding.action_plan,
-                    quantity=binding.quantity,
-                    use_rth=binding.use_rth,
-                    capability_account_id=capability_account_id,
-                    retained_source_bar=retained,
-                    decision_evidence=decision_evidence,
-                )
-            except AdmissionBlockedError as exc:
-                _dispose_transient_exit_refusal(
-                    decision_receipts, binding=binding, evaluation=evaluation, exc=exc
-                )
-                continue
+            receipt = await clerk.execute_for_instance(
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                decision_id=decision_id,
+                purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
+                action_plan=binding.action_plan,
+                quantity=binding.quantity,
+                use_rth=binding.use_rth,
+                capability_account_id=capability_account_id,
+                retained_source_bar=retained,
+                decision_evidence=decision_evidence,
+            )
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
                 # A distinct failure mode from the liveness gate above: that one
                 # catches evidence already stale *before* the Clerk was reached,
@@ -1123,43 +1112,6 @@ def _append_decision_receipt(
 def _effect_state_value(receipt: _EffectReceipt) -> str:
     state = receipt.state
     return str(getattr(state, "value", state))
-
-
-def _dispose_transient_exit_refusal(
-    decision_receipts: SqliteDecisionReceipts,
-    *,
-    binding: BrokerBotBinding,
-    evaluation: StrategyEvaluation,
-    exc: AdmissionBlockedError,
-) -> None:
-    """Settle one staged decision whose Clerk refusal is TRANSIENT (F19).
-
-    TERMINAL refusals re-raise so an unclassified admission failure stays
-    honest crash evidence at ``_supervise``'s boundary. TRANSIENT refusals
-    (snapshot staleness during same-clock cohort reduces, ops study §9) are
-    refused-and-deferred: DISCARD the staged candidate, record a protected
-    ``blocked`` receipt, and let the next decision clock retry.
-    """
-    if classify_admission_refusal(exc.decision.reason_code) is not RefusalClass.TRANSIENT:
-        raise exc
-    _discard_evaluation(evaluation)
-    _append_decision_receipt(
-        decision_receipts,
-        binding=binding,
-        evaluation=evaluation,
-        outcome="blocked",
-        reason_code=exc.decision.reason_code or "ADMISSION_BLOCKED",
-    )
-    logger.warning(
-        "Trade bot deferred a transient Clerk admission refusal to the next decision clock",
-        extra={
-            "action": "bot_admission_refusal_deferred",
-            "strategy_instance_id": binding.strategy_instance_id,
-            "strategy_key": binding.strategy_key,
-            "symbol": binding.symbol,
-            "reason_code": exc.decision.reason_code,
-        },
-    )
 
 
 @dataclass(frozen=True)

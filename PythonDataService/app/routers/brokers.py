@@ -23,7 +23,6 @@ from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_sett
 from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ClerkStatus
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     MarketMark,
@@ -43,7 +42,7 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 )
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
-from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader, project_uncertainties
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import (
     BrokerAccountModeDisagreement,
@@ -778,16 +777,22 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
     repository = None if runtime is None else runtime.sqlite_repository
     if repository is None:
         return LaneAttentionRead(account_id=None, items=[])
-    # The one projection of an episode (#2440 review): the bell says what
-    # the bot page and the desk say — the watchdog's real next try, priced
-    # from the authority's own seam, or that an exit is working — and an
-    # unreadable record still rings, without a symbol or a next attempt.
+    # Read eligibility from the selected facade, exactly as the desk and
+    # panel do. A repository without its policy authority cannot name a time.
     clerk = runtime.clerk
-    pricing = (
-        clerk.recovery_pricing
-        if isinstance(clerk, SqliteAlpacaClerkFacade)
-        else UNPRICEABLE_RECOVERY
-    )
+    if isinstance(clerk, SqliteAlpacaClerkFacade):
+        reader = SqliteClerkProjectionReader.from_facade(clerk)
+        try:
+            uncertainties = reader.account_snapshot().uncertainties
+        finally:
+            reader.close()
+    else:
+        uncertainties = project_uncertainties(
+            repository.active_uncertainties(),
+            now_ms=repository.clock(),
+            exits_in_progress=repository.strategies_with_active_exit,
+            redrive_policy=None,
+        )
     items = [
         LaneAttentionItem(
             condition_id=uncertainty.uncertainty_id,
@@ -797,16 +802,10 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
             symbol=uncertainty.symbol,
             headline=uncertainty.headline,
             next_attempt_at_ms=uncertainty.next_attempt_at_ms,
-            next_attempt_overdue=uncertainty.next_attempt_overdue,
             exit_working=uncertainty.exit_working,
             facts_unreadable=uncertainty.facts_unreadable,
         )
-        for uncertainty in project_uncertainties(
-            repository.active_uncertainties(),
-            now_ms=repository.clock(),
-            exits_in_progress=repository.strategies_with_active_exit,
-            redrive_policy=pricing.policy_source(),
-        )
+        for uncertainty in uncertainties
     ]
     return LaneAttentionRead(account_id=repository.account_id, items=items)
 

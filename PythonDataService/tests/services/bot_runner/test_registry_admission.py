@@ -16,6 +16,7 @@ import pytest
 
 import app.services.bot_runner as bot_runner
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhase
 from app.engine.live.desired_state import DesiredState
@@ -46,6 +47,7 @@ from tests._helpers.bot_runner.custody import (
     _flat_custody_snapshot,
     _lifecycle_json,
     _registry,
+    admission_guard_for,
 )
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 
@@ -54,7 +56,7 @@ from ._support import _current_run_json, _OrderingClerk
 
 @asynccontextmanager
 async def _fixed_start_guard(sid: str):
-    yield _flat_custody_snapshot(sid, observed_at_ms=_T0)
+    yield _flat_custody_snapshot(sid, observed_at_ms=_T0), ProgramLegPolicy.regular_only()
 
 
 @pytest.mark.asyncio
@@ -272,7 +274,7 @@ async def test_activation_failure_with_unproven_cleanup_keeps_raw_propagation(
     clerk = _OrderingClerk(_custody_proof(exposure={}))
     clerk.fail_stop = True
     feed = _FakeFeed([], mode="hold")
-    registry = _registry(tmp_path, feed, start_custody_guard=clerk.start_admission_snapshot)
+    registry = _registry(tmp_path, feed, start_custody_guard=admission_guard_for(clerk))
     set_alpaca_clerk(clerk)
     try:
         original_record_launch = registry._bindings.record_launch

@@ -54,3 +54,10 @@ def _default_lifecycle_clerk() -> None:
     set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
     yield
     set_alpaca_clerk(None)
+
+
+@pytest.fixture(autouse=True)
+def _configured_execution_allowances(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests._helpers.bot_runner.custody import configure_execution_allowances
+
+    configure_execution_allowances(monkeypatch)

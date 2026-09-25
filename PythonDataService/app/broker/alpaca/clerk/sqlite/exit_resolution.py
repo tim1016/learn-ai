@@ -552,10 +552,10 @@ def _fold_exit_not_flat(
     in the lane's attention bell — and what the stuck-EXIT watchdog re-drives:
     the market leg inside the regular session, a limit it prices itself in a
     declared extended session (#2229). Every such episode carries when that
-    re-drive will next try (#2440), computed here from ``pricing`` so no fold
+    re-drive is first session-eligible (#2440), computed here from ``pricing`` so no fold
     can omit or disagree on it: an ``int64 ms UTC`` value the UI renders,
     never prose. What the fold cannot know — that the watchdog has since
-    escalated, or that a deferred try is past due — the projection says
+    escalated, an EXIT is working, or session eligibility has rolled over — the projection says
     (``projections.project_uncertainties``). ``why`` is the cause recorded on
     the failed transition beside the quantity still held.
     """

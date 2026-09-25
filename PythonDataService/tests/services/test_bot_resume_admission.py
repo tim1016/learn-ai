@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.schemas.run_admission import (
@@ -177,13 +178,13 @@ async def test_preview_projects_custody_and_never_reconciles() -> None:
     async def reconciling_guard(strategy_instance_id: str):
         del strategy_instance_id
         used.append("reconcile")
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     @asynccontextmanager
     async def projection_guard(strategy_instance_id: str):
         del strategy_instance_id
         used.append("project")
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     admission = _minimal_admission(
         custody_guard=reconciling_guard,
@@ -225,7 +226,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
     @asynccontextmanager
     async def custody_guard(strategy_instance_id: str):
         del strategy_instance_id
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")

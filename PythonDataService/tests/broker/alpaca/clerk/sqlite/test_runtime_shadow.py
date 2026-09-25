@@ -316,7 +316,9 @@ async def test_shadow_safe_flatten_binds_retained_evidence_and_finishes_flat(
             reason="test-safe-flatten",
         )
         await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
         finally:

@@ -30,11 +30,13 @@ import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import regular_session_open
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition, OrderSide, OrderType, TimeInForce
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.source_bar_ledger import SourceBarLedger
@@ -91,6 +93,16 @@ class _EntryFillingBroker(_SqliteRuntimeBroker):
             self.orders[client_order_id] = order
         return order
 
+    async def list_positions(self) -> list[BrokerPosition]:
+        if not any(order.status == "filled" for order in self.orders.values()):
+            return []
+        return [BrokerPosition(
+            broker="alpaca", symbol="SPY", asset_id=None, asset_class="us_equity",
+            quantity=1, side="long", average_entry_price=401, market_value=400,
+            cost_basis=401, current_price=400, unrealized_pl=-1, unrealized_plpc=None,
+            observed_at_ms=_clerk_clock(),
+        )]
+
     async def cancel(self, order_id: str) -> None:
         """A filled order is not cancelable; the Clerk proves its state by exact lookup."""
         if any(order.order_id == order_id and order.status == "filled" for order in self.orders.values()):
@@ -126,8 +138,9 @@ def _regular_hours_binding() -> BrokerBotBinding:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stale_snapshot", [False, True])
 async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_hours_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_snapshot: bool
 ) -> None:
     """The last bar's EXIT is the extended-hours DAY limit, never a market order queued for the open."""
     # Undo the harness's always-open session (module docstring): the send-time
@@ -140,6 +153,23 @@ async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_h
         lease_ttl_ms=_REPLAY_LEASE_TTL_MS,
     )
     broker = _EntryFillingBroker()
+    if stale_snapshot:
+        original_submit = broker.submit
+
+        async def submit_then_lose_snapshot(leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            order = await original_submit(leg, client_order_id=client_order_id)
+            if leg.side is OrderSide.BUY:
+                raise_uncertainty(
+                    repo, strategy_instance_id=None, reason_code="BROKER_SNAPSHOT_STALE",
+                    headline="Broker account truth is unavailable",
+                    explanation="The account snapshot failed after the entry filled.",
+                    operator_impact="Unproven reductions are paused.",
+                    next_step="Reconcile after connectivity recovers.",
+                    cause_facts={"snapshot": "open_orders_and_positions"}, severity="error",
+                )
+            return order
+
+        monkeypatch.setattr(broker, "submit", submit_then_lose_snapshot)
     facade = SqliteAlpacaClerkFacade(
         repo=repo, read=broker, trade=broker, account_mode="paper", program_leg_policy=_POLICY
     )
@@ -158,6 +188,19 @@ async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_h
     try:
         await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger)
         await facade.drain_effects()
+
+        if stale_snapshot:
+            # The real capability refusal happens after acceptance. The Clerk
+            # retains custody and the runner commits the accepted evaluation;
+            # there is no unowned EXIT waiting for another strategy bar (#2482).
+            assert len(broker.submitted_legs) == 1
+            [pending] = repo.reconcilable_effect_operations()
+            assert pending.kind == "EXIT"
+            receipts = SqliteDecisionReceipts(repo, strategy_instance_id=_SID).tail(20)
+            assert receipts[-1].outcome == "exit_intent"
+            assert feed.bars_consumed == 3
+            await facade.reconcile_once()
+            assert feed.bars_consumed == 3
 
         enter_leg, exit_leg = broker.submitted_legs
         assert (enter_leg.side, enter_leg.order_type, enter_leg.extended_hours) == (

@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
-    UNPRICEABLE_RECOVERY,
     RecoveryPricing,
     next_redrive_at_ms,
+    redrive_window_opened_at_ms,
 )
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -104,31 +104,18 @@ def project_uncertainties(
     *,
     now_ms: int,
     exits_in_progress: ExitsInProgress,
-    redrive_policy: ProgramLegPolicy,
+    redrive_policy: ProgramLegPolicy | None,
 ) -> tuple[ProjectedUncertainty, ...]:
     """Open episodes, in the order given, each projected with the one read of its facts.
 
     The single projection of an ``uncertainties`` row — the custody read, the
     bot page's guidance and the lane's attention bell all come through here.
-    A recorded next attempt is the stuck-EXIT watchdog's promise, so it is
-    projected only as far as it is still true (#2440 review):
-
-    - an ``EXIT_NOT_FLAT`` whose strategy has an active ``EXIT_STUCK`` among
-      ``rows`` carries none, and its next step says automatic attempts
-      stopped: the watchdog escalated and re-drives it no more;
-    - one whose strategy has an exit in progress (``exits_in_progress``,
-      asked once about the strategies these notices name) carries none and
-      is flagged ``exit_working``: the watchdog sends nothing while an exit
-      is in progress, and nothing rewrites the recorded time when it accepts
-      one;
-    - otherwise the time is the watchdog's real next try, projected now from
-      the recorded one by the computation that recorded it
-      (``recovery_reduction.next_redrive_at_ms`` under ``redrive_policy``,
-      the authority's own ``recovery_pricing``): a deferral writes nothing,
-      so a 16:02 promise the after-hours quote could not keep reads 03:59:55
-      from 20:00. Only when that projection is itself not in the future —
-      the watchdog could have sent by now — is the recorded promise shown,
-      flagged ``next_attempt_overdue``.
+    A recorded next attempt marks earliest eligibility, not a scheduled
+    broker submission. Quotes, custody evidence and the periodic sweep can
+    delay it. Closed sessions project forward under the authority's own
+    recovery policy. Without a policy authority, eligibility is unknown.
+    An active EXIT hides the
+    timestamp and an EXIT_STUCK episode stops automatic attempts entirely.
     """
     rows = tuple(rows)
     escalated = frozenset(
@@ -200,10 +187,16 @@ def _checked_record(
 
 def _projected_next_attempt(
     recorded: int, *, now_ms: int, redrive_policy: ProgramLegPolicy
-) -> tuple[int, bool]:
-    """The time to show for a recorded next attempt, and whether it is past due."""
+) -> int:
+    """Earliest retry eligibility, re-anchored after a closed-session deferral.
+
+    Quotes or custody can defer an eligible attempt without rewriting its
+    record. Once the next window opens, keep that window's opening time.
+    """
     projected = next_redrive_at_ms(not_before_ms=max(recorded, now_ms), policy=redrive_policy)
-    return (projected, False) if projected > now_ms else (recorded, True)
+    if projected > now_ms:
+        return projected
+    return max(recorded, redrive_window_opened_at_ms(now_ms=now_ms, policy=redrive_policy))
 
 
 def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
@@ -216,27 +209,27 @@ def _projected_uncertainty(
     row: Mapping[str, Any],
     *,
     now_ms: int,
-    redrive_policy: ProgramLegPolicy,
+    redrive_policy: ProgramLegPolicy | None,
     redrives_stopped: bool,
     exit_working: bool,
 ) -> ProjectedUncertainty:
     """One open episode, projected from its columns and the facts only they cannot carry.
 
-    The facts carry what the columns do not — when the Clerk next tries
+    The facts carry what the columns do not — earliest retry eligibility
     (#2440), and the symbol the cause names. A row whose facts cannot be read
     — or whose next attempt cannot be projected — is still projected, flagged
     ``facts_unreadable`` with no next attempt, and logged at error level once:
     one bad row fails loudly on its own and never blanks the whole read
     (#2440 review).
     """
-    next_attempt_at_ms, next_attempt_overdue = None, False
+    next_attempt_at_ms = None
     try:
         cause_facts, recorded = _checked_record(
             UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
         )
         symbol = _cause_symbol(cause_facts)
-        if recorded is not None and not (redrives_stopped or exit_working):
-            next_attempt_at_ms, next_attempt_overdue = _projected_next_attempt(
+        if recorded is not None and redrive_policy is not None and not (redrives_stopped or exit_working):
+            next_attempt_at_ms = _projected_next_attempt(
                 recorded, now_ms=now_ms, redrive_policy=redrive_policy
             )
         facts_unreadable = False
@@ -262,7 +255,6 @@ def _projected_uncertainty(
         evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
         symbol=symbol,
         next_attempt_at_ms=next_attempt_at_ms,
-        next_attempt_overdue=next_attempt_overdue,
         exit_working=exit_working,
         facts_unreadable=facts_unreadable,
     )
@@ -291,10 +283,9 @@ class SqliteClerkProjectionReader:
 
     ``pricing`` is the authority's own ``recovery_pricing`` — the seam its
     stuck-EXIT watchdog re-drives from and its folds record the next attempt
-    from — so an ``EXIT_NOT_FLAT`` notice projects the watchdog's real next
-    try (``project_uncertainties``). A surface that shows that time passes
-    it; the degraded default projects the regular session only, as an
-    authority that can price nothing would re-drive.
+    from — so an ``EXIT_NOT_FLAT`` notice projects retry eligibility
+    under the same authority. Required: callers must name the pricing seam,
+    including an explicitly unpriceable seam for an isolated reader.
     """
 
     def __init__(
@@ -305,7 +296,7 @@ class SqliteClerkProjectionReader:
         authority_generation: int,
         db_identity_token: str,
         clock: Clock = now_ms_utc,
-        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+        pricing: RecoveryPricing,
     ) -> None:
         self._db_path = db_path
         self._account_id = account_id
@@ -379,7 +370,7 @@ class SqliteClerkProjectionReader:
         repository: ClerkSqliteRepository,
         *,
         clock: Clock | None = None,
-        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+        pricing: RecoveryPricing,
     ) -> SqliteClerkProjectionReader:
         """A reader over ``repository``, judging freshness by the repository's own clock.
 
@@ -402,8 +393,7 @@ class SqliteClerkProjectionReader:
         """A reader over an authority's repository that projects from the authority's own pricing seam.
 
         Every surface that shows an ``EXIT_NOT_FLAT`` notice reads through
-        here, so the next attempt it shows is the one that authority's
-        watchdog will make (#2440 review).
+        here, so eligibility uses that authority's own recovery policy (#2440 review).
         """
         return cls.from_repository(facade.repository, pricing=facade.recovery_pricing)
 

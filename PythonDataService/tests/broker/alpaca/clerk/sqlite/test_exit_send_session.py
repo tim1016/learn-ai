@@ -654,8 +654,8 @@ def test_the_next_redrive_is_judged_where_its_send_would_land() -> None:
     assert next_redrive_at_ms(not_before_ms=_at(19, 59, 54), policy=_POLICY) == _at(19, 59, 54)
 
 
-def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool, bool]:
-    """What the bot page shows for SID's ``EXIT_NOT_FLAT``: the time, overdue, and exit working."""
+def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool]:
+    """What the bot page shows for SID's ``EXIT_NOT_FLAT``: eligibility and exit working."""
     reader = SqliteClerkProjectionReader.from_repository(repo, pricing=_live_touch())
     try:
         snapshot = reader.bot_snapshot(SID)
@@ -664,8 +664,8 @@ def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool, bo
     assert snapshot is not None
     [episode] = [item for item in snapshot.uncertainties if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
     guidance = snapshot.guidance
-    shown = (episode.next_attempt_at_ms, episode.next_attempt_overdue, episode.exit_working)
-    assert (guidance.next_attempt_at_ms, guidance.next_attempt_overdue, guidance.exit_working) == shown
+    shown = (episode.next_attempt_at_ms, episode.exit_working)
+    assert (guidance.next_attempt_at_ms, guidance.exit_working) == shown
     return shown
 
 
@@ -674,7 +674,7 @@ def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool, bo
     [f"{EXIT_REDRIVE_DECISION_PREFIX}0123456789ab-1", f"{RECOVERY_FLATTEN_DECISION_PREFIX}operator01"],
     ids=["watchdog-redrive", "operator-priced-flatten"],
 )
-async def test_a_working_exit_is_shown_working_never_overdue_until_it_ends(
+async def test_a_working_exit_replaces_retry_eligibility_until_it_ends(
     repo: ClerkSqliteRepository, decision_id: str
 ) -> None:
     """#2440 review (major): a sell resting in pre-market read "overdue since 04:00" until 20:00.
@@ -703,7 +703,7 @@ async def test_a_working_exit_is_shown_working_never_overdue_until_it_ends(
     )
     _walk_clock_to(repo, _at(19, 59, 57))
     await resolve_exit(repo, effect_operation_id=program_exit, trade=_acked(), pricing=_live_touch())
-    assert _projected_notice(repo) == (_at(3, 59, 55, day=thursday), False, False)
+    assert _projected_notice(repo) == (_at(3, 59, 55, day=thursday), False)
 
     _walk_clock_to(repo, _at(4, 0, 15, day=thursday))
     priced = price_automatic_recovery_reduction(
@@ -732,7 +732,7 @@ async def test_a_working_exit_is_shown_working_never_overdue_until_it_ends(
     assert sent.reducing_order_ref is not None
     for read_at_ms in (_at(4, 0, 30, day=thursday), _at(9, 35, day=thursday)):
         _walk_clock_to(repo, read_at_ms)
-        assert _projected_notice(repo) == (None, False, True)
+        assert _projected_notice(repo) == (None, True)
 
     _walk_clock_to(repo, _at(20, 0, 10, day=thursday))
     expired = _FakeTrade(
@@ -744,7 +744,7 @@ async def test_a_working_exit_is_shown_working_never_overdue_until_it_ends(
         repo, effect_operation_id=working.effect_operation_id, trade=expired, pricing=_live_touch()
     )
     assert repo.position(SID, "SPY") == 10
-    assert _projected_notice(repo) == (_at(3, 59, 55, day=friday), False, False)
+    assert _projected_notice(repo) == (_at(3, 59, 55, day=friday), False)
 
 
 async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(

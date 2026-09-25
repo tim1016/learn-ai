@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     RecoveryEvaluationObservation,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedHealth
@@ -678,7 +679,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
     @asynccontextmanager
     async def custody_guard(strategy_instance_id: str):
         del strategy_instance_id
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")

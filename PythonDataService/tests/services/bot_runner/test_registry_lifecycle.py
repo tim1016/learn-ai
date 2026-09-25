@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.models import (
     CustodyCountFact,
     CustodyExposureFact,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.desired_state import DesiredState
 from app.marketdata.feed import (
@@ -117,12 +118,12 @@ class _CancellationSuppressingFeed(_FakeFeed):
 
 @asynccontextmanager
 async def _rth_start_guard(sid: str):
-    yield _flat_custody_snapshot(sid, observed_at_ms=_RTH_MS)
+    yield _flat_custody_snapshot(sid, observed_at_ms=_RTH_MS), ProgramLegPolicy.regular_only()
 
 
 @asynccontextmanager
 async def _closed_start_guard(sid: str):
-    yield _flat_custody_snapshot(sid, observed_at_ms=_CLOSED_MS)
+    yield _flat_custody_snapshot(sid, observed_at_ms=_CLOSED_MS), ProgramLegPolicy.regular_only()
 
 
 @asynccontextmanager
@@ -465,7 +466,7 @@ async def test_start_timestamps_activation_after_custody_reconciliation(
     @asynccontextmanager
     async def delayed_custody_guard(sid: str):
         clock["now"] = _T0 + 10_000
-        yield _flat_custody_snapshot(sid, observed_at_ms=clock["now"])
+        yield _flat_custody_snapshot(sid, observed_at_ms=clock["now"]), ProgramLegPolicy.regular_only()
 
     registry = BotTaskRegistry(
         tmp_path,
@@ -837,10 +838,10 @@ class _CustodyThatAcquiresExposure:
         self.exposed = False
 
     @asynccontextmanager
-    async def __call__(self, sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
+    async def __call__(self, sid: str) -> AsyncIterator[tuple[ClerkCustodySnapshot, ProgramLegPolicy]]:
         flat = _flat_custody_snapshot(sid)
         if not self.exposed:
-            yield flat
+            yield flat, ProgramLegPolicy.regular_only()
             return
         yield flat.model_copy(
             update={
@@ -849,7 +850,7 @@ class _CustodyThatAcquiresExposure:
                 ),
                 "working_orders": CustodyCountFact(state="non_zero", count=1),
             }
-        )
+        ), ProgramLegPolicy.regular_only()
 
 
 @pytest.mark.asyncio
@@ -971,10 +972,10 @@ class _CustodyThatFreezes:
         self.frozen = False
 
     @asynccontextmanager
-    async def __call__(self, sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
+    async def __call__(self, sid: str) -> AsyncIterator[tuple[ClerkCustodySnapshot, ProgramLegPolicy]]:
         flat = _flat_custody_snapshot(sid)
         if not self.frozen:
-            yield flat
+            yield flat, ProgramLegPolicy.regular_only()
             return
         yield flat.model_copy(
             update={
@@ -986,7 +987,7 @@ class _CustodyThatFreezes:
                     observed_at_ms=_RTH_MS,
                 )
             }
-        )
+        ), ProgramLegPolicy.regular_only()
 
 
 @pytest.mark.asyncio

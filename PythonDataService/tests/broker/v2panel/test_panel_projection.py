@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     ReconciliationSummary,
 )
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -861,7 +862,7 @@ def test_transaction_rail_resolves_old_transaction_outside_bounded_window(
     repo = _real_repo(tmp_path)
     try:
         old_ref, newest_ref = _two_real_operations(repo)
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             # A window of 1 only carries the newest operation (EXIT); the
             # ENTER `old_ref` genuinely exists in storage but falls outside it.
@@ -893,7 +894,7 @@ def test_transaction_rail_reports_explicit_absence_for_a_ref_that_does_not_exist
     repo = _real_repo(tmp_path)
     try:
         _old_ref, newest_ref = _two_real_operations(repo)
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             projection = reader.bot_snapshot(SID)
         finally:
@@ -936,7 +937,7 @@ def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
             leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         )
 
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             projection = reader.bot_snapshot(SID)
         finally:
@@ -1437,15 +1438,15 @@ def test_sqlite_adapter_keeps_unavailable_custody_subject_blockers_on_bot_scope(
     assert adapted.readiness_checks[0].scope == "bot"
 
 
-@pytest.mark.parametrize("overdue", [False, True])
-def test_the_mission_verdict_says_when_the_clerk_next_tries_an_exit(overdue: bool) -> None:
+@pytest.mark.parametrize("offset_ms", [-60_000, 3_600_000])
+def test_the_mission_verdict_carries_retry_eligibility(offset_ms: int) -> None:
     """#2440 M5: the bot page's verdict is the only bot surface with the EXIT_NOT_FLAT words.
 
-    It carries the primary episode's next automatic attempt, and whether that
-    time has passed, from the guidance it is built from — the bot page renders
+    It carries the primary episode's retry eligibility from the guidance
+    it is built from — the bot page renders
     it beside "Next:" as the desk does.
     """
-    next_attempt_at_ms = _NOW + (-60_000 if overdue else 3_600_000)
+    next_attempt_at_ms = _NOW + offset_ms
     episode = ProjectedUncertainty(
         uncertainty_id="uncertainty:9",
         scope="CUSTODY_SUBJECT",
@@ -1463,7 +1464,6 @@ def test_the_mission_verdict_says_when_the_clerk_next_tries_an_exit(overdue: boo
         evidence_age_ms=1_000,
         evidence_refs=("order:exit",),
         next_attempt_at_ms=next_attempt_at_ms,
-        next_attempt_overdue=overdue,
     )
     base = _rail_projection(orders=())
     projection = replace(
@@ -1474,7 +1474,6 @@ def test_the_mission_verdict_says_when_the_clerk_next_tries_an_exit(overdue: boo
             explanation=episode.explanation,
             next_step=episode.next_step,
             next_attempt_at_ms=next_attempt_at_ms,
-            next_attempt_overdue=overdue,
         ),
     )
 
@@ -1482,7 +1481,7 @@ def test_the_mission_verdict_says_when_the_clerk_next_tries_an_exit(overdue: boo
 
     assert verdict.state == "blocked"
     assert verdict.next_action == episode.next_step
-    assert (verdict.next_attempt_at_ms, verdict.next_attempt_overdue) == (next_attempt_at_ms, overdue)
+    assert verdict.next_attempt_at_ms == next_attempt_at_ms
 
 
 @pytest.mark.parametrize(

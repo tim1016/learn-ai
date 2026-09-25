@@ -410,6 +410,7 @@ class SqliteAlpacaClerkFacade:
         values = self._live_envelope.in_force
         return replace(
             self._program_leg_policy,
+            allowance_refusal=None,
             # The canonical deploy-knob stamp (#2229): the band edge and the
             # spread cap ride beside the sealed pair on every resolution path
             # alike, so a re-arm cannot silently change them.

@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from app.broker.alpaca import adapter
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -1079,7 +1080,7 @@ async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
 
     def posture_condition() -> str | None:
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             projection = reader.account_snapshot()
         finally:

@@ -47,7 +47,7 @@ from app.broker.contract.models import (
     BrokerPosition,
 )
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.custody import _SID, _registry
+from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -233,7 +233,7 @@ async def _run_late_fill_case(
 
     clerk.execute_for_instance = recording_execute  # type: ignore[method-assign]
     feed = _QueueFeed()
-    registry = _registry(tmp_path / "runner", feed, start_custody_guard=clerk.start_admission_snapshot)
+    registry = _registry(tmp_path / "runner", feed, start_custody_guard=admission_guard_for(clerk))
     set_alpaca_clerk(clerk)
     base = _WIN_START_MS + 60_000
     deployed = False

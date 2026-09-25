@@ -29,6 +29,26 @@ class HostComponent {
 }
 
 describe('ConfigurationRevisionFormComponent', () => {
+  it.each(['paper', 'live'] as const)('accepts backend-valid fractional values on a %s revision', async (endpoint) => {
+    const rendered = await render(HostComponent);
+    await userEvent.selectOptions(screen.getByLabelText('Endpoint'), endpoint);
+    await rendered.fixture.whenStable();
+
+    const values = [
+      ['Extended-hours entry offset (bps)', '7.25'],
+      [/^Extended-hours exit offset \(bps\)/, '8.125'],
+      ...(endpoint === 'live' ? [['Daily loss fraction', '0.00025'], ['Daily loss cap (USD)', '12.345']] : []),
+    ] as const;
+    for (const [name, value] of values) {
+      const field = screen.getByRole('spinbutton', { name });
+      if (!(field instanceof HTMLInputElement)) throw new Error('Expected a numeric input');
+      await userEvent.type(field, value);
+      await rendered.fixture.whenStable();
+      expect(field.value).toBe(value);
+      expect(field.checkValidity()).toBe(true);
+    }
+  });
+
   it('offers every allowlisted slot and says which has no credentials injected', async () => {
     await render(HostComponent);
 

@@ -28,7 +28,6 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
 )
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
@@ -38,6 +37,7 @@ from app.services.bot_lifecycle_projection import (
     SqliteAlpacaLifecycleAuthority,
 )
 from app.services.bot_start_admission import (
+    AdmissionCustodyCut,
     StartAdmissionUnavailable,
     default_start_custody_guard,
     default_start_custody_projection,
@@ -50,10 +50,10 @@ class BindingAuthority:
 
     account_id: str
 
-    def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    def start_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         raise NotImplementedError
 
-    def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    def start_custody_projection(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         """Custody for a read: projects the sweep's verdict, never reconciles."""
         raise NotImplementedError
 
@@ -103,17 +103,17 @@ class PrimaryAccountBindingAuthority(BindingAuthority):
 
     binding: BrokerBotBinding
     projector: AlpacaLifecycleProjector
-    external_start_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
+    external_start_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None
     artifacts_root: Path
     custody_kind: Callable[[], AccountAuthorityKind]
     account_id: str = "real_paper"
 
-    def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    def start_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         if self.external_start_guard is not None:
             return self.external_start_guard(self.binding.strategy_instance_id)
         return default_start_custody_guard(self.binding)
 
-    def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    def start_custody_projection(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         # An injected guard is a whole-authority substitution (tests, sim
         # harnesses); it stands in for reads too.
         if self.external_start_guard is not None:
@@ -148,10 +148,10 @@ class SyntheticBindingAuthority(BindingAuthority):
     def __post_init__(self) -> None:
         self.account_id = synthetic_account_id_for_strategy(self.binding.strategy_instance_id)
 
-    def start_custody_guard(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    def start_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._start_custody_guard()
 
-    def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    def start_custody_projection(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._start_custody_guard(project=True)
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
@@ -217,7 +217,7 @@ class SyntheticBindingAuthority(BindingAuthority):
         )
 
     @asynccontextmanager
-    async def _start_custody_guard(self, *, project: bool = False) -> AsyncIterator[ClerkCustodySnapshot]:
+    async def _start_custody_guard(self, *, project: bool = False) -> AsyncIterator[AdmissionCustodyCut]:
         runtime = await self._runtime()
         clerk = runtime.clerk
         if clerk is None:
@@ -229,7 +229,7 @@ class SyntheticBindingAuthority(BindingAuthority):
             clerk.start_admission_projection if project else clerk.start_admission_snapshot
         )
         async with admission(self.binding.strategy_instance_id) as snapshot:
-            yield snapshot
+            yield snapshot, clerk.program_leg_policy
 
     async def _runtime(self) -> ActiveClerkRuntime:
         existing = get_clerk_runtime(self.account_id)
@@ -259,7 +259,7 @@ class BindingAuthoritySelector:
     artifacts_root: Path
     lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo]
     real_projector: AlpacaLifecycleProjector
-    external_start_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
+    external_start_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None
     runtime_in_use: Callable[[BrokerBotBinding], bool]
     synthetic_brokers: dict[str, SyntheticBroker] = field(default_factory=dict)
 

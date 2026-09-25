@@ -42,7 +42,6 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
-    active_program_leg_policy,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
@@ -153,6 +152,7 @@ from app.services.bot_runtime import (
     require_live_managed_bot,
 )
 from app.services.bot_start_admission import (
+    AdmissionCustodyCut,
     AdmittedBotStart,
     BotStartAdmission,
     MarketLivenessFactResolver,
@@ -446,7 +446,7 @@ class BotTaskRegistry:
         now_ms: Callable[[], int] = now_ms_utc,
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
-        start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
+        start_custody_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
         symbol_unresolvable: Callable[[str, str], bool] = symbol_unresolvable_for_mode,
@@ -528,7 +528,6 @@ class BotTaskRegistry:
             activate=self._activate_start_binding,
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
-            program_leg_policy=active_program_leg_policy,
             arming_fact=arming_fact,
         )
         self._resume_admission = BotResumeAdmission(
@@ -546,7 +545,6 @@ class BotTaskRegistry:
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
             legacy_migration_repository=self._bindings,
-            program_leg_policy=active_program_leg_policy,
             arming_fact=arming_fact,
         )
         self._run_evidence = BotRunEvidenceService(
@@ -1065,7 +1063,7 @@ class BotTaskRegistry:
                     detail="The roster has no binding for this instance.",
                 )
             status = self.status(broker, strategy_instance_id)
-            async with self._start_custody_guard(binding) as custody:
+            async with self._start_custody_guard(binding) as (custody, _policy):
                 verdict = evaluate_retirement(
                     running=status.running,
                     phase=status.phase,
@@ -1123,7 +1121,7 @@ class BotTaskRegistry:
                 )
             status = self.status(broker, strategy_instance_id)
             try:
-                async with self._start_custody_guard(binding) as custody:
+                async with self._start_custody_guard(binding) as (custody, _policy):
                     verdict = evaluate_archive(
                         running=status.running,
                         phase=status.phase,
@@ -1916,13 +1914,13 @@ class BotTaskRegistry:
     def _start_custody_guard(
         self,
         binding: BrokerBotBinding,
-    ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._authority_for(binding).start_custody_guard()
 
     def _start_custody_projection(
         self,
         binding: BrokerBotBinding,
-    ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+    ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._authority_for(binding).start_custody_projection()
 
     def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:

@@ -21,6 +21,7 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -126,7 +127,7 @@ def _start_guard_sealing(
 
     @asynccontextmanager
     async def guard(sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
-        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id})
+        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id}), ProgramLegPolicy.regular_only()
 
     return guard
 
@@ -272,6 +273,9 @@ async def test_scoped_run_reads_match_the_canonical_account_identity(
     A Dry Run seal names its isolated ``sim:`` authority, so it is matched
     against the lane's primary authority -- the account its roster lists it
     under."""
+    from tests._helpers.bot_runner.custody import configure_execution_allowances
+
+    configure_execution_allowances(monkeypatch)
     app, _registry = api
     registry = _bot_registry(tmp_path / "sealed", _start_guard_sealing(sealed_account_id))
     set_bot_task_registry(registry)
@@ -341,6 +345,9 @@ async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
 ) -> None:
     """With no primary authority there is no lane account to match a Dry Run
     seal against, so the read is refused as unavailable, never admitted."""
+    from tests._helpers.bot_runner.custody import configure_execution_allowances
+
+    configure_execution_allowances(monkeypatch)
     app, registry = api
     await registry.deploy(
         broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run"
