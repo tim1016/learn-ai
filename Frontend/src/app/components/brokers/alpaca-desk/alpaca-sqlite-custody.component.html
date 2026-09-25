@@ -45,6 +45,12 @@
             }
             <span>{{ uncertainty.explanation }}</span>
             <span>{{ uncertainty.operator_impact }} {{ uncertainty.next_step }}</span>
+            @if (uncertainty.next_attempt_at_ms; as nextAttemptAtMs) {
+              <span>
+                Next automatic attempt:
+                <app-timestamp-display [value]="nextAttemptAtMs" mode="et" />
+              </span>
+            }
             @if (uncertainty.reason_code === unfoldableReasonCode) {
               <app-unfoldable-order-review
                 [brokerOrderIds]="uncertainty.evidence_refs"

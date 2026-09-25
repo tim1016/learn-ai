@@ -20515,6 +20515,8 @@ export interface components {
             explanation: string;
             /** Headline */
             headline: string;
+            /** Next Attempt At Ms */
+            next_attempt_at_ms?: number | null;
             /** Next Step */
             next_step: string;
             /** Observed At Ms */

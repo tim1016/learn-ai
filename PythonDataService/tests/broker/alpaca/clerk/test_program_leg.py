@@ -154,7 +154,12 @@ def test_a_regular_hours_exit_decided_at_the_close_takes_the_extended_shape() ->
 
 
 def test_an_early_close_day_moves_the_regular_hours_exit_boundary_to_its_calendar_close() -> None:
-    """The close is the canonical calendar's, never a 16:00 literal: 13:00 on a half-day."""
+    """The close is the canonical calendar's, never a 16:00 literal: 13:00 on a half-day.
+
+    So is the after-hours close the leg is bounded by (#2440 review): 17:00 on
+    that half-day, not the declared window's 20:00 — Alpaca's after-hours ends
+    with the calendar's, and a leg sent at 18:00 would reach no session.
+    """
     black_friday = date(2026, 11, 27)
 
     at_close = shape_program_leg(
@@ -173,41 +178,67 @@ def test_an_early_close_day_moves_the_regular_hours_exit_boundary_to_its_calenda
     )
 
     assert (at_close.shape.order_type, at_close.shape.extended_hours) == (OrderType.LIMIT, True)
-    assert at_close.valid_until_ms == _at(20, 0, day=black_friday)
+    assert at_close.valid_until_ms == _at(17, 0, day=black_friday)
     assert inside == ProgramLeg(regular_session_shape(OrderSide.SELL))
 
 
+def test_an_extended_leg_decided_after_a_half_days_after_hours_close_is_refused() -> None:
+    """17:30 on 2026-11-27 is inside the declared 04:00-20:00 window but past the calendar's
+    after-hours close: no session accepts a leg, so nothing is priced for one (#2440 review)."""
+    with pytest.raises(ProgramLegRefused) as refused:
+        shape_program_leg(
+            side=OrderSide.SELL,
+            purpose=EffectPurpose.EXIT,
+            use_rth=False,
+            decision_bar=_bar(17, 30, day=date(2026, 11, 27)),
+            policy=_POLICY,
+        )
+    assert refused.value.reason_code == "SESSION_CLOSED_AT_DECISION"
+
+
 @pytest.mark.parametrize(
-    ("bar", "policy"),
+    ("bar", "policy", "unpriced"),
     [
-        pytest.param(_bar(15, 59), _POLICY, id="decided-inside-the-session"),
-        pytest.param(None, _POLICY, id="no-retained-bar"),
+        pytest.param(_bar(15, 59), _POLICY, None, id="decided-inside-the-session"),
+        pytest.param(None, _POLICY, "EXTENDED_ANCHOR_UNAVAILABLE", id="no-retained-bar"),
         pytest.param(
-            _bar(16, 0), ProgramLegPolicy(window=None, allowances=_ALLOWANCES), id="no-declared-window"
+            _bar(16, 0),
+            ProgramLegPolicy(window=None, allowances=_ALLOWANCES),
+            "SESSION_CLOSED_AT_DECISION",
+            id="no-declared-window",
         ),
         pytest.param(
-            _bar(16, 0), ProgramLegPolicy(window=_WINDOW, allowances=None), id="no-exit-allowance"
+            _bar(16, 0),
+            ProgramLegPolicy(window=_WINDOW, allowances=None),
+            "EXTENDED_HOURS_ALLOWANCE_UNSET",
+            id="no-exit-allowance",
         ),
     ],
 )
 def test_a_regular_hours_exit_that_cannot_take_the_extended_shape_keeps_the_regular_leg(
-    bar: RetainedSourceBar | None, policy: ProgramLegPolicy
+    bar: RetainedSourceBar | None, policy: ProgramLegPolicy, unpriced: str | None
 ) -> None:
-    """Nothing here refuses a regular-hours EXIT.
+    """Nothing here refuses a regular-hours EXIT — a refused EXIT would never reduce.
 
     Inside the session the market leg is right. At the close without a window
-    or an allowance to price the extended shape, the regular leg is kept and
-    the send-time rule in ``exit_resolution`` refuses to send it after the
-    close — loudly, through ``EXIT_NOT_FLAT`` — rather than a rejected receipt
-    leaving the position with nothing but a decision record.
+    or an allowance to price the extended shape — or with no retained bar to
+    tell — the regular leg is kept and says why on ``unpriced``, which the
+    Clerk logs loudly (#2440 review, B-4); the send-time rule in
+    ``exit_resolution`` then re-prices or refuses it after the close, through
+    ``EXIT_NOT_FLAT``, rather than a rejected receipt leaving the position with
+    nothing but a decision record.
     """
-    assert shape_program_leg(
+    leg = shape_program_leg(
         side=OrderSide.SELL,
         purpose=EffectPurpose.EXIT,
         use_rth=True,
         decision_bar=bar,
         policy=policy,
-    ) == ProgramLeg(regular_session_shape(OrderSide.SELL))
+    )
+
+    assert leg.shape == regular_session_shape(OrderSide.SELL)
+    assert leg.valid_until_ms is None
+    assert (None if leg.unpriced is None else leg.unpriced.reason_code) == unpriced
 
 
 @pytest.mark.parametrize(

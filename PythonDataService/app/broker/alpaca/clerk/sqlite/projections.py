@@ -732,8 +732,8 @@ class SqliteClerkProjectionReader:
         rows = self._conn.execute(
             "SELECT uncertainty_id, scope, severity, blocks_new_exposure, allows_reduction, "
             "custody_owner, strategy_instance_id, reason_code, headline, explanation, "
-            "operator_impact, next_step, observed_at_ms, evidence_refs_json FROM uncertainties "
-            f"WHERE {where} ORDER BY observed_at_ms DESC",
+            "operator_impact, next_step, observed_at_ms, evidence_refs_json, facts_json "
+            f"FROM uncertainties WHERE {where} ORDER BY observed_at_ms DESC",
             params,
         ).fetchall()
         return tuple(
@@ -753,6 +753,9 @@ class SqliteClerkProjectionReader:
                 observed_at_ms=row["observed_at_ms"],
                 evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
                 evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
+                next_attempt_at_ms=UncertaintyRaisedFacts.from_facts_json(
+                    row["facts_json"]
+                ).next_attempt_at_ms,
             )
             for row in rows
         )

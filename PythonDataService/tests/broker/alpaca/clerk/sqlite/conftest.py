@@ -49,9 +49,10 @@ FIXTURE_RTH_MS = 1_700_060_400_000
 """2023-11-15 10:00 ET (a Wednesday): inside the regular session, the morning
 after every ``1_700_000_000_xxx`` broker stamp these fixtures carry.
 
-``1_700_000_000_000`` itself is 17:13 ET -- after-hours -- which is where an
-unshaped recovery reduction waits for the regular session (#2007). A test of
-a regular-hours flatten starts here instead."""
+``1_700_000_000_000`` itself is 17:13 ET -- after-hours -- where an unshaped
+recovery reduction's market leg cannot go out (#2440): it is re-priced as an
+after-hours limit, or folded for the operator when nothing can price one. A
+test of a regular-hours flatten starts here instead."""
 
 
 def _walk_clock_to(repo: ClerkSqliteRepository, target_ms: int) -> None:

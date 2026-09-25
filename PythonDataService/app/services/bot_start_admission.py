@@ -337,9 +337,25 @@ async def resolve_start_runtime_fact(
 def extended_hours_admission_fact(
     *, use_rth: bool, policy: ProgramLegPolicy, observed_at_ms: int
 ) -> ExtendedHoursAdmissionFact:
-    """Pure: what the active authority can do for a run outside regular hours."""
+    """Pure: what the active authority can price for this run outside regular hours.
+
+    An extended-hours run needs the declared window and both allowances. A
+    regular-hours run asks for no extended session, but its exit on the day's
+    last bar reaches the broker after the close and goes out as an after-hours
+    limit priced from the exit allowance (#2440). Owner decision 2026-09-25:
+    Start and Resume refuse it as ``ALLOWANCE_UNSET`` until that allowance is
+    configured — never a built-in default. The allowances are one document
+    (``ExtendedHoursAllowances`` has no exit-only form), so the refusal is the
+    shared one. An authority that declares no extended window at all cannot
+    price that exit whatever it is configured with; its run is admitted as
+    before and the send-time rule tells the operator at the close.
+    """
     if use_rth:
-        state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"] = "NOT_REQUESTED"
+        state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"] = (
+            "ALLOWANCE_UNSET"
+            if policy.window is not None and policy.allowances is None
+            else "NOT_REQUESTED"
+        )
     elif policy.window is None:
         state = "UNSUPPORTED"
     elif policy.allowances is None:

@@ -538,9 +538,17 @@ class UncertaintyRaisedFacts:
     next_step: str
     evidence_refs: list[str]
     cause_facts: dict[str, Any] = field(default_factory=dict)
+    # When the Clerk will next try to resolve the episode on its own, when it
+    # can say: the stuck-EXIT watchdog's next re-drive (#2440). An ``int64 ms
+    # UTC`` value the UI renders, never prose. Omitted when absent, so every
+    # episode without one serializes and hashes exactly as before.
+    next_attempt_at_ms: int | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        payload = asdict(self)
+        if payload["next_attempt_at_ms"] is None:
+            del payload["next_attempt_at_ms"]
+        return canonicalize(payload)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> UncertaintyRaisedFacts:

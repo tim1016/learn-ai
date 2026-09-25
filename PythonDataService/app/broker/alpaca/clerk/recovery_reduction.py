@@ -69,6 +69,7 @@ from app.schemas.market_liveness import TopOfBookQuote
 from app.services.session_authority import (
     TRADEABLE_EXTENDED_PHASES,
     SessionAuthorityState,
+    order_session_state_at_ms,
     session_state_at_ms,
 )
 
@@ -83,6 +84,37 @@ RECOVERY_QUOTE_MAX_AGE_MS = 10_000
 Owner decision 2026-09-19: send the confirmed price, but ask for a refresh if
 the bid/ask the operator looked at is more than about ten seconds old.
 """
+
+EXIT_SEND_GUARD_BAND_MS = 5_000
+"""How close to the end of its session a reducing leg is treated as past it (#2440 review).
+
+The send-time rule is judged a moment before the order reaches Alpaca: a
+market leg that passes the check at 15:59:59.9 can arrive after 16:00 and be
+queued for the next open, and a limit checked at 19:59:59 can arrive after
+the after-hours close. So every judgement — may this leg still go out, and if
+not, what would be priced in its place — is made at the latest instant the
+leg may reach the broker: now plus this band (:func:`send_arrival_ms`). Just
+before the open the same rule lets a market leg rest at most this band for the
+opening auction; that is not the overnight queue #2440 closes.
+"""
+
+REDUCING_ORDER_PAST_SESSION_GRACE_MS = 300_000
+"""How long a reducing order may still be working past its session before the operator is told.
+
+Alpaca ends a DAY extended-hours limit at the end of after-hours, and a market
+leg sent in the regular session executes before its close — the Clerk does not
+rely on either (#2440 review). A reducing order the broker still reports
+working this long after its session ended raises ``EXIT_NOT_FLAT`` once.
+Minutes, not seconds: the broker's own expiry and its trade-update evidence
+take a few seconds to land, and a false alarm on every close would teach the
+operator to ignore the real one.
+"""
+
+
+def send_arrival_ms(now_ms: int) -> int:
+    """The latest instant a leg sent at ``now_ms`` may reach the broker (:data:`EXIT_SEND_GUARD_BAND_MS`)."""
+    return now_ms + EXIT_SEND_GUARD_BAND_MS
+
 
 RECOVERY_BAND_ALLOWANCE_MULTIPLE = DEFAULT_EXIT_BAND_MULTIPLE
 """The declared default band multiple: how far through the book a confirmed
@@ -155,10 +187,13 @@ RECOVERY_SESSION_CHANGED = LegRefusal(
 )
 
 
+NO_SESSION_OPEN_REASON_CODE = "NO_SESSION_OPEN"
+
+
 def no_session_open(opens_at_ms: int | None) -> LegRefusal:
     """No session the active authority trades is open now."""
     return LegRefusal(
-        reason_code="NO_SESSION_OPEN",
+        reason_code=NO_SESSION_OPEN_REASON_CODE,
         explanation="No trading session is open now, so no reduction can be sent.",
         next_step="Flatten again once the next session opens.",
         available_at_ms=opens_at_ms,
@@ -313,9 +348,11 @@ def flatten_session(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthorit
     """The session an operator's flatten would go out in at ``now_ms``.
 
     The calendar's regular session widened by the window the broker declares
-    -- the same window an extended-session program leg is shaped against.
+    -- the same window an extended-session program leg is shaped against --
+    with after-hours ending at the calendar's scheduled close on an
+    early-close day (``order_session_state_at_ms``).
     """
-    return session_state_at_ms(now_ms=now_ms, extended_window=policy.window)
+    return order_session_state_at_ms(now_ms=now_ms, extended_window=policy.window)
 
 
 def price_recovery_reduction(
@@ -577,11 +614,49 @@ def reducing_leg_verdict(
     to be created — after the side reconciliation that can turn a limit into a
     market leg (R11) — and on every resubmission, so no path reaches the broker
     around it. An extended-hours leg with no recorded bound was priced for no
-    session this rule can name, so it is ``expired``.
+    session this rule can name, so it is ``expired``. Judged at
+    :func:`send_arrival_ms`, so a leg within :data:`EXIT_SEND_GUARD_BAND_MS` of
+    its bound is already past it.
+    """
+    arrival_ms = send_arrival_ms(now_ms)
+    if extended_hours:
+        return "send" if valid_until_ms is not None and arrival_ms < valid_until_ms else "expired"
+    return "send" if regular_session_open(arrival_ms) else "wait"
+
+
+def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
+    """The first instant, not before ``not_before_ms``, the stuck-EXIT watchdog can send a reduction.
+
+    Inside the regular session it sends the market leg; in the declared PRE or
+    POST window it prices a limit itself, which needs the policy's exit
+    allowance (#2229) — without one the next chance is the regular open. The
+    live touch that pricing also reads cannot be foreseen, so this is when
+    the watchdog *tries*; a refused try defers to its next pass. Owner
+    decision 2026-09-25 (#2440): the ``EXIT_NOT_FLAT`` notice states this
+    time — the 04:00 pre-market sell after an after-hours exit that could not
+    go out.
+    """
+    sendable = policy if policy.allowances is not None else ProgramLegPolicy.regular_only()
+    state = flatten_session(now_ms=not_before_ms, policy=sendable)
+    if state.phase == "RTH" or state.phase in TRADEABLE_EXTENDED_PHASES:
+        return not_before_ms
+    return not_before_ms if state.next_transition_ms is None else state.next_transition_ms
+
+
+def reducing_leg_session_end_ms(
+    *, extended_hours: bool, valid_until_ms: int | None, sent_at_ms: int
+) -> int | None:
+    """When the session a sent reducing leg was sendable in ends, or ``None`` when none can be named.
+
+    An extended-hours limit's own bound; a market leg's regular close on the
+    day it was sent (the canonical calendar's, so 13:00 on an early-close
+    day). Read by the sweep's end-of-session alarm
+    (:data:`REDUCING_ORDER_PAST_SESSION_GRACE_MS`).
     """
     if extended_hours:
-        return "send" if valid_until_ms is not None and now_ms < valid_until_ms else "expired"
-    return "send" if regular_session_open(now_ms) else "wait"
+        return valid_until_ms
+    state = session_state_at_ms(now_ms=sent_at_ms)
+    return state.next_transition_ms if state.phase == "RTH" else None
 
 
 def realized_slippage_bps(*, side: OrderSide, reference_price: float, fill_price: float) -> float:
@@ -693,6 +768,8 @@ def _extended_phase(state: SessionAuthorityState) -> ExtendedPhase:
 
 
 __all__ = [
+    "EXIT_SEND_GUARD_BAND_MS",
+    "NO_SESSION_OPEN_REASON_CODE",
     "RECOVERY_BAND_ALLOWANCE_MULTIPLE",
     "RECOVERY_LIMIT_OUTSIDE_BAND",
     "RECOVERY_LIMIT_SESSION_ENDED",
@@ -700,6 +777,7 @@ __all__ = [
     "RECOVERY_QUOTE_MAX_AGE_MS",
     "RECOVERY_SPREAD_TOO_WIDE",
     "RECOVERY_SPREAD_WARNING_BPS",
+    "REDUCING_ORDER_PAST_SESSION_GRACE_MS",
     "UNPRICEABLE_RECOVERY",
     "ConfirmedRecoveryLimit",
     "ConfirmedRecoveryShape",
@@ -713,11 +791,14 @@ __all__ = [
     "ReducingLegVerdict",
     "RegularSessionReduction",
     "flatten_session",
+    "next_redrive_at_ms",
     "no_session_open",
     "price_automatic_recovery_reduction",
     "price_recovery_reduction",
     "realized_slippage_bps",
     "recovery_reduction_shape",
+    "reducing_leg_session_end_ms",
     "reducing_leg_verdict",
     "regular_session_open",
+    "send_arrival_ms",
 ]

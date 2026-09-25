@@ -29770,6 +29770,19 @@
             "title": "Headline",
             "type": "string"
           },
+          "next_attempt_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At Ms"
+          },
           "next_step": {
             "title": "Next Step",
             "type": "string"

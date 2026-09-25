@@ -46,7 +46,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_NOT_FLAT_REASON_CODE
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import TopOfBookQuote
 from app.utils.timestamps import to_ms_utc
@@ -132,11 +132,17 @@ def _exit_not_flat(repo: ClerkSqliteRepository) -> dict | None:
 async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_market_order(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Codex R1, verbatim: accepted at 15:59 in the regular session, driven at 16:01.
+    """Codex R1's scenario: accepted at 15:59 in the regular session, driven at 16:01.
 
     With nothing that can price an after-hours limit (the degraded pricing
     seam), nothing is sent at all — and the operator is told, on the bot page
-    and in the lane's attention bell, that the position is still open.
+    and in the lane's attention bell, that the position is still open, and
+    when the watchdog tries again. On master this test fails only with a
+    ``TypeError`` (``resolve_exit`` took no ``pricing``); it pins the fold,
+    not the regression. ``test_runtime_program_leg.py::
+    test_a_regular_hours_exit_decided_on_the_last_bar_goes_out_as_an_after_hours_limit``
+    is the one that fails on master for the behavioural reason — a MARKET/DAY
+    order submitted after the close.
     """
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     effect_operation_id = _accept_program_exit(repo, entry_ref)
@@ -157,8 +163,13 @@ async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_mar
         "An exit could not be sent after its session ended; the position is still open"
     )
     assert "10 SPY is still held" in episode["explanation"]
-    # Why no after-hours limit replaced it rides in the explanation.
-    assert "No trading session is open now" in episode["explanation"]
+    # Why no after-hours limit replaced it rides in the explanation — and it is
+    # the truth: after-hours IS open at 16:01; this Clerk cannot price it.
+    assert "Extended-hours pricing is unavailable" in episode["explanation"]
+    assert "No trading session is open now" not in episode["explanation"]
+    # The degraded seam prices nothing outside the regular session, so the
+    # watchdog's next try is Thursday's open (a time value, not prose).
+    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == _at(9, 30, day=date(2026, 9, 3))
 
 
 @pytest.mark.parametrize(
@@ -534,3 +545,324 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
         if row["transition_kind"] == "EXIT_NOT_FLAT"
     ]
     assert "confirmed" not in json.loads(not_flat["facts_json"])["reason"]
+
+
+# ── #2440 review batch 2 ──────────────────────────────────────────────────────
+
+
+def _raised_episode_writes(repo: ClerkSqliteRepository) -> int:
+    return repo._conn.execute(
+        "SELECT COUNT(*) FROM custody_transitions WHERE transition_kind IN "
+        "('UNCERTAINTY_RAISED', 'UNCERTAINTY_REFRESHED')"
+    ).fetchone()[0]
+
+
+def _next_attempt_at_ms(episode: dict) -> int | None:
+    return json.loads(episode["facts_json"]).get("next_attempt_at_ms")
+
+
+async def test_a_market_leg_judged_within_the_guard_band_of_the_close_goes_out_as_an_after_hours_limit(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """15:59:57 passes a bare ``now < 16:00`` check, but the order can reach Alpaca after 16:00.
+
+    Judged at the instant it may arrive — now plus ``EXIT_SEND_GUARD_BAND_MS``
+    — the market leg is already past the close, so it is re-priced for
+    after-hours exactly as a leg driven at 16:00:30 is, never sent as a
+    MARKET/DAY order Alpaca could queue for the next open.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    _walk_clock_to(repo, _at(15, 59, 57))
+    trade = _acked()
+
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+
+    ((sent, _),) = trade.submit_calls
+    assert (sent.order_type, sent.extended_hours) == (OrderType.LIMIT, True)
+    assert sent.limit_price == pytest.approx(99.80)
+
+
+async def test_a_limit_judged_within_the_guard_band_of_its_bound_is_not_sent(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A POST limit bound by 20:00, driven at 19:59:57: it could reach Alpaca after the close.
+
+    Nothing is sent; the operator is told, with the watchdog's next attempt —
+    04:00 the next morning — as a time value.
+    """
+    _walk_clock_to(repo, _at(19, 50))
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(
+        repo,
+        entry_ref,
+        shape=LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=99.80,
+            extended_hours=True,
+            side=OrderSide.SELL,
+        ),
+        valid_until_ms=_at(20, 0),
+    )
+    _walk_clock_to(repo, _at(19, 59, 57))
+    trade = _acked()
+
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+
+    assert trade.submit_calls == []
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert "No trading session is open now" in episode["explanation"]
+    assert _next_attempt_at_ms(episode) == _at(4, 0, day=date(2026, 9, 3))
+
+
+async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
+    tmp_path: Path,
+) -> None:
+    """2026-11-27: the regular close is 13:00 and after-hours ends at 17:00, not 20:00.
+
+    An EXIT decided at 12:59 and first driven at 17:30 is inside the declared
+    04:00-20:00 window but past the calendar's after-hours close, so no limit
+    is priced for a session Alpaca no longer runs; the operator is told the
+    watchdog tries at Monday's 04:00 pre-market.
+    """
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_at(_at(12, 59, day=_EARLY_CLOSE_DAY)),
+        lease_ttl_ms=300_000,
+    )
+    try:
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+        effect_operation_id = _accept_program_exit(repo, entry_ref)
+        _walk_clock_to(repo, _at(17, 30, day=_EARLY_CLOSE_DAY))
+        trade = _acked()
+
+        await resolve_exit(
+            repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch()
+        )
+
+        assert trade.submit_calls == [], "a limit was sent after the half-day's after-hours close"
+        episode = _exit_not_flat(repo)
+        assert episode is not None
+        assert "No trading session is open now" in episode["explanation"]
+        assert _next_attempt_at_ms(episode) == _at(4, 0, day=date(2026, 11, 30))
+    finally:
+        repo.close()
+
+
+async def test_a_half_days_after_hours_limit_is_bounded_by_the_calendar_close(
+    tmp_path: Path,
+) -> None:
+    """Re-priced at 13:00:30 on 2026-11-27, the limit carries 17:00 as its bound, not 20:00."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_at(_at(12, 59, day=_EARLY_CLOSE_DAY)),
+        lease_ttl_ms=300_000,
+    )
+    try:
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+        effect_operation_id = _accept_program_exit(repo, entry_ref)
+        _walk_clock_to(repo, _at(13, 0, 30, day=_EARLY_CLOSE_DAY))
+
+        resolved = await resolve_exit(
+            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+        )
+
+        assert resolved.reducing_order_ref is not None
+        created = repo.first_order_transition(
+            order_ref=resolved.reducing_order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
+        )
+        assert created is not None
+        facts = ExitReducingOrderCreatedFacts.from_facts_json(created["facts_json"])
+        assert facts.extended_hours
+        assert facts.valid_until_ms == _at(17, 0, day=_EARLY_CLOSE_DAY)
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("sent_at", "shape", "valid_until", "quiet_at", "alarm_at"),
+    [
+        pytest.param(
+            (17, 13),
+            LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            ),
+            (20, 0),
+            (20, 4),
+            (20, 6),
+            id="after-hours-limit-past-its-close",
+        ),
+        pytest.param((15, 30), None, None, (16, 4), (16, 6), id="market-leg-past-the-regular-close"),
+    ],
+)
+async def test_a_reducing_order_still_working_past_its_session_tells_the_operator_once(
+    repo: ClerkSqliteRepository,
+    sent_at: tuple[int, int],
+    shape: LegShape | None,
+    valid_until: tuple[int, int] | None,
+    quiet_at: tuple[int, int],
+    alarm_at: tuple[int, int],
+) -> None:
+    """Acceptance criterion 4 does not rest on Alpaca ending the order.
+
+    The broker still reports the reducing order working five minutes after
+    its session ended: the Clerk raises ``EXIT_NOT_FLAT`` once, keeps custody
+    of the order (the EXIT is not failed, the entry not released — it may
+    still execute), and a later pass does not raise it again.
+    """
+    _walk_clock_to(repo, _at(*sent_at))
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(
+        repo,
+        entry_ref,
+        shape=shape,
+        valid_until_ms=None if valid_until is None else _at(*valid_until),
+    )
+    sent = await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+    )
+    assert sent.reducing_order_ref is not None
+
+    def still_working() -> _FakeTrade:
+        return _FakeTrade(
+            lookup_results=[_broker_order("placeholder", side="sell", status="accepted")]
+        )
+
+    _walk_clock_to(repo, _at(*quiet_at))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch())
+    assert _exit_not_flat(repo) is None, "raised inside the grace the broker has to end the order"
+
+    _walk_clock_to(repo, _at(*alarm_at))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch())
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert episode["headline"] == (
+        "An exit order is still working after its session ended; the position is still open"
+    )
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "in_progress"
+    assert repo.active_exit_for_order(entry_ref) is not None
+    writes = _raised_episode_writes(repo)
+
+    _walk_clock_to(repo, _at(alarm_at[0], alarm_at[1] + 1))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch())
+    assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
+
+
+async def test_a_reducing_order_the_broker_refuses_tells_the_operator(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A synchronous 4xx on the reducing submit: nothing reached the book, the position is open.
+
+    It used to fold a bare ``ORDER_SUBMIT_FAILED`` — no ``EXIT_NOT_FLAT``, no
+    bell — so the operator learned nothing while the exposure stayed. It is
+    the same releasable fold now, with the notice and the watchdog's next try.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    refused = _FakeTrade(submit_error=BrokerOrderRejected("insufficient qty available for order"))
+
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=refused, pricing=_live_touch())
+
+    assert len(refused.submit_calls) == 1
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    assert repo.active_exit_for_order(entry_ref) is None
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert episode["headline"] == "The broker refused this exit's order; the position is still open"
+    assert "10 SPY is still held" in episode["explanation"]
+    # Inside the regular session the watchdog's next try is its re-drive age away.
+    assert _next_attempt_at_ms(episode) == _at(15, 59) + 120_000
+    failed = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_NOT_FLAT"
+    )
+    assert failed is not None and failed["summary_code"] == "ORDER_SUBMIT_FAILED"
+    assert "insufficient qty available for order" in failed["facts_json"]
+
+
+@pytest.mark.parametrize(
+    "resumed_at",
+    [
+        pytest.param((15, 59, 40), id="in-session-resubmit"),
+        pytest.param((16, 0, 40), id="out-of-session-resubmit"),
+    ],
+)
+async def test_a_lost_submit_is_never_resent_into_a_flat_position(
+    repo: ClerkSqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    resumed_at: tuple[int, int, int],
+) -> None:
+    """Created and sent at 15:59, the answer lost; by the resume the position is flat.
+
+    Resending the recorded SELL 10 then would sell into a flat — or short —
+    position. In the session and out of it alike, the EXIT proves
+    attributed-flat instead, recorded against the EXIT's primary entry exactly
+    as every other attributed-flat fold is.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch())
+    assert len(lost.submit_calls) == 1
+
+    # The attribution moved to flat while the order was lost (a correction,
+    # an operator's own reduction) — the resume must read it, not the past.
+    monkeypatch.setattr(repo, "position", lambda strategy_instance_id, symbol: 0.0)
+    _walk_clock_to(repo, _at(*resumed_at))  # past the 30 s submit-absence grace
+    resumed = _FakeTrade(lookup_results=[None])
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch())
+
+    assert resumed.submit_calls == [], "a reduction was resent into a flat position"
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "succeeded"
+    flat = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_ATTRIBUTED_FLAT"
+    )
+    assert flat is not None and flat["order_ref"] == entry_ref
+
+
+async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The recovery fold keeps why nothing was priced in the leg's place (#2440 review).
+
+    An operator's market flatten accepted in the session and driven at 16:01
+    by a Clerk with no extended-hours pricing: the episode says after-hours
+    pricing is unavailable — not that no session is open, which at 16:01 is
+    false — and carries the watchdog's next try.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-unpriced01",
+        entry_order_ref=entry_ref,
+        confirmed_shape=None,
+    )
+    assert accepted.effect_operation_id is not None
+    _walk_clock_to(repo, _at(16, 1))
+    trade = _acked()
+
+    await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY
+    )
+
+    assert trade.submit_calls == []
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert "Extended-hours pricing is unavailable" in episode["explanation"]
+    assert _next_attempt_at_ms(episode) == _at(9, 30, day=date(2026, 9, 3))

@@ -604,6 +604,10 @@ async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operato
         "flattening the position; 10 SPY is still held."
     )
     assert "Nothing was queued for the next open." in episode["next_step"]
+    # Owner decision 2026-09-25: the notice says when the sell is tried next,
+    # as a time value. This Clerk prices nothing outside the regular session
+    # (the degraded seam), so that is Thursday's 09:30 ET open.
+    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == 1_700_145_000_000
 
 
 async def test_next_exit_decision_reissues_at_the_new_anchor(

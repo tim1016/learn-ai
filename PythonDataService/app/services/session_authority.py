@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from itertools import pairwise
@@ -166,6 +166,47 @@ def session_state_at_ms(
         now_ms=now_ms,
         strategy_session_policy=strategy_session_policy,
         allowed_sessions=allowed_sessions,
+    )
+
+
+def order_session_state_at_ms(
+    *, now_ms: int, extended_window: ExtendedHoursWindow | None
+) -> SessionAuthorityState:
+    """The session a broker order placed at ``now_ms`` goes out in (#2440).
+
+    :func:`session_state_at_ms` over the broker's declared window, with the
+    after-hours session ending at the earlier of the declared close and the
+    calendar's scheduled after-hours close. The declared window is one fixed
+    pair of wall-clock minutes; on an early-close day the calendar ends
+    after-hours hours earlier (2026-11-27: the regular close is 13:00 and
+    after-hours ends at 17:00, not at the declared 20:00), and an order placed
+    in between would reach the broker after its session. Past that close the
+    instant is ``CLOSED`` until the declared window's next open. Order-placing
+    code reads this; the declared window itself — which bars a run decides
+    on — is unchanged (#2391 moves the scheduled bounds into the canonical
+    calendar).
+    """
+    state = session_state_at_ms(now_ms=now_ms, extended_window=extended_window)
+    if extended_window is None or state.phase != "POST" or state.next_transition_ms is None:
+        return state
+    session_date = _ny_dt(now_ms).date()
+    scheduled = scheduled_extended_session_bounds(session_date)
+    if scheduled is None or scheduled.close_ms >= state.next_transition_ms:
+        return state
+    if now_ms < scheduled.close_ms:
+        return replace(state, next_transition_ms=scheduled.close_ms)
+    next_open_ms = extended_session_bounds_ms(
+        next_trading_day(session_date), window=extended_window
+    ).open_ms
+    return _state(
+        phase="CLOSED",
+        now_ms=now_ms,
+        next_transition_ms=next_open_ms,
+        timezone=state.timezone,
+        source=state.source,
+        extended_phase_proven=state.extended_phase_proven,
+        strategy_session_policy=None,
+        allowed_sessions=None,
     )
 
 

@@ -2073,6 +2073,14 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "failed"
     assert repo.active_exit_for_order(entry_ref) is None
+    # The operator priced it — for the other side. The notice says that, not
+    # that a market reduction "nothing had priced" waited (#2440 review).
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=SID
+    )
+    assert episode is not None
+    assert episode["headline"] == "A confirmed flatten limit no longer fits the position"
+    assert "nothing had priced" not in episode["explanation"]
 
 
 async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_folds(

@@ -113,6 +113,9 @@ class ProjectedUncertainty:
     observed_at_ms: int
     evidence_age_ms: int
     evidence_refs: tuple[str, ...]
+    # When the Clerk will next try to resolve this on its own, when it can say
+    # (the stuck-EXIT watchdog's next re-drive, #2440).
+    next_attempt_at_ms: int | None = None
 
 
 @dataclass(frozen=True)

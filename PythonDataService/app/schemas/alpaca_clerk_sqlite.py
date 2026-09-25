@@ -234,6 +234,10 @@ class ProjectedUncertaintyResponse(BaseModel):
     observed_at_ms: int
     evidence_age_ms: int
     evidence_refs: tuple[str, ...]
+    # When the Clerk will next try to resolve this on its own (the stuck-EXIT
+    # watchdog's next re-drive, #2440): int64 ms UTC for the shared timestamp
+    # display, never prose. ``None`` when nothing is scheduled.
+    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class ProjectedReconciliationResponse(BaseModel):

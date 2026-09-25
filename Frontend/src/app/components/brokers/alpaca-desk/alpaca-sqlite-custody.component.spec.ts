@@ -235,6 +235,41 @@ describe('AlpacaSqliteCustodyComponent', () => {
     const botLink = await screen.findByRole('link', { name: 'Review spy-bot recovery' });
     expect(botLink.getAttribute('href'))
       .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
+    // No retry is scheduled for this cause, so no attempt time is shown.
+    expect(screen.queryByText(/Next automatic attempt/)).toBeNull();
+  });
+
+  it('says when the Clerk next tries to sell a position an exit left open (#2440)', async () => {
+    // 2026-09-03 04:00 ET: the pre-market open after an after-hours exit that
+    // could not go out. The backend sends the instant; this page formats it.
+    const nextAttemptAtMs = 1_788_422_400_000;
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:21',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: nextAttemptAtMs,
+        }],
+      }),
+    });
+
+    const attempt = await screen.findByText(/Next automatic attempt/);
+    expect(attempt.textContent).toContain('04:00');
+    expect(attempt.textContent).toContain('ET');
   });
 
   function unfoldableProjection(): SqliteClerkProjection {
