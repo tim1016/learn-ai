@@ -2,11 +2,13 @@
 
 A reservation prices the part of an ENTER the latest cash observation
 cannot see: the unfilled remainder of a working order, plus any fill the
-Clerk recorded at or after the observation. A filled order reserves
-everything not recorded before the observation — its later fills and its
+Clerk recorded at or after ``seen_before_ms`` — the instant before which the
+observation's cash is trusted to include a fill, which the caller supplies
+(``AccountObservation.fills_seen_before_ms``). A filled order reserves
+everything not recorded before that instant — its later fills and its
 not-yet-recorded ones alike, because a filled order's quantity is known. A
-dead order (canceled, expired, rejected, replaced) reserves only its
-post-observation fills; its unrecorded remainder is cancelled quantity,
+dead order (canceled, expired, rejected, replaced) reserves only its fills
+recorded at or after it; its unrecorded remainder is cancelled quantity,
 never cash. The shadow book fills at submit while the sweep records the
 fill later, so a filled order with no fill row is the common case there,
 not a corner.
@@ -58,19 +60,20 @@ def append_envelope_reservation_row(
     )
 
 
-def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float:
-    """The reserved notional an observation taken at ``observed_at_ms`` misses.
+def reserved_cash_usd(conn: sqlite3.Connection, *, seen_before_ms: int) -> float:
+    """The reserved notional a cash figure seeing only fills recorded before ``seen_before_ms`` misses.
 
-    Every reservation is summed; a dead order with no post-observation fill
-    contributes zero on its own arithmetic; a filled order with no recorded
-    fill contributes its whole notional. Nothing is pruned on
-    ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill without
-    touching ``orders``, and the websocket's acknowledgement is skipped when
-    the snapshot has not moved, so a dead order's ``updated_at_ms`` can
-    sit *before* an observation that has not seen its fills. Only a fill's own
-    ``recorded_at_ms`` can say what an observation could have seen — and for a
-    corrected execution that is the *root's* ``recorded_at_ms``, which
-    ``roots`` supplies.
+    A fill recorded strictly before ``seen_before_ms`` counts as seen; one
+    recorded at it or later stays reserved. Every reservation is summed; a
+    dead order with no fill at or after ``seen_before_ms`` contributes zero on
+    its own arithmetic; a filled order with no recorded fill contributes its
+    whole notional. Nothing is pruned on ``orders.updated_at_ms``:
+    ``EXECUTION_SLICE_FILLED`` writes a fill without touching ``orders``, and
+    the websocket's acknowledgement is skipped when the snapshot has not
+    moved, so a dead order's ``updated_at_ms`` can sit *before* an observation
+    that has not seen its fills. Only a fill's own ``recorded_at_ms`` can say
+    what an observation could have seen — and for a corrected execution that
+    is the *root's* ``recorded_at_ms``, which ``roots`` supplies.
     """
     # Imported here, not at module scope: ``repository`` imports this module,
     # and ``economic_projection`` imports ``repository``. The canonical CTE
@@ -94,7 +97,7 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
         "                  WHERE s.superseded_execution_ref = f.execution_id) "
         "LEFT JOIN roots r2 ON r2.effective_fill_id = f.fill_id "
         "GROUP BY r.effect_operation_id",
-        (observed_at_ms, observed_at_ms),
+        (seen_before_ms, seen_before_ms),
     ).fetchall()
     total = 0.0
     for row in rows:

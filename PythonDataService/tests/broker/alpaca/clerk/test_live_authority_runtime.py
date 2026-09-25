@@ -480,7 +480,7 @@ async def test_an_armed_live_instances_enter_passes_all_three_gates_and_reaches_
     receipt = await _enter(runtime, bar)
 
     assert receipt.state != "rejected", receipt.explanation
-    assert runtime.sqlite_repository.reserved_cash_usd(observed_at_ms=NOW_MS) > 0
+    assert runtime.sqlite_repository.reserved_cash_usd(seen_before_ms=NOW_MS) > 0
     assert len(broker.submissions) == 1
     (leg, client_order_id) = broker.submissions[0]
     assert (leg.symbol, leg.side, leg.quantity) == ("SPY", OrderSide.BUY, 1)

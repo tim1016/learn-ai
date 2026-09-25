@@ -50,6 +50,26 @@ ENVELOPE_SYNC_INTERVAL_S = 15.0
 # Three sync intervals: one missed tick is a blip, two is an outage the
 # admission seam must not trade through.
 OBSERVATION_MAX_AGE_MS = 45_000
+# How long before an observation's reads were issued a fill the Clerk recorded
+# is still not trusted to be in the broker's cash (#2441). The observation is
+# stamped the instant its reads are issued, and the broker's answer is at
+# least that recent -- but a fill recorded just before that instant is in the
+# answer only if Alpaca's account ledger had caught up with a trade update
+# Alpaca had already delivered. Alpaca documents no such ordering:
+# account values are "updated Real-Time post trade executions" (Broker API
+# FAQ), and neither the account endpoint nor the ``trade_updates`` stream
+# states an ordering or consistency guarantee between the two
+# (docs/references/alpaca-live-envelope.md cites each page). So a fill recorded
+# within this margin before the stamp stays reserved, even though the cash may
+# already include it (``AccountObservation.fills_seen_before_ms``):
+# over-reserving refuses an ENTER that would have fit, under-reserving admits a
+# second ENTER against cash already spent.
+#
+# Five seconds: an order of magnitude above the sub-second lag "real-time"
+# implies, and under one sync interval, so a fill stays reserved at most one
+# observation longer than it otherwise would. Pinned below the interval by
+# ``tests/broker/alpaca/clerk/test_live_envelope.py``.
+FILL_VISIBILITY_GRACE_MS = 5_000
 _CASH_EPSILON_USD = 1e-9
 
 EnvelopeAgreement = Literal["unsealed", "agreed", "disagreed"]
@@ -149,7 +169,14 @@ def envelope_agreement(
 
 @dataclass(frozen=True)
 class AccountObservation:
-    """One broker read the sync published, stamped with the repository clock."""
+    """One broker read the sync published, stamped with the repository clock.
+
+    ``observed_at_ms`` is the instant the reads were *issued*, not the instant
+    they returned: the broker's answer is only known to be at least that
+    recent. Which fills its cash is trusted to include is
+    :attr:`fills_seen_before_ms`. Freshness is aged from the same instant,
+    which errs old by the read's round trip.
+    """
 
     observed_at_ms: int
     broker_cash_usd: float
@@ -159,6 +186,20 @@ class AccountObservation:
     last_equity_usd: float | None
     unrealized_pl_usd: float
     position_count: int
+
+    @property
+    def fills_seen_before_ms(self) -> int:
+        """The instant before which a fill is assumed to be in this observation's cash.
+
+        A fill the Clerk recorded strictly before this instant is assumed
+        reflected in ``broker_cash_usd``; one recorded at it or later stays
+        reserved. It sits ``FILL_VISIBILITY_GRACE_MS`` before the reads were
+        issued, because a fill recorded just before them is not trusted to be
+        in the answer either (#2441). Over-reserving is the safe side: it
+        refuses an ENTER that would have fit, where under-reserving admits one
+        against cash already spent.
+        """
+        return self.observed_at_ms - FILL_VISIBILITY_GRACE_MS
 
 
 @dataclass(frozen=True)
@@ -281,6 +322,7 @@ __all__ = [
     "ENVELOPE_ADMISSION_REASON_CODES",
     "ENVELOPE_SETTINGS_FIELDS",
     "ENVELOPE_SYNC_INTERVAL_S",
+    "FILL_VISIBILITY_GRACE_MS",
     "LIVE_ENVELOPE_CASH_EXCEEDED",
     "LIVE_ENVELOPE_DISAGREEMENT",
     "LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE",

@@ -315,7 +315,7 @@ def test_the_reservation_never_enters_the_hash_chain(
 
 
 @pytest.mark.parametrize(
-    ("broker_state", "fills", "observed_at_ms", "expected"),
+    ("broker_state", "fills", "seen_before_ms", "expected"),
     [
         (None, [], T0, 1_000.0),  # working, unacked: full
         ("new", [(4, T0 - 1)], T0, 600.0),  # 4 filled before the observation: remainder
@@ -337,7 +337,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
     active_instance: tuple[str, str],
     broker_state: str | None,
     fills: list[tuple[float, int]],
-    observed_at_ms: int,
+    seen_before_ms: int,
     expected: float,
 ) -> None:
     sid, run_id = active_instance
@@ -385,7 +385,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
             ),
         )
 
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=observed_at_ms) == pytest.approx(expected)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=seen_before_ms) == pytest.approx(expected)
 
 
 def _refuse_coverage_conflict() -> TransitionInput:
@@ -491,7 +491,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     )
     assert order_after["updated_at_ms"] < T2_OBSERVATION <= T3_TRAILING_FILL
 
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
 
 
 def _append_slice(
@@ -648,7 +648,7 @@ def test_a_corrected_fill_reserves_at_its_restated_size(
         ).fetchone()["broker_state"]
         is None
     )
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(expected)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(expected)
 
 
 def test_reservations_sum_across_instances(
@@ -668,4 +668,4 @@ def test_reservations_sum_across_instances(
             reference_price=100.0,
         )
 
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == pytest.approx(1_000.0)

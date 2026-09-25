@@ -114,7 +114,7 @@ def test_an_armed_instance_is_admitted_through_all_three_gates(
     sid, run_id = active_instance
     accepted = _accept(envelope_repo, sid, run_id, arming=_arming(sid, _record(sid)), envelope=_envelope())
     assert accepted.created
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(100.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == pytest.approx(100.0)
 
 
 def test_no_gate_means_no_arming_check_paper_and_shadow_unchanged(
@@ -174,7 +174,7 @@ def test_a_never_armed_instance_is_required_and_nothing_is_written(
         _accept(envelope_repo, sid, run_id, arming=_arming(sid), envelope=_envelope())
     assert _refusal(exc_info) == LIVE_ARMING_REQUIRED
     assert envelope_repo.control_meta_snapshot().control_revision == before
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
 
 
 def test_a_lapsed_instance_refuses_with_its_own_code(

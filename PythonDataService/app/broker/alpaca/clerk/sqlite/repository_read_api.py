@@ -697,9 +697,9 @@ class ClerkSqliteRepositoryReadApi:
                 subject_id=subject_id,
             )
 
-    def reserved_cash_usd(self: ClerkSqliteRepository, *, observed_at_ms: int) -> float:
-        """Cash the accepted ENTERs claim that ``observed_at_ms`` cannot see."""
+    def reserved_cash_usd(self: ClerkSqliteRepository, *, seen_before_ms: int) -> float:
+        """Cash the accepted ENTERs claim beyond the fills recorded before ``seen_before_ms``."""
         with self._write_lock:
             return envelope_reservations.reserved_cash_usd(
-                self._conn, observed_at_ms=observed_at_ms
+                self._conn, seen_before_ms=seen_before_ms
             )

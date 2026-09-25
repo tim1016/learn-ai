@@ -16,24 +16,38 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
+    ENVELOPE_SYNC_INTERVAL_S,
+    FILL_VISIBILITY_GRACE_MS,
+    LIVE_ENVELOPE_CASH_EXCEEDED,
     OBSERVATION_MAX_AGE_MS,
+    AccountObservation,
     LiveEnvelopeGate,
 )
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     LossHoldCause,
 )
 from app.broker.contract.errors import BrokerUnavailable
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
-from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, BrokerPosition
+from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES, _LiveBroker
+from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    NOON,
+    TODAY_OPEN,
+    _accept_day_pnl_enter,
+    _append_day_pnl_slice,
+    _TestClock,
+)
+from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 
 SYNC_LOGGER = "app.broker.alpaca.clerk.sqlite.live_envelope_sync"
 
@@ -114,7 +128,7 @@ async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
 
     def build(
         repository: ClerkSqliteRepository,
-        read: _Read,
+        read: _Read | _LiveBroker,
         *,
         simulated: bool = True,
         **loop: Any,
@@ -413,3 +427,331 @@ async def test_a_stopped_sync_refuses_to_start_again(
 
     with pytest.raises(RuntimeError, match="terminal after stop"):
         sync.start()
+
+
+# ── A fill the Clerk records while the broker is being read (#2441) ───────────
+# An observation's cash is trusted to include every fill recorded before its
+# stamp, so the stamp is the instant the reads were *issued*. Stamped when
+# they returned, a fill recorded during the round trip -- which the broker's
+# answer may well predate -- was released from its reservation, and a second
+# instance was admitted against cash the first had already spent.
+
+# Each half of a synthetic broker round trip, on the repo clock. Longer than
+# the fill-visibility grace, so the grace alone cannot hide a stamp taken on
+# return: a slow read is exactly when the stamp matters.
+READ_LEG_MS = FILL_VISIBILITY_GRACE_MS + 1_000
+
+
+class _FillLandsMidRead(_LiveBroker):
+    """The live account, answering the snapshot it took before a fill the Clerk records meanwhile.
+
+    ``during`` names the read whose round trip the fill lands inside. The
+    broker's answer is built first -- the pre-fill cash -- and only then does
+    the clock move and the Clerk record the fill, so the response returns
+    after the fill carrying a figure that does not include it. The fill lands
+    once, on the first round trip of that read.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: _TestClock,
+        cash: float,
+        during: Literal["account", "positions"],
+        record_fill: Callable[[], None],
+    ) -> None:
+        super().__init__(now_ms=clock(), cash=cash)
+        self._clock = clock
+        self._during: str | None = during
+        self._record_fill = record_fill
+
+    def _in_flight(self, read: str) -> None:
+        if read != self._during:
+            return
+        self._during = None
+        self._clock.advance(READ_LEG_MS)
+        self._record_fill()
+        self._clock.advance(READ_LEG_MS)
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        snapshot = await super().get_account()
+        self._in_flight("account")
+        return snapshot
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        positions = await super().list_positions()
+        self._in_flight("positions")
+        return positions
+
+
+def _observed_gate(*, cash: float, simulated: bool) -> LiveEnvelopeGate:
+    """A gate holding one observation fresh at ``T0``: what the first ENTER is admitted against."""
+    gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=simulated)
+    gate.publish(
+        AccountObservation(
+            observed_at_ms=T0,
+            broker_cash_usd=cash,
+            cash_available_usd=cash,
+            last_equity_usd=cash,
+            unrealized_pl_usd=0.0,
+            position_count=0,
+        )
+    )
+    return gate
+
+
+def _enter(
+    repo: ClerkSqliteRepository,
+    instance: tuple[str, str],
+    *,
+    symbol: str,
+    envelope: LiveEnvelopeGate,
+) -> EnterSubmission:
+    """A $1,000 market ENTER: 10 shares against a $100 decision-bar close."""
+    sid, run_id = instance
+    return accept_enter(
+        repo,
+        account_id=repo.account_id,
+        strategy_instance_id=sid,
+        decision_id=f"{sid}-entry",
+        lifecycle_run_id=run_id,
+        leg=BrokerOrderLeg(symbol=symbol, side="buy", quantity=10),
+        envelope=envelope,
+        reference_price=100.0,
+    )
+
+
+def _fill_all_ten(
+    repo: ClerkSqliteRepository, clock: _TestClock, accepted: EnterSubmission
+) -> Callable[[], None]:
+    return lambda: _append_slice(
+        repo, accepted, execution_id="exec-mid-read", quantity=10, source_event_at_ms=clock()
+    )
+
+
+@pytest.mark.parametrize(
+    "during",
+    [
+        pytest.param("positions", id="codex-fill-while-positions-read"),
+        pytest.param("account", id="fill-inside-the-single-account-read"),
+    ],
+)
+async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    make_sync: Callable[..., LiveEnvelopeSync],
+    during: Literal["account", "positions"],
+) -> None:
+    """Two instances share $1,000, and the first's $1,000 fill lands mid-read.
+
+    The broker answers $1,000 -- its snapshot predates the fill -- so only the
+    first ENTER's reservation stands between the second instance and cash
+    already spent. Codex (#2415 finding A1) reproduced the admission with the
+    fill inside the parallel positions read; the single-read variant shows the
+    parallel read is not the cause. One account round trip is enough, because
+    the fault was the stamp.
+    """
+    first_instance, second_instance = two_active_instances
+    first = _enter(
+        envelope_repo,
+        first_instance,
+        symbol="SPY",
+        envelope=_observed_gate(cash=1_000.0, simulated=False),
+    )
+    read = _FillLandsMidRead(
+        clock=envelope_clock,
+        cash=1_000.0,
+        during=during,
+        record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
+    )
+    sync = make_sync(envelope_repo, read, simulated=False)
+
+    reading = await sync.observe()
+
+    assert envelope_repo.position(first_instance[0], "SPY") == 10.0
+    with pytest.raises(AdmissionBlockedError) as refused:
+        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
+    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+    # The observation is dated when its reads were issued, not when they returned.
+    assert reading.observation.observed_at_ms == T0
+
+
+@pytest.mark.parametrize(
+    "recorded_before_read_ms",
+    [
+        pytest.param(1, id="just-before-the-read"),
+        pytest.param(FILL_VISIBILITY_GRACE_MS, id="at-the-grace-boundary"),
+    ],
+)
+async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    make_sync: Callable[..., LiveEnvelopeSync],
+    recorded_before_read_ms: int,
+) -> None:
+    """The broker's cash may lag a fill whose trade update it already delivered.
+
+    Alpaca promises no ordering between the two, so a fill the Clerk recorded
+    up to ``FILL_VISIBILITY_GRACE_MS`` before the read was issued -- the
+    boundary, inclusive -- is not trusted to be in the answer. Here the broker
+    still reports the pre-fill $1,000, and the second instance is refused
+    rather than admitted against it. The 1 ms case is the one a zero grace
+    would release; the boundary case is the one a grace applied off by one
+    would.
+    """
+    first_instance, second_instance = two_active_instances
+    first = _enter(
+        envelope_repo,
+        first_instance,
+        symbol="SPY",
+        envelope=_observed_gate(cash=1_000.0, simulated=False),
+    )
+    _fill_all_ten(envelope_repo, envelope_clock, first)()
+    envelope_clock.advance(recorded_before_read_ms)
+    sync = make_sync(
+        envelope_repo, _LiveBroker(now_ms=envelope_clock(), cash=1_000.0), simulated=False
+    )
+
+    reading = await sync.observe()
+
+    assert reading.observation.observed_at_ms == T0 + recorded_before_read_ms
+    with pytest.raises(AdmissionBlockedError) as refused:
+        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
+    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+
+
+async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observation(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """Shadow errs toward refusing, and recovers on the next observation.
+
+    Under simulated custody the broker's cash never moves, so the envelope
+    subtracts what the Clerk's own fills spent (plan R2) -- read *after* the
+    broker answered. A fill recorded mid-read is therefore in
+    ``cash_available`` and still reserved: counted twice, never zero times.
+    The account's true free cash is $1,000 and the envelope offers none, so
+    the second $1,000 ENTER is refused. The next observation, issued past the
+    fill-visibility grace, counts the fill once and admits it.
+    """
+    first_instance, second_instance = two_active_instances
+    first = _enter(
+        envelope_repo,
+        first_instance,
+        symbol="SPY",
+        envelope=_observed_gate(cash=2_000.0, simulated=True),
+    )
+    read = _FillLandsMidRead(
+        clock=envelope_clock,
+        cash=2_000.0,
+        during="account",
+        record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
+    )
+    sync = make_sync(envelope_repo, read, simulated=True)
+
+    mid_read = (await sync.observe()).observation
+    assert mid_read.cash_available_usd == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(
+        seen_before_ms=mid_read.fills_seen_before_ms
+    ) == pytest.approx(1_000.0)
+    with pytest.raises(AdmissionBlockedError) as refused:
+        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
+    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+
+    envelope_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
+    next_tick = (await sync.observe()).observation
+    assert next_tick.cash_available_usd == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=next_tick.fills_seen_before_ms) == 0.0
+    assert _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope).created
+
+
+def _round_trip_closed_mid_read(
+    repo: ClerkSqliteRepository,
+    clock: _TestClock,
+    *,
+    entry_price: float,
+    exit_price: float,
+) -> _FillLandsMidRead:
+    """BUY 10 at today's open; the SELL that closes it lands while the positions read is in flight.
+
+    The broker answers with no open position -- the lot is closed -- so no
+    unrealized P&L carries it, and only the realized window can.
+    """
+    accepted = _accept_day_pnl_enter(repo, decision_id="d-closed-mid-read")
+    _append_day_pnl_slice(
+        repo,
+        accepted,
+        execution_id="exec-buy-today",
+        side="BUY",
+        quantity=10.0,
+        price=entry_price,
+        occurred_at_ms=TODAY_OPEN,
+    )
+    return _FillLandsMidRead(
+        clock=clock,
+        cash=100_000.0,
+        during="positions",
+        record_fill=lambda: _append_day_pnl_slice(
+            repo,
+            accepted,
+            execution_id="exec-sell-mid-read",
+            side="SELL",
+            quantity=10.0,
+            price=exit_price,
+            occurred_at_ms=clock(),
+        ),
+    )
+
+
+async def test_the_realized_day_pnl_window_ends_when_the_reads_return(
+    day_pnl_repo: ClerkSqliteRepository,
+    day_pnl_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """The realized window ends at a clock read taken after the broker answered.
+
+    ``observed_at_ms`` stays the pre-read stamp -- it dates which fills the
+    cash has seen -- but a lot closed during the round trip is this reading's
+    realized P&L. The positions answer may already show it closed, and a
+    window ending at the stamp would then count the close nowhere.
+    """
+    read = _round_trip_closed_mid_read(
+        day_pnl_repo, day_pnl_clock, entry_price=100.0, exit_price=110.0
+    )
+    sync = make_sync(day_pnl_repo, read, simulated=False)
+
+    reading = await sync.observe()
+
+    assert reading.day_pnl is not None
+    assert reading.day_pnl.realized_usd == pytest.approx(100.0)
+    assert reading.observation.observed_at_ms == NOON
+
+
+async def test_a_losing_close_recorded_during_the_reads_raises_the_loss_hold(
+    day_pnl_repo: ClerkSqliteRepository,
+    day_pnl_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A loss realized mid-read is judged on this tick, never published past (#2473 review).
+
+    The SELL realizes $6,000 against a $5,000 limit while the positions read
+    is in flight, and the broker answers with the position already closed.
+    With the realized window ending at the pre-read stamp the loss was in
+    neither figure: the tick published an unbreached observation and the next
+    ENTER was bounded by cash alone.
+    """
+    read = _round_trip_closed_mid_read(
+        day_pnl_repo, day_pnl_clock, entry_price=1_000.0, exit_price=400.0
+    )
+    sync = make_sync(day_pnl_repo, read, simulated=False)
+
+    assert await sync.tick() == "hold_raised"
+    hold = _hold(day_pnl_repo)
+    assert hold is not None
+    cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
+    assert cause.day_pnl_usd == pytest.approx(-6_000.0)
+    assert sync.envelope.latest_observation() is None
