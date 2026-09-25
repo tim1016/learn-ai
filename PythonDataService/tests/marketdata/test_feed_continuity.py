@@ -1170,6 +1170,41 @@ async def test_a_short_rth_minute_on_a_connected_line_is_refused_not_delivered(_
     assert asked == []
 
 
+async def test_an_impossible_minute_is_refused_under_its_own_reason(_real_rth_chain) -> None:
+    """#2444: a NaN, zero or high-below-low minute is refused under
+    ``IMPOSSIBLE_SOURCE_BAR`` on the continuity path too, exactly as on the
+    policy-less one. It is an ingestion refusal, not an interruption episode,
+    so the sink records no continuity event for it."""
+    feed = _real_rth_chain(
+        raw_minute(RTH_MINUTE, range(0, 60, 5))
+        + _impossible_minute(RTH_MINUTE + timedelta(minutes=1))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=2), range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=3), (0,))
+    )
+    sink = _RecordingSink()
+
+    delivered, error = await _drain_real_chain(feed, _policy(sink), 3)
+
+    assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
+    assert error is not None and error.reason == "IMPOSSIBLE_SOURCE_BAR"
+    assert sink.events == []
+
+
+def _impossible_minute(minute_start: datetime) -> tuple:
+    """One RTH minute of twelve prints whose close is not a real price (#2444)."""
+    return tuple(
+        SimpleNamespace(
+            time=minute_start + timedelta(seconds=second),
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("nan"),
+            volume=10,
+        )
+        for second in range(0, 60, 5)
+    )
+
+
 async def test_a_short_join_minute_is_omitted_as_a_recorded_gap(_real_rth_chain) -> None:
     """#2364: a stream that joins at 10:30:30 holds 6 of 10:30's 12 prints.
 

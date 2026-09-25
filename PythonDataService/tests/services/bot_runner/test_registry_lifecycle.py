@@ -24,7 +24,13 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.desired_state import DesiredState
-from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import (
+    FEED_REFUSAL_REASON_CODES,
+    ContinuityPolicy,
+    FeedHealth,
+    MarketDataBar,
+    MarketDataFeedError,
+)
 from app.schemas.broker_bots import BotProcessFact
 from app.services import bot_runner as bot_runner_module
 from app.services.bot_runner import (
@@ -706,19 +712,19 @@ async def test_refused_warmup_records_its_own_reason_and_stops_the_run(
 
 
 @pytest.mark.asyncio
-async def test_impossible_bar_refusal_records_its_own_reason_and_stops_the_run(
-    tmp_path: Path,
+@pytest.mark.parametrize("reason", sorted(FEED_REFUSAL_REASON_CODES))
+async def test_refused_before_deciding_records_its_own_reason_and_stops_the_run(
+    tmp_path: Path, reason: str
 ) -> None:
-    """#2444: a run refused on a bar whose values cannot be real says so through
-    the outcome's reason code; ``FEED_DEATH`` would point the operator at
-    connectivity instead of the data."""
+    """#2365, #2314, #2444: through the real ``_supervise`` -> ``finalize_crash``
+    path, a run refused on data it never decided on is recorded under its typed
+    reason, reaped, and left STOPPED -- never resumed on its own and never
+    shown as FEED_DEATH. Parametrized over the production set so a new refusal
+    code cannot land without this coverage following it."""
     feed = _FakeFeed(
         [_bar(_T0)],
         mode="crash",
-        error=MarketDataFeedError(
-            "IBKR bar for SPY at 1 ms was refused: close price is not finite",
-            reason="IMPOSSIBLE_SOURCE_BAR",
-        ),
+        error=MarketDataFeedError("refused on data it never decided on", reason=reason),
     )
     registry = _registry(tmp_path, feed)
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
@@ -729,9 +735,10 @@ async def test_impossible_bar_refusal_records_its_own_reason_and_stops_the_run(
     assert view.running is False
     assert view.duty_outcome is not None
     assert view.duty_outcome.kind == "CRASHED"
-    assert view.duty_outcome.reason_code == "IMPOSSIBLE_SOURCE_BAR"
+    assert view.duty_outcome.reason_code == reason
     assert view.desired_state == "STOPPED"
-    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == "IMPOSSIBLE_SOURCE_BAR"
+    assert _desired_json(tmp_path)["desired_state"] == "STOPPED"
+    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == reason
 
 
 @pytest.mark.asyncio

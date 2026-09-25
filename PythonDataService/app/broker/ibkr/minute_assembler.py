@@ -316,11 +316,12 @@ def _validated_contribution(
 ) -> _Contribution:
     """Read one bar's OHLCV and refuse it if its values cannot be real (#2444).
 
-    The single admission check both IBKR feed paths fold through: the live
-    5-second subscription (``aggregate_realtime_bar``) and the historical
-    fetch (``fetch_historical_minute_bars``) warm up on. The refusal is
-    surfaced -- logged with a structured action, counted on the live
-    counters -- and fatal through the same path a timestamp violation takes.
+    The admission check every IBKR bar passes through before any of it is kept:
+    the live fold (``MinuteAssembler.feed`` -- at the entry, so the absorb
+    paths are covered too -- and ``aggregate_realtime_bar``), the raw 5-second
+    stream, and the historical fetch warm up runs on. The refusal is surfaced
+    -- logged with a structured action, counted on the live counters -- and
+    fatal through the same path a timestamp violation takes.
     """
     contribution = _contribution(bar)
     violation = _impossibility(contribution)
@@ -629,6 +630,14 @@ class MinuteAssembler:
     def feed(
         self, raw_bar: object, *, symbol: str, generation: int, venue: str | None, use_rth: bool
     ) -> IbkrMinuteBar | None:
+        # #2444: validated at the assembler's entry, before the absorb path,
+        # so a print whose values cannot be real is refused even where an
+        # ordinary post-emit correction or late print would be absorbed or
+        # dropped. Impossible values are vendor corruption, not a delivery
+        # quirk the idempotent relaxation covers.
+        _validated_contribution(
+            raw_bar, symbol=symbol, source_ms=_bar_time_ms(raw_bar), counters=self.counters
+        )
         if self._absorb_after_flush(raw_bar, symbol=symbol):
             return None
         self.current, emitted, self.last_source_ms = aggregate_realtime_bar(

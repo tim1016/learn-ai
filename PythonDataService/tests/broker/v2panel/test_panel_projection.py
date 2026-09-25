@@ -53,6 +53,7 @@ from app.schemas.broker_v2_panel import (
     PanelAction,
     RecentDecisionView,
     RecentFillView,
+    StartupJoinView,
 )
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
@@ -3093,6 +3094,44 @@ def test_exposure_notices_are_only_for_startup_refusals() -> None:
     projection = replace(_rail_projection(orders=(_entry_order(),)), positions=_held(3.0))
 
     assert _notices(_refused_panel("FEED_DEATH"), projection) == []
+
+
+def test_an_impossible_bar_refusal_while_preparing_shows_the_exposure_notices() -> None:
+    """#2444: the impossible-bar refusal is in the startup-notices vocabulary,
+    and a panel with no startup-join view cannot prove the run ever decided."""
+    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+
+    outcome = adapt_sqlite_panel(_refused_panel("IMPOSSIBLE_SOURCE_BAR"), projection).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert (notice.kind, notice.label) == ("position_unmanaged", "Bot is not managing this position")
+
+
+def test_an_impossible_bar_refusal_after_the_run_was_deciding_shows_no_startup_notices() -> None:
+    """#2444: IMPOSSIBLE_SOURCE_BAR can also end a run mid-flight; the startup
+    notices speak of a run that never managed anything, so a join that reached
+    ready keeps them off."""
+    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+    panel = _refused_panel("IMPOSSIBLE_SOURCE_BAR").model_copy(
+        update={
+            "startup_join": StartupJoinView(
+                run_id="r1",
+                state="ready",
+                label="Ready",
+                explanation="Warmup history reached the live stream.",
+                opened_at_ms=_NOW - 90_000,
+                live_from_ms=_NOW - 60_000,
+                joined_minute_start_ms=_NOW - 120_000,
+                deadline_ms=_NOW + 120_000,
+                missing_start_ms=None,
+                missing_end_ms=None,
+                reason_code=None,
+            )
+        }
+    )
+
+    assert _notices(panel, projection) == []
 
 
 @pytest.mark.parametrize("broker_state", ["held", "pending_replace", "accepted_for_bidding", None])

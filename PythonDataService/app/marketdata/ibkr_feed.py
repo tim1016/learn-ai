@@ -347,11 +347,10 @@ class IbkrMarketDataFeed:
                             "reason": str(exc),
                         },
                     )
-        except (IBKRImpossibleBarError, IBKRBarStreamError, NotConnectedError) as exc:
-            raise MarketDataFeedError(
-                str(exc),
-                reason=IMPOSSIBLE_SOURCE_BAR if isinstance(exc, IBKRImpossibleBarError) else None,
-            ) from exc
+        except IBKRImpossibleBarError as exc:
+            raise MarketDataFeedError(str(exc), reason=IMPOSSIBLE_SOURCE_BAR) from exc
+        except (IBKRBarStreamError, NotConnectedError) as exc:
+            raise MarketDataFeedError(str(exc)) from exc
 
     def _legacy_minute_is_deliverable(self, ibkr_bar: IbkrMinuteBar, assembler: MinuteAssembler) -> bool:
         """Omit a short join minute; fail fast on any other minute short of the calendar.

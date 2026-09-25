@@ -204,6 +204,7 @@ _IMPOSSIBLE_CASES = [
     (dict(close="0"), "not positive"),
     (dict(high="99", low="101"), "high is below low"),
     (dict(open_="101.5"), "outside the low"),
+    (dict(close="98.5"), "outside the low"),
     (dict(volume=-1), "volume is negative"),
 ]
 
@@ -211,7 +212,14 @@ _IMPOSSIBLE_CASES = [
 @pytest.mark.parametrize(
     ("case", "violation"),
     _IMPOSSIBLE_CASES,
-    ids=["nan_close", "zero_close", "high_below_low", "open_outside_range", "negative_volume"],
+    ids=[
+        "nan_close",
+        "zero_close",
+        "high_below_low",
+        "open_outside_range",
+        "close_outside_range",
+        "negative_volume",
+    ],
 )
 def test_impossible_contribution_is_refused_before_folding(case: dict, violation: str) -> None:
     """#2444: a NaN, zero, inconsistent or negative-volume 5-second print never
@@ -225,10 +233,12 @@ def test_impossible_contribution_is_refused_before_folding(case: dict, violation
 
     assert assembler.counters.refused_impossible_bar == 1
     # The refusal changed nothing: the open minute still holds only its valid
-    # first print, so a healthy line resumes folding into it.
+    # first print, and the line's next valid print folds into it again.
     assert assembler.open_minute_start_ms == int(_MINUTE.timestamp() * 1000)
     assert assembler.counters.skipped_duplicate == 0
     assert assembler.last_source_ms == int(_MINUTE.replace(second=0).timestamp() * 1000)
+    assert assembler.feed(_raw_with(10), symbol="SPY", generation=1, venue=None, use_rth=True) is None
+    assert assembler.last_source_ms == int(_MINUTE.replace(second=10).timestamp() * 1000)
 
 
 def test_a_volume_zero_bar_is_admitted() -> None:
@@ -243,8 +253,20 @@ def test_a_volume_zero_bar_is_admitted() -> None:
     assert assembler.counters.refused_impossible_bar == 0
 
 
+def test_impossible_correction_after_a_flush_is_refused_not_ignored() -> None:
+    """#2444: a redelivered print whose values cannot be real is corruption even
+    on the channel where an ordinary post-emit correction is absorbed -- the
+    absorb path may ignore a *changed* payload, never an impossible one."""
+    assembler = MinuteAssembler()
+    _fill_and_flush(assembler)
 
-def test_exact_redelivery_under_a_new_generation_leaves_the_minute_unflagged() -> None:
+    with pytest.raises(IBKRImpossibleBarError, match="not finite"):
+        assembler.feed(_raw_with(55, close="nan"), symbol="SPY", generation=2, venue=None, use_rth=True)
+
+    assert assembler.counters.refused_impossible_bar == 1
+    assert assembler.counters.ignored_post_emit_correction == 0
+    assert assembler.open_minute_start_ms is None
+
     # ``spans_interruption`` claims *contributions* arrived over more than one
     # generation. An exact redelivery contributes nothing — it is skipped — so
     # the minute's data still came wholly from generation 1 and flagging it
@@ -310,6 +332,21 @@ def test_a_sparse_pre_minute_is_emitted_once_its_close_passes_the_grace() -> Non
     assert emitted.session_phase == "PRE"
     assert assembler.open_minute_start_ms is None
     assert assembler.emit_if_elapsed(_PRE_CLOSE_MS + 30_000) is None  # nothing left open
+
+
+def test_an_impossible_late_print_after_a_sparse_emit_is_refused_not_dropped() -> None:
+    """#2444: a late print the sparse-minute timer path would merely drop is
+    still refused when its values cannot be real -- a dropped print is
+    surfaced, but impossible values are corruption, not a late delivery."""
+    assembler = MinuteAssembler()
+    _sparse_pre_minute(assembler)
+    assert assembler.emit_if_elapsed(_PRE_CLOSE_MS + SPARSE_MINUTE_EMIT_GRACE_MS) is not None
+
+    with pytest.raises(IBKRImpossibleBarError, match="not positive"):
+        assembler.feed(_pre_raw(50, close="0"), symbol="SPY", generation=1, venue=None, use_rth=False)
+
+    assert assembler.counters.refused_impossible_bar == 1
+    assert assembler.counters.ignored_late_print_after_emit == 0
 
 
 def test_the_grace_leaves_the_decision_allowance_room() -> None:

@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
-from app.marketdata.feed import WARMUP_REFUSAL_REASONS
+from app.marketdata.feed import FEED_REFUSAL_REASON_CODES
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -702,6 +702,20 @@ def _may_still_fill(order: ProjectedOrder) -> bool:
     return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
 
 
+def _startup_join_reached_ready(panel: BotPanelView) -> bool:
+    """Whether this run's startup join completed before it crashed (#2444).
+
+    The feed-refusal codes span two phases: a warmup code can only be raised
+    before the run decides, but ``IMPOSSIBLE_SOURCE_BAR`` can also end a run
+    that had been deciding for hours. The notices below speak of a run that
+    never managed anything, so they key on the startup phase, not on the
+    reason code alone. A missing join view proves nothing either way; the
+    conservative answer (not ready) keeps the notices on.
+    """
+    join = panel.startup_join
+    return join is not None and join.state == "ready"
+
+
 def _with_startup_refusal_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:
     """Say what a startup refusal left at the broker, from this SQLite cut (#2410).
 
@@ -715,7 +729,12 @@ def _with_startup_refusal_notices(panel: BotPanelView, projection: ClerkProjecti
     """
     health = panel.health
     outcome = health.duty_outcome
-    if health.running or outcome is None or outcome.reason_code not in WARMUP_REFUSAL_REASONS:
+    if (
+        health.running
+        or outcome is None
+        or outcome.reason_code not in FEED_REFUSAL_REASON_CODES
+        or _startup_join_reached_ready(panel)
+    ):
         return health
     sid = panel.strategy_instance_id
     notices: list[ExposureNoticeView] = []

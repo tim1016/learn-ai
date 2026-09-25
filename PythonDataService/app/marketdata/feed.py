@@ -115,6 +115,21 @@ WarmupRefusalReason = Literal[
 
 WARMUP_REFUSAL_REASONS: frozenset[str] = frozenset(get_args(WarmupRefusalReason))
 
+FEED_REFUSAL_REASON_CODES: frozenset[str] = frozenset(
+    {*WARMUP_REFUSAL_REASONS, IMPOSSIBLE_SOURCE_BAR}
+)
+"""Every ``MarketDataFeedError.reason`` a run is recorded under as its own
+duty-outcome reason, rather than ``FEED_DEATH`` — the refusals where no
+decision was ever made on the refused data (#2365, #2314, #2444).
+
+A warmup refusal never started deciding; an impossible bar was refused rather
+than decided on. Every other feed failure keeps the long-standing FEED_DEATH
+outcome code. Note the two kinds differ in phase: a warmup code can only be
+raised before the run decides, while ``IMPOSSIBLE_SOURCE_BAR`` can also end a
+run mid-flight, so a surface that means "never decided" (the deploy page's
+startup exposure notices) must key on the startup phase, not on this set
+alone."""
+
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
 """Canonical session-phase label. Single definition repo-wide: every other site
