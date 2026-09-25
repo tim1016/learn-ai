@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 # earlier versions continue to render as their original historical evidence.
 VERDICT_VERSION = 3
 FILL_PRICE_ATOL = "0.01"
+READINESS_STATISTICS_BASIS_DIFFERS = "readiness_statistics_basis_differs"
+
 READINESS_FIELDS: tuple[str, ...] = (
     "verdict_version",
     "status",
@@ -156,10 +158,18 @@ def compute_parity_verdict(*, parity_group_id: str, left: RunDetail, right: RunD
     inputs = compare_inputs(left, right)
     parameters = compare_parameters(left, right)
     program_version = compare_program_versions(left, right)
+    # A basis difference is a comparability fact about the readiness axis,
+    # not an evidence outcome: the axis stops participating in the status and
+    # reason instead of forcing the whole group unavailable.
+    readiness_axis = (
+        "non_comparable"
+        if readiness.reason == READINESS_STATISTICS_BASIS_DIFFERS
+        else readiness.status
+    )
     status = _resolve_status(
         len(comparison.divergences),
         native.status,
-        readiness.status,
+        readiness_axis,
         inputs.status,
         parameters.status,
         program_version.status,
@@ -167,7 +177,7 @@ def compute_parity_verdict(*, parity_group_id: str, left: RunDetail, right: RunD
     reason = _resolve_reason(
         status,
         native.status,
-        readiness.status,
+        readiness_axis,
         inputs.status,
         parameters.status,
         program_version.status,
@@ -219,7 +229,7 @@ def _resolve_status(
     if any(receipt != "match" for receipt in comparable_inputs):
         return "unavailable"
     result_receipts = (native, readiness)
-    if any(receipt not in {"match", "mismatch"} for receipt in result_receipts):
+    if any(receipt not in {"match", "mismatch", "non_comparable"} for receipt in result_receipts):
         return "unavailable"
     if trade_divergences > 0 or "mismatch" in result_receipts:
         return "diverged"
@@ -244,7 +254,7 @@ def _resolve_reason(
         return "program_version_mismatch"
     if native not in {"match", "mismatch"}:
         return "lean_native_metric_parity_unavailable"
-    if readiness not in {"match", "mismatch"}:
+    if readiness not in {"match", "mismatch", "non_comparable"}:
         return "production_readiness_parity_unavailable"
     if inputs not in {"match", "mismatch"}:
         return "compatibility_input_parity_unavailable"
@@ -324,6 +334,23 @@ def compare_readiness(left_json: str | None, right_json: str | None) -> Readines
         or not _readiness_signature_complete(right_signature)
     ):
         return ReadinessParityReceipt.unavailable("readiness_signature_incomplete")
+    # #2447 (owner decision #2424): the Python row's headline statistics
+    # grade the marked equity curve; the LEAN companion's grade the common
+    # closed-trade ledger. A raw signature equality across those bases would
+    # freeze a manufactured divergence that says nothing about whether the
+    # engines agree on the ledger -- the parity harness's worst possible
+    # output. The readiness axis says the bases differ instead, and the
+    # verdict rests on the axes that still compare (trade reconciliation,
+    # native metrics, inputs, parameters). Verdicts minted before the field
+    # existed carry no basis (legacy pairs were same-basis by construction).
+    left_basis = left.get("statistics_basis")
+    right_basis = right.get("statistics_basis")
+    if (
+        isinstance(left_basis, str)
+        and isinstance(right_basis, str)
+        and left_basis != right_basis
+    ):
+        return ReadinessParityReceipt.unavailable(READINESS_STATISTICS_BASIS_DIFFERS)
     if left_signature is not None and right_signature is not None and (
         _string(left_signature, "contract_id") != _string(right_signature, "contract_id")
     ):

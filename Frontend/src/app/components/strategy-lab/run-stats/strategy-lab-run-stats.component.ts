@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, input } from "@angular/core";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
-import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
+import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.types";
 import { ResultsSidebarComponent } from "../results-sidebar/results-sidebar.component";
 import { ResultsSummaryComponent } from "../results-summary/results-summary.component";
 import { StrategyLabDeepDivesComponent } from "../strategy-lab-deep-dives/strategy-lab-deep-dives.component";

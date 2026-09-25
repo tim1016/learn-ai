@@ -5,7 +5,7 @@ import { RouterTestingModule } from "@angular/router/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { MetricDocumentationContext } from "../../../services/backtest-runs.types";
-import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
+import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.types";
 import { ResultsSummaryComponent } from "./results-summary.component";
 
 afterEach(() => {

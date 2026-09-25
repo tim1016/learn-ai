@@ -4,7 +4,7 @@ import { Drawer } from "primeng/drawer";
 import type {
   EngineResultData,
   LeanAnalysisFinding,
-} from "../../lean-engine/engine-results/engine-results.component";
+} from "../../lean-engine/engine-results/engine-results.types";
 import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-statistics.component";
 import { TradeLedgerComponent } from "../../lean-engine/engine-results/trade-ledger/trade-ledger.component";
 import { ValidationAtlasComponent } from "../../lean-engine/engine-results/validation-atlas/validation-atlas.component";

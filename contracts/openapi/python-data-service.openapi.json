@@ -35128,6 +35128,17 @@
             ],
             "title": "Signal"
           },
+          "statistics_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statistics Basis"
+          },
           "status": {
             "enum": [
               "complete",

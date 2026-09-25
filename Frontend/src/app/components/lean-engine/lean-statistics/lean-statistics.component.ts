@@ -2,7 +2,7 @@ import {
   Component, computed, input, signal, type Signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
-import type { LeanStatistics } from '../engine-results/engine-results.component';
+import type { LeanStatistics } from '../engine-results/engine-results.types';
 import { MetricHelpModalComponent } from '../../strategy-lab/metric-help-modal/metric-help-modal.component';
 import { ValidationScopeNoteComponent } from '../../../shared/validation-scope/validation-scope-note.component';
 

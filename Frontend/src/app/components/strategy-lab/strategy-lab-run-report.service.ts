@@ -10,7 +10,7 @@ import type {
   EngineTrade,
   LeanStatistics,
   LeanAnalysisFinding,
-} from "../lean-engine/engine-results/engine-results.component";
+} from "../lean-engine/engine-results/engine-results.types";
 import { parseRunVerdictEnvelope, type StrategyLabParityView } from "./strategy-lab.models";
 
 /** A pending parity verdict is the one thing on a report that still changes; poll for it. */
@@ -235,6 +235,8 @@ const UNAVAILABLE_REASON_COPY: Record<string, string> = {
   lean_native_metric_mismatch: "The reproduced LEAN-native statistics differ from LEAN's own result.",
   production_readiness_mismatch: "The two engines produced different production-readiness evidence.",
   lean_native_metric_parity_unavailable: "LEAN-native calculation evidence is incomplete, so agreement cannot be claimed.",
+  readiness_statistics_basis_differs:
+    "The engines grade different statistical bases by design (Python: the marked equity curve; LEAN: the shared closed-trade ledger), so readiness is not compared; the verdict rests on the common ledger.",
   production_readiness_parity_unavailable: "One run has no comparable production-readiness envelope.",
   trade_reconciliation_diverged: "One or more trades differ between the engines.",
   compatibility_input_mismatch: "The runs did not consume the same pinned data or compatibility settings.",

@@ -2,7 +2,7 @@ import { Component, input, provideZonelessChangeDetection } from "@angular/core"
 import { TestBed } from "@angular/core/testing";
 import { describe, expect, it } from "vitest";
 
-import type { EngineResultData, LeanStatistics } from "../../lean-engine/engine-results/engine-results.component";
+import type { EngineResultData, LeanStatistics } from "../../lean-engine/engine-results/engine-results.types";
 import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-statistics.component";
 import { StrategyLabDeepDivesComponent } from "./strategy-lab-deep-dives.component";
 

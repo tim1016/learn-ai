@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input, signal } from '@an
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
-import type { EngineTrade } from '../engine-results.component';
+import type { EngineTrade } from '../engine-results.types';
 
 @Component({
   selector: 'app-engine-trade-ledger',

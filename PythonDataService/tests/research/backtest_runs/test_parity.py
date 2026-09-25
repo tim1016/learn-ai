@@ -656,3 +656,61 @@ async def test_a_group_with_no_python_run_stays_unsettled(conn, unique: str) -> 
 
     assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group, failure_detail="boom") is False
     assert await repo.get_parity_verdict(conn, group) is None
+
+
+# ── #2447: the readiness axis refuses to compare across statistical bases ─────
+
+
+def test_cross_basis_readiness_never_freezes_a_manufactured_divergence() -> None:
+    """#2447 (owner decision #2424): the Python row's verdict grades the
+    marked equity curve while the LEAN companion's grades the common
+    closed-trade ledger, so their readiness signatures differ even when the
+    engines agree exactly on the ledger. The readiness axis says the bases
+    differ instead of freezing ``diverged``; the verdict rests on the axes
+    that still compare."""
+    marked = dict(MATCHING_RUN_VERDICT, statistics_basis="marked_equity_curve")
+    ledger = dict(MATCHING_RUN_VERDICT, statistics_basis="closed_trade_ledger")
+    left = _run(1, "engine", run_verdict_json=json.dumps(marked))
+    right = _run(2, "lean-sidecar", run_verdict_json=json.dumps(ledger))
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    parsed = json.loads(verdict.verdict_json)
+
+    assert verdict.status == "agree"
+    assert parsed["readiness_parity"] == {
+        "status": "unavailable",
+        "reason": "readiness_statistics_basis_differs",
+        "compared_field_count": 0,
+        "mismatched_fields": [],
+    }
+    assert parsed["native_metric_parity"]["status"] == "match"
+    assert parsed["divergences"] == []
+
+
+def test_same_basis_readiness_still_compares() -> None:
+    """Both rows on one basis keep the readiness axis decisive: a real
+    signature difference still freezes ``diverged``."""
+    import copy
+
+    left_verdict = dict(MATCHING_RUN_VERDICT, statistics_basis="closed_trade_ledger")
+    right_verdict = copy.deepcopy(left_verdict)
+    right_verdict["grade"] = right_verdict["parity_signature"]["grade"] = "B"
+    left = _run(1, "engine", run_verdict_json=json.dumps(left_verdict))
+    right = _run(2, "lean-sidecar", run_verdict_json=json.dumps(right_verdict))
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+
+    assert verdict.status == "diverged"
+
+
+def test_legacy_verdicts_without_a_basis_still_compare() -> None:
+    """Verdicts minted before the field existed were same-basis by
+    construction; the axis compares them exactly as before."""
+    left = _run(1, "engine")
+    right = _run(2, "lean-sidecar")
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    parsed = json.loads(verdict.verdict_json)
+
+    assert verdict.status == "agree"
+    assert parsed["readiness_parity"]["status"] == "match"

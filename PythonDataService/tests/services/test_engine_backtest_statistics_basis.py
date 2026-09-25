@@ -151,6 +151,10 @@ def test_verdict_inputs_are_identical_in_paired_and_normal_mode() -> None:
 
     assert paired.statistics == normal.statistics
     assert paired.run_verdict is not None and normal.run_verdict is not None
+    # The verdict names its basis so the parity comparison can refuse to
+    # compare it against the LEAN companion's ledger-based envelope (#2447).
+    assert paired.run_verdict.statistics_basis == "marked_equity_curve"
+    assert normal.run_verdict.statistics_basis == "marked_equity_curve"
     # The verdict stamps its own wall-clock generation time; every graded
     # input and every grade must be identical between the two modes.
     assert paired.run_verdict.model_dump(exclude={"generated_at_ms"}) == (

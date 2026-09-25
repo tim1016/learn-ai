@@ -150,6 +150,7 @@ def compute_run_verdict(
     data = _coerce_input(payload)
     generated = generated_at_ms if generated_at_ms is not None else int(time.time() * 1000)
     clean = _coerce_cleanliness(cleanliness)
+    statistics_basis = data.statistics_basis if data is not None else None
 
     if data is None:
         verdict = _empty_verdict(
@@ -189,6 +190,7 @@ def compute_run_verdict(
             )
         verdict = RunVerdict(
             verdict_version=RUN_VERDICT_VERSION,
+            statistics_basis=statistics_basis,
             status=status,
             engine=engine,
             generated_at_ms=generated,
@@ -219,6 +221,7 @@ def compute_run_verdict(
     grade, signal, evidence_action, headline = _grade_and_signal(composite)
     verdict = RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
+        statistics_basis=statistics_basis,
         status="complete",
         engine=engine,
         generated_at_ms=generated,

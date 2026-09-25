@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, input } from "@angular/core";
 
-import type { LeanAnalysisFinding } from "../../../lean-engine/engine-results/engine-results.component";
+import type { LeanAnalysisFinding } from "../../../lean-engine/engine-results/engine-results.types";
 
 @Component({
   selector: "app-strategy-lab-lean-analysis",

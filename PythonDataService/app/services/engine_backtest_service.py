@@ -1017,6 +1017,10 @@ def _aggregate_backtest_response(
     run_verdict = compute_run_verdict(
         {
             "statistics": stats,
+            # #2447: the headline statistics grade the marked equity curve in
+            # every mode; the parity comparison reads this to refuse comparing
+            # them against the LEAN companion's ledger-based envelope.
+            "statistics_basis": "marked_equity_curve",
             "win_rate": win_rate,
             "total_trades": total,
             "net_profit": float(result.net_profit),
