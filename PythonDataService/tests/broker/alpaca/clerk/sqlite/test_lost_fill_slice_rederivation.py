@@ -27,6 +27,7 @@ from typing import Any, cast
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
@@ -550,7 +551,7 @@ async def _exit_with_open_reducing(
     trade.broker_state[entry_ref] = _broker_order(
         entry_ref, status="filled", quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0
     )
-    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     red = resolved.reducing_order_ref
     assert red is not None
     red_order = repo.order(red)
@@ -676,7 +677,7 @@ async def test_unknown_exit_after_a_filled_submit_response_refreshes_with_bounde
     trade.broker_state[entry_ref] = _broker_order(
         entry_ref, status="filled", quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0
     )
-    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     red = resolved.reducing_order_ref
     assert red is not None
     effect = repo.effect_operation(accepted.effect_operation_id)

@@ -424,6 +424,38 @@ def recovery_reduction_shape(
 
 
 @dataclass(frozen=True)
+class PricingSnapshot:
+    """One read of a :class:`RecoveryPricing`: the policy in force and the live touch.
+
+    Taken on the event loop — the production quote source registers IBKR
+    demand in the market-liveness store, whose symbol map the IBKR status
+    loop replaces there — and handed to synchronous code as a plain value, so
+    pricing never touches the store from a worker thread (#2440 review).
+    """
+
+    policy: ProgramLegPolicy
+    quote: TopOfBookQuote | None
+
+    @property
+    def quote_spread_bps(self) -> float | None:
+        """The touch's spread, logged beside every automatic price and refusal (#2229)."""
+        return None if self.quote is None else quote_spread_bps(self.quote)
+
+    def price(
+        self, *, side: OrderSide, symbol: str, quantity: float, now_ms: int
+    ) -> ConfirmedRecoveryShape | None:
+        """:func:`price_automatic_recovery_reduction` against this read."""
+        return price_automatic_recovery_reduction(
+            side=side,
+            symbol=symbol,
+            quantity=quantity,
+            now_ms=now_ms,
+            policy=self.policy,
+            quote=self.quote,
+        )
+
+
+@dataclass(frozen=True)
 class RecoveryPricing:
     """The seam one pass prices an automatic recovery reduction from (#2229).
 
@@ -436,6 +468,12 @@ class RecoveryPricing:
 
     policy_source: Callable[[], ProgramLegPolicy]
     quote_source: QuoteSource
+
+    def read(self, symbol: str, now_ms: int) -> PricingSnapshot:
+        """Resolve the policy and read the live touch for ``symbol`` — on the event loop."""
+        return PricingSnapshot(
+            policy=self.policy_source(), quote=self.quote_source(symbol, now_ms)
+        )
 
 
 def _no_live_quote(symbol: str, now_ms: int) -> TopOfBookQuote | None:
@@ -668,6 +706,7 @@ __all__ = [
     "ExtendedLimitProposal",
     "ExtendedPhase",
     "PricingProvenance",
+    "PricingSnapshot",
     "QuoteSource",
     "RecoveryPricing",
     "RecoveryReductionPricing",

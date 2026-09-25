@@ -19,6 +19,8 @@ and first driven at 16:01 used to submit a market DAY SELL with
 
 from __future__ import annotations
 
+import json
+import threading
 from collections.abc import Iterator
 from datetime import date, datetime
 from decimal import Decimal
@@ -27,14 +29,19 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLegPolicy
+from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg, ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
     RecoveryPricing,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
-from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    confirmed_flatten_reference_price,
+    resolve_exit,
+)
+from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
+from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_NOT_FLAT_REASON_CODE
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
@@ -106,8 +113,7 @@ def _accept_program_exit(
         decision_id="program-exit-1",
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
-        reducing_shape=shape,
-        reducing_valid_until_ms=valid_until_ms,
+        program_leg=None if shape is None else ProgramLeg(shape, valid_until_ms=valid_until_ms),
     )
     assert accepted.effect_operation_id is not None
     return accepted.effect_operation_id
@@ -137,7 +143,7 @@ async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_mar
     _walk_clock_to(repo, _at(16, 1))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.submit_calls == [], "a market DAY reduction was submitted after the close"
     assert repo.position(SID, "SPY") == 10
@@ -373,3 +379,158 @@ async def test_program_and_recovery_exits_follow_the_same_send_time_rule(
 
     ((leg, _),) = trade.submit_calls
     assert (leg.order_type, leg.limit_price, leg.extended_hours) == (OrderType.LIMIT, 99.8, True)
+
+
+@pytest.mark.parametrize(
+    ("decided_at", "sent_at", "recorded_limit", "reads"),
+    [
+        pytest.param((15, 59), (16, 1), False, 1, id="a-market-leg-past-the-close-is-re-priced"),
+        pytest.param((15, 59), (15, 59, 30), False, 0, id="inside-the-regular-session-nothing-is-read"),
+        pytest.param((17, 13), (17, 14), True, 0, id="a-sendable-after-hours-limit-reads-nothing"),
+    ],
+)
+async def test_the_live_touch_is_read_on_the_event_loop_and_only_to_re_price(
+    repo: ClerkSqliteRepository,
+    decided_at: tuple[int, ...],
+    sent_at: tuple[int, ...],
+    recorded_limit: bool,
+    reads: int,
+) -> None:
+    """#2440 review: the quote source is never called off the event loop, nor without need.
+
+    The production source registers IBKR demand in the market-liveness store,
+    whose symbol map the IBKR status loop iterates and replaces on the event
+    loop. The sweep, restart recovery and the watchdog run the EXIT machine's
+    repository steps on a worker thread (``off_loop=to_thread``), so the touch
+    is read on the loop between two of them — and only for a leg that must be
+    re-priced: a leg that goes out as recorded registers no demand at all.
+    """
+    loop_thread = threading.get_ident()
+    read_on: list[int] = []
+
+    def quote(symbol: str, now_ms: int) -> TopOfBookQuote:
+        read_on.append(threading.get_ident())
+        return TopOfBookQuote(
+            symbol=symbol, bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=now_ms
+        )
+
+    _walk_clock_to(repo, _at(*decided_at))
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(
+        repo,
+        entry_ref,
+        shape=(
+            LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            )
+            if recorded_limit
+            else None
+        ),
+        valid_until_ms=_at(20, 0) if recorded_limit else None,
+    )
+    _walk_clock_to(repo, _at(*sent_at))
+    trade = _acked()
+
+    await resolve_exit(
+        repo,
+        effect_operation_id=effect_operation_id,
+        trade=trade,
+        pricing=RecoveryPricing(policy_source=lambda: _POLICY, quote_source=quote),
+        off_loop=to_thread,
+    )
+
+    assert len(trade.submit_calls) == 1
+    assert len(read_on) == reads
+    assert all(thread == loop_thread for thread in read_on), "the live touch was read off the event loop"
+
+
+async def test_a_leg_the_clerk_prices_at_send_records_who_priced_it_and_its_reference_quote(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2440 review (#2229's invariant): a live-money limit the Clerk priced from an IBKR
+    quote is recorded as the Clerk's, with the quote it was priced against.
+
+    Without it a re-priced leg's fills had no slippage reference, and later
+    copy could not tell the Clerk's price from an operator's confirmation.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    _walk_clock_to(repo, _at(16, 1))
+    trade = _acked()
+
+    resolved = await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch()
+    )
+
+    assert resolved.reducing_order_ref is not None
+    transition = repo.first_order_transition(
+        order_ref=resolved.reducing_order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
+    )
+    assert transition is not None
+    created = ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
+    assert (created.order_type, created.limit_price, created.extended_hours, created.valid_until_ms) == (
+        "limit",
+        99.8,
+        True,
+        _at(20, 0),
+    )
+    assert (
+        created.priced_by,
+        created.reference_bid,
+        created.reference_ask,
+        created.reference_quote_observed_at_ms,
+    ) == ("clerk", 100.00, 100.05, _at(16, 1))
+    # A fill of it is measured from the bid it was priced against.
+    assert confirmed_flatten_reference_price(repo, resolved.reducing_order_ref) == 100.00
+
+
+async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confirmation(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2440 review: the fold copy is chosen from who priced the order being judged.
+
+    An operator's market flatten, driven at 19:59:50, is re-priced by the Clerk
+    as an after-hours limit good until 20:00; the submit is lost. Resumed after
+    the close, the order is never replayed — and the operator is not told that
+    a price they never saw was "confirmed". This copy is what blocked the
+    #2230 review.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="recovery-flatten-repriced01",
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    _walk_clock_to(repo, _at(19, 59, 50))
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
+    first = await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=lost, pricing=_live_touch()
+    )
+    ((sent, _),) = lost.submit_calls
+    assert (sent.order_type, sent.limit_price, sent.extended_hours) == (OrderType.LIMIT, 99.8, True)
+    assert first.reducing_order_ref is not None
+
+    _walk_clock_to(repo, _at(20, 0, 40))  # past the 30 s submit-absence grace and the POST close
+    resumed = _FakeTrade(lookup_results=[None])
+    await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=resumed, pricing=_live_touch()
+    )
+
+    assert resumed.submit_calls == []
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert episode["explanation"].startswith("The Clerk-priced limit for SPY was not sent")
+    assert "confirmed" not in episode["explanation"]
+    (not_flat,) = [
+        row
+        for row in repo.transitions_for_order(first.reducing_order_ref)
+        if row["transition_kind"] == "EXIT_NOT_FLAT"
+    ]
+    assert "confirmed" not in json.loads(not_flat["facts_json"])["reason"]

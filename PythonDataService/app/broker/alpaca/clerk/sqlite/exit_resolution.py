@@ -15,7 +15,12 @@ extended-hours limit off the live touch in PRE or POST, the market leg inside
 the regular session) unless an operator confirmed that price; when nothing
 can price it, or its order already has a broker identity, nothing is sent and
 the EXIT folds releasably through ``EXIT_NOT_FLAT`` — the operator-visible
-episode, never a silent queue.
+episode, never a silent queue. What it is re-priced from is the one pricing
+seam the caller names (every caller passes its authority's
+``recovery_pricing``); the live touch is read on the event loop, and only for
+a leg that must be re-priced. A leg the Clerk priced this way records who
+priced it and the quote it was priced against on its own
+``EXIT_REDUCING_ORDER_CREATED`` facts.
 """
 
 from __future__ import annotations
@@ -36,11 +41,10 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     RECOVERY_LIMIT_QUANTITY_CHANGED,
     RECOVERY_LIMIT_SESSION_ENDED,
     RECOVERY_MARKET_WAIT_ENDED,
-    UNPRICEABLE_RECOVERY,
+    ConfirmedRecoveryShape,
+    PricingSnapshot,
     RecoveryPricing,
     ReducingLegVerdict,
-    price_automatic_recovery_reduction,
-    quote_spread_bps,
     reducing_leg_verdict,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -110,7 +114,7 @@ async def resolve_exit(
     *,
     effect_operation_id: str,
     trade: BrokerTradePort,
-    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
 ) -> ExitSubmission:
     """Advance one EXIT under one exclusive, attempt-scoped broker claim.
@@ -122,9 +126,13 @@ async def resolve_exit(
     no shape — a regular-session decision, a safe flatten or re-drive inside
     the regular session — gets the regular-session market DAY leg (ruling R5).
     Either leg then passes the send-time rule (module docstring); ``pricing``
-    is what a leg that can no longer go out as recorded is re-priced from.
-    The degraded :data:`UNPRICEABLE_RECOVERY` default prices nothing, so such
-    an EXIT folds for the operator instead.
+    is what a leg that can no longer go out as recorded is re-priced from. It
+    has no default: the runner, the sweep, restart recovery, the watchdog and
+    the operator's flatten all name their authority's one seam
+    (``SqliteAlpacaClerkFacade.recovery_pricing``), so which caller drives an
+    EXIT never decides whether it is re-priced or folded. A caller that can
+    price nothing passes :data:`~recovery_reduction.UNPRICEABLE_RECOVERY`, and
+    such an EXIT folds for the operator instead.
 
     ``off_loop`` moves each synchronous repository run of the machine onto a
     worker thread (#1993); the default keeps the pre-#1993 inline behavior
@@ -255,41 +263,31 @@ def _prepare_reduction(
     repo: ClerkSqliteRepository,
     effect_operation_id: str,
     state: _ClaimedState,
-    pricing: RecoveryPricing,
-) -> tuple[OrderResource | None, ExitSubmission | None]:
-    """One atomic admission-to-append run: ``(created, None)``, or
-    ``(None, snapshot)`` when a precondition folded the EXIT to an early
-    end — attributed-flat, the send-time rule, or a moved quantity.
+    touch: PricingSnapshot | None,
+) -> OrderResource | ExitSubmission | _TouchNeeded:
+    """One atomic admission-to-append run: the created reducing order, or
+    the EXIT's snapshot when a precondition folded it to an early end —
+    attributed-flat, the send-time rule, or a moved quantity — or
+    :data:`_TOUCH_NEEDED`, having written nothing, when the recorded leg
+    must be re-priced and ``touch`` was not read yet.
     """
     remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
+    order_ref = _primary_entry_ref(repo, state.entries)
     if not position_quantity_is_nonzero(remaining_qty):
-        _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, state.entries))
-        return None, _snapshot(repo, effect_operation_id)
+        _fold_attributed_flat(repo, effect_operation_id, order_ref)
+        return _snapshot(repo, effect_operation_id)
     leg = _leg_to_create(
         repo,
         effect_operation_id=effect_operation_id,
-        shape=_resolved_reducing_shape(
-            repo,
-            effect_operation_id=effect_operation_id,
-            reducing_side=OrderSide.SELL if remaining_qty > 0 else OrderSide.BUY,
-        ),
-        order_ref=_primary_entry_ref(repo, state.entries),
+        order_ref=order_ref,
         symbol=state.symbol,
         remaining_qty=remaining_qty,
-        pricing=pricing,
+        touch=touch,
     )
+    if isinstance(leg, _TouchNeeded):
+        return leg
     if leg is None:
-        return None, _snapshot(repo, effect_operation_id)
-    # A confirmed quantity belongs to the price it was confirmed with; a leg
-    # re-priced just now was priced for the quantity attributed now.
-    if not leg.repriced and not _confirmed_quantity_still_holds(
-        repo,
-        effect_operation_id=effect_operation_id,
-        order_ref=_primary_entry_ref(repo, state.entries),
-        symbol=state.symbol,
-        remaining_qty=remaining_qty,
-    ):
-        return None, _snapshot(repo, effect_operation_id)
+        return _snapshot(repo, effect_operation_id)
     require_capability(
         repo,
         capability=Capability.REDUCE,
@@ -300,16 +298,12 @@ def _prepare_reduction(
             quantity=abs(remaining_qty),
         ),
     )
-    return (
-        _create_reducing_order(
-            repo,
-            effect_operation_id=effect_operation_id,
-            symbol=state.symbol,
-            quantity=remaining_qty,
-            shape=leg.shape,
-            valid_until_ms=leg.valid_until_ms,
-        ),
-        None,
+    return _create_reducing_order(
+        repo,
+        effect_operation_id=effect_operation_id,
+        symbol=state.symbol,
+        quantity=remaining_qty,
+        leg=leg,
     )
 
 
@@ -417,6 +411,12 @@ async def _resolve_claimed(
     The send-time rule is judged only once the entry set is proven terminal:
     a working entry is cancelled whatever the session, because cancelling it
     reduces risk and the reducing quantity is not known until it is proven.
+
+    ``pricing`` is read here, on the event loop, and only when the repository
+    step answers that the recorded leg must be re-priced: the production
+    quote source registers IBKR demand in the market-liveness store, which is
+    not safe from the worker thread ``run`` may hop to, and a leg that goes
+    out as recorded needs no quote at all (#2440 review).
     """
     state = await run(lambda: _read_exit_claim_state(repo, effect_operation_id))
     if not await _prove_entry_set_terminal(
@@ -448,12 +448,16 @@ async def _resolve_claimed(
             run=run,
         ):
             return await run(lambda: _snapshot(repo, effect_operation_id))
-        reducing, prepared_snapshot = await run(
-            lambda: _prepare_reduction(repo, effect_operation_id, state, pricing)
-        )
-        if prepared_snapshot is not None:
-            return prepared_snapshot
-        assert reducing is not None
+        prepared = await run(lambda: _prepare_reduction(repo, effect_operation_id, state, None))
+        if isinstance(prepared, _TouchNeeded):
+            touch = pricing.read(state.symbol, repo.clock())
+            prepared = await run(
+                lambda: _prepare_reduction(repo, effect_operation_id, state, touch)
+            )
+        if isinstance(prepared, ExitSubmission):
+            return prepared
+        assert isinstance(prepared, OrderResource)
+        reducing = prepared
         await _submit_reducing_order(
             repo,
             effect_operation_id=effect_operation_id,
@@ -531,41 +535,84 @@ class _SendableLeg(NamedTuple):
 
     shape: LegShape
     valid_until_ms: int | None
-    # Priced at this instant rather than taken from the EXIT's acceptance.
-    repriced: bool
+    # The Clerk's own price when the leg was priced as the reduction was
+    # created rather than taken from the acceptance (#2440): recorded on the
+    # order with the quote it was priced against, so a fill's slippage is
+    # measured from it and no copy ever calls the price confirmed.
+    clerk_price: ConfirmedRecoveryShape | None
+
+
+class _TouchNeeded:
+    """The recorded leg must be re-priced, and no live touch was read for it yet."""
+
+
+_TOUCH_NEEDED = _TouchNeeded()
 
 
 def _leg_to_create(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
-    shape: LegShape,
     order_ref: str,
     symbol: str,
     remaining_qty: float,
-    pricing: RecoveryPricing,
-) -> _SendableLeg | None:
+    touch: PricingSnapshot | None,
+) -> _SendableLeg | _TouchNeeded | None:
     """The send-time rule at creation: the leg to create now, or ``None`` once the EXIT folded.
 
-    ``shape`` is the EXIT's recorded leg, side-reconciled. Sendable now, it is
-    kept. Otherwise — a market leg after the regular close, which Alpaca would
-    queue for the next open; a limit past the session it was priced for — it
-    is re-priced from the current instant, since no broker identity exists yet
-    to preserve (#2440, owner decision #2431): an extended-hours limit off the
-    live touch in PRE or POST, the market leg inside the regular session. An
-    operator's confirmed price is the one exception — it is never replaced by
-    a price nobody confirmed (#2007). A refusal to price (no session open, no
-    allowance, no live quote, a spread past the cap) folds the EXIT for the
-    operator; the watchdog's re-drive keeps trying.
+    The EXIT's recorded leg, side-reconciled, is kept while it can still go
+    out — an operator's confirmed price only for the quantity it was
+    confirmed for. Otherwise — a market leg after the regular close, which
+    Alpaca would queue for the next open; a limit past the session it was
+    priced for — it is re-priced from the current instant, since no broker
+    identity exists yet to preserve (#2440, owner decision #2431): an
+    extended-hours limit off the live touch in PRE or POST, the market leg
+    inside the regular session. Re-pricing needs ``touch``, which is read on
+    the event loop and never here: without one this answers
+    :data:`_TOUCH_NEEDED` before writing anything, and the caller reads the
+    touch and asks again.
+
+    An operator's confirmed price is never replaced by one nobody confirmed
+    (#2007). Whether the recorded price is the operator's is read from the
+    EXIT's own acceptance — who priced it — never from the caller's pricing
+    seam, and never from the side-reconciled shape: a limit confirmed for the
+    other side becomes a market leg here, and is still the operator's. A
+    refusal to price (no session open, no allowance, no live quote, a spread
+    past the cap) folds the EXIT for the operator; the watchdog's re-drive
+    keeps trying.
     """
     facts = _accepted_facts(repo, effect_operation_id)
     now_ms = repo.clock()
+    reducing_side = OrderSide.SELL if remaining_qty > 0 else OrderSide.BUY
+    recorded = facts.reducing_shape()
+    shape = _resolved_reducing_shape(recorded, reducing_side=reducing_side)
     valid_until_ms = facts.reducing_valid_until_ms if shape.extended_hours else None
     verdict = reducing_leg_verdict(
         extended_hours=shape.extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms
     )
+    operator_priced = _operator_priced(facts)
+    if verdict != "send" and not operator_priced and touch is None:
+        return _TOUCH_NEEDED
+    if recorded is not None and shape != recorded:
+        logger.warning(
+            "Reducing leg shape was priced for the other side; submitting a regular-session market leg instead",
+            extra={
+                "action": "reducing_leg_shape_side_mismatch",
+                "effect_operation_id": effect_operation_id,
+                "shaped_side": recorded.side.value,
+                "reducing_side": reducing_side.value,
+            },
+        )
     if verdict == "send":
-        return _SendableLeg(shape, valid_until_ms, repriced=False)
+        if not _confirmed_quantity_still_holds(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            symbol=symbol,
+            remaining_qty=remaining_qty,
+        ):
+            return None
+        return _SendableLeg(shape, valid_until_ms, clerk_price=None)
 
     def fold(refusal: LegRefusal | None) -> None:
         _fold_unsendable_leg(
@@ -576,28 +623,24 @@ def _leg_to_create(
             remaining_qty=remaining_qty,
             verdict=verdict,
             refusal=refusal,
+            priced_by=facts.reducing_priced_by,
         )
 
-    if shape.extended_hours and _operator_priced(facts):
+    if operator_priced:
         fold(None)
         return None
-    quote = pricing.quote_source(symbol, now_ms)
+    assert touch is not None  # answered _TOUCH_NEEDED above otherwise
     try:
-        priced = price_automatic_recovery_reduction(
-            side=shape.side,
-            symbol=symbol,
-            quantity=remaining_qty,
-            now_ms=now_ms,
-            policy=pricing.policy_source(),
-            quote=quote,
+        priced = touch.price(
+            side=reducing_side, symbol=symbol, quantity=remaining_qty, now_ms=now_ms
         )
     except ProgramLegRefused as exc:
         fold(exc.refusal)
         return None
-    resent = _SendableLeg(
-        regular_session_shape(shape.side) if priced is None else priced.shape,
-        None if priced is None else priced.valid_until_ms,
-        repriced=True,
+    resent = (
+        _SendableLeg(regular_session_shape(reducing_side), None, clerk_price=None)
+        if priced is None
+        else _SendableLeg(priced.shape, priced.valid_until_ms, clerk_price=priced)
     )
     logger.warning(
         "an EXIT's recorded leg could no longer be sent; re-priced it for the session open now",
@@ -608,7 +651,7 @@ def _leg_to_create(
             "verdict": verdict,
             "order_type": resent.shape.order_type.value,
             "limit_price": resent.shape.limit_price,
-            "quote_spread_bps": None if quote is None else quote_spread_bps(quote),
+            "quote_spread_bps": touch.quote_spread_bps,
         },
     )
     return resent
@@ -654,6 +697,13 @@ def _created_leg_may_be_sent(
         remaining_qty=remaining_qty,
         verdict=verdict,
         refusal=None,
+        # Who priced the order being judged: the Clerk's own record when it
+        # priced the leg at creation, otherwise the acceptance's.
+        priced_by=(
+            created.priced_by
+            if created.priced_by is not None
+            else _accepted_facts(repo, effect_operation_id).reducing_priced_by
+        ),
     )
     return False
 
@@ -661,8 +711,10 @@ def _created_leg_may_be_sent(
 def _operator_priced(facts: ExitAcceptedFacts) -> bool:
     """Did an operator confirm this EXIT's recorded price (#2007)?
 
-    A confirmed quantity comes with every recovery price; only the Clerk's own
-    stamps ``priced_by`` (#2229). A deciding program confirms no quantity.
+    Read from the acceptance alone, whatever shape side reconciliation later
+    makes of it. A confirmed quantity comes with every recovery price; only
+    the Clerk's own stamps ``priced_by`` (#2229). A deciding program confirms
+    no quantity.
     """
     return facts.reducing_confirmed_quantity is not None and facts.reducing_priced_by is None
 
@@ -676,6 +728,7 @@ def _fold_unsendable_leg(
     remaining_qty: float,
     verdict: ReducingLegVerdict,
     refusal: LegRefusal | None,
+    priced_by: str | None,
 ) -> None:
     """Fold an EXIT whose leg can no longer be sent, releasably, through ``EXIT_NOT_FLAT``.
 
@@ -683,7 +736,10 @@ def _fold_unsendable_leg(
     what the operator sees on the bot page and in the lane's attention bell,
     and it is what the stuck-EXIT watchdog re-drives — pricing a limit itself
     in an extended session (#2229). ``refusal`` is why no current-session
-    price could replace the leg, when one was attempted.
+    price could replace the leg, when one was attempted. ``priced_by`` is who
+    priced the leg that could not be sent (``"clerk"``, or ``None`` for an
+    operator's confirmation), recorded durably with it: a trader is never
+    told a price was confirmed that nobody confirmed.
     """
     logger.info(
         "an EXIT's reducing leg could not be sent in its session; folded releasably",
@@ -733,8 +789,15 @@ def _fold_unsendable_leg(
             next_step=RECOVERY_MARKET_WAIT_ENDED.next_step,
         )
         return
-    clerk_priced = _accepted_facts(repo, effect_operation_id).reducing_priced_by == "clerk"
-    subject = "The Clerk-priced limit" if clerk_priced else "The limit confirmed"
+    if priced_by == "clerk":
+        subject = "The Clerk-priced limit"
+        reason = (
+            "The session this limit was priced in ended before it could be sent; a "
+            "price is never carried into another session."
+        )
+    else:
+        subject = "The limit confirmed"
+        reason = RECOVERY_LIMIT_SESSION_ENDED.explanation
     _fold_exit_not_flat(
         repo,
         effect_operation_id=effect_operation_id,
@@ -742,7 +805,7 @@ def _fold_unsendable_leg(
         symbol=symbol,
         attributed_qty=remaining_qty,
         summary_code=RECOVERY_LIMIT_SESSION_ENDED.reason_code,
-        reason=RECOVERY_LIMIT_SESSION_ENDED.explanation,
+        reason=reason,
         headline="A recovery flatten limit expired unsent",
         explanation=(
             f"{subject} for {symbol} was not sent before its session ended; "
@@ -1083,24 +1146,14 @@ def _accepted_facts(repo: ClerkSqliteRepository, effect_operation_id: str) -> Ex
     return ExitAcceptedFacts.from_facts_json(acceptance["facts_json"])
 
 
-def _accepted_reducing_shape(
-    repo: ClerkSqliteRepository, *, effect_operation_id: str
-) -> LegShape | None:
-    """The leg shape this EXIT's own acceptance recorded, if any.
-
-    Read here rather than threaded from the caller so a reduction created on
-    a later pass — the 15 s reconciliation sweep, the stuck-EXIT watchdog,
-    restart recovery — carries the deciding program's (or the operator's
-    confirmed) shape instead of silently falling back to a market DAY order
-    the vendor queues to the next regular open.
-    """
-    return _accepted_facts(repo, effect_operation_id).reducing_shape()
-
-
-def _resolved_reducing_shape(
-    repo: ClerkSqliteRepository, *, effect_operation_id: str, reducing_side: OrderSide
-) -> LegShape:
+def _resolved_reducing_shape(recorded: LegShape | None, *, reducing_side: OrderSide) -> LegShape:
     """The leg this EXIT's reduction is created with: its recorded shape, side-reconciled.
+
+    ``recorded`` is the shape this EXIT's own acceptance recorded, never one
+    its driver supplies, so a reduction created on a later pass — the 15 s
+    reconciliation sweep, the stuck-EXIT watchdog, restart recovery — carries
+    the deciding program's (or the operator's confirmed) shape; an EXIT that
+    recorded none gets the regular-session leg (ruling R5).
 
     The shape was priced for the side its author expected to reduce.
     Cancellation can resolve to the other one; a limit priced for the wrong
@@ -1110,20 +1163,9 @@ def _resolved_reducing_shape(
     codebase (ruling R11). The result still passes the send-time rule
     (:func:`_leg_to_create`) before it is created.
     """
-    shape = _accepted_reducing_shape(repo, effect_operation_id=effect_operation_id)
-    resolved = regular_session_shape(reducing_side) if shape is None else shape
-    if resolved.side is not reducing_side:
-        logger.warning(
-            "Reducing leg shape was priced for the other side; submitting a regular-session market leg instead",
-            extra={
-                "action": "reducing_leg_shape_side_mismatch",
-                "effect_operation_id": effect_operation_id,
-                "shaped_side": resolved.side.value,
-                "reducing_side": reducing_side.value,
-            },
-        )
-        resolved = regular_session_shape(reducing_side)
-    return resolved
+    if recorded is None or recorded.side is not reducing_side:
+        return regular_session_shape(reducing_side)
+    return recorded
 
 
 def _create_reducing_order(
@@ -1132,8 +1174,7 @@ def _create_reducing_order(
     effect_operation_id: str,
     symbol: str,
     quantity: float,
-    shape: LegShape,
-    valid_until_ms: int | None,
+    leg: _SendableLeg,
 ) -> OrderResource:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -1141,6 +1182,9 @@ def _create_reducing_order(
         build_bot_order_namespace(effect.strategy_instance_id),
         _deterministic_intent_id(effect_operation_id),
     )
+    shape = leg.shape
+    clerk_price = leg.clerk_price
+    quote = None if clerk_price is None else clerk_price.reference_quote
     facts = ExitReducingOrderCreatedFacts(
         symbol=symbol,
         side=shape.side.value.upper(),
@@ -1149,7 +1193,11 @@ def _create_reducing_order(
         time_in_force=shape.time_in_force.value,
         limit_price=shape.limit_price,
         extended_hours=shape.extended_hours,
-        valid_until_ms=valid_until_ms,
+        valid_until_ms=leg.valid_until_ms,
+        priced_by=None if clerk_price is None else clerk_price.priced_by,
+        reference_bid=None if quote is None else quote.bid,
+        reference_ask=None if quote is None else quote.ask,
+        reference_quote_observed_at_ms=None if quote is None else quote.observed_at_ms,
     )
     repo.append_transition(
         TransitionInput(
@@ -1348,20 +1396,25 @@ async def _submit_reducing_order(
 
 
 def confirmed_flatten_reference_price(repo: ClerkSqliteRepository, order_ref: str) -> float | None:
-    """The bid (sell) or ask (cover) an operator-confirmed flatten's fills are measured from.
+    """The bid (sell) or ask (cover) a priced reducing leg's fills are measured from.
 
-    ``None`` unless ``order_ref`` is the reducing order of an EXIT that
-    recorded a confirmed limit's reference quote (#2007) — every other fill
-    has no confirmed price to have slipped from.
+    ``None`` unless ``order_ref`` is a reducing order priced against a live
+    quote: a leg the Clerk priced as the reduction was created (#2440), whose
+    own facts record that quote, or the recorded limit of an EXIT whose
+    acceptance recorded one — an operator's confirmed flatten (#2007) or the
+    watchdog's Clerk-priced re-drive (#2229). Every other fill has no quoted
+    price to have slipped from.
     """
     order = repo.order(order_ref)
     if order is None or order.role != "REDUCING":
         return None
+    created = _reducing_order_facts(repo, order_ref)
+    if created.priced_by is not None:
+        return created.reference_price()
     facts = _accepted_facts(repo, order.effect_operation_id)
     confirmed = facts.reducing_shape()
     if confirmed is None:
         return None
-    created = _reducing_order_facts(repo, order_ref)
     # The leg that actually went out is not always the confirmed one: side
     # reconciliation (R11) replaces a limit priced for the wrong side with a
     # regular-session market leg. That leg was never priced from this quote,

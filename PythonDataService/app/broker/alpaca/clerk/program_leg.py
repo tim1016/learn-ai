@@ -396,10 +396,21 @@ class ProgramLeg:
     (``ExitAcceptedFacts.reducing_valid_until_ms``) exactly as a recovery
     limit's is: ``exit_resolution`` never sends the leg past it. ``None`` for
     the regular-session leg, which may be sent only while that session is open.
+
+    The two travel as one value from the decision to the acceptance: an
+    extended-hours shape without its bound would be read as priced for no
+    session — expired on arrival — so the pair is refused here instead.
     """
 
     shape: LegShape
     valid_until_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.valid_until_ms is not None) != self.shape.extended_hours:
+            raise ValueError(
+                "an extended-hours program leg carries the end of the session it was "
+                "priced for, and a regular-session leg carries none"
+            )
 
 
 def regular_session_shape(side: OrderSide) -> LegShape:
@@ -577,7 +588,10 @@ def _leg_at_decision_close(
     state = session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=policy.window)
     if state.phase == "RTH":
         return ProgramLeg(regular_session_shape(side))
-    if state.phase not in TRADEABLE_EXTENDED_PHASES:
+    if state.phase not in TRADEABLE_EXTENDED_PHASES or state.next_transition_ms is None:
+        # A tradeable extended phase always names its end (the regular open
+        # after PRE, the declared close after POST); one that did not would
+        # bound the leg by no session at all.
         raise ProgramLegRefused(session_closed_at_decision(state.phase))
     if policy.allowances is None:
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
@@ -599,8 +613,6 @@ def _leg_at_decision_close(
             extended_hours=True,
             side=side,
         ),
-        # A tradeable extended phase always names its end: the regular open
-        # after PRE, the declared close after POST.
         valid_until_ms=state.next_transition_ms,
     )
 

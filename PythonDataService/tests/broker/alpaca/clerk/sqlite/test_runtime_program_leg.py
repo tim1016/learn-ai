@@ -426,11 +426,14 @@ async def test_a_regular_hours_exit_decided_inside_the_session_keeps_the_market_
 def test_a_late_exit_is_repriced_from_the_live_market_only_off_a_synthetic_authority(
     tmp_path: Path, account_id: str, authority_kind: str, prices_from_the_live_market: bool
 ) -> None:
-    """#2440: the send-time re-pricing seam is the one the authority's sweep uses.
+    """#2440: one pricing seam per authority, named by every path that drives an EXIT.
 
+    The runner, restart recovery, the sweep and its watchdog, operator
+    Reconcile Now and the operator's flatten all read ``recovery_pricing``.
     A synthetic authority fills against retained bars, never the live market
-    (PR #2230 review), so it re-prices nothing — such an EXIT folds for the
-    operator instead of being priced off a market it does not execute in.
+    (PR #2230 review), so it re-prices nothing — whichever of them drives
+    such an EXIT, it folds for the operator instead of being priced off a
+    market it does not execute in.
     """
     repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(
@@ -442,7 +445,7 @@ def test_a_late_exit_is_repriced_from_the_live_market_only_off_a_synthetic_autho
         program_leg_policy=_EXTENDED_POLICY,
     )
     try:
-        pricing = facade.exit_send_pricing
+        pricing = facade.recovery_pricing
         assert (pricing is not UNPRICEABLE_RECOVERY) is prices_from_the_live_market
         if prices_from_the_live_market:
             assert pricing.policy_source() is _EXTENDED_POLICY

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import record_unfoldable_broker_order
@@ -243,7 +244,7 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
         "placeholder", side="sell", status="canceled", filled_quantity=4.0, filled_avg_price=101.0
     )
     result = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(submit_result=partial)
+        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(submit_result=partial), pricing=UNPRICEABLE_RECOVERY
     )
     assert result.reducing_order_ref is not None
     fold_order_evidence(
@@ -251,7 +252,7 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
         effect_operation_id=accepted.effect_operation_id,
         order=partial.model_copy(update={"client_order_id": result.reducing_order_ref}),
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade())
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     episode = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=SID
     )

@@ -13,8 +13,11 @@ import logging
 
 import pytest
 
-from app.broker.alpaca.clerk.program_leg import LegShape
-from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
+from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    ConfirmedRecoveryShape,
+)
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     confirmed_flatten_reference_price,
@@ -159,6 +162,58 @@ def test_an_extended_shape_is_carried_in_the_reducing_facts_json() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "written_before",
+    [
+        pytest.param('{"quantity":10.0,"side":"SELL","symbol":"SPY"}', id="a-regular-leg"),
+        pytest.param(
+            '{"extended_hours":true,"limit_price":99.8,"order_type":"limit",'
+            '"quantity":10.0,"side":"SELL","symbol":"SPY","valid_until_ms":1700096400000}',
+            id="an-extended-leg-with-its-bound",
+        ),
+    ],
+)
+def test_a_reducing_order_row_written_before_send_time_pricing_parses_and_hashes_the_same(
+    written_before: str,
+) -> None:
+    """#2440 review: who priced a leg and its reference quote are omitted at their defaults.
+
+    Every row written before the provenance fields existed parses to "priced
+    as its acceptance recorded it" and re-serializes byte-identically, so no
+    sealed receipt hashed over one changes.
+    """
+    parsed = ExitReducingOrderCreatedFacts.from_facts_json(written_before)
+
+    assert parsed.priced_by is None
+    assert parsed.reference_price() is None
+    assert parsed.to_facts_json() == written_before
+
+
+def test_a_leg_the_clerk_priced_at_send_carries_its_provenance_in_the_reducing_facts_json() -> None:
+    priced = ExitReducingOrderCreatedFacts(
+        symbol="SPY",
+        side="SELL",
+        quantity=10.0,
+        order_type="limit",
+        limit_price=99.80,
+        extended_hours=True,
+        valid_until_ms=1_700_096_400_000,
+        priced_by="clerk",
+        reference_bid=100.00,
+        reference_ask=100.05,
+        reference_quote_observed_at_ms=1_700_086_860_000,
+    )
+
+    assert priced.to_facts_json() == (
+        '{"extended_hours":true,"limit_price":99.8,"order_type":"limit","priced_by":"clerk",'
+        '"quantity":10.0,"reference_ask":100.05,"reference_bid":100.0,'
+        '"reference_quote_observed_at_ms":1700086860000,"side":"SELL","symbol":"SPY",'
+        '"valid_until_ms":1700096400000}'
+    )
+    assert ExitReducingOrderCreatedFacts.from_facts_json(priced.to_facts_json()) == priced
+    assert priced.reference_price() == 100.00  # the bid, for a sell
+
+
 async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitted_identically(
     repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
 ) -> None:
@@ -172,8 +227,7 @@ async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitt
         decision_id="exit-1",
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
-        reducing_shape=_XH_SELL,
-        reducing_valid_until_ms=POST_CLOSE_MS,
+        program_leg=ProgramLeg(_XH_SELL, valid_until_ms=POST_CLOSE_MS),
     )
     assert accepted.effect_operation_id is not None
 
@@ -185,6 +239,7 @@ async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitt
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=first_trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert first.reducing_order_ref is not None
     ((leg, _client_order_id),) = first_trade.submit_calls
@@ -198,7 +253,7 @@ async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitt
 
     repo._clock.advance(31_000)  # type: ignore[attr-defined]
     second_trade = _FakeTrade(lookup_results=[None])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=second_trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=second_trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert second_trade.submit_calls[0][0] == leg
 
@@ -222,7 +277,7 @@ async def test_a_shape_for_the_other_side_falls_back_to_market(
         decision_id="exit-1",
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
-        reducing_shape=wrong_side,
+        program_leg=ProgramLeg(wrong_side, valid_until_ms=POST_CLOSE_MS),
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted"))
@@ -232,6 +287,7 @@ async def test_a_shape_for_the_other_side_falls_back_to_market(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            pricing=UNPRICEABLE_RECOVERY,
         )
 
     ((leg, _),) = trade.submit_calls
@@ -278,7 +334,7 @@ async def test_a_replaced_leg_reports_no_slippage_against_the_price_it_never_use
     trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted"))
 
     resolved = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=trade
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY
     )
 
     ((leg, _),) = trade.submit_calls
@@ -311,8 +367,7 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
         decision_id="exit-1",
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
-        reducing_shape=_XH_SELL,
-        reducing_valid_until_ms=POST_CLOSE_MS,
+        program_leg=ProgramLeg(_XH_SELL, valid_until_ms=POST_CLOSE_MS),
     )
     assert accepted.effect_operation_id is not None
 
@@ -320,7 +375,7 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
         lookup_results=[_broker_order(entry_ref, status="accepted", filled_quantity=0.0)]
     )
     deferred = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=deferring
+        repo, effect_operation_id=accepted.effect_operation_id, trade=deferring, pricing=UNPRICEABLE_RECOVERY
     )
     assert deferring.submit_calls == [], "the entry is still working; nothing to reduce yet"
     assert deferred.reducing_order_ref is None
@@ -336,7 +391,7 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
     swept = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=sweeping
+        repo, effect_operation_id=accepted.effect_operation_id, trade=sweeping, pricing=UNPRICEABLE_RECOVERY
     )
 
     assert swept.reducing_order_ref is not None
@@ -369,7 +424,7 @@ async def test_an_exit_accepted_without_a_decision_still_reduces_market_day(
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
 
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     ((leg, _client_order_id),) = trade.submit_calls
     assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (

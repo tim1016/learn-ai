@@ -7,9 +7,8 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 
-from app.broker.alpaca.clerk.program_leg import LegShape
+from app.broker.alpaca.clerk.program_leg import ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import (
-    UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryShape,
     RecoveryPricing,
 )
@@ -112,15 +111,14 @@ def _accept_exit_capture(
     entry_order_ref: str,
     resolve_run_id: Callable[[OrderResource], str],
     decision_receipt: AtomicDecisionReceipt | None,
-    reducing_shape: LegShape | None = None,
-    reducing_valid_until_ms: int | None = None,
+    program_leg: ProgramLeg | None = None,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
-    A deciding program's ``reducing_shape`` (with the end of the session it
-    was priced for) or an operator's ``confirmed_shape`` — never both — is
-    durable with the acceptance.
+    A deciding program's ``program_leg`` (its shape with the end of the
+    session it was priced for) or an operator's ``confirmed_shape`` — never
+    both — is durable with the acceptance.
 
     The run identity is supplied by ``resolve_run_id``: a strategy decision
     binds to the currently ACTIVE run (``accept_exit``); a recovery EXIT binds
@@ -173,9 +171,11 @@ def _accept_exit_capture(
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
         ).with_reducing_shape(
-            reducing_shape if confirmed_shape is None else confirmed_shape.shape,
+            (None if program_leg is None else program_leg.shape)
+            if confirmed_shape is None
+            else confirmed_shape.shape,
             valid_until_ms=(
-                reducing_valid_until_ms
+                (None if program_leg is None else program_leg.valid_until_ms)
                 if confirmed_shape is None
                 else confirmed_shape.valid_until_ms
             ),
@@ -237,20 +237,20 @@ def accept_exit(
     lifecycle_run_id: str,
     entry_order_ref: str,
     decision_receipt: AtomicDecisionReceipt | None = None,
-    reducing_shape: LegShape | None = None,
-    reducing_valid_until_ms: int | None = None,
+    program_leg: ProgramLeg | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
-    ``reducing_shape`` is the leg shape the deciding program computed for
-    this EXIT (ADR 0059 D5.3). It is durable *with the acceptance*, not with
-    the reducing order, because the two can be many passes apart: when the
-    entry is still working, cancel-and-prove defers, and whichever later pass
-    creates the reduction — the reconciliation sweep, the watchdog, recovery
-    — knows nothing about the decision. Only a non-regular shape is recorded;
-    see ``ExitAcceptedFacts.with_reducing_shape``. ``reducing_valid_until_ms``
-    is the end of the session an extended-hours shape was priced for
-    (``program_leg.ProgramLeg``, #2440): past it the leg is never sent.
+    ``program_leg`` is the leg the deciding program shaped for this EXIT
+    (ADR 0059 D5.3) — its shape, and the end of the session an extended-hours
+    shape was priced for (#2440), as the one value ``shape_program_leg``
+    returns. It is durable *with the acceptance*, not with the reducing
+    order, because the two can be many passes apart: when the entry is still
+    working, cancel-and-prove defers, and whichever later pass creates the
+    reduction — the reconciliation sweep, the watchdog, recovery — knows
+    nothing about the decision. Only a non-regular shape is recorded; see
+    ``ExitAcceptedFacts.with_reducing_shape``. Past its bound the leg is
+    never sent.
     """
     reject_colon("lifecycle_run_id", lifecycle_run_id)
 
@@ -265,8 +265,7 @@ def accept_exit(
         entry_order_ref=entry_order_ref,
         resolve_run_id=resolve_run_id,
         decision_receipt=decision_receipt,
-        reducing_shape=reducing_shape,
-        reducing_valid_until_ms=reducing_valid_until_ms,
+        program_leg=program_leg,
     )
 
 
@@ -361,6 +360,7 @@ async def submit_exit(
     lifecycle_run_id: str,
     entry_order_ref: str,
     trade: BrokerTradePort,
+    pricing: RecoveryPricing,
     decision_receipt: AtomicDecisionReceipt | None = None,
 ) -> ExitSubmission:
     accepted = accept_exit(
@@ -372,7 +372,7 @@ async def submit_exit(
         entry_order_ref=entry_order_ref,
         decision_receipt=decision_receipt,
     )
-    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing)
 
 
 async def resolve_accepted_exit(
@@ -380,7 +380,7 @@ async def resolve_accepted_exit(
     *,
     accepted: ExitSubmission,
     trade: BrokerTradePort,
-    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
 ) -> ExitSubmission:
     """Drive a previously accepted EXIT outside the intake decision segment.
@@ -397,7 +397,10 @@ async def resolve_accepted_exit(
     the EXIT's own acceptance recorded (ADR 0059 D5.3), so this call and the
     sweep's re-drive of the very same EXIT cannot produce different legs.
     ``pricing`` is what a leg that can no longer go out as recorded is
-    re-priced from at send time (#2440; see ``resolve_exit``).
+    re-priced from at send time (#2440; see ``resolve_exit``). It has no
+    default: every caller names the authority's one pricing seam
+    (``SqliteAlpacaClerkFacade.recovery_pricing``), so the same EXIT cannot
+    be re-priced by one caller and folded by another.
 
     ``off_loop`` is the sweep's worker-thread seam for the resolution spine
     (#1993); the default keeps the pre-#1993 inline behavior.

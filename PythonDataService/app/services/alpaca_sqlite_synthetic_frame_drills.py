@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -326,6 +327,7 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
                     repo,
                     effect_operation_id=accepted.effect_operation_id,
                     trade=broker,
+                    pricing=UNPRICEABLE_RECOVERY,
                 )
             )
             try:
@@ -374,6 +376,7 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
                 repo,
                 effect_operation_id=accepted.effect_operation_id,
                 trade=broker,
+                pricing=UNPRICEABLE_RECOVERY,
             )
         entry_transitions = repo.transitions_for_order(entry.order_ref)
         cancel_requested_sequence = next(

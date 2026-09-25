@@ -299,3 +299,34 @@ def test_an_unpriceable_anchor_is_a_typed_refusal_not_a_validation_error() -> No
 
     assert caught.value.reason_code == "EXTENDED_ANCHOR_UNPRICEABLE"
     assert caught.value.next_step
+
+
+@pytest.mark.parametrize(
+    ("shape", "valid_until_ms"),
+    [
+        pytest.param(
+            LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            ),
+            None,
+            id="an-extended-limit-without-the-end-of-its-session",
+        ),
+        pytest.param(regular_session_shape(OrderSide.SELL), _at(20, 0), id="a-market-leg-with-a-bound"),
+    ],
+)
+def test_a_program_leg_never_travels_without_the_bound_its_shape_needs(
+    shape: LegShape, valid_until_ms: int | None
+) -> None:
+    """#2440 review: the shape and its bound are one value from the decision to the acceptance.
+
+    An extended-hours shape recorded without the end of the session it was
+    priced for is read at send time as priced for no session — expired on
+    arrival, and re-priced off the live quote. The pair is refused where it
+    is built instead of being split into two optional arguments downstream.
+    """
+    with pytest.raises(ValueError, match="end of the session"):
+        ProgramLeg(shape, valid_until_ms=valid_until_ms)

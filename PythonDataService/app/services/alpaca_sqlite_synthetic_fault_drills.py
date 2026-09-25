@@ -10,6 +10,7 @@ from typing import Any
 from alpaca.common.exceptions import APIError
 
 from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.client import AlpacaTradingClient
@@ -303,6 +304,7 @@ async def lost_cancel(artifacts_root: Path) -> SyntheticScenarioObservation:
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            pricing=UNPRICEABLE_RECOVERY,
         )
         effect = repo.effect_operation(accepted.effect_operation_id)
         after = broker.proof()

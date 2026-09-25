@@ -17,6 +17,7 @@ import json
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.execution_coverage import ORDER_TOTAL_PROVEN_SUMMARY_CODE
@@ -395,6 +396,7 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
         trade=trade,
         intake=ReentrantAsyncLock(),
         account_id=ACCOUNT_ID,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert [leg.side for leg in trade.submitted_legs] == ["sell"]
     assert [leg.quantity for leg in trade.submitted_legs] == [10]

@@ -44,8 +44,6 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryShape,
     RecoveryPricing,
-    price_automatic_recovery_reduction,
-    quote_spread_bps,
     regular_session_open,
 )
 from app.broker.alpaca.clerk.sqlite.exit import (
@@ -162,7 +160,6 @@ async def redrive_or_escalate_stale_exits(
     # module constants; the watchdog keeps its execution logic and loses
     # its policy.
     redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
-    pricing_policy = pricing.policy_source()
 
     def _scan_stale_exits() -> tuple[int, list[_StaleExit]]:
         now_ms = repo.clock()
@@ -261,16 +258,14 @@ async def redrive_or_escalate_stale_exits(
             # re-drive prices a limit itself instead of waiting for the open.
             # A refusal (no session, no allowance, no live quote, or a spread
             # past the cap) defers — the episode stays raised and the entry
-            # stays free.
-            quote = pricing.quote_source(cause.symbol, now_ms)
+            # stays free. Read here, on the event loop (#2440 review).
+            touch = pricing.read(cause.symbol, now_ms)
             try:
-                priced = price_automatic_recovery_reduction(
+                priced = touch.price(
                     side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,
                     symbol=cause.symbol,
                     quantity=remaining,
                     now_ms=now_ms,
-                    policy=pricing_policy,
-                    quote=quote,
                 )
             except ProgramLegRefused as exc:
                 logger.info(
@@ -285,9 +280,7 @@ async def redrive_or_escalate_stale_exits(
                         # The spread beside every refusal is the series an
                         # operator tunes ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS
                         # from — a too-tight gate should be visible in data.
-                        "quote_spread_bps": None
-                        if quote is None
-                        else quote_spread_bps(quote),
+                        "quote_spread_bps": touch.quote_spread_bps,
                     },
                 )
                 continue
@@ -309,7 +302,7 @@ async def redrive_or_escalate_stale_exits(
                 )
                 continue
             confirmed_shape = priced
-            quote_spread = quote_spread_bps(quote) if quote is not None else None
+            quote_spread = touch.quote_spread_bps
         try:
             accepted = await intake.off_loop(
                 _accept_admissible_redrive,

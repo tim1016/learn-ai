@@ -411,14 +411,14 @@ async def select_synthetic_clerk_runtime(
             on_result=facade.publish_sweep_reconciliation,
             # Retires a run whose in-process runner is gone (#2369).
             run_ownership=facade.run_ownership,
-            # Deliberately no extended-hours re-drive pricing inputs here
-            # (PR #2230 review): a ``sim:`` authority can declare a window —
-            # ``synthetic_broker`` copies the environment's — and a process
-            # with a configured live binding also has a live IBKR top-of-book
-            # store, but a synthetic broker fills against retained source
-            # bars, never the live market. Pricing a synthetic recovery from
-            # live quotes would couple it to a market it does not execute in;
-            # the degraded default defers instead.
+            # The facade's one pricing seam, as on every authority (#2440).
+            # On a ``sim:`` authority it prices nothing (PR #2230 review): a
+            # synthetic broker can declare a window — ``synthetic_broker``
+            # copies the environment's — and a process with a configured live
+            # binding also has a live IBKR top-of-book store, but a synthetic
+            # broker fills against retained source bars, never the live
+            # market, so its re-drives defer and its late EXITs fold instead.
+            pricing=facade.recovery_pricing,
             # ADR 0050: no on_lease_revived here, deliberately. Lease
             # *revival* applies to this synthetic heartbeat like any other,
             # but the post-revival recovery pass is real-paper-scoped (the

@@ -347,32 +347,30 @@ class SqliteAlpacaClerkFacade:
 
     @property
     def recovery_pricing(self) -> RecoveryPricing:
-        """The seam the stuck-EXIT watchdog prices an extended-hours re-drive from.
+        """The one seam this authority prices an automatic reduction from.
+
+        Every path that can drive an EXIT hands it to ``resolve_exit`` — the
+        deciding runner, restart recovery, the reconciliation sweep (and its
+        stuck-EXIT watchdog, which prices its extended-hours re-drives from it,
+        #2229), operator Reconcile Now and the operator's safe flatten — so an
+        EXIT whose leg can no longer go out as recorded is re-priced, or folds,
+        the same way whichever of them drives it (#2440).
 
         The policy is resolved per read (the envelope in force, never a
         boot-time snapshot) and the quote is the same live top-of-book read
         the operator's safe flatten rides — IBKR via the market-liveness
-        store, never Alpaca market data (#2229).
+        store, never Alpaca market data (#2229). A synthetic authority prices
+        nothing: it fills against retained source bars rather than the live
+        market, so pricing its reductions off live quotes would couple it to a
+        market it does not execute in (PR #2230 review); such an EXIT folds
+        for the operator instead.
         """
+        if self.authority_kind == "synthetic":
+            return UNPRICEABLE_RECOVERY
         return RecoveryPricing(
             policy_source=lambda: self.program_leg_policy,
             quote_source=self._quote_source,
         )
-
-    @property
-    def exit_send_pricing(self) -> RecoveryPricing:
-        """What an EXIT whose leg can no longer go out as recorded is re-priced from (#2440).
-
-        The seam this authority's reconciliation sweep also hands its
-        watchdog: the live pricing above for a real-broker or shadow authority,
-        and none for a synthetic one, which fills against retained source bars
-        rather than the live market (PR #2230 review). Such an EXIT on a
-        synthetic authority folds for the operator instead of being priced off
-        a market it does not execute in.
-        """
-        if self.authority_kind == "synthetic":
-            return UNPRICEABLE_RECOVERY
-        return self.recovery_pricing
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
@@ -768,6 +766,7 @@ class SqliteAlpacaClerkFacade:
             trade=self._trade,
             intake=self._intake,
             account_id=self.account_id,
+            pricing=self.recovery_pricing,
             confirmed_shape=self._safe_flatten_shape(plan, confirmed_limit),
         )
         logger.info(
@@ -1147,8 +1146,7 @@ class SqliteAlpacaClerkFacade:
                         # Durable with the acceptance, not with this call:
                         # a deferred cancel-and-prove leaves the reducing
                         # order to a later sweep that knows no decision.
-                        reducing_shape=program_leg.shape,
-                        reducing_valid_until_ms=program_leg.valid_until_ms,
+                        program_leg=program_leg,
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake
@@ -1194,7 +1192,7 @@ class SqliteAlpacaClerkFacade:
             self._repo,
             accepted=accepted_exit,
             trade=trade,
-            pricing=self.exit_send_pricing,
+            pricing=self.recovery_pricing,
         )
         order_refs = tuple(
             ref
@@ -1243,7 +1241,7 @@ class SqliteAlpacaClerkFacade:
                 intake=self._intake,
                 # A restart re-drives every EXIT it finds under the same
                 # send-time rule the runner and the sweep apply (#2440).
-                pricing=self.exit_send_pricing,
+                pricing=self.recovery_pricing,
                 run_ownership=self._run_ownership,
             )
         )
@@ -1305,9 +1303,10 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger=trigger,
                 intake=self._intake,
-                # The watchdog prices extended-hours re-drive limits from
-                # the same sealed policy and live quote the operator's
-                # flatten does (#2229).
+                # The same seam every other EXIT driver names (#2440): the
+                # watchdog prices extended-hours re-drive limits from it, and
+                # an EXIT this pass creates a reduction for is re-priced from
+                # it (#2229).
                 pricing=self.recovery_pricing,
                 run_ownership=self._run_ownership,
             )

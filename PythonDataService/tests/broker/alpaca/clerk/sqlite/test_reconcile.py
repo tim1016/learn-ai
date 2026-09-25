@@ -25,7 +25,10 @@ import pytest
 
 import app.broker.alpaca.clerk.sqlite.uncertainty_policies as uncertainty_policies_module
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    RecoveryPricing,
+)
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -705,6 +708,7 @@ async def test_account_reconciliation_delegates_an_exit_owned_entry_to_resolve_e
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(cancel_error=BrokerUnavailable("timeout")),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     effect_stuck = repo.effect_operation(accepted.effect_operation_id)
     assert effect_stuck is not None and effect_stuck.state == "unknown"

@@ -206,10 +206,16 @@ _REDUCING_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "extended_hours": False,
 }
 # The reducing order's own send bound (#2440) is absent for a regular leg and
-# for every order created before it existed.
+# for every order created before it existed; who priced it and against which
+# quote is present only on a leg the Clerk priced when it was created, which
+# always also carries its bound.
 _REDUCING_ORDER_DEFAULTS: Mapping[str, Any] = {
     **_REDUCING_SHAPE_DEFAULTS,
     "valid_until_ms": None,
+    "priced_by": None,
+    "reference_bid": None,
+    "reference_ask": None,
+    "reference_quote_observed_at_ms": None,
 }
 # ``reducing_side`` is what makes an accepted shape *present*: the four
 # fields above are all at their defaults for a regular-session leg, so the
@@ -382,7 +388,15 @@ class ExitReducingOrderCreatedFacts:
     was priced for (#2440): a resubmission past it is never sent. The leg is
     not always the acceptance's shape — one re-priced at send time carries
     its own bound — so the bound lives with the order, not only with the
-    EXIT."""
+    EXIT.
+
+    A leg the Clerk priced when the reduction was created, rather than taking
+    it from the acceptance, also records who priced it (``priced_by="clerk"``)
+    and the live IBKR quote it was priced against — the reference its
+    realized slippage is measured from, exactly as an acceptance records a
+    recovery limit's (#2229) — so no copy ever calls it confirmed. All four
+    are absent from a leg created as its acceptance recorded it, whose
+    provenance is the acceptance's."""
 
     symbol: str
     side: str
@@ -392,6 +406,14 @@ class ExitReducingOrderCreatedFacts:
     limit_price: float | None = None
     extended_hours: bool = False
     valid_until_ms: int | None = None
+    priced_by: str | None = None
+    reference_bid: float | None = None
+    reference_ask: float | None = None
+    reference_quote_observed_at_ms: int | None = None
+
+    def reference_price(self) -> float | None:
+        """The bid (sell) or ask (cover) a send-time-priced leg's fills are measured from."""
+        return self.reference_bid if self.side.lower() == "sell" else self.reference_ask
 
     def to_facts_json(self) -> str:
         return canonicalize(_omit_defaults(asdict(self), _REDUCING_ORDER_DEFAULTS))

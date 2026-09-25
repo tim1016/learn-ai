@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.exit import ExitSubmission, accept_exit, resolve_accepted_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
@@ -148,7 +149,7 @@ async def test_rest_recorded_fill_then_live_exact_lets_the_exit_reduce(
     accepted = _accept_exit(repo, order_ref)
     filled = _broker_order(order_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.7)
     trade = _FakeTrade(lookup_results=[filled] * 5)
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert [(str(leg.side), leg.quantity) for leg, _ in trade.submit_calls] == [("sell", 10.0)]
 
@@ -194,7 +195,7 @@ async def test_late_exact_between_exit_passes_does_not_block_the_reduction(
     accepted = _accept_exit(repo, order_ref)
     pending = _broker_order(order_ref, status="pending_cancel", filled_quantity=5.0, filled_avg_price=100.6)
     await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(lookup_results=[pending])
+        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(lookup_results=[pending]), pricing=UNPRICEABLE_RECOVERY
     )
     await _ws_fill(
         repo, order_ref, execution_id="exec-A", qty=2.0, price=100.0,
@@ -204,7 +205,7 @@ async def test_late_exact_between_exit_passes_does_not_block_the_reduction(
 
     canceled = _broker_order(order_ref, status="canceled", filled_quantity=5.0, filled_avg_price=100.6)
     trade = _FakeTrade(lookup_results=[canceled] * 3)
-    await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert [(str(leg.side), leg.quantity) for leg, _ in trade.submit_calls] == [("sell", 5.0)]
     assert _conflicts(repo) == []
@@ -264,7 +265,7 @@ async def test_changed_redelivery_of_an_effective_execution_stays_blocked(
     filled = _broker_order(order_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.0)
     trade = _FakeTrade(lookup_results=[filled] * 5)
     with pytest.raises(AdmissionBlockedError) as blocked:
-        await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+        await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert blocked.value.decision.reason_code == "EXECUTION_COVERAGE_CONFLICT"
     assert trade.submit_calls == []
 
@@ -298,7 +299,7 @@ async def _pending_cancel_exit_with_quarantined_exec_a(
     accepted = _accept_exit(clerk, order_ref)
     pending = _broker_order(order_ref, status="pending_cancel", filled_quantity=5.0, filled_avg_price=100.6)
     await resolve_exit(
-        clerk, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(lookup_results=[pending])
+        clerk, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(lookup_results=[pending]), pricing=UNPRICEABLE_RECOVERY
     )
     await _ws_fill(
         clerk, order_ref, execution_id="exec-A", qty=2.0, price=100.0,
@@ -331,7 +332,7 @@ async def test_stale_working_ack_after_the_final_total_does_not_prove_coverage(
     # total now matches the recorded fills, so the whole position is sold.
     canceled = _broker_order(order_ref, status="canceled", filled_quantity=10.0, filled_avg_price=101.1)
     trade = _FakeTrade(lookup_results=[canceled] * 3)
-    await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert _conflicts(repo) == []
     assert repo.position(SID, "SPY") == pytest.approx(10.0, abs=QTY_ATOL, rel=0)
@@ -374,7 +375,7 @@ async def test_late_exact_after_an_order_total_resolution_completes_the_set_proo
 
     canceled = _broker_order(order_ref, status="canceled", filled_quantity=5.0, filled_avg_price=100.6)
     trade = _FakeTrade(lookup_results=[canceled] * 3)
-    await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert [(str(leg.side), leg.quantity) for leg, _ in trade.submit_calls] == [("sell", 5.0)]
 
     # The supersession fold re-proves the extended set on replay.

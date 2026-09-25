@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityEr
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import runtime as runtime_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     BrokerCallUnderIntakeError,
@@ -975,7 +976,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     # The reducing order reaches the broker and is acked, but is still
     # working (not yet filled) — exactly the state the review comment flags.
     trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0, side="sell"))
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert result.reducing_order_ref is not None
     reducing_order = repo.order(result.reducing_order_ref)
     assert reducing_order is not None and reducing_order.role == "REDUCING"

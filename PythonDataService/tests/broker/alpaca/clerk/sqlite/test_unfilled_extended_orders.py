@@ -19,7 +19,8 @@ import json
 
 import pytest
 
-from app.broker.alpaca.clerk.program_leg import LegShape
+from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
@@ -363,6 +364,7 @@ async def test_an_unknown_enter_is_left_to_its_own_route_so_its_episode_resolves
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(lookup_results=[dead] * 5),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert repo.active_exit_for_order(entry_ref) is None
 
@@ -515,7 +517,7 @@ async def test_exit_reducing_order_cancelled_unfilled_is_an_uncertainty_immediat
     assert accepted.effect_operation_id is not None
 
     ack_trade = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade, pricing=UNPRICEABLE_RECOVERY)
     assert first.reducing_order_ref is not None
 
     cancel_trade = _FakeTrade(
@@ -523,7 +525,7 @@ async def test_exit_reducing_order_cancelled_unfilled_is_an_uncertainty_immediat
             _broker_order(first.reducing_order_ref, side="sell", status="canceled", filled_quantity=0.0)
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade, pricing=UNPRICEABLE_RECOVERY)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None
@@ -561,18 +563,20 @@ async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operato
         decision_id="exit-last-bar",
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
-        reducing_shape=LegShape(
-            order_type=OrderType.LIMIT,
-            time_in_force=TimeInForce.DAY,
-            limit_price=99.80,
-            extended_hours=True,
-            side=OrderSide.SELL,
+        program_leg=ProgramLeg(
+            LegShape(
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=99.80,
+                extended_hours=True,
+                side=OrderSide.SELL,
+            ),
+            valid_until_ms=POST_CLOSE_MS,
         ),
-        reducing_valid_until_ms=POST_CLOSE_MS,
     )
     assert accepted.effect_operation_id is not None
     working = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=working)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=working, pricing=UNPRICEABLE_RECOVERY)
     assert first.reducing_order_ref is not None
     assert repo.active_uncertainties() == []
 
@@ -582,7 +586,7 @@ async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operato
             _broker_order(first.reducing_order_ref, side="sell", status="expired", filled_quantity=0.0)
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=expired)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=expired, pricing=UNPRICEABLE_RECOVERY)
 
     assert expired.submit_calls == []
     assert repo.position(SID, "SPY") == 10
@@ -619,14 +623,14 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
     )
     assert accepted.effect_operation_id is not None
     ack_trade = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade, pricing=UNPRICEABLE_RECOVERY)
     assert first.reducing_order_ref is not None
     cancel_trade = _FakeTrade(
         lookup_results=[
             _broker_order(first.reducing_order_ref, side="sell", status="canceled", filled_quantity=0.0)
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade, pricing=UNPRICEABLE_RECOVERY)
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "failed"
 
@@ -648,8 +652,7 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
             decision_id="exit-2",
             lifecycle_run_id=RUN_ID,
             entry_order_ref=entry_ref,
-            reducing_shape=new_anchor,
-            reducing_valid_until_ms=POST_CLOSE_MS,
+            program_leg=ProgramLeg(new_anchor, valid_until_ms=POST_CLOSE_MS),
         )
     except AdmissionBlockedError as exc:
         pytest.fail(
@@ -665,6 +668,7 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
         repo,
         effect_operation_id=second_accepted.effect_operation_id,
         trade=second_trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert second.reducing_order_ref is not None
