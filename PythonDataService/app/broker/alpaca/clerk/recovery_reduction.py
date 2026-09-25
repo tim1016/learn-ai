@@ -363,12 +363,15 @@ def regular_session_open(now_ms: int) -> bool:
 
 
 def flatten_session(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthorityState:
-    """The session an operator's flatten would go out in at ``now_ms``.
+    """The session a reducing leg that reaches the broker at ``now_ms`` goes out in.
 
     The calendar's regular session widened by the window the broker declares
     -- the same window an extended-session program leg is shaped against --
     with after-hours ending at the calendar's scheduled close on an
-    early-close day (``order_session_state_at_ms``).
+    early-close day (``order_session_state_at_ms``). Callers pass the arrival
+    instant (:func:`send_arrival_ms`), never the send instant: every
+    reduction — an operator's flatten, the watchdog's re-drive, a re-priced
+    EXIT — is judged where it may land (#2440 review).
     """
     return order_session_state_at_ms(now_ms=now_ms, extended_window=policy.window)
 
@@ -673,12 +676,22 @@ def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
     decision 2026-09-25 (#2440): the ``EXIT_NOT_FLAT`` notice states this
     time — the 04:00 pre-market sell after an after-hours exit that could not
     go out.
+
+    Judged at :func:`send_arrival_ms`, as the watchdog's own send is (#2440
+    review): a not-before of 19:59:57 is not a try — the watchdog refuses
+    ``NO_SESSION_OPEN`` then — so the answer is the first instant whose
+    arrival lands in the next session, the guard band before it opens
+    (03:59:55 for a 04:00 pre-market). The one computation behind both the
+    time a fold records and the time the notice projects on every read
+    (``projections.project_uncertainties``).
     """
     sendable = policy if policy.allowances is not None else ProgramLegPolicy.regular_only()
-    state = flatten_session(now_ms=not_before_ms, policy=sendable)
+    state = flatten_session(now_ms=send_arrival_ms(not_before_ms), policy=sendable)
     if state.phase == "RTH" or state.phase in TRADEABLE_EXTENDED_PHASES:
         return not_before_ms
-    return not_before_ms if state.next_transition_ms is None else state.next_transition_ms
+    if state.next_transition_ms is None:
+        return not_before_ms
+    return state.next_transition_ms - EXIT_SEND_GUARD_BAND_MS
 
 
 def reducing_leg_session_end_ms(

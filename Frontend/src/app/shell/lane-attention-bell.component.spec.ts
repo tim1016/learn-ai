@@ -128,6 +128,32 @@ describe('LaneAttentionBellComponent', () => {
     expect(screen.getAllByText(/Next automatic attempt/).length).toBe(2);
   });
 
+  it('says an exit is working, or that the next try is unknown, as the desk does (#2440 review)', async () => {
+    await renderBell({
+      unknown: false,
+      errorReason: null,
+      items: [
+        item({ next_attempt_at_ms: null, exit_working: true }),
+        item({
+          condition_id: 'unc-2',
+          strategy_instance_id: 'ema-2',
+          next_attempt_at_ms: null,
+          facts_unreadable: true,
+        }),
+      ],
+    });
+
+    await fireEvent.click(bellButton());
+
+    expect(
+      screen.getByText('An exit is in progress; no automatic attempt is due while it works.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Next automatic attempt: unknown; this notice's record could not be read."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/overdue/)).toBeNull();
+  });
+
   it('closes the popover on Escape', async () => {
     await renderBell({ unknown: false, errorReason: null, items: [item()] });
     await fireEvent.click(bellButton());

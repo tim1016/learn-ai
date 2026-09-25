@@ -9,6 +9,7 @@ coordinator as writers before using the shared connection.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -512,6 +513,12 @@ class ClerkSqliteRepositoryReadApi:
     ) -> EffectOperationResource | None:
         with self._write_lock:
             return reads.active_exit_for_strategy(self._conn, strategy_instance_id)
+
+    def strategies_with_active_exit(
+        self: ClerkSqliteRepository, strategy_instance_ids: Collection[str]
+    ) -> frozenset[str]:
+        with self._write_lock:
+            return reads.strategies_with_active_exit(self._conn, strategy_instance_ids)
 
     def reconcilable_effect_operations(
         self: ClerkSqliteRepository,

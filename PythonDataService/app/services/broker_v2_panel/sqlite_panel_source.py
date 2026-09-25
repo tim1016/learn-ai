@@ -361,7 +361,7 @@ async def read_sqlite_panel_evidence(
 
     def read_once() -> SqlitePanelEvidence | None:
         for _attempt in _spaced_attempts():
-            custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
+            custody_reader = SqliteClerkProjectionReader.from_facade(facade)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
                 projection = custody_reader.bot_snapshot(strategy_instance_id)
@@ -611,7 +611,7 @@ async def read_sqlite_catalog_projections(
         raise ValueError("Requested account is not the active SQLite authority")
 
     def read_all() -> dict[str, ClerkProjection]:
-        reader = SqliteClerkProjectionReader.from_repository(facade.repository)
+        reader = SqliteClerkProjectionReader.from_facade(facade)
         try:
             return {
                 strategy_instance_id: projection
@@ -748,7 +748,7 @@ async def read_sqlite_catalog_from_facade(
             selected_ids: tuple[str, ...] = tuple(strategy_instance_ids),
             projected_ids: tuple[str, ...] = tuple(membership.with_live_custody),
         ) -> tuple[dict[str, ClerkProjection], dict[str, EconomicSnapshot]]:
-            custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
+            custody_reader = SqliteClerkProjectionReader.from_facade(facade)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
                 # Custody for the rows that can still need attention; economics
@@ -891,7 +891,7 @@ async def execute_sqlite_panel_action(
 
     async def current_context():
         def read_context():
-            reader = SqliteClerkProjectionReader.from_repository(facade.repository)
+            reader = SqliteClerkProjectionReader.from_facade(facade)
             try:
                 return reader.recovery_context(
                     strategy_instance_id=strategy_instance_id

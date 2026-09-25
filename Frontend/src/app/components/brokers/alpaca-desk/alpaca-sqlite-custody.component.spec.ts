@@ -337,6 +337,38 @@ describe('AlpacaSqliteCustodyComponent', () => {
     )).toBeTruthy();
   });
 
+  it('says an exit is working instead of an overdue time while one is in progress (#2440 review)', async () => {
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:24',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: null,
+          exit_working: true,
+        }],
+      }),
+    });
+
+    expect(await screen.findByText(
+      'An exit is in progress; no automatic attempt is due while it works.',
+    )).toBeTruthy();
+    expect(screen.queryByText(/overdue since/)).toBeNull();
+  });
+
   function unfoldableProjection(): SqliteClerkProjection {
     return {
       ...projection([]),

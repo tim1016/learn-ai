@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Iterator
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.sqlite import projections
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
@@ -17,11 +25,40 @@ from app.broker.alpaca.clerk.sqlite.projections import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrderLeg
+from app.utils.timestamps import to_ms_utc
 
 ACCOUNT_ID = "PA-PROJECTION"
 SID = "spy-bot"
 OTHER_SID = "qqq-bot"
+
+# The authority's pricing seam an Alpaca lane with a sealed exit allowance
+# re-drives from: the 04:00-20:00 declared window, so the watchdog prices a
+# limit in pre-market and after-hours (#2229). No quote is ever read by a
+# projection.
+_XH_PRICING = RecoveryPricing(
+    policy_source=lambda: ProgramLegPolicy(
+        window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
+        allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
+    ),
+    quote_source=lambda symbol, now_ms: None,
+)
+_ET = ZoneInfo("America/New_York")
+
+
+def _et(hour: int, minute: int = 0, second: int = 0, *, day: int = 2) -> int:
+    """An ET wall-clock instant in September 2026 (the 2nd is a Wednesday, the 3rd a Thursday)."""
+    return to_ms_utc(datetime(2026, 9, day, hour, minute, second, tzinfo=_ET))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_unreadable_log() -> Iterator[None]:
+    """The once-per-record log memory is process-wide; each test starts without it."""
+    projections._UNREADABLE_LOGGED.clear()
+    yield
+    projections._UNREADABLE_LOGGED.clear()
 
 
 class _Clock:
@@ -259,10 +296,12 @@ def test_one_unreadable_uncertainty_is_projected_as_unreadable_without_failing_t
         ('{"written_by_a_later_schema":true}',),
     )
     repo._conn.commit()
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
     try:
         with caplog.at_level(logging.ERROR):
             snapshot = reader.bot_snapshot(SID)
+            # Every surface polls; the damaged record is logged once, not per read.
+            reader.bot_snapshot(SID)
     finally:
         reader.close()
         repo.close()
@@ -312,7 +351,8 @@ def test_a_past_next_attempt_is_projected_overdue_never_as_a_promise(tmp_path: P
     promised_at_ms, due_at_ms = clock.value + 3_600_000, clock.value - 60_000
     _raise_exit_not_flat(repo, SID, next_attempt_at_ms=promised_at_ms)
     _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=due_at_ms)
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    # 17:13 ET: after-hours is open, so the watchdog could have tried the due one.
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
     try:
         promised = reader.bot_snapshot(SID)
         overdue = reader.bot_snapshot(OTHER_SID)
@@ -358,7 +398,7 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
         evidence_refs=("order:exit:spy-bot",),
         severity="error",
     )
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
     try:
         snapshot = reader.account_snapshot()
     finally:
@@ -374,6 +414,115 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
         (SID, "EXIT_STUCK"): None,
         (OTHER_SID, "EXIT_NOT_FLAT"): promised_at_ms,
     }
+    # Y m8: the escalated episode's own next step pointed at the time it no
+    # longer shows; it now says the automatic attempts stopped.
+    next_steps = {
+        item.strategy_instance_id: item.next_step
+        for item in snapshot.uncertainties
+        if item.reason_code == "EXIT_NOT_FLAT"
+    }
+    assert next_steps == {
+        SID: (
+            "Automatic attempts to reduce this position have stopped. Run Reconcile now, "
+            "then execute the presented safe flatten."
+        ),
+        OTHER_SID: "Let the automatic re-drive reduce it.",
+    }
+
+
+@pytest.mark.parametrize(
+    ("read_at_ms", "shown_at_ms", "overdue"),
+    [
+        # The watchdog's 16:02 try deferred (no after-hours quote) and wrote
+        # nothing; after 20:00 its real next try is the pre-market send.
+        (_et(20, 30), _et(3, 59, 55, day=3), False),
+        (_et(23, 0), _et(3, 59, 55, day=3), False),
+        # After-hours is still open, so the watchdog could have sent by now:
+        # the promise is past due (the watchdog is not running, or keeps
+        # deferring) and is shown as the time it was promised for.
+        (_et(16, 30), _et(16, 2), True),
+    ],
+    ids=["overnight", "late-evening", "after-hours-still-open"],
+)
+def test_a_deferred_promise_reads_the_watchdogs_real_next_try(
+    tmp_path: Path, read_at_ms: int, shown_at_ms: int, overdue: bool
+) -> None:
+    """#2440 review (Y m6, X m3): from 20:00 the notice read "overdue since 16:02" all night.
+
+    The time is re-projected on every read by the computation that recorded
+    it, under the authority's own pricing policy, so the surfaces name the
+    try the watchdog will actually make. Only a projection that is not in the
+    future is overdue.
+    """
+    clock = _Clock()
+    clock.value = _et(16, 0)
+    repo = _repository(tmp_path, clock)
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=_et(16, 2))
+    clock.value = read_at_ms
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
+    try:
+        snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert snapshot is not None
+    [episode] = snapshot.uncertainties
+    assert (episode.next_attempt_at_ms, episode.next_attempt_overdue) == (shown_at_ms, overdue)
+    assert (snapshot.guidance.next_attempt_at_ms, snapshot.guidance.next_attempt_overdue) == (
+        shown_at_ms,
+        overdue,
+    )
+
+
+def test_a_record_with_mistyped_facts_is_unreadable_and_never_breaks_the_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2440 review (Y m5): facts that parse but carry the wrong types fail only their own row.
+
+    A cause that is not an object used to raise AttributeError reading its
+    symbol, and a next attempt that is not an int64 ms UTC raised TypeError
+    outside the guard — either one blanked the desk, the bot page and the
+    bell. Each is now projected unreadable and logged once, however often the
+    surfaces poll.
+    """
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 3_600_000)
+    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=clock.value + 3_600_000)
+    for sid, field, value in (
+        (SID, "cause_facts", ["SPY"]),
+        (OTHER_SID, "next_attempt_at_ms", "at the open"),
+    ):
+        (facts_json,) = repo._conn.execute(
+            "SELECT facts_json FROM uncertainties WHERE strategy_instance_id = ?", (sid,)
+        ).fetchone()
+        facts = json.loads(facts_json)
+        facts[field] = value
+        repo._conn.execute(
+            "UPDATE uncertainties SET facts_json = ? WHERE strategy_instance_id = ?",
+            (json.dumps(facts), sid),
+        )
+    repo._conn.commit()
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
+    try:
+        with caplog.at_level(logging.ERROR):
+            snapshot = reader.account_snapshot()
+            reader.account_snapshot()
+    finally:
+        reader.close()
+        repo.close()
+
+    assert {
+        item.strategy_instance_id: (item.symbol, item.next_attempt_at_ms, item.facts_unreadable)
+        for item in snapshot.uncertainties
+    } == {SID: (None, None, True), OTHER_SID: (None, None, True)}
+    logged = [
+        record.__dict__["strategy_instance_id"]
+        for record in caplog.records
+        if getattr(record, "action", None) == "uncertainty_facts_unreadable"
+    ]
+    assert sorted(logged) == sorted([SID, OTHER_SID])
 
 
 def test_timeline_cursor_is_stable_while_new_transitions_append(tmp_path: Path) -> None:

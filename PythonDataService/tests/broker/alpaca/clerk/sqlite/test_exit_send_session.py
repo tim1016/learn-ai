@@ -33,15 +33,20 @@ from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg, ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
     RecoveryPricing,
+    next_redrive_at_ms,
+    price_automatic_recovery_reduction,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    EXIT_REDRIVE_DECISION_PREFIX,
+    RECOVERY_FLATTEN_DECISION_PREFIX,
     priced_reduction_reference_price,
     resolve_exit,
 )
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
@@ -171,8 +176,11 @@ async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_mar
     assert "Extended-hours pricing is unavailable" in episode["explanation"]
     assert "No trading session is open now" not in episode["explanation"]
     # The degraded seam prices nothing outside the regular session, so the
-    # watchdog's next try is Thursday's open (a time value, not prose).
-    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == _at(9, 30, day=date(2026, 9, 3))
+    # watchdog's next try is the first send that lands in Thursday's open —
+    # the guard band before it (a time value, not prose).
+    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == _at(
+        9, 29, 55, day=date(2026, 9, 3)
+    )
 
 
 @pytest.mark.parametrize(
@@ -598,7 +606,8 @@ async def test_a_limit_judged_within_the_guard_band_of_its_bound_is_not_sent(
     """A POST limit bound by 20:00, driven at 19:59:57: it could reach Alpaca after the close.
 
     Nothing is sent; the operator is told, with the watchdog's next attempt —
-    04:00 the next morning — as a time value.
+    the first send that lands in the next morning's 04:00 pre-market, the
+    guard band before it — as a time value.
     """
     _walk_clock_to(repo, _at(19, 50))
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
@@ -623,7 +632,119 @@ async def test_a_limit_judged_within_the_guard_band_of_its_bound_is_not_sent(
     episode = _exit_not_flat(repo)
     assert episode is not None
     assert "No trading session is open now" in episode["explanation"]
-    assert _next_attempt_at_ms(episode) == _at(4, 0, day=date(2026, 9, 3))
+    assert _next_attempt_at_ms(episode) == _at(3, 59, 55, day=date(2026, 9, 3))
+
+
+def test_the_next_redrive_is_judged_where_its_send_would_land() -> None:
+    """#2440 review (X m3): a not-before of 19:59:57 used to come back as 19:59:57.
+
+    The watchdog refuses ``NO_SESSION_OPEN`` at that instant — its send would
+    land after 20:00 — so the notice read "overdue since 19:59:57" all night.
+    Judged at the send's arrival, the next try is the first instant whose
+    send lands in the pre-market: 03:59:55.
+    """
+    thursday = date(2026, 9, 3)
+
+    assert next_redrive_at_ms(not_before_ms=_at(19, 59, 57), policy=_POLICY) == _at(
+        3, 59, 55, day=thursday
+    )
+    assert next_redrive_at_ms(not_before_ms=_at(3, 59, 55, day=thursday), policy=_POLICY) == _at(
+        3, 59, 55, day=thursday
+    )
+    assert next_redrive_at_ms(not_before_ms=_at(19, 59, 54), policy=_POLICY) == _at(19, 59, 54)
+
+
+def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool, bool]:
+    """What the bot page shows for SID's ``EXIT_NOT_FLAT``: the time, overdue, and exit working."""
+    reader = SqliteClerkProjectionReader.from_repository(repo, pricing=_live_touch())
+    try:
+        snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+    assert snapshot is not None
+    [episode] = [item for item in snapshot.uncertainties if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
+    guidance = snapshot.guidance
+    shown = (episode.next_attempt_at_ms, episode.next_attempt_overdue, episode.exit_working)
+    assert (guidance.next_attempt_at_ms, guidance.next_attempt_overdue, guidance.exit_working) == shown
+    return shown
+
+
+@pytest.mark.parametrize(
+    "decision_id",
+    [f"{EXIT_REDRIVE_DECISION_PREFIX}0123456789ab-1", f"{RECOVERY_FLATTEN_DECISION_PREFIX}operator01"],
+    ids=["watchdog-redrive", "operator-priced-flatten"],
+)
+async def test_a_working_exit_is_shown_working_never_overdue_until_it_ends(
+    repo: ClerkSqliteRepository, decision_id: str
+) -> None:
+    """#2440 review (major): a sell resting in pre-market read "overdue since 04:00" until 20:00.
+
+    The ``EXIT_NOT_FLAT`` episode stays open until flat, and nothing rewrites
+    its recorded time when the watchdog accepts a re-drive — or while the
+    operator's own priced flatten works. The watchdog then skips the
+    strategy, so the time is not a promise: the notice says an exit is
+    working instead, never that the automatic sell failed. Once the exit ends
+    unfilled, the watchdog's next try is shown again.
+    """
+    thursday, friday = date(2026, 9, 3), date(2026, 9, 4)
+    _walk_clock_to(repo, _at(19, 50))
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    program_exit = _accept_program_exit(
+        repo,
+        entry_ref,
+        shape=LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=99.80,
+            extended_hours=True,
+            side=OrderSide.SELL,
+        ),
+        valid_until_ms=_at(20, 0),
+    )
+    _walk_clock_to(repo, _at(19, 59, 57))
+    await resolve_exit(repo, effect_operation_id=program_exit, trade=_acked(), pricing=_live_touch())
+    assert _projected_notice(repo) == (_at(3, 59, 55, day=thursday), False, False)
+
+    _walk_clock_to(repo, _at(4, 0, 15, day=thursday))
+    priced = price_automatic_recovery_reduction(
+        side=OrderSide.SELL,
+        symbol="SPY",
+        quantity=10,
+        now_ms=repo.clock(),
+        policy=_POLICY,
+        quote=TopOfBookQuote(
+            symbol="SPY", bid=100.00, ask=100.05, source="ibkr.market_data.status",
+            observed_at_ms=repo.clock(),
+        ),
+    )
+    working = accept_recovery_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id=decision_id,
+        entry_order_ref=entry_ref,
+        confirmed_shape=priced,
+    )
+    assert working.effect_operation_id is not None
+    sent = await resolve_exit(
+        repo, effect_operation_id=working.effect_operation_id, trade=_acked(), pricing=_live_touch()
+    )
+    assert sent.reducing_order_ref is not None
+    for read_at_ms in (_at(4, 0, 30, day=thursday), _at(9, 35, day=thursday)):
+        _walk_clock_to(repo, read_at_ms)
+        assert _projected_notice(repo) == (None, False, True)
+
+    _walk_clock_to(repo, _at(20, 0, 10, day=thursday))
+    expired = _FakeTrade(
+        lookup_results=[
+            _broker_order(sent.reducing_order_ref, side="sell", status="expired", filled_quantity=0.0)
+        ]
+    )
+    await resolve_exit(
+        repo, effect_operation_id=working.effect_operation_id, trade=expired, pricing=_live_touch()
+    )
+    assert repo.position(SID, "SPY") == 10
+    assert _projected_notice(repo) == (_at(3, 59, 55, day=friday), False, False)
 
 
 async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
@@ -658,7 +779,7 @@ async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
         episode = _exit_not_flat(repo)
         assert episode is not None
         assert "No trading session is open now" in episode["explanation"]
-        assert _next_attempt_at_ms(episode) == _at(4, 0, day=date(2026, 11, 30))
+        assert _next_attempt_at_ms(episode) == _at(3, 59, 55, day=date(2026, 11, 30))
     finally:
         repo.close()
 
@@ -1058,4 +1179,4 @@ async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
     assert episode is not None
     assert "Extended-hours pricing is unavailable" in episode["explanation"]
     assert "No trading session is open" not in episode["explanation"]
-    assert _next_attempt_at_ms(episode) == _at(9, 30, day=date(2026, 9, 3))
+    assert _next_attempt_at_ms(episode) == _at(9, 29, 55, day=date(2026, 9, 3))

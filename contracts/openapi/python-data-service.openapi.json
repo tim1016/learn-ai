@@ -21770,6 +21770,16 @@
             "title": "Condition Id",
             "type": "string"
           },
+          "exit_working": {
+            "default": false,
+            "title": "Exit Working",
+            "type": "boolean"
+          },
+          "facts_unreadable": {
+            "default": false,
+            "title": "Facts Unreadable",
+            "type": "boolean"
+          },
           "headline": {
             "title": "Headline",
             "type": "string"
@@ -25112,9 +25122,19 @@
             "title": "Evaluated At Ms",
             "type": "integer"
           },
+          "exit_working": {
+            "default": false,
+            "title": "Exit Working",
+            "type": "boolean"
+          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
+          },
+          "facts_unreadable": {
+            "default": false,
+            "title": "Facts Unreadable",
+            "type": "boolean"
           },
           "label": {
             "title": "Label",
@@ -29832,6 +29852,11 @@
             "title": "Evidence Refs",
             "type": "array"
           },
+          "exit_working": {
+            "default": false,
+            "title": "Exit Working",
+            "type": "boolean"
+          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
@@ -29944,9 +29969,19 @@
             "title": "Custody Owner",
             "type": "string"
           },
+          "exit_working": {
+            "default": false,
+            "title": "Exit Working",
+            "type": "boolean"
+          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
+          },
+          "facts_unreadable": {
+            "default": false,
+            "title": "Facts Unreadable",
+            "type": "boolean"
           },
           "headline": {
             "title": "Headline",

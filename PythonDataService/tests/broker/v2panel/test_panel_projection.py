@@ -1485,6 +1485,35 @@ def test_the_mission_verdict_says_when_the_clerk_next_tries_an_exit(overdue: boo
     assert (verdict.next_attempt_at_ms, verdict.next_attempt_overdue) == (next_attempt_at_ms, overdue)
 
 
+@pytest.mark.parametrize(
+    ("exit_working", "facts_unreadable"), [(True, False), (False, True)], ids=["working", "unknown"]
+)
+def test_the_mission_verdict_says_an_exit_is_working_or_its_next_try_is_unknown(
+    exit_working: bool, facts_unreadable: bool
+) -> None:
+    """#2440 review (major, Y m4): the bot page says what the desk says when there is no time.
+
+    An exit in progress is not a missed attempt, and a record that could not
+    be read is an unknown attempt, not an absent one: both ride from the
+    guidance onto the verdict.
+    """
+    base = _rail_projection(orders=())
+    projection = replace(
+        base,
+        guidance=replace(
+            base.guidance, exit_working=exit_working, facts_unreadable=facts_unreadable
+        ),
+    )
+
+    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection).mission_verdict
+
+    assert (verdict.next_attempt_at_ms, verdict.exit_working, verdict.facts_unreadable) == (
+        None,
+        exit_working,
+        facts_unreadable,
+    )
+
+
 def test_reconciled_station_requires_resolved_success_outcome() -> None:
     """#1396 P1: a matching reconciliation row must not close the custody
     chain unless its outcome is RESOLVED_SUCCESS — STILL_UNKNOWN and

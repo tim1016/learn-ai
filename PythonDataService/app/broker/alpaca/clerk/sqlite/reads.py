@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from typing import NamedTuple
 
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -781,6 +782,16 @@ def orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> 
     return [OrderResource(**dict(row)) for row in rows]
 
 
+_ACTIVE_EXIT_PREDICATE = "e.kind = 'EXIT' AND e.state NOT IN ('succeeded','failed','rejected')"
+"""An exit in progress: the one definition behind every "is an EXIT working?" read.
+
+The stuck-EXIT watchdog re-drives only an entry no such EXIT owns
+(:func:`active_exit_for_order`), and an ``EXIT_NOT_FLAT`` notice stops
+promising its next attempt while the strategy has one
+(:func:`strategies_with_active_exit`, #2440 review) — one predicate, so the
+two never disagree about whether an exit is in flight."""
+
+
 def active_exit_for_order(conn: sqlite3.Connection, order_ref: str) -> EffectOperationResource | None:
     """The nonterminal EXIT currently linked to an entry, if any."""
     row = conn.execute(
@@ -788,8 +799,7 @@ def active_exit_for_order(conn: sqlite3.Connection, order_ref: str) -> EffectOpe
         "e.strategy_instance_id, e.run_id, e.kind, e.state, e.custody_owner, e.created_at_ms, "
         "e.updated_at_ms, e.terminal_receipt_id FROM effect_operations e "
         "JOIN operation_order_links l ON l.effect_operation_id = e.effect_operation_id "
-        "WHERE l.order_ref = ? AND e.kind = 'EXIT' "
-        "AND e.state NOT IN ('succeeded','failed','rejected') "
+        f"WHERE l.order_ref = ? AND {_ACTIVE_EXIT_PREDICATE} "
         "ORDER BY e.created_at_ms DESC LIMIT 1",
         (order_ref,),
     ).fetchone()
@@ -799,15 +809,38 @@ def active_exit_for_order(conn: sqlite3.Connection, order_ref: str) -> EffectOpe
 def active_exit_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> EffectOperationResource | None:
     """The strategy's live EXIT fence against concurrently admitted ENTERs."""
     row = conn.execute(
-        "SELECT effect_operation_id, authority_generation, idempotency_key, command_id, "
-        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
-        "updated_at_ms, terminal_receipt_id FROM effect_operations "
-        "WHERE strategy_instance_id = ? AND kind = 'EXIT' "
-        "AND state NOT IN ('succeeded','failed','rejected') "
-        "ORDER BY created_at_ms DESC LIMIT 1",
+        "SELECT e.effect_operation_id, e.authority_generation, e.idempotency_key, e.command_id, "
+        "e.strategy_instance_id, e.run_id, e.kind, e.state, e.custody_owner, e.created_at_ms, "
+        "e.updated_at_ms, e.terminal_receipt_id FROM effect_operations e "
+        f"WHERE e.strategy_instance_id = ? AND {_ACTIVE_EXIT_PREDICATE} "
+        "ORDER BY e.created_at_ms DESC LIMIT 1",
         (strategy_instance_id,),
     ).fetchone()
     return EffectOperationResource(**dict(row)) if row is not None else None
+
+
+def strategies_with_active_exit(
+    conn: sqlite3.Connection, strategy_instance_ids: Collection[str]
+) -> frozenset[str]:
+    """Which of these strategies has an exit in progress — :func:`active_exit_for_strategy`, in one read.
+
+    While a strategy has one, the stuck-EXIT watchdog sends it no re-drive:
+    either no entry is free of an active EXIT (``_candidate_entries``) or the
+    EXIT is Clerk work in flight on the symbol (``clerk_work_in_flight``). So
+    its ``EXIT_NOT_FLAT`` notice says an exit is working instead of promising
+    a time (#2440 review). Asked only about the strategies such a notice
+    names, so the usual answer — none — costs no query.
+    """
+    if not strategy_instance_ids:
+        return frozenset()
+    ids = sorted(set(strategy_instance_ids))
+    rows = conn.execute(
+        "SELECT DISTINCT e.strategy_instance_id FROM effect_operations e "
+        f"WHERE e.strategy_instance_id IN ({', '.join('?' for _ in ids)}) "
+        f"AND {_ACTIVE_EXIT_PREDICATE}",
+        ids,
+    ).fetchall()
+    return frozenset(row["strategy_instance_id"] for row in rows)
 
 
 def reconcilable_effect_operations(

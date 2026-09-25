@@ -35,11 +35,7 @@
       @if (panelView.mission_verdict.next_action; as nextAction) {
         <p class="verdict__next"><strong>Next:</strong> {{ nextAction }}</p>
       }
-      @if (panelView.mission_verdict.next_attempt_at_ms; as nextAttemptAtMs) {
-        <p class="verdict__next">
-          <app-next-attempt [atMs]="nextAttemptAtMs" [overdue]="panelView.mission_verdict.next_attempt_overdue" />
-        </p>
-      }
+      <app-next-attempt class="verdict__next" [facts]="panelView.mission_verdict" />
     </div>
 
     @if (panelView.actions.length > 0) {

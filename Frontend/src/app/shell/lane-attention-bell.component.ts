@@ -148,13 +148,7 @@ interface BellItem {
                     <span class="item__reason">{{ row.item.reason_code | receiptLabel }}</span>
                   </span>
                   <span class="item__headline">{{ row.item.headline }}</span>
-                  @if (row.item.next_attempt_at_ms; as nextAttemptAtMs) {
-                    <app-next-attempt
-                      class="item__attempt"
-                      [atMs]="nextAttemptAtMs"
-                      [overdue]="row.item.next_attempt_overdue"
-                    />
-                  }
+                  <app-next-attempt class="item__attempt" [facts]="row.item" />
                   @if (row.link; as link) {
                     <a class="item__open" [routerLink]="link.commands" [queryParams]="link.queryParams">
                       Open bot

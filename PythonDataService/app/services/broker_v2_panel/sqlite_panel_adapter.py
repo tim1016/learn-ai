@@ -505,6 +505,9 @@ _PREPARE_PRICED_FLATTEN_MOVE = OperatorMove(
 )
 
 
+_PREPARED_PLAN_SHOWS_WHEN = "Prepare safe flatten shows when."
+
+
 def _flatten_session_blocker(
     verdict: SessionAuthorityState | LegRefusal | None,
 ) -> OperatorBlocker | None:
@@ -522,7 +525,9 @@ def _flatten_session_blocker(
     so a refusal is shown in the Clerk's words -- ``NO_SESSION_OPEN``, or
     ``EXTENDED_HOURS_PRICING_UNAVAILABLE`` when the calendar's after-hours is
     open on an authority that declares no extended window (#2440 review) --
-    never a second reading of the session made here.
+    never a second reading of the session made here. The blocker list renders
+    no time, so a refusal that names one points at the prepared plan, which
+    shows it (``available_at_ms``, kept as evidence).
     A ``None`` verdict means no authority answered. That is not an RTH
     fallback: the one session in which this button can succeed is the only
     one it may assume, so an unanswered session blocks it too (CodeRabbit
@@ -553,7 +558,11 @@ def _flatten_session_blocker(
             audience="both",
             disposition="wait",
             headline=verdict.explanation,
-            detail=verdict.next_step,
+            detail=(
+                verdict.next_step
+                if verdict.available_at_ms is None
+                else f"{verdict.next_step} {_PREPARED_PLAN_SHOWS_WHEN}"
+            ),
             applies_to="run",
             evidence={"available_at_ms": verdict.available_at_ms},
         )
@@ -655,6 +664,8 @@ def _mission_verdict(
         evaluated_at_ms=projection.generated_at_ms,
         next_attempt_at_ms=guidance.next_attempt_at_ms,
         next_attempt_overdue=guidance.next_attempt_overdue,
+        exit_working=guidance.exit_working,
+        facts_unreadable=guidance.facts_unreadable,
     )
 
 

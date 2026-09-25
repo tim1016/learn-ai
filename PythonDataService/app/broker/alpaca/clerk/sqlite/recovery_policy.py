@@ -1097,6 +1097,8 @@ def build_projection_guidance(
             next_step=primary.next_step,
             next_attempt_at_ms=primary.next_attempt_at_ms,
             next_attempt_overdue=primary.next_attempt_overdue,
+            exit_working=primary.exit_working,
+            facts_unreadable=primary.facts_unreadable,
         )
     return ProjectionGuidance(
         headline="Account Clerk custody is healthy",

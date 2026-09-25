@@ -23,6 +23,7 @@ from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_sett
 from app.broker.alpaca.clerk.account_authority import account_route_matches_custody
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ClerkStatus
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     MarketMark,
@@ -778,8 +779,15 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
     if repository is None:
         return LaneAttentionRead(account_id=None, items=[])
     # The one projection of an episode (#2440 review): the bell says what
-    # the bot page and the desk say, and an unreadable record still rings —
-    # without a symbol or a next attempt, and logged loudly.
+    # the bot page and the desk say — the watchdog's real next try, priced
+    # from the authority's own seam, or that an exit is working — and an
+    # unreadable record still rings, without a symbol or a next attempt.
+    clerk = runtime.clerk
+    pricing = (
+        clerk.recovery_pricing
+        if isinstance(clerk, SqliteAlpacaClerkFacade)
+        else UNPRICEABLE_RECOVERY
+    )
     items = [
         LaneAttentionItem(
             condition_id=uncertainty.uncertainty_id,
@@ -790,9 +798,14 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
             headline=uncertainty.headline,
             next_attempt_at_ms=uncertainty.next_attempt_at_ms,
             next_attempt_overdue=uncertainty.next_attempt_overdue,
+            exit_working=uncertainty.exit_working,
+            facts_unreadable=uncertainty.facts_unreadable,
         )
         for uncertainty in project_uncertainties(
-            repository.active_uncertainties(), now_ms=repository.clock()
+            repository.active_uncertainties(),
+            now_ms=repository.clock(),
+            exits_in_progress=repository.strategies_with_active_exit,
+            redrive_policy=pricing.policy_source(),
         )
     ]
     return LaneAttentionRead(account_id=repository.account_id, items=items)

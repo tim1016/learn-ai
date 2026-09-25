@@ -45,11 +45,7 @@
             }
             <span>{{ uncertainty.explanation }}</span>
             <span>{{ uncertainty.operator_impact }} {{ uncertainty.next_step }}</span>
-            @if (uncertainty.next_attempt_at_ms; as nextAttemptAtMs) {
-              <app-next-attempt [atMs]="nextAttemptAtMs" [overdue]="uncertainty.next_attempt_overdue" />
-            } @else if (uncertainty.facts_unreadable) {
-              <span>Next automatic attempt: unknown; this notice's record could not be read.</span>
-            }
+            <app-next-attempt [facts]="uncertainty" />
             @if (uncertainty.reason_code === unfoldableReasonCode) {
               <app-unfoldable-order-review
                 [brokerOrderIds]="uncertainty.evidence_refs"

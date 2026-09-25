@@ -154,7 +154,7 @@ def sqlite_projection(
         return None
     if facade.account_id != account_id:
         raise ValueError("Requested account is not the active SQLite authority")
-    reader = SqliteClerkProjectionReader.from_repository(facade.repository)
+    reader = SqliteClerkProjectionReader.from_facade(facade)
     try:
         projection = (
             reader.account_snapshot()

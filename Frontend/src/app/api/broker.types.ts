@@ -16959,6 +16959,16 @@ export interface components {
         LaneAttentionItem: {
             /** Condition Id */
             condition_id: string;
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /**
@@ -18521,8 +18531,18 @@ export interface components {
         MissionVerdictView: {
             /** Evaluated At Ms */
             evaluated_at_ms: number;
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
             /** Explanation */
             explanation: string;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Label */
             label: string;
             /** Next Action */
@@ -20551,6 +20571,11 @@ export interface components {
             evidence_age_ms: number;
             /** Evidence Refs */
             evidence_refs: string[];
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
             /** Explanation */
             explanation: string;
             /**
@@ -20595,8 +20620,18 @@ export interface components {
             available_safety_actions: string[];
             /** Custody Owner */
             custody_owner: string;
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
             /** Explanation */
             explanation: string;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /** Impact */
