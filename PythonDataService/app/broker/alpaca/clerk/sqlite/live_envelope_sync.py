@@ -267,6 +267,8 @@ class LiveEnvelopeSync:
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
+        # The day-P&L window ends here, not at the stamp: a loss closed mid-read may be gone from positions.
+        returned_at_ms = self._repo.clock()
         self._observed_account_id = account.account_id
         # Under simulated custody the broker's cash never moved, so the
         # envelope subtracts what the Clerk's own fills would have spent
@@ -308,9 +310,8 @@ class LiveEnvelopeSync:
             day_pnl=(
                 None
                 if unjudgeable
-                # The realized window deliberately ends at the observation's own instant.
                 else day_pnl_at(
-                    self._reader, self._repo, observation=observation, now_ms=observed_at_ms
+                    self._reader, self._repo, observation=observation, now_ms=returned_at_ms
                 )
             ),
             loss_limit_usd=(

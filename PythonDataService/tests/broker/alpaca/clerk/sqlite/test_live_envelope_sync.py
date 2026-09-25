@@ -669,49 +669,89 @@ async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observat
     assert _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope).created
 
 
-async def test_the_realized_day_pnl_window_ends_at_the_observation_instant(
-    day_pnl_repo: ClerkSqliteRepository,
-    day_pnl_clock: _TestClock,
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """One observation, one instant: a lot closed during the reads is the next tick's realized.
+def _round_trip_closed_mid_read(
+    repo: ClerkSqliteRepository,
+    clock: _TestClock,
+    *,
+    entry_price: float,
+    exit_price: float,
+) -> _FillLandsMidRead:
+    """BUY 10 at today's open; the SELL that closes it lands while the positions read is in flight.
 
-    The day-P&L window ends at ``observed_at_ms`` -- when the reads were issued
-    -- so a SELL recorded inside the round trip is not this reading's realized
-    P&L; the next observation's window covers it.
+    The broker answers with no open position -- the lot is closed -- so no
+    unrealized P&L carries it, and only the realized window can.
     """
-    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-closed-mid-read")
+    accepted = _accept_day_pnl_enter(repo, decision_id="d-closed-mid-read")
     _append_day_pnl_slice(
-        day_pnl_repo,
+        repo,
         accepted,
         execution_id="exec-buy-today",
         side="BUY",
         quantity=10.0,
-        price=100.0,
+        price=entry_price,
         occurred_at_ms=TODAY_OPEN,
     )
-    read = _FillLandsMidRead(
-        clock=day_pnl_clock,
+    return _FillLandsMidRead(
+        clock=clock,
         cash=100_000.0,
-        during="account",
+        during="positions",
         record_fill=lambda: _append_day_pnl_slice(
-            day_pnl_repo,
+            repo,
             accepted,
             execution_id="exec-sell-mid-read",
             side="SELL",
             quantity=10.0,
-            price=110.0,
-            occurred_at_ms=day_pnl_clock(),
+            price=exit_price,
+            occurred_at_ms=clock(),
         ),
+    )
+
+
+async def test_the_realized_day_pnl_window_ends_when_the_reads_return(
+    day_pnl_repo: ClerkSqliteRepository,
+    day_pnl_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """The realized window ends at a clock read taken after the broker answered.
+
+    ``observed_at_ms`` stays the pre-read stamp -- it dates which fills the
+    cash has seen -- but a lot closed during the round trip is this reading's
+    realized P&L. The positions answer may already show it closed, and a
+    window ending at the stamp would then count the close nowhere.
+    """
+    read = _round_trip_closed_mid_read(
+        day_pnl_repo, day_pnl_clock, entry_price=100.0, exit_price=110.0
     )
     sync = make_sync(day_pnl_repo, read, simulated=False)
 
-    mid_read = await sync.observe()
-    assert mid_read.day_pnl is not None
-    assert mid_read.day_pnl.realized_usd == pytest.approx(0.0)
-    assert mid_read.observation.observed_at_ms == NOON
+    reading = await sync.observe()
 
-    day_pnl_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
-    next_tick = await sync.observe()
-    assert next_tick.day_pnl is not None
-    assert next_tick.day_pnl.realized_usd == pytest.approx(100.0)
+    assert reading.day_pnl is not None
+    assert reading.day_pnl.realized_usd == pytest.approx(100.0)
+    assert reading.observation.observed_at_ms == NOON
+
+
+async def test_a_losing_close_recorded_during_the_reads_raises_the_loss_hold(
+    day_pnl_repo: ClerkSqliteRepository,
+    day_pnl_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A loss realized mid-read is judged on this tick, never published past (#2473 review).
+
+    The SELL realizes $6,000 against a $5,000 limit while the positions read
+    is in flight, and the broker answers with the position already closed.
+    With the realized window ending at the pre-read stamp the loss was in
+    neither figure: the tick published an unbreached observation and the next
+    ENTER was bounded by cash alone.
+    """
+    read = _round_trip_closed_mid_read(
+        day_pnl_repo, day_pnl_clock, entry_price=1_000.0, exit_price=400.0
+    )
+    sync = make_sync(day_pnl_repo, read, simulated=False)
+
+    assert await sync.tick() == "hold_raised"
+    hold = _hold(day_pnl_repo)
+    assert hold is not None
+    cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
+    assert cause.day_pnl_usd == pytest.approx(-6_000.0)
+    assert sync.envelope.latest_observation() is None

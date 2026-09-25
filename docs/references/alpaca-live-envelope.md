@@ -120,8 +120,11 @@ notional cap, no symbol allowlist, no session restriction.
   the round trip — which the broker's answer could predate — and a second
   instance was admitted against cash the first had already spent. One slow
   account read was enough; the parallel positions read was not the cause.
-  Freshness is aged from the same instant (it errs old by the round trip), and
-  the day-P&L window ends there too.
+  Freshness is aged from the same instant (it errs old by the round trip). The
+  day-P&L window does *not* end there: it ends at a clock read taken after the
+  reads return, because a losing SELL recorded mid-read may already be gone
+  from the positions answer, and a window ending at the stamp would count
+  that loss nowhere and publish an unbreached observation (#2473 review).
 - **Reservations, fills-aware.** `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
   prices the part of an accepted ENTER the latest observation cannot see. A
   fill counts as seen only when the Clerk recorded it before the observation's
