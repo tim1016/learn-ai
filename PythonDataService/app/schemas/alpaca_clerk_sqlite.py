@@ -236,8 +236,13 @@ class ProjectedUncertaintyResponse(BaseModel):
     evidence_refs: tuple[str, ...]
     # When the Clerk will next try to resolve this on its own (the stuck-EXIT
     # watchdog's next re-drive, #2440): int64 ms UTC for the shared timestamp
-    # display, never prose. ``None`` when nothing is scheduled.
+    # display, never prose. ``None`` when nothing is scheduled — including
+    # once the watchdog has escalated to EXIT_STUCK and stopped re-driving.
     next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # ``next_attempt_at_ms`` has passed without the try resolving the episode
+    # (a deferred try records nothing): render it as overdue, never as a
+    # future promise (#2440 review).
+    next_attempt_overdue: bool = False
     # The episode's recorded facts could not be read: its next attempt is
     # unknown, not unscheduled (#2440 review). The row itself still projects.
     facts_unreadable: bool = False
@@ -345,6 +350,10 @@ class ProjectionGuidanceResponse(BaseModel):
     available_safety_actions: tuple[str, ...]
     action_required: bool
     next_step: str
+    # The primary episode's next automatic attempt, as its uncertainty
+    # projects it (#2440).
+    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    next_attempt_overdue: bool = False
 
 
 class ClerkProjectionResponse(BaseModel):

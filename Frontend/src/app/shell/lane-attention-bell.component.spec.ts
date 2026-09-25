@@ -98,6 +98,36 @@ describe('LaneAttentionBellComponent', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
+  it('says when the Clerk next tries, and says overdue rather than promising a past time (#2440)', async () => {
+    // 2026-09-03 04:00 ET: the pre-market open after an exit that could not go out.
+    const nextAttemptAtMs = 1_788_422_400_000;
+    await renderBell({
+      unknown: false,
+      errorReason: null,
+      items: [
+        item({ next_attempt_at_ms: nextAttemptAtMs, next_attempt_overdue: false }),
+        item({
+          condition_id: 'unc-2',
+          strategy_instance_id: 'ema-2',
+          next_attempt_at_ms: nextAttemptAtMs,
+          next_attempt_overdue: true,
+        }),
+        item({ condition_id: 'unc-3', strategy_instance_id: 'ema-3', reason_code: 'ORDER_OUTCOME_UNKNOWN' }),
+      ],
+    });
+
+    await fireEvent.click(bellButton());
+
+    const [promised, overdue] = screen.getAllByText(/Next automatic attempt/);
+    expect(promised.textContent).toContain('04:00');
+    expect(promised.textContent).toContain('ET');
+    expect(promised.textContent).not.toContain('overdue');
+    expect(overdue.textContent).toContain('overdue since');
+    expect(overdue.textContent).toContain('04:00');
+    // A condition with no scheduled attempt says nothing about one.
+    expect(screen.getAllByText(/Next automatic attempt/).length).toBe(2);
+  });
+
   it('closes the popover on Escape', async () => {
     await renderBell({ unknown: false, errorReason: null, items: [item()] });
     await fireEvent.click(bellButton());

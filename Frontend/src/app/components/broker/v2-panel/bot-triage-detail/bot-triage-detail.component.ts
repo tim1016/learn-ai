@@ -22,6 +22,7 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 import type { DeskLens } from '../../../../shared/lens/lens';
 import { ActiveLensBridgeService } from '../../../../shared/lens/active-lens-bridge.service';
 import { fmtExposure, fmtInteger, fmtSignedCurrency } from '../../format';
+import { NextAttemptComponent } from '../../shared/next-attempt/next-attempt.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { BotBannerOverflowComponent } from '../bot-detail-banner/bot-banner-overflow.component';
 import { MissionVerdictStatusComponent } from '../bot-detail-banner/mission-verdict-status.component';
@@ -103,6 +104,7 @@ function dominantSource(bars: readonly ChartBar[]): ChartSource | null {
     PanelActionButtonComponent,
     BotBannerOverflowComponent,
     MissionVerdictStatusComponent,
+    NextAttemptComponent,
     AssetIdentityComponent,
     TriageActivityComponent,
     TriageEvidenceComponent,

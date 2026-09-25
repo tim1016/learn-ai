@@ -123,10 +123,11 @@ _REDRIVE_NEXT_STEP = (
 )
 """What the operator can do about an EXIT that folded with exposure the watchdog re-drives.
 
-Shared by every such fold that carries ``next_attempt_at_ms`` — a leg the
-send-time rule could not send, a broker's refusal, an extended-hours limit
-that ended unfilled — so the notice's next step always points at the time it
-shows."""
+Every ``EXIT_NOT_FLAT`` fold carries the time of that re-drive
+(:func:`_fold_exit_not_flat`); this is the next step of the folds whose copy
+has nothing more specific to ask — a leg the send-time rule could not send, a
+broker's refusal, an extended-hours limit that ended unfilled — so it points
+at the time the notice shows."""
 
 PROGRAM_EXIT_SESSION_ENDED = LegRefusal(
     reason_code="PROGRAM_EXIT_SESSION_ENDED",
@@ -404,7 +405,6 @@ def _finalize_claimed_exit(
             )
         return _snapshot(repo, effect_operation_id)
     created = _reducing_order_facts(repo, refreshed.order_ref)
-    next_attempt_at_ms = None
     if created.extended_hours:
         # An extended-hours DAY limit the broker ended unfilled — normally at
         # the close of the after-hours session (#2440, owner decision #2431):
@@ -419,7 +419,6 @@ def _finalize_claimed_exit(
         next_step = (
             f"{_REDRIVE_NEXT_STEP} Nothing was queued for the next open."
         )
-        next_attempt_at_ms = _next_redrive_at_ms(repo, pricing)
     else:
         headline = "A completed EXIT left attributed exposure"
         explanation = (
@@ -438,7 +437,7 @@ def _finalize_claimed_exit(
         headline=headline,
         explanation=explanation,
         next_step=next_step,
-        next_attempt_at_ms=next_attempt_at_ms,
+        pricing=pricing,
     )
     return _snapshot(repo, effect_operation_id)
 
@@ -546,18 +545,21 @@ def _fold_exit_not_flat(
     headline: str,
     explanation: str,
     next_step: str,
+    pricing: RecoveryPricing,
     why: str | None = None,
-    next_attempt_at_ms: int | None = None,
 ) -> None:
     """Fail the EXIT and raise the ``EXIT_NOT_FLAT`` episode exposure is still held under.
 
     The episode is what flags the bot for the operator — on the bot page and
     in the lane's attention bell — and what the stuck-EXIT watchdog re-drives:
     the market leg inside the regular session, a limit it prices itself in a
-    declared extended session (#2229). ``next_attempt_at_ms`` is when that
-    re-drive will next try, when the fold can say (#2440): an ``int64 ms UTC``
-    value the UI renders, never prose. ``why`` is the cause recorded on the
-    failed transition beside the quantity still held.
+    declared extended session (#2229). Every such episode carries when that
+    re-drive will next try (#2440), computed here from ``pricing`` so no fold
+    can omit or disagree on it: an ``int64 ms UTC`` value the UI renders,
+    never prose. What the fold cannot know — that the watchdog has since
+    escalated, or that a deferred try is past due — the projection says
+    (``projections.project_uncertainties``). ``why`` is the cause recorded on
+    the failed transition beside the quantity still held.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -585,7 +587,7 @@ def _fold_exit_not_flat(
             attributed_qty=attributed_qty,
         ).to_mapping(),
         severity="error",
-        next_attempt_at_ms=next_attempt_at_ms,
+        next_attempt_at_ms=_next_redrive_at_ms(repo, pricing),
     )
 
 
@@ -600,8 +602,8 @@ def _next_redrive_at_ms(repo: ClerkSqliteRepository, pricing: RecoveryPricing) -
 
     Not before the episode's re-drive age, and then in the first session the
     pricing seam can send in: the regular session, or a declared extended one
-    when the policy carries the exit allowance. The policy is read here, off
-    the event loop, only when a fold needs it; no quote is read.
+    when the policy carries the exit allowance. Only
+    :func:`_fold_exit_not_flat` asks, so every fold agrees; no quote is read.
     """
     redrive = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
     return next_redrive_at_ms(
@@ -793,6 +795,7 @@ def _leg_to_create(
             order_ref=order_ref,
             symbol=symbol,
             remaining_qty=remaining_qty,
+            pricing=pricing,
         ):
             return None
         return _SendableLeg(shape, valid_until_ms, clerk_price=None)
@@ -1016,7 +1019,7 @@ def _fold_unsendable_leg(
             headline=headline,
             explanation=f"{explanation} {why_not_repriced}".rstrip(),
             next_step=next_step,
-            next_attempt_at_ms=_next_redrive_at_ms(repo, pricing),
+            pricing=pricing,
         )
 
     if not _is_recovery_exit(repo, effect_operation_id):
@@ -1116,6 +1119,7 @@ def _confirmed_quantity_still_holds(
     order_ref: str,
     symbol: str,
     remaining_qty: float,
+    pricing: RecoveryPricing,
 ) -> bool:
     """``True`` unless the reduction is no longer the one the operator priced (#2007).
 
@@ -1152,6 +1156,7 @@ def _confirmed_quantity_still_holds(
                 "No action needed: the next automatic re-drive prices the new "
                 "quantity afresh, or the operator can flatten it themselves."
             ),
+            pricing=pricing,
         )
         return False
     _fold_exit_not_flat(
@@ -1168,6 +1173,7 @@ def _confirmed_quantity_still_holds(
             f"{abs(remaining_qty):g} is attributed now; the confirmation does not cover it."
         ),
         next_step=RECOVERY_LIMIT_QUANTITY_CHANGED.next_step,
+        pricing=pricing,
     )
     return False
 
@@ -1736,7 +1742,7 @@ def _fold_submit_refused(
             "held. The broker's reason is on the order's evidence."
         ),
         next_step=_REDRIVE_NEXT_STEP,
-        next_attempt_at_ms=_next_redrive_at_ms(repo, pricing),
+        pricing=pricing,
     )
 
 

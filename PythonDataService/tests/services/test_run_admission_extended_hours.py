@@ -20,10 +20,11 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal(
     ("use_rth", "policy", "state"),
     [
         (True, ProgramLegPolicy.regular_only(), "NOT_REQUESTED"),
-        # #2440 owner decision 2026-09-25: a regular-hours run's last-bar exit
-        # is an after-hours limit priced from the exit allowance, so a
-        # paper or sim authority (a declared window, no allowance) refuses it.
-        (True, ProgramLegPolicy(window=_WINDOW, allowances=None), "ALLOWANCE_UNSET"),
+        # #2440 owner decisions 2026-09-25: a regular-hours run's last-bar exit
+        # is an after-hours limit priced from the exit allowance, so a paper or
+        # sim authority (a declared window, no allowance) has its own state —
+        # refused on Start and on a flat Resume, never on a holding one.
+        (True, ProgramLegPolicy(window=_WINDOW, allowances=None), "EXIT_ALLOWANCE_UNSET"),
         (True, ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES), "NOT_REQUESTED"),
         (False, ProgramLegPolicy.regular_only(), "UNSUPPORTED"),
         (False, ProgramLegPolicy(window=_WINDOW, allowances=None), "ALLOWANCE_UNSET"),

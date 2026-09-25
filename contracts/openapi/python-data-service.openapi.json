@@ -21779,6 +21779,24 @@
             "title": "Kind",
             "type": "string"
           },
+          "next_attempt_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At Ms"
+          },
+          "next_attempt_overdue": {
+            "default": false,
+            "title": "Next Attempt Overdue",
+            "type": "boolean"
+          },
           "reason_code": {
             "title": "Reason Code",
             "type": "string"
@@ -25112,6 +25130,24 @@
               }
             ],
             "title": "Next Action"
+          },
+          "next_attempt_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At Ms"
+          },
+          "next_attempt_overdue": {
+            "default": false,
+            "title": "Next Attempt Overdue",
+            "type": "boolean"
           },
           "state": {
             "enum": [
@@ -29788,6 +29824,11 @@
             ],
             "title": "Next Attempt At Ms"
           },
+          "next_attempt_overdue": {
+            "default": false,
+            "title": "Next Attempt Overdue",
+            "type": "boolean"
+          },
           "next_step": {
             "title": "Next Step",
             "type": "string"
@@ -29883,6 +29924,24 @@
           },
           "may_create_exposure": {
             "title": "May Create Exposure",
+            "type": "boolean"
+          },
+          "next_attempt_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At Ms"
+          },
+          "next_attempt_overdue": {
+            "default": false,
+            "title": "Next Attempt Overdue",
             "type": "boolean"
           },
           "next_step": {

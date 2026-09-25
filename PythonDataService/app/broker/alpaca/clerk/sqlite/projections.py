@@ -12,7 +12,7 @@ import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -66,6 +66,8 @@ from app.broker.alpaca.clerk.sqlite.timeline_query import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
     HOLD_REASON_CODE_SQL_PARAMS,
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
@@ -83,17 +85,61 @@ _json_string_tuple = partial(projection_helpers.json_string_tuple, error_type=Pr
 timeline_sequences = projection_helpers.timeline_sequences
 
 
-def _projected_uncertainty(row: sqlite3.Row, *, now_ms: int) -> ProjectedUncertainty:
+def project_uncertainties(
+    rows: Iterable[Mapping[str, Any]], *, now_ms: int
+) -> tuple[ProjectedUncertainty, ...]:
+    """Open episodes, in the order given, each projected with the one read of its facts.
+
+    The single projection of an ``uncertainties`` row — the custody read, the
+    bot page's guidance and the lane's attention bell all come through here.
+    A recorded next attempt is the stuck-EXIT watchdog's promise, so it is
+    projected only as far as it is still true (#2440 review):
+
+    - an ``EXIT_NOT_FLAT`` whose strategy has an active ``EXIT_STUCK`` among
+      ``rows`` carries none: the watchdog escalated and re-drives it no more;
+    - one at or before ``now_ms`` is flagged ``next_attempt_overdue``: a
+      deferred try writes nothing to the ledger, so the recorded time passes
+      while the watchdog keeps trying, and a past time is never shown as a
+      promise.
+    """
+    rows = tuple(rows)
+    escalated = frozenset(
+        row["strategy_instance_id"] for row in rows if row["reason_code"] == EXIT_STUCK_REASON_CODE
+    )
+    return tuple(
+        _projected_uncertainty(
+            row,
+            now_ms=now_ms,
+            redrives_stopped=(
+                row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
+                and row["strategy_instance_id"] in escalated
+            ),
+        )
+        for row in rows
+    )
+
+
+def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
+    """The symbol an episode's cause names, when it names one (an ``EXIT_NOT_FLAT`` does)."""
+    symbol = cause_facts.get("symbol")
+    return symbol if isinstance(symbol, str) and symbol else None
+
+
+def _projected_uncertainty(
+    row: Mapping[str, Any], *, now_ms: int, redrives_stopped: bool
+) -> ProjectedUncertainty:
     """One open episode, projected from its columns and the facts only they cannot carry.
 
-    The facts carry one thing the columns do not — when the Clerk next tries
-    (#2440). A row whose facts cannot be read is still projected, flagged
-    ``facts_unreadable`` with no next attempt, and logged at error level: one
-    bad row fails loudly on its own and never blanks the whole custody read
-    (#2440 review).
+    The facts carry what the columns do not — when the Clerk next tries
+    (#2440), and the symbol the cause names. A row whose facts cannot be read
+    is still projected, flagged ``facts_unreadable`` with no next attempt,
+    and logged at error level: one bad row fails loudly on its own and never
+    blanks the whole custody read (#2440 review).
     """
     try:
-        next_attempt_at_ms = UncertaintyRaisedFacts.from_facts_json(row["facts_json"]).next_attempt_at_ms
+        facts = UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
+        next_attempt_at_ms = None if redrives_stopped else facts.next_attempt_at_ms
+        symbol = _cause_symbol(facts.cause_facts)
         facts_unreadable = False
     except (TypeError, ValueError):
         logger.error(
@@ -107,6 +153,7 @@ def _projected_uncertainty(row: sqlite3.Row, *, now_ms: int) -> ProjectedUncerta
             exc_info=True,
         )
         next_attempt_at_ms = None
+        symbol = None
         facts_unreadable = True
     return ProjectedUncertainty(
         uncertainty_id=row["uncertainty_id"],
@@ -124,7 +171,9 @@ def _projected_uncertainty(row: sqlite3.Row, *, now_ms: int) -> ProjectedUncerta
         observed_at_ms=row["observed_at_ms"],
         evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
         evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
+        symbol=symbol,
         next_attempt_at_ms=next_attempt_at_ms,
+        next_attempt_overdue=next_attempt_at_ms is not None and next_attempt_at_ms <= now_ms,
         facts_unreadable=facts_unreadable,
     )
 
@@ -785,7 +834,7 @@ class SqliteClerkProjectionReader:
             f"FROM uncertainties WHERE {where} ORDER BY observed_at_ms DESC",
             params,
         ).fetchall()
-        return tuple(_projected_uncertainty(row, now_ms=now_ms) for row in rows)
+        return project_uncertainties(rows, now_ms=now_ms)
 
     def _execution_coverage_conflicts(
         self,

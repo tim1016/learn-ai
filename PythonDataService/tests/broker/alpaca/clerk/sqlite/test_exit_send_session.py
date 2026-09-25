@@ -878,6 +878,29 @@ async def test_a_reducing_order_the_broker_refuses_tells_the_operator(
     assert "insufficient qty available for order" in failed["facts_json"]
 
 
+async def test_a_completed_exit_that_left_exposure_says_when_the_watchdog_tries_again(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2440 review: every fold the watchdog re-drives carries the time it will.
+
+    A regular-session market leg the broker ended unfilled folds as "a
+    completed EXIT left attributed exposure". The watchdog re-drives that
+    episode like every other ``EXIT_NOT_FLAT``, but this fold used to carry no
+    time, so its notice could not say when. ``_fold_exit_not_flat`` computes
+    it for every fold now.
+    """
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    canceled = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="canceled"))
+
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=canceled, pricing=_live_touch())
+
+    episode = _exit_not_flat(repo)
+    assert episode is not None
+    assert episode["headline"] == "A completed EXIT left attributed exposure"
+    assert _next_attempt_at_ms(episode) == _at(15, 59) + 120_000
+
+
 @pytest.mark.parametrize(
     "resumed_at",
     [

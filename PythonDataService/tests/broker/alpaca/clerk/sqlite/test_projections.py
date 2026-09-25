@@ -284,6 +284,98 @@ def test_one_unreadable_uncertainty_is_projected_as_unreadable_without_failing_t
     assert logged.__dict__["uncertainty_id"] == unreadable.uncertainty_id
 
 
+def _raise_exit_not_flat(repo: ClerkSqliteRepository, sid: str, *, next_attempt_at_ms: int) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=sid,
+        reason_code="EXIT_NOT_FLAT",
+        headline="An exit could not be sent after its session ended",
+        explanation="10 SPY is still held.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Let the automatic re-drive reduce it.",
+        evidence_refs=(f"order:exit:{sid}",),
+        cause_facts={"symbol": "SPY", "attributed_qty": 10.0},
+        severity="error",
+        next_attempt_at_ms=next_attempt_at_ms,
+    )
+
+
+def test_a_past_next_attempt_is_projected_overdue_never_as_a_promise(tmp_path: Path) -> None:
+    """#2440 review: the watchdog's deferral writes nothing, so a recorded time can pass.
+
+    The projection compares it with its own clock: a future time is a
+    promise, a time at or before now is flagged overdue — on the episode and
+    on the guidance the bot page's verdict is built from.
+    """
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    promised_at_ms, due_at_ms = clock.value + 3_600_000, clock.value - 60_000
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=promised_at_ms)
+    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=due_at_ms)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        promised = reader.bot_snapshot(SID)
+        overdue = reader.bot_snapshot(OTHER_SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert promised is not None and overdue is not None
+    [promised_episode] = promised.uncertainties
+    [overdue_episode] = overdue.uncertainties
+    assert (promised_episode.next_attempt_at_ms, promised_episode.next_attempt_overdue) == (
+        promised_at_ms,
+        False,
+    )
+    assert (overdue_episode.next_attempt_at_ms, overdue_episode.next_attempt_overdue) == (due_at_ms, True)
+    assert (promised.guidance.next_attempt_at_ms, promised.guidance.next_attempt_overdue) == (
+        promised_at_ms,
+        False,
+    )
+    assert (overdue.guidance.next_attempt_at_ms, overdue.guidance.next_attempt_overdue) == (due_at_ms, True)
+
+
+def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
+    """#2440 review: once the watchdog escalates to EXIT_STUCK it re-drives no more.
+
+    The EXIT_NOT_FLAT episode stays open beside EXIT_STUCK, still carrying
+    the time its fold recorded; the projection drops it for that strategy
+    only, since nothing will try then.
+    """
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    promised_at_ms = clock.value + 3_600_000
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=promised_at_ms)
+    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=promised_at_ms)
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=SID,
+        reason_code="EXIT_STUCK",
+        headline="Automatic exit re-drives stopped",
+        explanation="The re-drive budget is spent.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Flatten the position.",
+        evidence_refs=("order:exit:spy-bot",),
+        severity="error",
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        snapshot = reader.account_snapshot()
+    finally:
+        reader.close()
+        repo.close()
+
+    next_attempts = {
+        (item.strategy_instance_id, item.reason_code): item.next_attempt_at_ms
+        for item in snapshot.uncertainties
+    }
+    assert next_attempts == {
+        (SID, "EXIT_NOT_FLAT"): None,
+        (SID, "EXIT_STUCK"): None,
+        (OTHER_SID, "EXIT_NOT_FLAT"): promised_at_ms,
+    }
+
+
 def test_timeline_cursor_is_stable_while_new_transitions_append(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)

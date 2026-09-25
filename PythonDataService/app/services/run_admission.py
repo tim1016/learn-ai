@@ -42,11 +42,39 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
 logger = logging.getLogger(__name__)
 
 # What an `ExtendedHoursAdmissionFact` state means at the gate. `NOT_REQUESTED`
-# and `READY` admit, so they are simply absent here.
+# and `READY` admit, so they are simply absent here. A regular-hours run's
+# missing exit allowance is the same refusal (#2440), bar the one Resume
+# `_resumes_holding_without_exit_allowance` admits.
 _EXTENDED_HOURS_REFUSALS: dict[str, LegRefusal] = {
     "UNSUPPORTED": EXTENDED_HOURS_UNSUPPORTED,
     "ALLOWANCE_UNSET": EXTENDED_HOURS_ALLOWANCE_UNSET,
+    "EXIT_ALLOWANCE_UNSET": EXTENDED_HOURS_ALLOWANCE_UNSET,
 }
+# Rides an admitted Resume that `_resumes_holding_without_exit_allowance`
+# let through, so the operator reads what the missing allowance still costs.
+EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE = (
+    "No exit allowance is configured: an exit reaching the broker after the close is "
+    "held back, and the operator is told when the sell will be tried."
+)
+
+
+def _resumes_holding_without_exit_allowance(
+    bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot
+) -> bool:
+    """A Resume of a regular-hours run with no exit allowance that may still hold a position (#2440).
+
+    Owner decision 2026-09-25: Start refuses such a run, and so does a Resume
+    of a flat one, but a run still holding a position always resumes — an
+    exit is never blocked by a configuration error (ADR 0060). The position
+    is the Clerk's canonical exposure read, and ``unknown`` counts as holding:
+    this rule never refuses on it. Whether unknown custody admits a Resume at
+    all is the Clerk gates' question (``CLERK_EXPOSURE_UNKNOWN``), unchanged.
+    """
+    return (
+        isinstance(bot, ResumeRunFacts)
+        and bot.extended_hours.state == "EXIT_ALLOWANCE_UNSET"
+        and clerk.exposure.state != "zero"
+    )
 
 
 def _not_armed(bot: RunAdmissionFacts) -> bool:
@@ -353,7 +381,17 @@ def evaluate_run_admission(
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
     # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
     extended_refusal = _EXTENDED_HOURS_REFUSALS.get(bot.extended_hours.state)
-    if extended_refusal is not None:
+    if _resumes_holding_without_exit_allowance(bot, clerk):
+        logger.warning(
+            "Resume of a run that may hold a position is not refused for its missing exit allowance",
+            extra={
+                "action": "resume_admitted_without_exit_allowance",
+                "strategy_instance_id": bot.strategy_instance_id,
+                "exposure_state": clerk.exposure.state,
+                "mode": bot.mode,
+            },
+        )
+    elif extended_refusal is not None:
         return decide(
             allowed=False,
             reason_code=extended_refusal.reason_code,
@@ -491,13 +529,13 @@ def evaluate_run_admission(
     return decide(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",
-        explanation=_admitted_explanation(bot),
+        explanation=_admitted_explanation(bot, clerk),
         next_step=ARMING_NEXT_STEP if _not_armed(bot) else None,
     )
 
 
-def _admitted_explanation(bot: RunAdmissionFacts) -> str:
-    """The admitted sentence, carrying the corpus-coverage and not-armed stamps when they apply."""
+def _admitted_explanation(bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot) -> str:
+    """The admitted sentence, with the corpus-coverage, exit-allowance and not-armed stamps that apply."""
     admitted = (
         "The process slot is absent, market data is ready, and the Clerk proves flat custody."
         if bot.operation == "START"
@@ -505,6 +543,8 @@ def _admitted_explanation(bot: RunAdmissionFacts) -> str:
     )
     if bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
+    if _resumes_holding_without_exit_allowance(bot, clerk):
+        admitted = f"{admitted} {EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE}"
     if _not_armed(bot):
         admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"
     return admitted

@@ -270,6 +270,40 @@ describe('AlpacaSqliteCustodyComponent', () => {
     const attempt = await screen.findByText(/Next automatic attempt/);
     expect(attempt.textContent).toContain('04:00');
     expect(attempt.textContent).toContain('ET');
+    expect(attempt.textContent).not.toContain('overdue');
+  });
+
+  it('says a past next attempt is overdue, never a promise (#2440 review)', async () => {
+    // The watchdog's deferral writes nothing, so the recorded time can pass;
+    // the backend projects that as overdue and this page says so.
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:23',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: 1_788_422_400_000,
+          next_attempt_overdue: true,
+        }],
+      }),
+    });
+
+    const attempt = await screen.findByText(/Next automatic attempt/);
+    expect(attempt.textContent).toContain('overdue since');
+    expect(attempt.textContent).toContain('04:00');
   });
 
   it('says the next attempt is unknown when the notice record cannot be read (#2440 review)', async () => {

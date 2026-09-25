@@ -35,7 +35,11 @@ from app.schemas.run_admission import (
 )
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
-from app.services.run_admission import CORPUS_UNCOVERED_ADMITTED_NOTE, evaluate_run_admission
+from app.services.run_admission import (
+    CORPUS_UNCOVERED_ADMITTED_NOTE,
+    EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE,
+    evaluate_run_admission,
+)
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
@@ -405,6 +409,132 @@ def test_resume_admission_admits_a_clocked_and_priced_extended_session(state: st
 
     assert decision.reason_code != "EXTENDED_HOURS_UNSUPPORTED"
     assert decision.reason_code != "EXTENDED_HOURS_ALLOWANCE_UNSET"
+
+
+def _carried_spy() -> tuple[ClerkCustodySnapshot, ResumeCheckpointAdmissionFact]:
+    """A Clerk proving one carried SPY share, and the approved STOP checkpoint that matches it."""
+    clerk = _clerk().model_copy(
+        update={"exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})}
+    )
+    checkpoint = ResumeCheckpointAdmissionFact(
+        account_id="paper-account",
+        stopped_run_id="run-prior",
+        configuration_hash="b" * 64,
+        exposure={"SPY": 1.0},
+        approved=True,
+        evidence_ref="carryover-checkpoint:run-prior",
+    )
+    return clerk, checkpoint
+
+
+@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
+def test_start_of_a_regular_hours_run_without_an_exit_allowance_is_refused(mode: str) -> None:
+    """#2440 owner decision 2026-09-25: Start refuses until the exit allowance is set."""
+    decision = evaluate_run_admission(
+        _bot(mode=mode, extended_hours_state="EXIT_ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+
+
+@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
+def test_flat_resume_of_a_regular_hours_run_without_an_exit_allowance_is_refused(mode: str) -> None:
+    decision = evaluate_run_admission(
+        _resume_bot(mode=mode, extended_hours_state="EXIT_ALLOWANCE_UNSET"),
+        _clerk(exposure_state="zero"),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+
+
+def test_holding_resume_of_a_regular_hours_run_without_an_exit_allowance_resumes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2440 owner decision 2026-09-25: a run still holding a position always resumes.
+
+    An exit is never blocked by a configuration error (ADR 0060). The admitted
+    decision says what the missing allowance still costs, and the skip is logged.
+    """
+    clerk, checkpoint = _carried_spy()
+
+    with caplog.at_level("WARNING", logger="app.services.run_admission"):
+        decision = evaluate_run_admission(
+            _resume_bot(checkpoint=checkpoint, extended_hours_state="EXIT_ALLOWANCE_UNSET"),
+            clerk,
+            evaluated_at_ms=_NOW,
+        )
+
+    assert decision.allowed is True
+    assert decision.reason_code == "RESUME_ADMITTED"
+    assert decision.explanation.endswith(EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE)
+    [record] = [r for r in caplog.records if r.__dict__.get("action") == "resume_admitted_without_exit_allowance"]
+    assert record.__dict__["exposure_state"] == "non_zero"
+    assert record.__dict__["strategy_instance_id"] == _SID
+
+
+def test_resume_with_unknown_exposure_is_never_refused_for_its_missing_exit_allowance(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unknown exposure counts as holding for the exit-allowance rule.
+
+    Dry Run holds no custody, so it is admitted; a trade Resume is still
+    refused, by the existing ``CLERK_EXPOSURE_UNKNOWN`` custody check — never
+    by the allowance.
+    """
+    clerk = _clerk(exposure_state="unknown")
+
+    with caplog.at_level("WARNING", logger="app.services.run_admission"):
+        dry_run = evaluate_run_admission(
+            _resume_bot(mode="dry_run", extended_hours_state="EXIT_ALLOWANCE_UNSET"),
+            clerk,
+            evaluated_at_ms=_NOW,
+        )
+    trade = evaluate_run_admission(
+        _resume_bot(mode="trade", extended_hours_state="EXIT_ALLOWANCE_UNSET"),
+        clerk,
+        evaluated_at_ms=_NOW,
+    )
+
+    assert dry_run.allowed is True
+    assert dry_run.reason_code == "RESUME_ADMITTED"
+    assert any(
+        r.__dict__.get("action") == "resume_admitted_without_exit_allowance"
+        and r.__dict__.get("exposure_state") == "unknown"
+        for r in caplog.records
+    )
+    assert trade.allowed is False
+    assert trade.reason_code == "CLERK_EXPOSURE_UNKNOWN"
+
+
+def test_holding_resume_of_an_extended_run_without_allowances_is_still_refused() -> None:
+    """The carve-out is the regular-hours run's alone: an extended run's own legs need the allowances."""
+    clerk, checkpoint = _carried_spy()
+
+    decision = evaluate_run_admission(
+        _resume_bot(checkpoint=checkpoint, extended_hours_state="ALLOWANCE_UNSET"),
+        clerk,
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+
+
+def test_holding_resume_with_a_configured_exit_allowance_carries_no_note() -> None:
+    """A live (or configured) authority is unaffected: no refusal, no note."""
+    clerk, checkpoint = _carried_spy()
+
+    decision = evaluate_run_admission(
+        _resume_bot(checkpoint=checkpoint, extended_hours_state="NOT_REQUESTED"),
+        clerk,
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is True
+    assert EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE not in decision.explanation
 
 
 def test_start_admission_keeps_unprovable_custody_unknown() -> None:

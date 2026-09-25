@@ -10,7 +10,6 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 from collections.abc import Awaitable, Callable
@@ -43,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 )
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
+from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import (
     BrokerAccountModeDisagreement,
@@ -777,27 +777,24 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
     repository = None if runtime is None else runtime.sqlite_repository
     if repository is None:
         return LaneAttentionRead(account_id=None, items=[])
-    items: list[LaneAttentionItem] = []
-    for row in repository.active_uncertainties():
-        symbol: str | None = None
-        try:
-            cause = json.loads(row["facts_json"]).get("cause_facts") or {}
-            candidate = cause.get("symbol")
-            symbol = candidate if isinstance(candidate, str) and candidate else None
-        except (ValueError, TypeError):
-            # Unreadable cause facts never hide the condition itself; the
-            # item still rings, without a symbol.
-            symbol = None
-        items.append(
-            LaneAttentionItem(
-                condition_id=row["uncertainty_id"],
-                reason_code=row["reason_code"],
-                severity=row["severity"],
-                strategy_instance_id=row["strategy_instance_id"],
-                symbol=symbol,
-                headline=row["headline"],
-            )
+    # The one projection of an episode (#2440 review): the bell says what
+    # the bot page and the desk say, and an unreadable record still rings —
+    # without a symbol or a next attempt, and logged loudly.
+    items = [
+        LaneAttentionItem(
+            condition_id=uncertainty.uncertainty_id,
+            reason_code=uncertainty.reason_code,
+            severity=uncertainty.severity,
+            strategy_instance_id=uncertainty.strategy_instance_id,
+            symbol=uncertainty.symbol,
+            headline=uncertainty.headline,
+            next_attempt_at_ms=uncertainty.next_attempt_at_ms,
+            next_attempt_overdue=uncertainty.next_attempt_overdue,
         )
+        for uncertainty in project_uncertainties(
+            repository.active_uncertainties(), now_ms=repository.clock()
+        )
+    ]
     return LaneAttentionRead(account_id=repository.account_id, items=items)
 
 

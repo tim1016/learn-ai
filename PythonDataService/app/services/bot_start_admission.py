@@ -342,17 +342,23 @@ def extended_hours_admission_fact(
     An extended-hours run needs the declared window and both allowances. A
     regular-hours run asks for no extended session, but its exit on the day's
     last bar reaches the broker after the close and goes out as an after-hours
-    limit priced from the exit allowance (#2440). Owner decision 2026-09-25:
-    Start and Resume refuse it as ``ALLOWANCE_UNSET`` until that allowance is
-    configured — never a built-in default. The allowances are one document
-    (``ExtendedHoursAllowances`` has no exit-only form), so the refusal is the
-    shared one. An authority that declares no extended window at all cannot
-    price that exit whatever it is configured with; its run is admitted as
-    before and the send-time rule tells the operator at the close.
+    limit priced from the exit allowance (#2440). Owner decisions 2026-09-25:
+    until that allowance is configured — never a built-in default — the run's
+    state is ``EXIT_ALLOWANCE_UNSET``, which Start refuses and a Resume refuses
+    only when the run is flat: a run still holding a position always resumes,
+    since an exit is never blocked by a configuration error (ADR 0060); at the
+    close it is held back and the operator is told when the sell is tried.
+    The allowances are one document (``ExtendedHoursAllowances`` has no
+    exit-only form), so the refusal is the shared one. An authority that
+    declares no extended window at all cannot price that exit whatever it is
+    configured with; its run is admitted as before and the send-time rule
+    tells the operator at the close.
     """
     if use_rth:
-        state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"] = (
-            "ALLOWANCE_UNSET"
+        state: Literal[
+            "NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"
+        ] = (
+            "EXIT_ALLOWANCE_UNSET"
             if policy.window is not None and policy.allowances is None
             else "NOT_REQUESTED"
         )

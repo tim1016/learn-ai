@@ -638,6 +638,8 @@ def _mission_verdict(
         explanation=guidance.explanation,
         next_action=guidance.next_step,
         evaluated_at_ms=projection.generated_at_ms,
+        next_attempt_at_ms=guidance.next_attempt_at_ms,
+        next_attempt_overdue=guidance.next_attempt_overdue,
     )
 
 

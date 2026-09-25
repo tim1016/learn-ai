@@ -480,8 +480,8 @@ EXTENDED_HOURS_ALLOWANCE_UNSET = LegRefusal(
     # Under ADR 0060 the allowances come from the newest sealed arming, and
     # otherwise from the applied profile revision — not from the environment
     # file this used to name. Telling an operator to edit `.env` and restart
-    # would now send them somewhere that changes nothing. Start and Resume of
-    # a regular-hours run refuse with this too (owner decision 2026-09-25,
+    # would now send them somewhere that changes nothing. Start, and a flat
+    # Resume, of a regular-hours run refuse with this too (owner decisions 2026-09-25,
     # #2440): the exit allowance is what prices that run's after-close exit.
     next_step=(
         "Set the exit allowance (xh_exit_bps), with the entry allowance beside it, in the "

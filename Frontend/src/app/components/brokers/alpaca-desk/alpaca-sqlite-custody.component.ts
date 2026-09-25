@@ -31,6 +31,7 @@ import type {
   SqliteSafeFlattenPlan,
   SqliteTimelineEntry,
 } from '../../../api/alpaca.types';
+import { NextAttemptComponent } from '../../broker/shared/next-attempt/next-attempt.component';
 import { SafeFlattenPlanComponent } from '../../broker/shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confirm/typed-halt-confirm.component';
 import {
@@ -90,6 +91,7 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
   selector: 'app-alpaca-sqlite-custody',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    NextAttemptComponent,
     PanelActionReceiptComponent,
     ReceiptLabelPipe,
     RouterLink,

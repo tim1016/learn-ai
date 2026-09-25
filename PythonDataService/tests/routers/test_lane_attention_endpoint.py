@@ -151,3 +151,59 @@ async def test_other_brokers_are_404() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["reason"] == "lane_attention_unsupported_broker"
+
+
+async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
+    tmp_path: Path,
+) -> None:
+    """#2440 review: the bell says when the watchdog next tries, and never promises a past time.
+
+    The route reads each episode through the one projection the bot page and
+    the desk read: the recorded time, flagged overdue once the lane's clock
+    passes it (a deferred try writes nothing). An episode with unreadable
+    facts still rings, without a symbol or a time.
+    """
+    repo, _clock = _repo_with_two_episodes(tmp_path)
+    repo.register_strategy_instance(strategy_instance_id="ema-3", symbol="IWM", config_hash="h1")
+    for strategy_instance_id, symbol, next_attempt_at_ms in (
+        ("ema-1", "SPY", _T0 + 3_600_000),
+        ("ema-2", "QQQ", _T0 - 60_000),
+    ):
+        raise_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            reason_code=EXIT_NOT_FLAT_REASON_CODE,
+            headline="This bot's exit has not flattened its position",
+            explanation="The exit's attributed position is not flat.",
+            operator_impact="New exposure for this bot is blocked.",
+            next_step="Let the automatic re-drive reduce it.",
+            cause_facts={"symbol": symbol, "attributed_qty": 10.0},
+            severity="blocking",
+            refresh_unchanged=True,
+            next_attempt_at_ms=next_attempt_at_ms,
+        )
+    _raise_exit_not_flat(repo, strategy_instance_id="ema-3", symbol="IWM")
+    repo._conn.execute(
+        "UPDATE uncertainties SET facts_json = ? WHERE strategy_instance_id = 'ema-3'",
+        ('{"written_by_a_later_schema":true}',),
+    )
+    repo._conn.commit()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", _sqlite_repository=repo, account_id=ACCOUNT)
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/brokers/alpaca/attention")
+
+    assert response.status_code == 200
+    by_sid = {item["strategy_instance_id"]: item for item in response.json()["items"]}
+    assert (by_sid["ema-1"]["next_attempt_at_ms"], by_sid["ema-1"]["next_attempt_overdue"]) == (
+        _T0 + 3_600_000,
+        False,
+    )
+    assert (by_sid["ema-2"]["next_attempt_at_ms"], by_sid["ema-2"]["next_attempt_overdue"]) == (
+        _T0 - 60_000,
+        True,
+    )
+    unreadable = by_sid["ema-3"]
+    assert (unreadable["symbol"], unreadable["next_attempt_at_ms"]) == (None, None)
