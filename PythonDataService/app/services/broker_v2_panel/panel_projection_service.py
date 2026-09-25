@@ -27,6 +27,7 @@ from app.broker.v2panel.vocabulary import (
     duty_outcome_copy_key,
     hold_reason_for,
 )
+from app.marketdata.feed import IMPOSSIBLE_SOURCE_BAR
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -96,6 +97,15 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_CUSTODY_UNPROVABLE": (
         "Stopped; custody unprovable",
         "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
+    ),
+    IMPOSSIBLE_SOURCE_BAR: (
+        "Refused: impossible source bar",
+        "The market-data feed delivered a bar that cannot be real -- a non-finite or "
+        "non-positive price, a high below its low, a print outside the bar's range, or a "
+        "negative volume -- so the run was stopped rather than allowed to decide on it. "
+        "This is a data-quality refusal, not a market verdict: nothing about the strategy "
+        "changed. Check IB Gateway's connection and market-data farm health, then resume "
+        "once its bars arrive clean.",
     ),
     **WARMUP_REFUSAL_COPY,
 }

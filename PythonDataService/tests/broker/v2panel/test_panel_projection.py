@@ -53,7 +53,6 @@ from app.schemas.broker_v2_panel import (
     PanelAction,
     RecentDecisionView,
     RecentFillView,
-    StartupJoinView,
 )
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
@@ -2936,10 +2935,15 @@ def test_retire_survives_sqlite_adaptation_and_reaches_the_operator() -> None:
     [
         ("RESUME_HOLE_AFTER_HOURS", "Refused: after-hours hole"),
         ("RESUME_HOLE_UNFILLED", "Refused: gap could not be filled"),
+        ("IMPOSSIBLE_SOURCE_BAR", "Refused: impossible source bar"),
     ],
 )
 def test_a_resume_hole_refusal_carries_its_own_duty_outcome_copy(reason: str, label: str) -> None:
-    """#2314: a resume refused at its hole is not a feed death or a generic crash."""
+    """#2314: a resume refused at its hole is not a feed death or a generic crash.
+
+    #2444: an impossible source bar is likewise a named data-quality refusal,
+    never the generic crash copy that disclaims a market-data verdict.
+    """
     status = _status(running=False).model_copy(
         update={
             "duty_outcome": BotDutyOutcomeView(
@@ -3055,8 +3059,13 @@ def _held(quantity: float) -> tuple[ProjectedPosition, ...]:
     return (ProjectedPosition(strategy_instance_id=SID, symbol="SPY", attributed_qty=quantity, updated_at_ms=_NOW - 200),)
 
 
-def _notices(panel: BotPanelView, projection: ClerkProjection) -> list[tuple[str, str]]:
-    outcome = adapt_sqlite_panel(panel, projection).health.duty_outcome
+def _notices(
+    panel: BotPanelView,
+    projection: ClerkProjection,
+    *,
+    startup_join: RetainedStartupJoin | None = None,
+) -> list[tuple[str, str]]:
+    outcome = adapt_sqlite_panel(panel, projection, startup_join=startup_join).health.duty_outcome
     assert outcome is not None
     return [(notice.kind, notice.label) for notice in outcome.exposure_notices]
 
@@ -3111,27 +3120,31 @@ def test_an_impossible_bar_refusal_while_preparing_shows_the_exposure_notices() 
 def test_an_impossible_bar_refusal_after_the_run_was_deciding_shows_no_startup_notices() -> None:
     """#2444: IMPOSSIBLE_SOURCE_BAR can also end a run mid-flight; the startup
     notices speak of a run that never managed anything, so a join that reached
-    ready keeps them off."""
+    ready keeps them off. The projected view drops the join for a stopped run
+    (review P2), so the ready evidence arrives as the retained join record,
+    exactly as the panel read path supplies it."""
     projection = replace(_rail_projection(orders=()), positions=_held(3.0))
-    panel = _refused_panel("IMPOSSIBLE_SOURCE_BAR").model_copy(
-        update={
-            "startup_join": StartupJoinView(
-                run_id="r1",
-                state="ready",
-                label="Ready",
-                explanation="Warmup history reached the live stream.",
-                opened_at_ms=_NOW - 90_000,
-                live_from_ms=_NOW - 60_000,
-                joined_minute_start_ms=_NOW - 120_000,
-                deadline_ms=_NOW + 120_000,
-                missing_start_ms=None,
-                missing_end_ms=None,
-                reason_code=None,
-            )
-        }
+    panel = _refused_panel("IMPOSSIBLE_SOURCE_BAR")
+    retained = _startup(
+        **_SEAM,
+        history_joined_at_ms=_NOW - 50_000,
+        ready_at_ms=_NOW - 49_000,
     )
+    assert build_startup_join(retained, running=False) is None  # the view is gone; the record answers
 
-    assert _notices(panel, projection) == []
+    assert _notices(panel, projection, startup_join=retained) == []
+
+
+def test_an_impossible_bar_refusal_with_a_retained_join_that_never_reached_ready_keeps_the_notices() -> None:
+    """#2444: a retained join that was still filling when the run stopped proves
+    the run never decided, so the startup notices stay on."""
+    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+
+    assert _notices(
+        _refused_panel("IMPOSSIBLE_SOURCE_BAR"),
+        projection,
+        startup_join=_startup(**_SEAM),
+    ) == [("position_unmanaged", "Bot is not managing this position")]
 
 
 @pytest.mark.parametrize("broker_state", ["held", "pending_replace", "accepted_for_bidding", None])
