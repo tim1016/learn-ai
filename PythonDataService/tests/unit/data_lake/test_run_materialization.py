@@ -24,7 +24,8 @@ import pytest
 import respx
 
 from app.data_lake import catalog_client, run_materialization
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake.ensure_data import ensure_data, minute_bar_identity
+from app.data_lake.factor_files import FactorFileNotCoveringError, read_recorded_factor_file
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import (
     EngineRunMaterialization,
@@ -34,7 +35,13 @@ from app.data_lake.run_materialization import (
     _materialize_run_data_sync,
     materialize_engine_run,
 )
-from app.data_lake.types import ArtifactFailure, ArtifactRecord, DataAvailabilityResult, DataRunSpec
+from app.data_lake.types import (
+    ArtifactFailure,
+    ArtifactIdentity,
+    ArtifactRecord,
+    DataAvailabilityResult,
+    DataRunSpec,
+)
 from app.utils.background_loop import background_loop
 from tests._helpers.fake_lake_catalog import (
     FakeCatalog,
@@ -396,6 +403,149 @@ async def test_ensure_data_reports_a_terminal_failure_once_retries_are_exhausted
     # The terminal reason must not be read as contention, or the bridge would
     # poll a row that will never change again.
     assert not run_materialization._is_blocked_by_a_sibling_fetch(third, resolution="minute")
+
+
+def _history_spec() -> DataRunSpec:
+    """The research capture's spec (minute bars + the factor file) for one day."""
+    spec = run_materialization._build_symbol_history_spec(
+        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="test", fetch_timeout_seconds=600
+    )
+    return spec.model_copy(update={"include_map_files": False})
+
+
+def _mock_no_corporate_actions() -> None:
+    for endpoint in ("splits", "dividends"):
+        respx.get(re.compile(rf"https://api\.polygon\.io/v3/reference/{endpoint}.*")).mock(
+            return_value=httpx.Response(200, json={"status": "OK", "results": []})
+        )
+
+
+async def _strand_a_failed_row(fake_catalog: FakeCatalog, identity: ArtifactIdentity) -> int:
+    """A row an earlier writer claimed and failed once: retryable, not exhausted."""
+    claim = (
+        fake_catalog.claim_corp_action_artifact
+        if identity.artifact_kind == "factor_file"
+        else fake_catalog.claim_minute_bar
+    )
+    stranded = await claim(identity, "old-writer", 300_000, "legacy-contract", "legacy-path")
+    assert stranded is not None
+    assert await fake_catalog.fail_artifact(
+        stranded, "provider_api_error", worker_id="old-writer", lease_generation=catalog_client.INITIAL_LEASE_GENERATION
+    )
+    return stranded
+
+
+def _a_sibling_steals_after_the_first_lookup(fake_catalog: FakeCatalog, lookup_name: str, stranded: int):
+    """Wrap one ``select_*_claim_state`` so another worker reclaims the row
+    right after this caller's first lookup — the snapshot it then holds
+    still says ``'failed'`` while the row is live under a sibling's lease."""
+    real_lookup = getattr(fake_catalog, lookup_name)
+
+    async def _lookup_then_lose_the_row(identity: ArtifactIdentity):
+        state = await real_lookup(identity)
+        if fake_catalog.rows[stranded]["status"] == "failed":
+            won = await fake_catalog.steal_or_retry_minute_bar(stranded, "sibling-worker", 300_000, 3)
+            assert won is not None
+        return state
+
+    return _lookup_then_lose_the_row
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_data_reports_a_minute_row_a_sibling_just_reclaimed_as_contention(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    """#2452 review: a row another worker reclaimed between this call's
+    lookup and its steal is live — it must read as ``lease_timeout``, which
+    the bridge waits out, never as a terminal "exhausted 1 attempt(s)"."""
+    mock_launcher()
+    polygon = _mock_polygon()
+    spec = _spec()
+    identity = minute_bar_identity(spec, symbol="SPY", trading_date=TRADING_DAY, data_type="trade")
+    stranded = await _strand_a_failed_row(fake_catalog, identity)
+    monkeypatch.setattr(
+        catalog_client,
+        "select_minute_bar_claim_state",
+        _a_sibling_steals_after_the_first_lookup(fake_catalog, "select_minute_bar_claim_state", stranded),
+    )
+
+    result = await ensure_data(spec)
+
+    minute_failure = next(
+        f for f in result.failures if f.artifact_kind == "time_series_bars" and f.trading_date == TRADING_DAY
+    )
+    assert minute_failure.reason == "lease_timeout", minute_failure.detail
+    assert run_materialization._is_blocked_by_a_sibling_fetch(result, resolution="minute")
+    assert polygon.call_count == 0, "the sibling owns the fetch"
+    assert fake_catalog.rows[stranded]["lease_owner"] == "sibling-worker"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_data_reports_a_factor_file_row_a_sibling_just_reclaimed_as_contention(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    """The factor-file copy of the race above: it was copied from the
+    minute-bar block before either re-read the row, so a factor file another
+    capture was about to finish read as terminally exhausted and the study
+    refused a window it would have covered moments later."""
+    mock_launcher()
+    _mock_polygon()
+    _mock_no_corporate_actions()
+    identity = ArtifactIdentity(
+        artifact_kind="factor_file", market="usa", symbol="SPY", provider="polygon", price_adjustment_mode="raw"
+    )
+    stranded = await _strand_a_failed_row(fake_catalog, identity)
+    monkeypatch.setattr(
+        catalog_client,
+        "select_corp_action_claim_state",
+        _a_sibling_steals_after_the_first_lookup(fake_catalog, "select_corp_action_claim_state", stranded),
+    )
+
+    result = await ensure_data(_history_spec())
+
+    (factor_failure,) = [f for f in result.failures if f.artifact_kind == "factor_file"]
+    assert factor_failure.reason == "lease_timeout", factor_failure.detail
+    # And the research capture waits it out rather than returning it (m2).
+    assert run_materialization._is_blocked_by_a_sibling_fetch(result, resolution="minute")
+    assert fake_catalog.rows[stranded]["lease_owner"] == "sibling-worker"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_factor_file_row_completes_only_with_its_coverage_record_beside_it(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    """#2452 review: the coverage record is promoted under the CSV's lease,
+    in the same fenced step, so the catalog never reads the row
+    ``'complete'`` while its record is missing or describes other bytes —
+    the state that made studies refuse (409) a file that was about to be
+    vouched for, and made the next capture rebuild it."""
+    mock_launcher()
+    _mock_polygon()
+    _mock_no_corporate_actions()
+    lake_root = tmp_lake / lake_subpath("raw")
+    real_complete = fake_catalog.complete_artifact
+    record_at_completion: list[str] = []
+
+    async def _complete_observing_the_record(**kwargs):
+        if fake_catalog.rows[kwargs["artifact_id"]]["artifact_kind"] == "factor_file":
+            try:
+                recorded = read_recorded_factor_file(lake_root, market="usa", symbol="SPY")
+            except FactorFileNotCoveringError as exc:
+                record_at_completion.append(f"not vouched for: {exc.reason}")
+            else:
+                record_at_completion.append(recorded.file_sha256)
+        return await real_complete(**kwargs)
+
+    monkeypatch.setattr(fake_catalog, "complete_artifact", _complete_observing_the_record)
+
+    result = await ensure_data(_history_spec())
+
+    assert result.overall_status == "complete", result.failures
+    (factor,) = [a for a in result.artifacts if a.artifact_kind == "factor_file"]
+    assert record_at_completion == [factor.file_sha256]
 
 
 @pytest.mark.asyncio
@@ -1247,6 +1397,36 @@ async def test_materialize_symbol_history_waits_out_sibling_contention(monkeypat
     assert receipt.fetched_artifact_count == 42
     assert receipt.reused_artifact_count == 7
     assert receipt.detail is None
+
+
+@pytest.mark.asyncio
+async def test_materialize_symbol_history_waits_out_a_factor_file_being_built_elsewhere(monkeypatch):
+    """#2452 review: a second study of a symbol whose factor file another
+    capture is still publishing waits for it, instead of returning the
+    lease and refusing a window the other capture is about to cover."""
+    factor_contention = ArtifactFailure(
+        artifact_kind="factor_file",
+        symbol="SPY",
+        trading_date=None,
+        data_type=None,
+        reason="lease_timeout",
+        detail="another worker holds the lease",
+        attempt_count=1,
+    )
+    results = iter([_history_result("partial", failures=[factor_contention]), _history_result("complete", reused=3)])
+    calls: list[DataRunSpec] = []
+
+    async def _ensure(spec: DataRunSpec) -> DataAvailabilityResult:
+        calls.append(spec)
+        return next(results)
+
+    monkeypatch.setattr(run_materialization, "ensure_data", _ensure)
+    receipt = await run_materialization.materialize_symbol_history(
+        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="study-test"
+    )
+
+    assert len(calls) == 2, "factor-file contention must be waited out like a bar's"
+    assert receipt.status == "complete"
 
 
 @pytest.mark.asyncio

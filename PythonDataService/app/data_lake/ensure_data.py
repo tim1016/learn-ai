@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -34,7 +35,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.atomic import ArtifactLeaseLostError, atomic_write_and_promote, publish_artifact
+from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -168,9 +169,13 @@ async def _publish_under_lease(
     first_bar_start_ms: int,
     last_bar_start_ms: int,
     data_contract_hash: str | None = None,
+    companions: Sequence[tuple[PurePosixPath, bytes]] = (),
 ) -> tuple[str, None] | tuple[None, ArtifactFailure]:
     """Publish one claimed artifact -- bytes onto the lake and receipt into
     the catalog, as one operation (issue #1888).
+
+    ``companions`` are files that describe the artifact and must land with it
+    (the factor file's coverage record); see ``atomic.publish_artifact``.
 
     Every Pass-1/Pass-2 ``_process_*_artifact`` function claims (or reclaims)
     a row, fetches or derives bytes, then reaches this one call. Promotion
@@ -202,6 +207,7 @@ async def _publish_under_lease(
             first_bar_start_ms=first_bar_start_ms,
             last_bar_start_ms=last_bar_start_ms,
             data_contract_hash=data_contract_hash,
+            companions=companions,
         )
     except ArtifactLeaseLostError as e:
         return None, ArtifactFailure(
@@ -512,48 +518,21 @@ async def _process_minute_trade_artifact(
         if existing:
             return existing[0], None, True  # cache hit
 
-        # Not complete either — the row exists but is 'failed' or 'fetching'.
-        # Those need different answers: a 'failed' (or lease-expired
-        # 'fetching') row is not contention, it is a done deal, and reporting
-        # it as lease_timeout would send the caller into a 600s poll loop that
-        # can never resolve, because the row never transitions on its own.
-        # Reclaim it here instead — the same primitive the lease-expiry sweep
-        # uses — so this call either gets a fresh attempt at the bytes or a
-        # terminal answer, on this pass.
-        row_state = await catalog_client.select_minute_bar_claim_state(identity)
-        if row_state is not None:
-            reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
-                artifact_id=row_state.id,
-                worker_id=_WORKER_ID,
-                lease_ttl_ms=_LEASE_TTL_MS,
-                max_retries=_MAX_CLAIM_RETRIES,
-            )
-            if reclaimed_generation is not None:
-                artifact_id = row_state.id
-                lease_generation = reclaimed_generation
-                # Falls through to the fetch below, exactly as a fresh claim would.
-            elif row_state.status == "failed":
-                # Retries exhausted: a real, terminal failure, not contention.
-                # fetch_timeout (not lease_timeout) so the bridge's contention
-                # classifier does not send this back into the poll loop.
-                return (
-                    None,
-                    ArtifactFailure(
-                        artifact_kind=identity.artifact_kind,
-                        symbol=identity.symbol,
-                        trading_date=identity.trading_date,
-                        data_type=identity.data_type,
-                        reason="fetch_timeout",
-                        detail=(
-                            f"exhausted {row_state.attempt_count} attempt(s); "
-                            f"last error: {row_state.last_error}"
-                        ),
-                        attempt_count=row_state.attempt_count,
-                    ),
-                    False,
-                )
-        if artifact_id is None:
-            # Genuinely fetching under a live lease elsewhere — real contention.
+        # Not complete either — the row exists but is 'failed', 'stale', or
+        # 'fetching'. A 'failed' (or lease-expired 'fetching') row is not
+        # contention, it is a done deal, and reporting it as lease_timeout
+        # would send the caller into a 600s poll loop that can never resolve,
+        # because the row never transitions on its own. Reclaim it here
+        # instead, through the one reclaim protocol every artifact kind uses,
+        # so this call either gets a fresh attempt at the bytes, a terminal
+        # fetch_timeout, or lease_timeout while another worker holds the row.
+        reclaim = await catalog_client.reclaim_after_lost_claim(
+            lambda: catalog_client.select_minute_bar_claim_state(identity),
+            worker_id=_WORKER_ID,
+            lease_ttl_ms=_LEASE_TTL_MS,
+            max_retries=_MAX_CLAIM_RETRIES,
+        )
+        if isinstance(reclaim, catalog_client.ReclaimRefused):
             return (
                 None,
                 ArtifactFailure(
@@ -561,12 +540,14 @@ async def _process_minute_trade_artifact(
                     symbol=identity.symbol,
                     trading_date=identity.trading_date,
                     data_type=identity.data_type,
-                    reason="lease_timeout",
-                    detail="another worker has the lease",
-                    attempt_count=1,
+                    reason=reclaim.reason,
+                    detail=reclaim.detail,
+                    attempt_count=reclaim.attempt_count,
                 ),
                 False,
             )
+        # Falls through to the fetch below, exactly as a fresh claim would.
+        artifact_id, lease_generation = reclaim.artifact_id, reclaim.lease_generation
 
     # Fetch from Polygon.
     api_key = settings.POLYGON_API_KEY
@@ -780,7 +761,7 @@ def _factor_file_is_recorded(lake_root: Path, row: ArtifactRecord) -> bool:
 
     A catalog row that is ``complete`` under the current data contract is
     still not reusable without its coverage record: a file written before
-    #2452, or one whose record write failed after the publish, covers
+    #2452 (or a record lost or replaced behind the catalog's back) covers
     nothing for the readers, and reusing it would leave them refusing
     forever. A vouched-for CSV that no longer parses (``ValueError``) is
     lake corruption: it is logged and rebuilt rather than served.
@@ -807,7 +788,7 @@ async def _process_factor_file_artifact(
     spec: DataRunSpec,
     lake_root: Path,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
-    """Build the symbol's factor file over every captured session → claim → publish → record coverage.
+    """Build the symbol's factor file over every captured session → claim → publish it with its coverage.
 
     #2452: the file is built over the symbol's whole catalogued minute-trade
     coverage, never over this request's window — a narrower request used to
@@ -815,14 +796,14 @@ async def _process_factor_file_artifact(
     spanning an older split then presented unadjusted returns as adjusted.
     The data contract is that source set (``_factor_file_dch``), the same
     rebuild-when-the-sources-change model as ``_process_daily_trade_artifact``,
-    and after the CSV is published its coverage record is written beside it
+    and the CSV is published together with its coverage record
     (``factor_files.factor_coverage_record_bytes``) — what every adjusted
-    reader checks before trusting the file.
+    reader checks before trusting the file — in one lease-fenced step.
 
     Built *before* claiming, like the daily artifact: a provider or pricing
     failure then leaves no catalog row behind to strand as ``'failed'``. A
     row a pre-#2452 writer did strand (or a lease that expired mid-publish)
-    is reclaimed through the same retry budget minute bars use.
+    is reclaimed through the same protocol and retry budget minute bars use.
 
     Returns (record, None, outcome) on success or (None, failure, "fetched")
     on error — the third element is meaningless on failure.
@@ -914,27 +895,17 @@ async def _process_factor_file_artifact(
                 )
             artifact_id, lease_generation, outcome = existing.id, prior.new_lease_generation, "refreshed"
         else:
-            # 'failed', or 'fetching' under someone's lease. A failed (or
-            # lease-expired) row is reclaimed exactly as a minute bar's is;
-            # only a live lease is contention.
-            row_state = await catalog_client.select_corp_action_claim_state(identity)
-            if row_state is None:
-                return _failure("lease_timeout", "another worker is building this factor file")
-            reclaimed = await catalog_client.steal_or_retry_minute_bar(
-                artifact_id=row_state.id,
+            # 'failed', 'stale', or 'fetching' under someone's lease: the same
+            # reclaim protocol a minute bar's row goes through.
+            reclaim = await catalog_client.reclaim_after_lost_claim(
+                lambda: catalog_client.select_corp_action_claim_state(identity),
                 worker_id=_WORKER_ID,
                 lease_ttl_ms=_LEASE_TTL_MS,
                 max_retries=_MAX_CLAIM_RETRIES,
             )
-            if reclaimed is None and row_state.status == "failed":
-                return _failure(
-                    "fetch_timeout",
-                    f"exhausted {row_state.attempt_count} attempt(s); last error: {row_state.last_error}",
-                    attempt_count=row_state.attempt_count,
-                )
-            if reclaimed is None:
-                return _failure("lease_timeout", "another worker is building this factor file")
-            artifact_id, lease_generation = row_state.id, reclaimed
+            if isinstance(reclaim, catalog_client.ReclaimRefused):
+                return _failure(reclaim.reason, reclaim.detail, attempt_count=reclaim.attempt_count)
+            artifact_id, lease_generation = reclaim.artifact_id, reclaim.lease_generation
 
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
     file_sha, lease_failure = await _publish_under_lease(
@@ -953,23 +924,19 @@ async def _process_factor_file_artifact(
         # A refresh completes onto a different source set than the row's
         # existing DataContractHash — see _process_daily_trade_artifact.
         data_contract_hash=dch,
+        # The coverage record is promoted under the same lease, in the same
+        # fenced step as the CSV it vouches for, so the row never reads
+        # 'complete' without its record and a writer that lost its lease
+        # replaces neither file.
+        companions=(
+            (
+                LeanFactorFilePath(market=identity.market, symbol=symbol).coverage_record_path(),  # type: ignore[arg-type]
+                factor_coverage_record_bytes(symbol, payload, plan.spans),
+            ),
+        ),
     )
     if lease_failure is not None:
         return None, lease_failure, "fetched"
-    try:
-        atomic_write_and_promote(
-            factor_coverage_record_bytes(symbol, payload, plan.spans),
-            lake_root,
-            staging_root,
-            LeanFactorFilePath(market=identity.market, symbol=symbol).coverage_record_path(),  # type: ignore[arg-type]
-            spec.request_id,
-            _WORKER_ID,
-            1,
-        )
-    except OSError as e:
-        # The CSV is published but vouched for by nothing: readers refuse it,
-        # and the next ensure_data sees no record and rebuilds (_current).
-        return _failure("io_error", f"factor file published but its coverage record could not be written: {e}")
     logger.info(
         "data_lake.ensure_data: factor file for %s covers %d span(s)",
         symbol,

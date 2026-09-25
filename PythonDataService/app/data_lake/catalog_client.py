@@ -14,7 +14,7 @@ import json
 import logging
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -645,7 +645,8 @@ class ArtifactClaimState:
     live, actively-leased fetch. This is that lookup's result — shared by
     :func:`select_minute_bar_claim_state`, :func:`select_metadata_claim_state`
     and :func:`select_corp_action_claim_state` since the shape carries no
-    kind-specific field.
+    kind-specific field, and read by :func:`reclaim_after_lost_claim` on
+    either side of its steal.
     """
 
     id: int
@@ -1084,6 +1085,15 @@ async def steal_or_retry_minute_bar(
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
 
+    Generic over artifact kind despite its name, which dates from minute bars
+    being its first caller: the UPDATE is keyed on row id alone, and every
+    kind's row -- minute bar, factor file, map file, metadata -- carries the
+    same Status / lease / AttemptCount columns it reads. A caller that lost a
+    ``claim_*`` insert should not call this directly; go through
+    :func:`reclaim_after_lost_claim`, which pairs it with the claim-state
+    lookup before and the re-read after that a refusal needs to be classified
+    correctly.
+
     Eligibility:
       - Status='fetching' AND LeaseExpiresAtMs < now_ms  (lease expired), OR
       - Status='failed' AND (AttemptCount < max_retries OR bypass_retry_ceiling)
@@ -1124,7 +1134,7 @@ async def steal_or_retry_minute_bar(
     ceiling -- callers pass ``bypass_retry_ceiling=True`` only for the
     specific reason they know is infinitely retryable, never as a default.
     Default ``False`` preserves this function's existing behaviour for every
-    other caller (minute bars, factor files, map files) unchanged.
+    other caller (minute bars and factor files) unchanged.
 
     Returns the new fencing generation (issue #1888; always
     ``> INITIAL_LEASE_GENERATION`` since this always increments) when the
@@ -1164,6 +1174,88 @@ async def steal_or_retry_minute_bar(
             max_retries,
             bypass_retry_ceiling,
         )
+
+
+@dataclass(frozen=True)
+class ReclaimedLease:
+    """A lost claim turned into a held lease: the caller now owns the row at
+    ``lease_generation`` and must publish, complete, or fail it with that
+    generation."""
+
+    artifact_id: int
+    lease_generation: int
+
+
+@dataclass(frozen=True)
+class ReclaimRefused:
+    """Why a lost claim could not be reclaimed, as an ``ArtifactFailure`` reason.
+
+    ``lease_timeout`` is contention and clears by itself: a live lease
+    elsewhere, or a row another worker reclaimed, completed, or re-failed
+    within its budget a moment ago. ``fetch_timeout`` is terminal: the row is
+    ``'failed'`` with its retry budget spent, and asking again changes
+    nothing, so the run-materialization wait must not poll it.
+    """
+
+    reason: Literal["lease_timeout", "fetch_timeout"]
+    detail: str
+    attempt_count: int
+
+
+async def reclaim_after_lost_claim(
+    read_claim_state: Callable[[], Awaitable[ArtifactClaimState | None]],
+    *,
+    worker_id: str,
+    lease_ttl_ms: int,
+    max_retries: int,
+    retry_ceiling_exempt_errors: frozenset[str] = frozenset(),
+) -> ReclaimedLease | ReclaimRefused:
+    """Reclaim a row this caller's ``claim_*`` insert lost to, or say why not.
+
+    The one reclaim protocol for every artifact kind. A caller reaches it
+    after its claim returned ``None`` and the row turned out not to be a
+    usable ``'complete'`` one; ``read_claim_state`` is that kind's
+    ``select_*_claim_state`` lookup, bound to the caller's identity.
+
+    The steal's own ``WHERE`` clause decides eligibility (an expired lease, a
+    ``'failed'`` row under ``max_retries``, a ``'stale'`` row). When it
+    refuses, the row is **re-read** before the refusal is classified: the
+    first lookup is a snapshot from before the steal, and another worker can
+    reclaim that very row in between. Trusting the snapshot reported such a
+    row -- live, and about to complete -- as terminally "exhausted", which
+    the run-materialization wait then refused to wait out. Only a re-read
+    ``'failed'`` row past the same retry ceiling the steal applies is
+    ``fetch_timeout``; everything else is ``lease_timeout``.
+
+    ``retry_ceiling_exempt_errors`` names ``LastError`` values that are
+    retried no matter the attempt count (the metadata bootstrap's
+    ``launcher_unreachable``, #1889): the ceiling is lifted for the steal and
+    never reported as exhausted.
+    """
+    state = await read_claim_state()
+    if state is not None:
+        generation = await steal_or_retry_minute_bar(
+            artifact_id=state.id,
+            worker_id=worker_id,
+            lease_ttl_ms=lease_ttl_ms,
+            max_retries=max_retries,
+            bypass_retry_ceiling=state.last_error in retry_ceiling_exempt_errors,
+        )
+        if generation is not None:
+            return ReclaimedLease(artifact_id=state.id, lease_generation=generation)
+        state = await read_claim_state()
+    if (
+        state is not None
+        and state.status == "failed"
+        and state.attempt_count >= max_retries
+        and state.last_error not in retry_ceiling_exempt_errors
+    ):
+        return ReclaimRefused(
+            reason="fetch_timeout",
+            detail=f"exhausted {state.attempt_count} attempt(s); last error: {state.last_error}",
+            attempt_count=state.attempt_count,
+        )
+    return ReclaimRefused(reason="lease_timeout", detail="another worker holds the lease", attempt_count=1)
 
 
 @dataclass(frozen=True)

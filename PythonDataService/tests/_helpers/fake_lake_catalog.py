@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from pathlib import Path
 
 import httpx
@@ -39,6 +40,12 @@ class FakeCatalog:
     race — which is what makes contention observable rather than papered
     over. The methods contain no ``await``, so on one event loop a claim is
     as indivisible as the SQL statement it stands in for.
+
+    Leases are modelled as the real rows carry them — owner, expiry on the
+    wall clock, fencing generation, attempt count — so an expired lease is
+    stealable and a retry budget runs out exactly as the SQL decides. A test
+    expires a lease by setting its row's ``lease_expires_at_ms`` into the
+    past, as the Postgres tests do with an ``UPDATE``.
     """
 
     def __init__(self) -> None:
@@ -48,7 +55,11 @@ class FakeCatalog:
 
     # -- claim helpers ------------------------------------------------------
 
-    def _claim(self, key: tuple, row: dict) -> int | None:
+    @staticmethod
+    def _now_ms() -> int:
+        return int(time.time() * 1000)
+
+    def _claim(self, key: tuple, row: dict, worker_id: str, lease_ttl_ms: int) -> int | None:
         if key in self.keys:
             return None
         artifact_id = self._next_id
@@ -60,12 +71,25 @@ class FakeCatalog:
             "status": "fetching",
             "attempt_count": 1,
             "last_error": None,
+            "lease_owner": worker_id,
+            "lease_expires_at_ms": self._now_ms() + lease_ttl_ms,
             # Fencing generation (issue #1888): mirrors the real schema's
             # LeaseGeneration column, starting at
             # catalog_client.INITIAL_LEASE_GENERATION on every fresh claim.
             "lease_generation": catalog_client.INITIAL_LEASE_GENERATION,
         }
         return artifact_id
+
+    def _take_lease(self, row: dict, worker_id: str, lease_ttl_ms: int) -> int:
+        """The SET list steal_or_retry_minute_bar and refresh_complete_artifact share."""
+        row.update(
+            status="fetching",
+            lease_owner=worker_id,
+            lease_expires_at_ms=self._now_ms() + lease_ttl_ms,
+            lease_generation=row["lease_generation"] + 1,
+            attempt_count=row["attempt_count"] + 1,
+        )
+        return row["lease_generation"]
 
     @staticmethod
     def _identity_row(identity, data_contract_hash: str, file_path: str) -> dict:
@@ -84,9 +108,12 @@ class FakeCatalog:
             "row_count": None,
             "first_bar_start_ms": None,
             "last_bar_start_ms": None,
+            "data_root_id": identity.data_root_id,
         }
 
-    _BOOKKEEPING_KEYS = frozenset({"status", "attempt_count", "last_error", "lease_generation"})
+    _BOOKKEEPING_KEYS = frozenset(
+        {"status", "attempt_count", "last_error", "lease_owner", "lease_expires_at_ms", "lease_generation"}
+    )
 
     @classmethod
     def _record(cls, row: dict) -> ArtifactRecord:
@@ -103,6 +130,8 @@ class FakeCatalog:
         return self._claim(
             ("metadata", data_contract_hash),
             self._identity_row(identity, data_contract_hash, file_path),
+            worker_id,
+            lease_ttl_ms,
         )
 
     async def select_complete_metadata_artifact(
@@ -174,7 +203,9 @@ class FakeCatalog:
         )
 
     async def claim_minute_bar(self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path) -> int | None:
-        return self._claim(self._minute_key(identity), self._identity_row(identity, data_contract_hash, file_path))
+        return self._claim(
+            self._minute_key(identity), self._identity_row(identity, data_contract_hash, file_path), worker_id, lease_ttl_ms
+        )
 
     async def select_minute_bar_claim_state(self, identity) -> catalog_client.ArtifactClaimState | None:
         artifact_id = self.keys.get(self._minute_key(identity))
@@ -192,24 +223,21 @@ class FakeCatalog:
         self, artifact_id, worker_id, lease_ttl_ms, max_retries, *, bypass_retry_ceiling: bool = False
     ) -> int | None:
         row = self.rows[artifact_id]
-        # The fake has no lease clock, so "fetching" always means a live
-        # lease held by someone else — nothing to steal, matching the real
-        # WHERE clause's "LeaseExpiresAtMs < now" arm never firing here.
-        # 'stale' reactivates unconditionally (Codex P1, PR #1884) -- see
-        # the real ``steal_or_retry_minute_bar``'s docstring for why that
-        # branch carries no lease/retry gate, unlike the other two.
+        # The real WHERE clause's three arms: an expired lease, a failed row
+        # within its retry budget, and a 'stale' row, which reactivates
+        # unconditionally (Codex P1, PR #1884 -- see the real
+        # ``steal_or_retry_minute_bar``'s docstring for why that branch
+        # carries no lease/retry gate, unlike the other two).
         # ``bypass_retry_ceiling`` (#1889) is modelled rather than ignored:
         # a fake that accepted the flag and dropped it would answer "no
         # eligible row" for exactly the launcher-outage case the flag exists
         # to keep retryable, which is the bug it would be there to catch.
-        retryable = row["attempt_count"] < max_retries or bypass_retry_ceiling
-        if (row["status"] == "failed" and retryable) or row["status"] == "stale":
-            row["status"] = "fetching"
-            row["attempt_count"] += 1
-            row["last_error"] = None
-            row["lease_generation"] += 1
-            return row["lease_generation"]
-        return None
+        expired = row["status"] == "fetching" and row["lease_expires_at_ms"] < self._now_ms()
+        retryable = row["status"] == "failed" and (row["attempt_count"] < max_retries or bypass_retry_ceiling)
+        if not (expired or retryable or row["status"] == "stale"):
+            return None
+        row["last_error"] = None
+        return self._take_lease(row, worker_id, lease_ttl_ms)
 
     async def select_coverage_minute_bars(
         self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode
@@ -252,7 +280,7 @@ class FakeCatalog:
             identity.provider,
             identity.price_adjustment_mode,
         )
-        return self._claim(key, self._identity_row(identity, data_contract_hash, file_path))
+        return self._claim(key, self._identity_row(identity, data_contract_hash, file_path), worker_id, lease_ttl_ms)
 
     async def select_complete_aggregated_bar_artifact(self, identity) -> ArtifactRecord | None:
         for row in self.rows.values():
@@ -270,11 +298,12 @@ class FakeCatalog:
     @staticmethod
     def _corp_action_key(identity) -> tuple:
         # The real partial unique index uq_data_lake_artifacts_corp_actions:
-        # one factor_file / map_file row per (market, symbol, kind, provider,
-        # mode) -- never per window, which is why a rebuild is a refresh of
-        # that one row rather than a second claim.
+        # one factor_file / map_file row per (root, market, symbol, kind,
+        # provider, mode) -- never per window, which is why a rebuild is a
+        # refresh of that one row rather than a second claim.
         return (
             "corp_action",
+            identity.data_root_id,
             identity.market,
             identity.symbol,
             identity.artifact_kind,
@@ -285,7 +314,12 @@ class FakeCatalog:
     async def claim_corp_action_artifact(
         self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path
     ) -> int | None:
-        return self._claim(self._corp_action_key(identity), self._identity_row(identity, data_contract_hash, file_path))
+        return self._claim(
+            self._corp_action_key(identity),
+            self._identity_row(identity, data_contract_hash, file_path),
+            worker_id,
+            lease_ttl_ms,
+        )
 
     async def select_complete_corp_action_artifact(self, identity) -> ArtifactRecord | None:
         artifact_id = self.keys.get(self._corp_action_key(identity))
@@ -310,14 +344,11 @@ class FakeCatalog:
         row = self.rows.get(artifact_id)
         if row is None or row["status"] != "complete":
             return None
-        row["lease_generation"] += 1
-        prior = catalog_client.PriorArtifactMetadata(
+        return catalog_client.PriorArtifactMetadata(
             prior_file_path=row["file_path"],
             prior_file_sha256=row["file_sha256"],
-            new_lease_generation=row["lease_generation"],
+            new_lease_generation=self._take_lease(row, worker_id, lease_ttl_ms),
         )
-        row.update(status="fetching")
-        return prior
 
     async def complete_artifact(
         self,
@@ -345,6 +376,8 @@ class FakeCatalog:
             file_sha256=file_sha256,
             data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
             last_error=None,
+            lease_owner=None,
+            lease_expires_at_ms=None,
         )
         return True
 
@@ -373,7 +406,8 @@ class FakeCatalog:
             row is None
             or row["status"] != "fetching"
             or row["lease_generation"] != lease_generation
-            or row.get("lease_owner", worker_id) != worker_id
+            or row["lease_owner"] != worker_id
+            or row["lease_expires_at_ms"] <= self._now_ms()
         ):
             raise catalog_client.ArtifactLeaseLostError(
                 f"artifact {artifact_id}: {worker_id} is not authorized to publish at generation {lease_generation}"
@@ -393,16 +427,16 @@ class FakeCatalog:
 
     async def fail_artifact(self, artifact_id, last_error, error_message=None, *, worker_id, lease_generation) -> bool:
         row = self.rows.get(artifact_id)
-        if row is None or row["lease_generation"] != lease_generation:
+        if row is None or row["lease_owner"] != worker_id or row["lease_generation"] != lease_generation:
             return False
-        row.update(status="failed", last_error=last_error)
+        row.update(status="failed", last_error=last_error, lease_owner=None, lease_expires_at_ms=None)
         return True
 
     async def mark_complete_artifact_failed(self, artifact_id, last_error, error_message=None) -> bool:
         row = self.rows.get(artifact_id)
         if row is None or row["status"] != "complete":
             return False
-        row.update(status="failed", last_error=last_error)
+        row.update(status="failed", last_error=last_error, lease_owner=None, lease_expires_at_ms=None)
         return True
 
 

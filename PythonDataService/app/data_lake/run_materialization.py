@@ -304,9 +304,17 @@ def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: Engin
     aggregate to ever catch it. Every ``time_series_bars`` failure therefore
     withholds a daily run, unconditionally.
 
+    A factor-file failure withholds what the run reads whenever it occurs:
+    only a spec that asks for the factor file can fail on one, and the one
+    spec that does (:func:`_build_symbol_history_spec`) asks because its
+    study adjusts every bar it reads through that file (#2452). Contention
+    on it is therefore waited out like contention on a bar.
+
     Metadata failures mean the lake fell back to its hardcoded calendar —
     bad, and logged — but they withhold no bars, at either resolution.
     """
+    if failure.artifact_kind == "factor_file":
+        return True
     if failure.artifact_kind != "time_series_bars":
         return False
     if resolution == "daily":
@@ -806,10 +814,9 @@ async def materialize_symbol_history(
     live on the request loop. Unlike a bare :func:`ensure_data` call, the
     capture here goes through :func:`_materialize_run_data`, so it (a) waits
     out a sibling fetch that owns the catalog claim instead of returning
-    its ``lease_timeout`` as a final answer, and (b) is bounded by
-    ``fetch_timeout_seconds`` wall-clock. Contention on a factor file still
-    being built elsewhere is not waited out — the study refuses the
-    uncovered window with that reason, and a retry reads the finished file.
+    its ``lease_timeout`` as a final answer — a factor file another capture
+    is still building included — and (b) is bounded by
+    ``fetch_timeout_seconds`` wall-clock.
 
     Never raises for a data reason; every failure lands in the receipt's
     ``failed``/``skipped`` status and ``detail``.
