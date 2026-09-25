@@ -338,6 +338,13 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
+        # Admits safe flatten because it says nothing about any attributed
+        # quantity -- the quantity is what both sides agree on -- and
+        # ``safe_flatten_requires_later_reconciliation`` stays unset for the
+        # same reason: the raise can postdate a clean reconciliation (a
+        # trade-updates fold or an exact lookup), but the flatten's
+        # attributed quantities are quantity facts this episode cannot doubt,
+        # already pinned by the position-evidence freshness gate.
         admits_safe_flatten=True,
         cause_is_valid=_execution_price_conflict_cause_is_valid,
         age=CauseCleared(),

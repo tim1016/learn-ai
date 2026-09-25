@@ -386,7 +386,7 @@ class SqliteEconomicProjectionReader:
         it cannot vouch for: more rows than ``limit`` raises (the
         FillWindowProjection contract), and so does incomplete fill evidence —
         cumulative-recovery evidence inside the window, an unresolved
-        execution-coverage-conflict uncertainty, or a filled external order
+        execution-conflict uncertainty (coverage or price), or a filled external order
         (mirrors the completeness gate in :meth:`account_pnl_attribution`).
         """
         _validate_window(from_ms=from_ms, to_ms=to_ms)

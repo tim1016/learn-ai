@@ -48,6 +48,10 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture, _clock_at
+from tests.broker.alpaca.clerk.sqlite.test_folds_execution import (
+    _correction_transition,
+    _correction_uncertainty_transition,
+)
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade, _position
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
@@ -1297,15 +1301,11 @@ async def test_a_same_quantity_price_restatement_records_an_economic_conflict(
 
         reader = SqliteEconomicProjectionReader.from_repository(repo)
         try:
-            try:
-                snapshot = reader.bot_economic_snapshot(
-                    _SID,
-                    session_window=None,
-                    marks={"GOOGL": MarketMark(price=110.0, observed_at_ms=latest_ms)},
-                )
-            except EconomicProjectionUnavailable:
-                assert conflicting
-                return
+            snapshot = reader.bot_economic_snapshot(
+                _SID,
+                session_window=None,
+                marks={"GOOGL": MarketMark(price=110.0, observed_at_ms=latest_ms)},
+            )
         finally:
             reader.close()
         assert snapshot is not None
@@ -1425,5 +1425,149 @@ async def test_the_price_conflict_never_blocks_a_reduction(tmp_path: Path) -> No
         )
 
         assert decision.allowed is True
+    finally:
+        repo.close()
+
+
+def _episode_cause(repo: ClerkSqliteRepository):
+    from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
+    from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExecutionPriceConflictCause
+
+    episode = _recorded_price_conflict_episode(repo)
+    assert episode is not None
+    return ExecutionPriceConflictCause.from_mapping(
+        UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).cause_facts
+    )
+
+
+def _conflict_order(order_ref: str, *, reported: float, recorded: float = 100.0):
+    from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExecutionPriceConflictOrder
+
+    return ExecutionPriceConflictOrder(
+        order_ref=order_ref,
+        reported_avg_price=reported,
+        recorded_avg_price=recorded,
+        source_event_at_ms=1_700_000_000_500,
+    )
+
+
+def test_a_second_conflicting_order_widens_the_one_episode(tmp_path: Path) -> None:
+    """#2460: two restated orders accumulate into one episode for the bot (the
+    #2348 widen discipline), and a materially different price on a named order
+    refreshes it in place -- never a second episode."""
+    from app.broker.alpaca.clerk.sqlite.uncertainty import (
+        clear_execution_price_conflict_order,
+        raise_execution_price_conflict_uncertainty,
+    )
+
+    repo, _accepted = _repository(tmp_path)
+    try:
+        assert (
+            raise_execution_price_conflict_uncertainty(
+                repo, strategy_instance_id=_SID, order=_conflict_order("a:1", reported=90.0)
+            )
+            == "raised"
+        )
+        assert (
+            raise_execution_price_conflict_uncertainty(
+                repo, strategy_instance_id=_SID, order=_conflict_order("a:2", reported=80.0)
+            )
+            == "refreshed"  # widened: one episode, now naming two orders
+        )
+        # Re-raising what the episode already names at the same price: no-op.
+        assert (
+            raise_execution_price_conflict_uncertainty(
+                repo, strategy_instance_id=_SID, order=_conflict_order("a:1", reported=90.0)
+            )
+            == "unchanged"
+        )
+        # A materially different price on a named order refreshes in place.
+        assert (
+            raise_execution_price_conflict_uncertainty(
+                repo, strategy_instance_id=_SID, order=_conflict_order("a:1", reported=70.0)
+            )
+            == "refreshed"
+        )
+        assert _active_price_conflict_count(repo) == 1
+        cause = _episode_cause(repo)
+        assert [item.order_ref for item in cause.orders] == ["a:1", "a:2"]
+        assert {item.order_ref: item.reported_avg_price for item in cause.orders} == {
+            "a:1": 70.0,
+            "a:2": 80.0,
+        }
+
+        # One order agreeing again narrows; the other stays fenced open.
+        assert (
+            clear_execution_price_conflict_order(repo, strategy_instance_id=_SID, order_ref="a:2")
+            == "narrowed"
+        )
+        assert [item.order_ref for item in _episode_cause(repo).orders] == ["a:1"]
+        # Clearing an order no open episode names is an honest no-op.
+        assert (
+            clear_execution_price_conflict_order(repo, strategy_instance_id=_SID, order_ref="a:2")
+            == "absent"
+        )
+        assert (
+            clear_execution_price_conflict_order(repo, strategy_instance_id=_SID, order_ref="a:1")
+            == "resolved"
+        )
+        assert _recorded_price_conflict_episode(repo) is None
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_correction_that_explains_the_difference_clears_the_conflict(
+    tmp_path: Path,
+) -> None:
+    """#2460: a terminal order's totals are never re-folded, so the
+    correction-explained exit runs from the reconciliation sweep's
+    re-derivation: once an identified execution correction changes the
+    recorded fills to the broker's reported average, the sweep drops the
+    order and coverage returns to complete."""
+    from app.broker.alpaca.clerk.sqlite.order_evidence import reconcile_execution_price_conflicts
+
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(repo, accepted, execution_id="fill-original", side="BUY",
+                      quantity=10.0, price=100.0, occurred_at_ms=now)
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
+        _fold_total(repo, accepted, quantity=10.0, price=90.0, updated_at_ms=now + 1)
+        assert _recorded_price_conflict_episode(repo) is not None
+        assert reconcile_execution_price_conflicts(repo) == 0  # fills still say 100
+
+        correction = ExecutionCorrectedFacts(
+            execution_id="correction-1",
+            superseded_execution_ref="fill-original",
+            symbol="GOOGL",
+            side="BUY",
+            corrected_qty=10.0,
+            corrected_price=90.0,
+            why="broker bust corrected the average to its reported total",
+        )
+        outcome = repo.append_execution_correction_or_raise(
+            correction=_correction_transition(
+                repo, accepted=accepted, facts=correction, source_event_at_ms=now + 2
+            ),
+            build_uncertainty=lambda reason: _correction_uncertainty_transition(
+                repo, reason=reason, execution_id="correction-1"
+            ),
+        )
+        assert outcome == "appended"
+
+        assert reconcile_execution_price_conflicts(repo) == 1
+        assert _recorded_price_conflict_episode(repo) is None
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            snapshot = reader.bot_economic_snapshot(
+                _SID,
+                session_window=None,
+                marks={"GOOGL": MarketMark(price=110.0, observed_at_ms=now + 3)},
+            )
+        finally:
+            reader.close()
+        assert snapshot is not None
+        assert snapshot.execution_coverage == "complete"
     finally:
         repo.close()

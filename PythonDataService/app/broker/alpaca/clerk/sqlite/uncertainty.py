@@ -575,18 +575,33 @@ def resolve_failed_enter_filled_uncertainty_if_flat(
     )
 
 
-def _active_execution_price_conflict_cause(
-    repo: ClerkSqliteRepository, *, strategy_instance_id: str
-) -> ExecutionPriceConflictCause | None:
-    episode = repo.active_uncertainty(
-        scope="CUSTODY_SUBJECT",
+def _price_conflict_envelope(cause: ExecutionPriceConflictCause) -> UncertaintyRaisedFacts:
+    """The operator envelope for one state of the price-conflict cause."""
+    refs = ", ".join(item.order_ref for item in cause.orders)
+    return UncertaintyRaisedFacts(
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=True,
         reason_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
-        strategy_instance_id=strategy_instance_id,
-    )
-    if episode is None:
-        return None
-    return ExecutionPriceConflictCause.from_mapping(
-        UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).cause_facts
+        headline="A broker order total disagrees on price with its recorded fills",
+        explanation=(
+            f"The broker reported an average fill price for order(s) {refs} that "
+            "materially disagrees with the average of the exact fills the Clerk "
+            "recorded for the same quantity. The recorded fills, positions and "
+            "FIFO P&L inputs are unchanged; the disagreement is held open as "
+            "economic evidence."
+        ),
+        operator_impact=(
+            "New entries for this bot are refused and its economic coverage reads incomplete. "
+            "Reducing or exiting the position stays allowed."
+        ),
+        next_step=(
+            "Check the broker's execution corrections for the named orders. The conflict "
+            "clears when the recorded fills and the broker's reported average agree again "
+            "within tolerance."
+        ),
+        evidence_refs=[item.order_ref for item in cause.orders],
+        cause_facts=cause.to_mapping(),
     )
 
 
@@ -605,86 +620,64 @@ def raise_execution_price_conflict_uncertainty(
     same instance widens the open episode, and re-folding the same conflicting
     total is a no-op (``"unchanged"``) -- one conflict, not one per re-read.
 
-    Read-merge-write like the #2348 fence: the caller must hold the Clerk's
-    intake lock, or two concurrent folds could each widen a stale read.
+    The cause-accumulating merge is atomic under the repository write lock
+    (:meth:`ClerkSqliteRepository.widen_execution_price_conflict`), so callers
+    need no intake lock: ``fold_order_evidence`` runs from intake-held paths
+    (the trade-updates sink, the reconciliation snapshot fold) and from
+    broker-IO-interleaved resolution paths (enter submit resolution, EXIT
+    cancel-and-prove, manual cancellation) alike.
     """
-    active = _active_execution_price_conflict_cause(repo, strategy_instance_id=strategy_instance_id)
-    cause = (
-        ExecutionPriceConflictCause(orders=(order,))
-        if active is None
-        else active.with_order(order)
-    )
-    refs = ", ".join(item.order_ref for item in cause.orders)
-    return raise_uncertainty(
-        repo,
+    def build(cause: ExecutionPriceConflictCause, kind: str) -> TransitionInput:
+        return TransitionInput(
+            strategy_instance_id=strategy_instance_id,
+            transition_kind=kind,
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
+            facts_json=_price_conflict_envelope(cause).to_facts_json(),
+        )
+
+    return repo.widen_execution_price_conflict(
         strategy_instance_id=strategy_instance_id,
-        reason_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
-        headline="A broker order total disagrees on price with its recorded fills",
-        explanation=(
-            f"The broker re-read order {order.order_ref} reporting {order.reported_avg_price} "
-            f"average on the same filled quantity the Clerk holds at {order.recorded_avg_price} "
-            "average. The recorded fills, positions and FIFO P&L inputs are unchanged; the "
-            f"disagreement is held open as economic evidence for order(s) {refs}."
-        ),
-        operator_impact=(
-            "New entries for this bot are refused and its economic coverage reads incomplete. "
-            "Reducing or exiting the position stays allowed."
-        ),
-        next_step=(
-            "Check the broker's execution corrections for the named orders. The conflict clears "
-            "when a later broker total agrees with the recorded fills within tolerance again."
-        ),
-        evidence_refs=tuple(item.order_ref for item in cause.orders),
-        cause_facts=cause.to_mapping(),
-        severity="error",
+        order=order,
+        build_raise=lambda cause: build(cause, "UNCERTAINTY_RAISED"),
+        build_refresh=lambda cause: build(cause, "UNCERTAINTY_REFRESHED"),
     )
 
 
-def resolve_execution_price_conflict_if_agreed(
+def clear_execution_price_conflict_order(
     repo: ClerkSqliteRepository,
     *,
     strategy_instance_id: str,
     order_ref: str,
-) -> bool:
+) -> str:
     """Drop ``order_ref`` from the open price conflict; end it if that was the last (#2460).
 
-    Called when a broker total for ``order_ref`` agrees with the recorded
-    effective fills within tolerance -- whether because the broker re-stated
-    the original price or because an identified execution correction changed
-    the recorded fills to match. ``False`` when no open episode names the
-    order.
+    Called when the broker's last reported average for ``order_ref`` and the
+    recorded effective fills' average agree within tolerance again -- whether
+    a later total restated the original price, or an identified execution
+    correction changed the recorded fills to match (the reconciliation
+    sweep's re-derivation,
+    :func:`order_evidence.reconcile_execution_price_conflicts`, finds the
+    latter from recorded evidence alone, because a terminal order's totals
+    are never re-folded). ``"absent"`` when no open episode names the order.
+    Atomic like the raise.
     """
-    active = _active_execution_price_conflict_cause(repo, strategy_instance_id=strategy_instance_id)
-    if active is None or not active.names(order_ref):
-        return False
-    remaining = active.without_order(order_ref)
-    if remaining.orders:
-        refs = ", ".join(item.order_ref for item in remaining.orders)
-        raise_uncertainty(
-            repo,
+    def build(cause: ExecutionPriceConflictCause) -> TransitionInput:
+        return TransitionInput(
             strategy_instance_id=strategy_instance_id,
-            reason_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
-            headline="A broker order total disagrees on price with its recorded fills",
-            explanation=(
-                f"Order {order_ref}'s latest broker total agrees with its recorded fills again; "
-                f"order(s) {refs} still disagree and stay fenced."
-            ),
-            operator_impact=(
-                "New entries for this bot are refused and its economic coverage reads incomplete. "
-                "Reducing or exiting the position stays allowed."
-            ),
-            next_step=(
-                "Check the broker's execution corrections for the named orders. The conflict "
-                "clears when a later broker total agrees with the recorded fills within "
-                "tolerance again."
-            ),
-            evidence_refs=tuple(item.order_ref for item in remaining.orders),
-            cause_facts=remaining.to_mapping(),
-            severity="error",
+            transition_kind="UNCERTAINTY_REFRESHED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
+            facts_json=_price_conflict_envelope(cause).to_facts_json(),
         )
-        return True
 
-    def build_transition(uncertainty_id: str) -> TransitionInput:
+    def build_resolved(uncertainty_id: str) -> TransitionInput:
         facts = UncertaintyResolvedFacts(
             uncertainty_id=uncertainty_id,
             resolution_kind="CAUSE_CLEARED",
@@ -701,11 +694,11 @@ def resolve_execution_price_conflict_if_agreed(
             facts_json=facts.to_facts_json(),
         )
 
-    return repo.resolve_uncertainty_if_active(
-        scope="CUSTODY_SUBJECT",
-        reason_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    return repo.clear_execution_price_conflict_order(
         strategy_instance_id=strategy_instance_id,
-        build_transition=build_transition,
+        order_ref=order_ref,
+        build_transition=build,
+        build_resolved=build_resolved,
     )
 
 

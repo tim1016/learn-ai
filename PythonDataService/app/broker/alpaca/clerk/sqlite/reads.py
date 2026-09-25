@@ -31,6 +31,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    ExecutionPriceConflictCause,
+)
 
 _COMMAND_COLUMNS: tuple[str, ...] = (
     "command_id",
@@ -1318,6 +1322,37 @@ def active_uncertainty(
         (scope, reason_code, strategy_instance_id),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def active_execution_price_conflicts(
+    conn: sqlite3.Connection,
+) -> tuple[tuple[str, str, ExecutionPriceConflictCause], ...]:
+    """Every active ``EXECUTION_PRICE_CONFLICT`` episode as ``(uncertainty_id,
+    strategy_instance_id, cause)`` (#2460).
+
+    The sweep re-derivation's worklist: it walks recorded evidence only, so
+    an episode whose order stopped being re-read (a terminal order's totals
+    are never re-folded) still gets its correction-explained exit. Rows whose
+    cause cannot be decoded are skipped -- an unreadable cause is not a
+    reason to wedge every other episode's re-derivation.
+    """
+    rows = conn.execute(
+        "SELECT uncertainty_id, strategy_instance_id, facts_json FROM uncertainties "
+        "WHERE reason_code = ? AND resolved_at_ms IS NULL "
+        "ORDER BY observed_at_ms ASC, uncertainty_id ASC",
+        (EXECUTION_PRICE_CONFLICT_REASON_CODE,),
+    ).fetchall()
+    episodes: list[tuple[str, str, ExecutionPriceConflictCause]] = []
+    for row in rows:
+        try:
+            raised = json.loads(row["facts_json"])
+            cause = ExecutionPriceConflictCause.from_mapping(raised.get("cause_facts"))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if row["strategy_instance_id"] is None:
+            continue
+        episodes.append((row["uncertainty_id"], row["strategy_instance_id"], cause))
+    return tuple(episodes)
 
 
 def uncertainty_history(

@@ -45,10 +45,10 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    clear_execution_price_conflict_order,
     failed_enter_fill_is_answered,
     raise_execution_price_conflict_uncertainty,
     raise_failed_enter_filled_uncertainty,
-    resolve_execution_price_conflict_if_agreed,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_PRICE_CONFLICT_REASON_CODE,
@@ -111,6 +111,7 @@ __all__ = [
     "fold_submit_absence_void",
     "fold_uncertain",
     "order_never_reached_broker",
+    "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
@@ -307,7 +308,7 @@ def _fold_execution_price_conflict(
     order: BrokerOrder,
     order_ref: str,
 ) -> None:
-    """Record, narrow or clear the price conflict between a total and its fills (#2460).
+    """Record or clear the price conflict between a total and its fills (#2460).
 
     A cumulative total whose quantity matches the recorded effective fills but
     whose average price disagrees beyond vendor rounding is contradictory
@@ -323,21 +324,27 @@ def _fold_execution_price_conflict(
     price verdict is possible (the fill-shortfall and position-drift
     machinery owns that gap), and a partial fill's cumulative average is not
     comparable with a subset of its fills. Re-folding the same conflicting
-    total is idempotent -- ``raise_uncertainty`` answers ``"unchanged"`` and
-    appends nothing. A total that agrees again within tolerance removes the
-    order from the open episode and ends it when the last order goes -- which
-    is also how an identified execution correction clears the conflict: the
-    correction changes the recorded fills, the next total the sweep folds
-    agrees, and the order drops out.
+    total is idempotent (``"unchanged"``, nothing appended); a materially
+    different conflicting price refreshes the one episode in place. A total
+    that agrees again within tolerance drops the order from the episode and
+    ends it when the last order goes. An execution correction clears it the
+    same way once the corrected fills agree with the broker's reported
+    average -- that exit is the sweep's re-derivation,
+    :func:`reconcile_execution_price_conflicts`, because a terminal order's
+    totals are never re-folded.
 
-    Caller must hold the Clerk's intake lock (the raise and the clear are
-    read-merge-writes over the open episode).
+    No intake-lock contract: the raise and the clear are atomic under the
+    repository write lock, so this runs from intake-held folds and from the
+    broker-IO-interleaved resolution paths alike.
     """
     if order.filled_avg_price is None or order.filled_quantity < FILL_QTY_EPSILON:
         return
     recorded_qty, recorded_cost = repo.effective_fill_totals_for_order(order_ref)
     if abs(order.filled_quantity - recorded_qty) >= FILL_QTY_EPSILON:
         return
+    # A sub-epsilon recorded quantity cannot produce a meaningful average
+    # (and would divide by ~0); the quantity guard above already sent every
+    # ordinary case away, so this is only the microscopic-quantity corner.
     if recorded_qty < FILL_QTY_EPSILON:
         return
     recorded_avg_price = recorded_cost / recorded_qty
@@ -366,9 +373,59 @@ def _fold_execution_price_conflict(
                 },
             )
         return
-    resolve_execution_price_conflict_if_agreed(
+    clear_execution_price_conflict_order(
         repo, strategy_instance_id=effect.strategy_instance_id, order_ref=order_ref
     )
+
+
+def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
+    """Re-derive open price conflicts from recorded fills on every pass (#2460).
+
+    A terminal order's totals stop being re-folded -- the reconciliation
+    sweep reads open orders, and the exact-lookup folds end with their
+    effects -- so the clear-on-agreeing-total path alone could strand an
+    episode. This gives the issue's second exit its mechanism: when an
+    identified execution correction changed the recorded fills, the
+    corrected effective average is compared against the broker's last
+    reported average (kept in the cause as evidence), and the order drops
+    out of the episode when they now agree within tolerance. Recorded
+    evidence only, no broker I/O; idempotent through the atomic clear.
+    Returns the number of orders dropped.
+    """
+    dropped = 0
+    for _uncertainty_id, strategy_instance_id, cause in repo.active_execution_price_conflicts():
+        for conflicted in cause.orders:
+            recorded_qty, recorded_cost = repo.effective_fill_totals_for_order(
+                conflicted.order_ref
+            )
+            if recorded_qty < FILL_QTY_EPSILON:
+                continue
+            corrected_avg_price = recorded_cost / recorded_qty
+            if (
+                abs(conflicted.reported_avg_price - corrected_avg_price)
+                >= TOTAL_PRICE_CONFLICT_ATOL
+            ):
+                continue
+            if (
+                clear_execution_price_conflict_order(
+                    repo,
+                    strategy_instance_id=strategy_instance_id,
+                    order_ref=conflicted.order_ref,
+                )
+                != "absent"
+            ):
+                logger.info(
+                    "Execution correction explained a price conflict; dropping the order",
+                    extra={
+                        "action": "execution_price_conflict_correction_cleared",
+                        "order_ref": conflicted.order_ref,
+                        "strategy_instance_id": strategy_instance_id,
+                        "reported_avg_price": conflicted.reported_avg_price,
+                        "corrected_avg_price": corrected_avg_price,
+                    },
+                )
+                dropped += 1
+    return dropped
 
 
 #: The execution-id namespaces the deterministic no-submit worlds mint
