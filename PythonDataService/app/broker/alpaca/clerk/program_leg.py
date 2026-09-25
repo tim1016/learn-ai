@@ -484,9 +484,10 @@ EXTENDED_HOURS_ALLOWANCE_UNSET = LegRefusal(
     # a regular-hours run refuse with this too (owner decision 2026-09-25,
     # #2440): the exit allowance is what prices that run's after-close exit.
     next_step=(
-        "Set the exit allowance (xh_exit_bps), with the entry allowance beside it, in the "
-        "broker profile and apply it; on a live account, re-arm so the sealed envelope "
-        "carries them."
+        "On the broker configuration page, save a revision of this account's profile with "
+        "both extended-hours offsets (entry and exit, in bps) — a paper revision has its "
+        "own two fields, a live revision carries them in its envelope — then stage, apply "
+        "and restart; on a live account, re-arm so the sealed envelope carries them."
     ),
 )
 

@@ -93,24 +93,27 @@ def test_a_registered_migration_advances_the_version_and_preserves_rows(
 ) -> None:
     """The upgrade machinery, exercised with a registered additive step.
 
-    The shipped registry is empty because v1 is the initial schema, so the
-    first *real* upgrade must be a table entry rather than a mechanism designed
-    under pressure. This proves the mechanism now.
+    A probe one version past whatever ships, so the next real upgrade stays a
+    table entry rather than a mechanism designed under pressure — and so this
+    test keeps exercising the machinery rather than an already-current open
+    when a real step is added (#2440's v2 -> v3 is exercised against a real v2
+    database in ``test_paper_extended_hours_allowances.py``).
     """
     first = _service_on(clerk_dir, clock)
     created = paper_profile(first)
     first.close()
 
-    monkeypatch.setattr(schema, "SCHEMA_VERSION", 3)
+    probe_version = schema.SCHEMA_VERSION + 1
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", probe_version)
     monkeypatch.setattr(
         schema,
         "SCHEMA_MIGRATIONS",
-        {2: ("ALTER TABLE broker_profiles ADD COLUMN migration_probe TEXT",)},
+        {probe_version - 1: ("ALTER TABLE broker_profiles ADD COLUMN migration_probe TEXT",)},
     )
 
     upgraded = ProfilesStore.open(clerk_dir=clerk_dir)
     try:
-        assert upgraded.schema_version == 3
+        assert upgraded.schema_version == probe_version
         assert upgraded.read_profile(created.profile.profile_id) is not None
     finally:
         upgraded.close()
@@ -118,7 +121,7 @@ def test_a_registered_migration_advances_the_version_and_preserves_rows(
     # Replaying the same open is a no-op, not a second ALTER.
     replayed = ProfilesStore.open(clerk_dir=clerk_dir)
     try:
-        assert replayed.schema_version == 3
+        assert replayed.schema_version == probe_version
         assert replayed.read_profile(created.profile.profile_id) is not None
     finally:
         replayed.close()
@@ -131,12 +134,13 @@ def test_a_partially_failing_migration_leaves_the_version_untouched(
     created = paper_profile(first)
     first.close()
 
-    monkeypatch.setattr(schema, "SCHEMA_VERSION", 3)
+    probe_version = schema.SCHEMA_VERSION + 1
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", probe_version)
     monkeypatch.setattr(
         schema,
         "SCHEMA_MIGRATIONS",
         {
-            2: (
+            probe_version - 1: (
                 "ALTER TABLE broker_profiles ADD COLUMN migration_probe TEXT",
                 "ALTER TABLE table_that_does_not_exist ADD COLUMN nope TEXT",
             )

@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from app.broker_configuration.envelope import ValidatedLiveEnvelope
+from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 
 EndpointMode = Literal["paper", "live"]
 ApplyOutcome = Literal["applied", "refused"]
@@ -79,6 +79,11 @@ class ProfileRevision:
     observed account exactly once and is never rewritten. They are deliberately
     *outside* ``content_sha256`` — the hash covers the configured content, so
     pinning cannot change the identity a stale-edit check compares against.
+
+    ``paper_xh_allowances`` is a paper revision's own extended-hours pair
+    (#2440), set only when ``live_envelope`` is ``None``; a live revision
+    carries its pair inside ``live_envelope`` and leaves this ``None``. So at
+    most one of the two ever names a revision's allowances.
     """
 
     profile_id: str
@@ -89,6 +94,7 @@ class ProfileRevision:
     account_pin: str | None
     account_pinned_at_ms: int | None
     live_envelope: ValidatedLiveEnvelope | None
+    paper_xh_allowances: ValidatedPaperAllowances | None
     content_sha256: str
     complete: bool
     author_owner_id: str

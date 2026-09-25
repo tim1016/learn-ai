@@ -11,14 +11,15 @@ four live-envelope floats as ``REAL`` and the two session counts as
 ``INTEGER``; ``NUMERIC`` is banned here because ``decimal.Decimal`` cannot
 reach ``LiveEnvelopeValues.sha`` (ADR 0060 Decision 6). The load path converts
 explicitly through ``ValidatedLiveEnvelope`` rather than trusting type
-affinity.
+affinity. A paper revision's own two allowances (``paper_xh_*``, #2440) are
+``REAL`` for the same reason and load through ``ValidatedPaperAllowances``.
 """
 
 from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -27,7 +28,64 @@ PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA busy_timeout = 5000",
 )
 
-SCHEMA_DDL = """\
+# A paper revision's own extended-hours allowances (#2440, owner decision
+# 2026-09-25): both or neither, only on a paper revision, and never beside the
+# envelope's own pair — so exactly one document prices a revision's
+# extended-hours legs. A live revision keeps its allowances in
+# ``live_xh_*`` inside the six-way envelope, sealed at arming; these two are
+# not a second home for them.
+#
+# Why new columns rather than reusing ``live_xh_*`` on paper: that needs the
+# six-way envelope CHECK relaxed, and SQLite changes a CHECK only by rebuilding
+# the table. ``installation_selection`` holds foreign keys into this one, and
+# with ``PRAGMA foreign_keys = ON`` a parent-table rebuild inside the
+# upgrade's transaction fails at COMMIT (the pragma cannot be switched off
+# inside a transaction). Two additive columns need no rebuild.
+#
+# Stated once and used by both the fresh DDL and the v2 -> v3 upgrade, so an
+# upgraded database and a fresh one carry the same columns, the same CHECK and
+# the same guard. Appended after ``created_at_ms`` in the fresh DDL too,
+# because that is where ``ALTER TABLE ... ADD COLUMN`` puts them.
+_PAPER_XH_ENTRY_COLUMN = "paper_xh_entry_bps      REAL"
+_PAPER_XH_EXIT_COLUMN = (
+    "paper_xh_exit_bps       REAL CHECK (\n"
+    "        (paper_xh_entry_bps IS NULL) = (paper_xh_exit_bps IS NULL)\n"
+    "        AND (paper_xh_entry_bps IS NULL\n"
+    "             OR (endpoint_mode = 'paper'\n"
+    "                 AND live_xh_entry_bps IS NULL AND live_xh_exit_bps IS NULL))\n"
+    "    )"
+)
+
+# The pin is the one write a revision admits, and only from unbound. Every
+# other column, and every delete, is refused. ``IS NOT`` rather than ``<>`` so
+# a NULL envelope column compares correctly.
+_REVISION_CONTENT_IMMUTABLE_TRIGGER = """\
+CREATE TRIGGER trg_profile_revisions_content_immutable
+BEFORE UPDATE ON profile_revisions
+FOR EACH ROW WHEN
+    OLD.profile_id IS NOT NEW.profile_id
+    OR OLD.revision IS NOT NEW.revision
+    OR OLD.schema_version IS NOT NEW.schema_version
+    OR OLD.credential_slot IS NOT NEW.credential_slot
+    OR OLD.endpoint_mode IS NOT NEW.endpoint_mode
+    OR OLD.live_loss_fraction IS NOT NEW.live_loss_fraction
+    OR OLD.live_loss_usd IS NOT NEW.live_loss_usd
+    OR OLD.live_shadow_sessions IS NOT NEW.live_shadow_sessions
+    OR OLD.live_arming_max_sessions IS NOT NEW.live_arming_max_sessions
+    OR OLD.live_xh_entry_bps IS NOT NEW.live_xh_entry_bps
+    OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
+    OR OLD.paper_xh_entry_bps IS NOT NEW.paper_xh_entry_bps
+    OR OLD.paper_xh_exit_bps IS NOT NEW.paper_xh_exit_bps
+    OR OLD.content_sha256 IS NOT NEW.content_sha256
+    OR OLD.complete IS NOT NEW.complete
+    OR OLD.author_owner_id IS NOT NEW.author_owner_id
+    OR OLD.created_at_ms IS NOT NEW.created_at_ms
+    OR OLD.account_pin IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'a profile revision is immutable apart from binding its account pin once');
+END"""
+
+SCHEMA_DDL = f"""\
 -- ============================================================
 -- configuration_meta — guarded singleton carrying the schema version
 -- ============================================================
@@ -96,6 +154,9 @@ CREATE TABLE profile_revisions (
     complete                INTEGER NOT NULL CHECK (complete IN (0, 1)),
     author_owner_id         TEXT NOT NULL REFERENCES local_owner(owner_id),
     created_at_ms           INTEGER NOT NULL,
+    -- A paper revision's own two allowances; see ``_PAPER_XH_EXIT_COLUMN``.
+    {_PAPER_XH_ENTRY_COLUMN},
+    {_PAPER_XH_EXIT_COLUMN},
     PRIMARY KEY (profile_id, revision),
     -- A live revision carries the whole envelope or none of it; a paper
     -- revision may carry none. Six-way all-or-nothing, in the schema.
@@ -180,31 +241,8 @@ CREATE UNIQUE INDEX ux_configuration_events_sequence ON configuration_events(seq
 -- none of them is left to a caller to remember.
 -- ============================================================
 
--- The pin is the one write a revision admits, and only from unbound. Every
--- other column, and every delete, is refused. ``IS NOT`` rather than ``<>`` so
--- a NULL envelope column compares correctly.
-CREATE TRIGGER trg_profile_revisions_content_immutable
-BEFORE UPDATE ON profile_revisions
-FOR EACH ROW WHEN
-    OLD.profile_id IS NOT NEW.profile_id
-    OR OLD.revision IS NOT NEW.revision
-    OR OLD.schema_version IS NOT NEW.schema_version
-    OR OLD.credential_slot IS NOT NEW.credential_slot
-    OR OLD.endpoint_mode IS NOT NEW.endpoint_mode
-    OR OLD.live_loss_fraction IS NOT NEW.live_loss_fraction
-    OR OLD.live_loss_usd IS NOT NEW.live_loss_usd
-    OR OLD.live_shadow_sessions IS NOT NEW.live_shadow_sessions
-    OR OLD.live_arming_max_sessions IS NOT NEW.live_arming_max_sessions
-    OR OLD.live_xh_entry_bps IS NOT NEW.live_xh_entry_bps
-    OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
-    OR OLD.content_sha256 IS NOT NEW.content_sha256
-    OR OLD.complete IS NOT NEW.complete
-    OR OLD.author_owner_id IS NOT NEW.author_owner_id
-    OR OLD.created_at_ms IS NOT NEW.created_at_ms
-    OR OLD.account_pin IS NOT NULL
-BEGIN
-    SELECT RAISE(ABORT, 'a profile revision is immutable apart from binding its account pin once');
-END;
+-- The revision-content guard: see ``_REVISION_CONTENT_IMMUTABLE_TRIGGER``.
+{_REVISION_CONTENT_IMMUTABLE_TRIGGER};
 
 CREATE TRIGGER trg_profile_revisions_no_delete
 BEFORE DELETE ON profile_revisions
@@ -232,11 +270,14 @@ BEGIN
 END;
 """
 
-# Additive-only upgrades keyed by the ``schema_version`` they start from. v1 is
-# the initial schema, so the registry is empty by construction; the machinery
-# ships with it (and is exercised by
-# ``tests/broker_configuration/test_schema_migration.py``) so the first real
-# upgrade is a table entry rather than a new mechanism designed under pressure.
+# Additive upgrades keyed by the ``schema_version`` they start from, each run
+# in one transaction (``migrate_schema``). Additive means new columns only —
+# never a rebuilt table, which the foreign keys forbid inside that transaction
+# (see ``_PAPER_XH_EXIT_COLUMN``). A guard that must cover a new column is
+# dropped and recreated in the same step, so no reader ever sees the column
+# unguarded. Exercised by ``tests/broker_configuration/test_schema_migration.py``
+# and, for v2 -> v3, against a real v2 database by
+# ``tests/broker_configuration/test_paper_extended_hours_allowances.py``.
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
         # v1 -> v2 (fleet delivery A2): the D9 binding generation column.
@@ -247,6 +288,15 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
             "effective_binding_generation INTEGER NOT NULL DEFAULT 0 "
             "CHECK (effective_binding_generation >= 0)"
         ),
+    ),
+    2: (
+        # v2 -> v3 (#2440): a paper revision's own extended-hours allowances.
+        # Existing rows keep NULL in both, so every stored revision loads — and
+        # hashes — exactly as it did.
+        f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_ENTRY_COLUMN}",
+        f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_EXIT_COLUMN}",
+        "DROP TRIGGER trg_profile_revisions_content_immutable",
+        _REVISION_CONTENT_IMMUTABLE_TRIGGER,
     ),
 }
 

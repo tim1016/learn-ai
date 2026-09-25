@@ -8,12 +8,14 @@ operator's ledger is sealed over that exact encoding.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.config import AlpacaSettings
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.alpaca.profile.credentials import AlpacaCredentialEnvironment
 from app.broker.alpaca.profile.errors import (
     CredentialSlotUnavailable,
@@ -23,9 +25,11 @@ from app.broker.alpaca.profile.errors import (
 from app.broker.alpaca.profile.runtime_context import (
     _INTEGER_ENVELOPE_FIELDS,
     LIVE_ENVELOPE_FIELDS,
+    PAPER_ALLOWANCE_SETTINGS_FIELDS,
     is_exactly_int,
     resolve_runtime_context,
 )
+from app.broker_configuration.envelope import ALLOWANCE_FIELDS
 from tests.broker.alpaca.profile.conftest import (
     COMPLETE_ENVELOPE,
     DEFAULT_SLOT_KEY,
@@ -296,6 +300,88 @@ def test_a_stale_live_value_in_the_environment_cannot_reach_a_paper_revision(
     assert context.settings.live_loss_usd is None
     assert context.settings.live_shadow_sessions is None
     assert context.live_envelope is None
+
+
+_PAPER_PAIR = {"xh_entry_bps": 12.5, "xh_exit_bps": 7.25}
+
+
+def test_a_paper_revisions_own_allowances_bind_the_two_settings_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    """#2440: the pair reaches pricing as the binding's settings, never as an envelope."""
+    # A stale environment value still cannot reach the resolved revision.
+    monkeypatch.setenv("ALPACA_LIVE_LOSS_USD", "999999")
+
+    context = resolve_runtime_context(
+        endpoint_mode="paper",
+        credential_slot="default",
+        paper_xh_allowances={"xh_entry_bps": 12.5, "xh_exit_bps": 7},
+        environment=only_default_slot_injected,
+    )
+
+    assert context.live_envelope is None
+    assert context.settings.is_paper
+    assert context.settings.live_xh_entry_bps == 12.5
+    assert type(context.settings.live_xh_exit_bps) is float
+    assert context.settings.live_xh_exit_bps == 7.0
+    for absent in ("live_loss_fraction", "live_loss_usd", "live_shadow_sessions", "live_arming_max_sessions"):
+        assert getattr(context.settings, absent) is None, absent
+    assert ExtendedHoursAllowances.from_settings(context.settings) == ExtendedHoursAllowances(
+        entry_bps=Decimal("12.5"), exit_bps=Decimal("7.0")
+    )
+
+
+@pytest.mark.parametrize(
+    ("endpoint_mode", "credential_slot", "live_envelope"),
+    [
+        ("live", "default", COMPLETE_ENVELOPE),
+        ("paper", "default", COMPLETE_ENVELOPE),
+    ],
+    ids=["beside-a-live-envelope", "beside-a-paper-envelope"],
+)
+def test_a_paper_pair_beside_an_envelope_is_refused(
+    endpoint_mode: str,
+    credential_slot: str,
+    live_envelope: dict[str, object],
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    with pytest.raises(RevisionIncomplete, match="two places"):
+        resolve_runtime_context(
+            endpoint_mode=endpoint_mode,  # type: ignore[arg-type]
+            credential_slot=credential_slot,
+            live_envelope=live_envelope,
+            paper_xh_allowances=_PAPER_PAIR,
+            environment=only_default_slot_injected,
+        )
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"xh_entry_bps": True, "xh_exit_bps": 7.25},
+        {"xh_entry_bps": "12.5", "xh_exit_bps": 7.25},
+        {"xh_exit_bps": 7.25},
+        {**_PAPER_PAIR, "loss_usd": 500.0},
+    ],
+    ids=["bool", "str", "one-sided", "a-live-only-value"],
+)
+def test_a_stored_paper_pair_of_the_wrong_shape_is_refused(
+    stored: dict[str, object],
+    only_default_slot_injected: AlpacaCredentialEnvironment,
+) -> None:
+    with pytest.raises(RevisionIncomplete):
+        resolve_runtime_context(
+            endpoint_mode="paper",
+            credential_slot="default",
+            paper_xh_allowances=stored,
+            environment=only_default_slot_injected,
+        )
+
+
+def test_the_paper_pair_is_the_configuration_modules_pair() -> None:
+    """The resolver's selection from the envelope table names the stored pair's keys."""
+    assert tuple(field for field, _ in PAPER_ALLOWANCE_SETTINGS_FIELDS) == ALLOWANCE_FIELDS
 
 
 def test_the_clerk_directory_stays_a_deployment_bootstrap_environment_read(

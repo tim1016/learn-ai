@@ -139,6 +139,20 @@ class InvalidLiveEnvelope(BrokerConfigurationError):
     status_code: ClassVar[int] = 422
 
 
+class InvalidPaperAllowances(BrokerConfigurationError):
+    """A paper revision's extended-hours allowances are out of domain or misplaced.
+
+    Not in the §6 table, for the reason ``live_envelope_invalid`` is not: the
+    paper allowance pair (#2440, owner decision 2026-09-25) states its domain
+    in §2.3 without naming the refusal a violation produces. Distinct from
+    ``live_envelope_invalid`` because a paper revision has no live envelope,
+    and a refusal that names one would send the operator to the wrong fields.
+    """
+
+    reason: ClassVar[str] = "paper_allowances_invalid"
+    status_code: ClassVar[int] = 422
+
+
 __all__ = [
     "AccountModeDisagreement",
     "AccountPinMismatch",
@@ -148,6 +162,7 @@ __all__ = [
     "CredentialSlotUnknown",
     "DisplayNameConflict",
     "InvalidLiveEnvelope",
+    "InvalidPaperAllowances",
     "ProfileArchived",
     "ProfileInUse",
     "ProfileNotFound",
