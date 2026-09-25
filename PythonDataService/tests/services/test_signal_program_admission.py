@@ -46,6 +46,15 @@ _SID = "sealed-ema-1"
 _NOW = 1_787_356_800_000
 
 
+@pytest.fixture(autouse=True)
+def _own_imported_source_digests():
+    """Own the session-global anchor locally: clear it after each test so a
+    test that patches ``_SERVICE_ROOT`` before the first anchor cannot poison
+    every later drift assertion."""
+    yield
+    admission_module._IMPORTED_SOURCE_DIGESTS.clear()
+
+
 def _binding(**updates: object) -> BrokerBotBinding:
     values: dict[str, object] = {
         "strategy_instance_id": _SID,

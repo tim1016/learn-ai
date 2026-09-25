@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -402,11 +403,13 @@ def prove_running_program_build(
     if failed is not None:
         return _unproven(binding.strategy_key, verified_at_ms, explanation=failed.explanation)
     try:
+        record_imported_program_sources()
         running_digest = running_artifact_digest(contract)
         # Hashed here, with the artifact digest, rather than after the receipt
         # lookup where it is used: both read files off disk and both can raise
         # on a source tree missing a declared path, and an admission check that
-        # escapes as an internal error is not failing closed.
+        # escapes as an internal error is not failing closed. The anchor shares
+        # the guard for the same reason: its import can raise on a torn tree.
         running_wiring = running_wiring_digest(contract)
         manifest = ProgramBuildQualificationManifest.model_validate_json(
             manifest_path.read_text(encoding="utf-8")
@@ -421,7 +424,6 @@ def prove_running_program_build(
     # ``git pull`` then restart, so between the two the disk holds bytes this
     # process never imported, and a proof computed from them would name code
     # that is not running. Refuse until the restart makes them one again.
-    record_imported_program_sources()
     drifted = imported_source_drift(contract)
     if drifted is not None:
         return _unproven(
@@ -505,15 +507,27 @@ def prove_running_program_build(
     )
 
 
+def _resolve_artifact(relative: str) -> Path:
+    """The one validated on-disk location for a service-relative source file."""
+    candidate = (_SERVICE_ROOT / relative).resolve()
+    if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
+        raise ValueError(f"invalid Signal Program artifact path: {relative}")
+    return candidate
+
+
+def _digest_entries(
+    paths: tuple[str, ...], digest_for: Callable[[str], str]
+) -> str:
+    """Hash a closed, ordered set of service-relative source files."""
+    entries = [{"path": relative, "sha256": digest_for(relative)} for relative in paths]
+    return semantic_payload_hash(entries)
+
+
 def _digest_paths(paths: tuple[str, ...]) -> str:
     """Hash a closed, ordered set of service-relative source files."""
-    entries: list[dict[str, str]] = []
-    for relative in paths:
-        candidate = (_SERVICE_ROOT / relative).resolve()
-        if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
-            raise ValueError(f"invalid Signal Program artifact path: {relative}")
-        entries.append({"path": relative, "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()})
-    return semantic_payload_hash(entries)
+    return _digest_entries(
+        paths, lambda relative: hashlib.sha256(_resolve_artifact(relative).read_bytes()).hexdigest()
+    )
 
 
 _IMPORT_LOCK = threading.Lock()
@@ -536,9 +550,13 @@ def record_imported_program_sources() -> None:
     computed from disk would name code that is not running -- including
     modules imported lazily (``indicator_state``), which the later pull can
     silently load mid-flight. This forces the import of every module in the
-    registered contracts' file lists and records each file's digest at that
-    moment, so the recorded digests are provably the bytes in memory. Called
-    at service startup; the first proof anchors lazily if it never ran.
+    registered contracts and records each file's digest at that moment, so
+    the recorded digests are the bytes in memory for every module the anchor
+    imports itself (the lazily imported ones) and fail closed on any
+    observable divergence for the rest. Called at service startup; the first
+    proof anchors lazily if it never ran -- which honestly describes the
+    bytes only under the startup caller's assumption that no pull landed
+    between process start and the anchor.
 
     Idempotent: the first recording wins, because only it describes what
     this process imported. Raises on an unreadable or invalid path -- a
@@ -555,20 +573,31 @@ def record_imported_program_sources() -> None:
             for relative in (*contract.artifact_paths, *contract.wiring_artifact_paths):
                 if relative in digests:
                     continue
-                importlib.import_module(_module_name(relative))
-                candidate = (_SERVICE_ROOT / relative).resolve()
-                if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
-                    raise ValueError(f"invalid Signal Program artifact path: {relative}")
-                digests[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+                # Hash first, import second: a pull landing between the two
+                # reads leaves the anchor on the pre-pull bytes while memory
+                # holds the post-pull ones -- which the drift check then
+                # catches and refuses, instead of anchoring the post-pull
+                # bytes for pre-pull memory and never seeing the change.
+                candidate = _resolve_artifact(relative)
+                digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+                module = importlib.import_module(_module_name(relative))
+                # The import resolves through sys.path, the digest through
+                # _SERVICE_ROOT; nothing else reconciles the two. A shadowing
+                # copy on sys.path would otherwise anchor bytes the process
+                # never executed, failing open forever.
+                if Path(module.__file__ or "").resolve() != candidate:
+                    raise ValueError(
+                        f"Signal Program artifact {relative} imported from "
+                        f"{module.__file__}, not {_SERVICE_ROOT}; the proof cannot "
+                        "name code this process is not running"
+                    )
+                digests[relative] = digest
         _IMPORTED_SOURCE_DIGESTS.update(digests)
 
 
 def _imported_digest(paths: tuple[str, ...]) -> str:
     """The digest of ``paths`` as recorded at import time (startup)."""
-    entries = [
-        {"path": relative, "sha256": _IMPORTED_SOURCE_DIGESTS[relative]} for relative in paths
-    ]
-    return semantic_payload_hash(entries)
+    return _digest_entries(paths, _IMPORTED_SOURCE_DIGESTS.__getitem__)
 
 
 def imported_source_drift(contract: SignalProgramContract) -> Literal["artifact", "wiring"] | None:
