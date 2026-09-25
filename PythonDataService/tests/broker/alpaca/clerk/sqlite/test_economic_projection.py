@@ -1440,14 +1440,20 @@ def _episode_cause(repo: ClerkSqliteRepository):
     )
 
 
-def _conflict_order(order_ref: str, *, reported: float, recorded: float = 100.0):
+def _conflict_order(
+    order_ref: str,
+    *,
+    reported: float,
+    recorded: float = 100.0,
+    source_event_at_ms: int = 1_700_000_000_500,
+):
     from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExecutionPriceConflictOrder
 
     return ExecutionPriceConflictOrder(
         order_ref=order_ref,
         reported_avg_price=reported,
         recorded_avg_price=recorded,
-        source_event_at_ms=1_700_000_000_500,
+        source_event_at_ms=source_event_at_ms,
     )
 
 
@@ -1460,31 +1466,33 @@ def test_a_second_conflicting_order_widens_the_one_episode(tmp_path: Path) -> No
         raise_execution_price_conflict_uncertainty,
     )
 
-    repo, _accepted = _repository(tmp_path)
+    repo, accepted = _repository(tmp_path)
     try:
+        effect = repo.effect_operation(accepted.effect_operation_id)
+        assert effect is not None
         assert (
             raise_execution_price_conflict_uncertainty(
-                repo, strategy_instance_id=_SID, order=_conflict_order("a:1", reported=90.0)
+                repo, effect=effect, order=_conflict_order("a:1", reported=90.0)
             )
             == "raised"
         )
         assert (
             raise_execution_price_conflict_uncertainty(
-                repo, strategy_instance_id=_SID, order=_conflict_order("a:2", reported=80.0)
+                repo, effect=effect, order=_conflict_order("a:2", reported=80.0)
             )
             == "refreshed"  # widened: one episode, now naming two orders
         )
         # Re-raising what the episode already names at the same price: no-op.
         assert (
             raise_execution_price_conflict_uncertainty(
-                repo, strategy_instance_id=_SID, order=_conflict_order("a:1", reported=90.0)
+                repo, effect=effect, order=_conflict_order("a:1", reported=90.0)
             )
             == "unchanged"
         )
         # A materially different price on a named order refreshes in place.
         assert (
             raise_execution_price_conflict_uncertainty(
-                repo, strategy_instance_id=_SID, order=_conflict_order("a:1", reported=70.0)
+                repo, effect=effect, order=_conflict_order("a:1", reported=70.0)
             )
             == "refreshed"
         )
@@ -1498,17 +1506,17 @@ def test_a_second_conflicting_order_widens_the_one_episode(tmp_path: Path) -> No
 
         # One order agreeing again narrows; the other stays fenced open.
         assert (
-            clear_execution_price_conflict_order(repo, strategy_instance_id=_SID, order_ref="a:2")
+            clear_execution_price_conflict_order(repo, effect=effect, order_ref="a:2")
             == "narrowed"
         )
         assert [item.order_ref for item in _episode_cause(repo).orders] == ["a:1"]
         # Clearing an order no open episode names is an honest no-op.
         assert (
-            clear_execution_price_conflict_order(repo, strategy_instance_id=_SID, order_ref="a:2")
+            clear_execution_price_conflict_order(repo, effect=effect, order_ref="a:2")
             == "absent"
         )
         assert (
-            clear_execution_price_conflict_order(repo, strategy_instance_id=_SID, order_ref="a:1")
+            clear_execution_price_conflict_order(repo, effect=effect, order_ref="a:1")
             == "resolved"
         )
         assert _recorded_price_conflict_episode(repo) is None
@@ -1569,5 +1577,190 @@ async def test_a_correction_that_explains_the_difference_clears_the_conflict(
             reader.close()
         assert snapshot is not None
         assert snapshot.execution_coverage == "complete"
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_an_older_agreeing_total_does_not_clear_a_newer_conflict(tmp_path: Path) -> None:
+    """#2460 review: broker observations are audit-appended even when their
+    source time is older than the governing evidence, so a delayed total must
+    not change a price conflict raised by newer evidence -- an older agreeing
+    total must not clear it, and only a total at least as new may."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=10.0, price=100.0, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
+        _fold_total(repo, accepted, quantity=10.0, price=90.0, updated_at_ms=now + 2)
+        assert _recorded_price_conflict_episode(repo) is not None
+
+        # A delayed agreeing total whose source time predates the conflicting
+        # one: folded for its acknowledgement, but it changes no conflict.
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now + 1)
+        episode = _recorded_price_conflict_episode(repo)
+        assert episode is not None, (
+            "an older agreeing total cleared a conflict raised by newer evidence"
+        )
+        assert _episode_cause(repo).orders[0].reported_avg_price == pytest.approx(
+            90.0, abs=_ATOL, rel=_RTOL
+        )
+
+        # The same agreeing total at least as new as the stored evidence clears.
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now + 2)
+        assert _recorded_price_conflict_episode(repo) is None
+    finally:
+        repo.close()
+
+
+def _manual_fold_total(
+    repo: ClerkSqliteRepository,
+    manual: ManualOrderSubmission,
+    *,
+    quantity: float,
+    price: float,
+    updated_at_ms: int,
+) -> None:
+    """Fold one REST/reconciliation aggregate for a manual ticket leg."""
+    order = _broker_order_fixture(
+        manual.leg.order_ref or "",
+        order_id="broker-order-manual",
+        symbol="MSFT",
+        status="filled",
+        quantity=2,
+        filled_quantity=quantity,
+        filled_avg_price=price,
+    ).model_copy(update={"updated_at_ms": updated_at_ms})
+    fold_order_evidence(
+        repo, effect_operation_id=manual.leg.effect_operation_id, order=order
+    )
+
+
+def _active_price_conflict_rows(repo: ClerkSqliteRepository) -> list[tuple[str, str | None]]:
+    """Every active price-conflict episode as ``(scope, subject_id)``."""
+    return [
+        (row["scope"], row["subject_id"])
+        for row in repo._conn.execute(
+            "SELECT scope, subject_id FROM uncertainties "
+            "WHERE reason_code = ? AND resolved_at_ms IS NULL",
+            (EXECUTION_PRICE_CONFLICT_REASON_CODE,),
+        ).fetchall()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_manual_order_price_conflict_is_scoped_to_its_custody_subject(
+    tmp_path: Path,
+) -> None:
+    """#2460 review: a manual-order effect has no strategy instance, so the
+    conflict must bind to the effect's durable custody subject -- never to an
+    account-wide episode that a repeated observation cannot widen and an
+    agreeing one can never clear."""
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+
+    repo, _accepted = _repository(tmp_path)
+    manual = _accept_manual(repo)
+    try:
+        now = repo.clock()
+        _append_manual_slice(
+            repo,
+            manual,
+            execution_id="manual-fill-original",
+            side="BUY",
+            quantity=2.0,
+            price=100.0,
+            occurred_at_ms=now,
+        )
+        _manual_fold_total(repo, manual, quantity=2.0, price=90.0, updated_at_ms=now + 1)
+
+        subject_id = manual_operator_subject_id(_OPERATOR_ID)
+        assert _active_price_conflict_rows(repo) == [("CUSTODY_SUBJECT", subject_id)], (
+            "a manual order's price conflict must be scoped to its custody subject, "
+            "not folded account-wide"
+        )
+        # A repeated conflicting observation widens nothing and never crashes
+        # against the one-active-cause index.
+        _manual_fold_total(repo, manual, quantity=2.0, price=90.0, updated_at_ms=now + 2)
+        assert _active_price_conflict_count(repo) == 1
+
+        # A later agreeing total finds and resolves the subject's episode.
+        _manual_fold_total(repo, manual, quantity=2.0, price=100.0, updated_at_ms=now + 3)
+        assert _active_price_conflict_rows(repo) == []
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refreshed_price_conflict_survives_a_sweep_holding_the_old_identity(
+    tmp_path: Path,
+) -> None:
+    """#2460 review: the sweep re-derives from the cause it read; if a
+    concurrent fold refreshes the episode in between, the clear must refuse
+    (compare-and-clear) instead of resolving the refreshed conflict by
+    subject/order alone."""
+    from app.broker.alpaca.clerk.sqlite.uncertainty import (
+        clear_execution_price_conflict_order,
+        raise_execution_price_conflict_uncertainty,
+    )
+
+    repo, accepted = _repository(tmp_path)
+    try:
+        effect = repo.effect_operation(accepted.effect_operation_id)
+        assert effect is not None
+        assert (
+            raise_execution_price_conflict_uncertainty(
+                repo,
+                effect=effect,
+                order=_conflict_order(
+                    accepted.order_ref or "", reported=90.0, source_event_at_ms=1_700_000_000_500
+                ),
+            )
+            == "raised"
+        )
+        stale_episodes = repo.active_execution_price_conflicts()
+        assert len(stale_episodes) == 1
+        stale_uncertainty_id, _stale_subject, stale_cause = stale_episodes[0]
+
+        # A concurrent fold refreshes the same order's reported average.
+        assert (
+            raise_execution_price_conflict_uncertainty(
+                repo,
+                effect=effect,
+                order=_conflict_order(
+                    accepted.order_ref or "", reported=80.0, source_event_at_ms=1_700_000_000_600
+                ),
+            )
+            == "refreshed"
+        )
+
+        # The sweep's clear holding the pre-refresh identity is a no-op.
+        assert (
+            clear_execution_price_conflict_order(
+                repo,
+                effect=effect,
+                order_ref=accepted.order_ref or "",
+                expected_episode=(stale_uncertainty_id, stale_cause),
+            )
+            == "stale"
+        )
+        assert _recorded_price_conflict_episode(repo) is not None
+
+        # The same clear holding the refreshed identity resolves the episode.
+        current = repo.active_execution_price_conflicts()
+        assert len(current) == 1
+        current_uncertainty_id, _current_subject, current_cause = current[0]
+        assert (
+            clear_execution_price_conflict_order(
+                repo,
+                effect=effect,
+                order_ref=accepted.order_ref or "",
+                expected_episode=(current_uncertainty_id, current_cause),
+            )
+            == "resolved"
+        )
+        assert _recorded_price_conflict_episode(repo) is None
     finally:
         repo.close()

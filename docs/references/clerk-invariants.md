@@ -115,15 +115,39 @@ difference real or representational?" about broker-reported fills.
 
 The recorded fills, positions and FIFO P&L inputs are never rewritten; the
 episode keeps the broker's reported average, the recorded average and the
-total's source time as evidence, and reports the owning bot's economic
-coverage `incomplete`. Unlike `EXECUTION_COVERAGE_CONFLICT` it never forbids
-reductions or exits — the quantity is the one thing both sides agree on.
+total's source time as evidence, and reports the owning custody subject's
+economic coverage `incomplete`. Unlike `EXECUTION_COVERAGE_CONFLICT` it never
+forbids reductions or exits — the quantity is the one thing both sides agree
+on.
+
 Only a quantity-matching total can raise it (while quantities differ no
 price verdict is possible), re-folding the same conflicting total is
 idempotent, and it clears when a later total agrees within tolerance again
 — which is also how an identified execution correction clears it: the
 correction changes the recorded fills, the next total the sweep folds
 agrees, and the order drops out of the episode.
+
+Three scoping rules keep that verdict honest across every observation route:
+
+- **Both aggregate routes fold it.** The REST/reconciliation snapshot path
+  (`fold_order_evidence`) and the `trade_updates` path (after its exact
+  execution slice and acknowledgement) run the same price-conflict fold, so
+  a snapshot-opened conflict cannot keep a stale reported average once a
+  later websocket fill's aggregate agrees.
+- **Evidence is ordered by source time.** A total whose `updated_at_ms` is
+  older than the stored evidence for the same order changes nothing — it can
+  neither restate an older conflicting price nor clear a newer conflict. A
+  total with no source time changes nothing either; the rule cannot order it.
+- **The episode is keyed by custody subject.** The raise, refresh, and clear
+  bind to the observing effect's durable subject (bot or manual operator),
+  never to `strategy_instance_id` alone, so manual-order conflicts scope to
+  their operator exactly as bot conflicts scope to their instance.
+
+The sweep's re-derivation (`reconcile_execution_price_conflicts`) is
+compare-and-clear: it passes the `(uncertainty_id, cause)` it derived from
+into the locked clear, which refuses when a concurrent fold refreshed the
+episode in between; the next pass re-derives against the refreshed
+evidence.
 
 ### Validation
 
@@ -138,6 +162,17 @@ agrees, and the order drops out of the episode.
   `test_a_vendor_rounding_sized_difference_raises_no_conflict`, and
   `test_the_price_conflict_never_blocks_a_reduction` pin the remaining
   invariants.
+- `test_an_older_agreeing_total_does_not_clear_a_newer_conflict`,
+  `test_a_manual_order_price_conflict_is_scoped_to_its_custody_subject`, and
+  `test_a_refreshed_price_conflict_survives_a_sweep_holding_the_old_identity`
+  pin the review-round scoping rules above.
+
+`PythonDataService/tests/broker/alpaca/clerk/test_trade_evidence.py`:
+
+- `test_a_websocket_aggregate_clears_a_price_conflict_opened_by_a_snapshot`
+  pins that the websocket aggregate route folds the price conflict: a
+  snapshot-opened conflict clears when a later frame's exact slice advances
+  the fills and its aggregate agrees.
 
 `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_enter.py`:
 

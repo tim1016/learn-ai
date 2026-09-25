@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyResolvedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
@@ -608,17 +608,23 @@ def _price_conflict_envelope(cause: ExecutionPriceConflictCause) -> UncertaintyR
 def raise_execution_price_conflict_uncertainty(
     repo: ClerkSqliteRepository,
     *,
-    strategy_instance_id: str,
+    effect: EffectOperationResource,
     order: ExecutionPriceConflictOrder,
 ) -> str:
     """Record one order whose broker total restated the price of its fills (#2460).
 
     The recorded exact fills are never rewritten; the episode keeps the
     broker's reported average price and the recorded average for the same
-    quantity as durable evidence, reports the bot's economic coverage
+    quantity as durable evidence, reports the owner's economic coverage
     incomplete, and never fences reductions. A second conflicted order on the
-    same instance widens the open episode, and re-folding the same conflicting
-    total is a no-op (``"unchanged"``) -- one conflict, not one per re-read.
+    same custody subject widens the open episode, and re-folding the same
+    conflicting total is a no-op (``"unchanged"``) -- one conflict, not one
+    per re-read.
+
+    The episode binds to ``effect``'s durable custody subject, which the
+    raise/refresh transitions also carry, so bot and manual-order work
+    (whose effects have no strategy instance) scope identically (#2460
+    review).
 
     The cause-accumulating merge is atomic under the repository write lock
     (:meth:`ClerkSqliteRepository.widen_execution_price_conflict`), so callers
@@ -629,7 +635,10 @@ def raise_execution_price_conflict_uncertainty(
     """
     def build(cause: ExecutionPriceConflictCause, kind: str) -> TransitionInput:
         return TransitionInput(
-            strategy_instance_id=strategy_instance_id,
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
             transition_kind=kind,
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
@@ -640,7 +649,7 @@ def raise_execution_price_conflict_uncertainty(
         )
 
     return repo.widen_execution_price_conflict(
-        strategy_instance_id=strategy_instance_id,
+        effect_operation_id=effect.effect_operation_id,
         order=order,
         build_raise=lambda cause: build(cause, "UNCERTAINTY_RAISED"),
         build_refresh=lambda cause: build(cause, "UNCERTAINTY_REFRESHED"),
@@ -650,24 +659,31 @@ def raise_execution_price_conflict_uncertainty(
 def clear_execution_price_conflict_order(
     repo: ClerkSqliteRepository,
     *,
-    strategy_instance_id: str,
+    effect: EffectOperationResource,
     order_ref: str,
+    source_event_at_ms: int | None = None,
+    expected_episode: tuple[str, ExecutionPriceConflictCause] | None = None,
 ) -> str:
     """Drop ``order_ref`` from the open price conflict; end it if that was the last (#2460).
 
     Called when the broker's last reported average for ``order_ref`` and the
     recorded effective fills' average agree within tolerance again -- whether
-    a later total restated the original price, or an identified execution
-    correction changed the recorded fills to match (the reconciliation
-    sweep's re-derivation,
+    a later total restated the original price (``source_event_at_ms`` then
+    names that total, and an older one changes nothing), or an identified
+    execution correction changed the recorded fills to match (the
+    reconciliation sweep's re-derivation,
     :func:`order_evidence.reconcile_execution_price_conflicts`, finds the
     latter from recorded evidence alone, because a terminal order's totals
-    are never re-folded). ``"absent"`` when no open episode names the order.
-    Atomic like the raise.
+    are never re-folded, and passes ``expected_episode`` so a concurrently
+    refreshed episode is refused). ``"absent"`` when no open episode names
+    the order. Atomic like the raise.
     """
     def build(cause: ExecutionPriceConflictCause) -> TransitionInput:
         return TransitionInput(
-            strategy_instance_id=strategy_instance_id,
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
             transition_kind="UNCERTAINTY_REFRESHED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
@@ -684,7 +700,10 @@ def clear_execution_price_conflict_order(
             evidence_refs=[order_ref],
         )
         return TransitionInput(
-            strategy_instance_id=strategy_instance_id,
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
             transition_kind="UNCERTAINTY_RESOLVED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
@@ -695,8 +714,10 @@ def clear_execution_price_conflict_order(
         )
 
     return repo.clear_execution_price_conflict_order(
-        strategy_instance_id=strategy_instance_id,
+        effect_operation_id=effect.effect_operation_id,
         order_ref=order_ref,
+        source_event_at_ms=source_event_at_ms,
+        expected_episode=expected_episode,
         build_transition=build,
         build_resolved=build_resolved,
     )

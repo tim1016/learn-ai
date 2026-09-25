@@ -428,6 +428,17 @@ class ExecutionPriceConflictCause:
     def names(self, order_ref: str) -> bool:
         return any(existing.order_ref == order_ref for existing in self.orders)
 
+    def entry_for(self, order_ref: str) -> ExecutionPriceConflictOrder | None:
+        """The stored evidence for ``order_ref``, or ``None`` when unnamed.
+
+        The raise/refresh/clear staleness rule compares an incoming total's
+        source time against the episode's stored ``source_event_at_ms`` for
+        the same order (#2460 review).
+        """
+        return next(
+            (existing for existing in self.orders if existing.order_ref == order_ref), None
+        )
+
     def to_mapping(self) -> dict[str, Any]:
         return {"orders": [order.to_mapping() for order in self.orders]}
 
