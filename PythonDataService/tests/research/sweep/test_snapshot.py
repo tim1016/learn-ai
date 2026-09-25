@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import zipfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -132,6 +133,27 @@ def test_daily_capture_refuses_a_missing_session(tmp_path: Path) -> None:
         capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
 
     assert excinfo.value.report.missing_days == [SESSIONS[0]]
+
+
+def test_daily_capture_refuses_a_session_whose_row_the_reader_cannot_parse(tmp_path: Path) -> None:
+    """A truncated row still begins with its date, but the reader parses no bar from it (#2445 review).
+
+    Admitting it would bind the sweep to a snapshot whose bound reader then
+    reads one session fewer than the window holds, without a word.
+    """
+    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
+    zip_path = tmp_path / "equity" / "usa" / "daily" / "spy.zip"
+    with zipfile.ZipFile(zip_path) as zf:
+        rows = zf.read("spy.csv").decode("ascii").splitlines()
+    stamp = SESSIONS[3].strftime("%Y%m%d")
+    rows = [",".join(row.split(",")[:4]) if row.startswith(stamp) else row for row in rows]
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("spy.csv", "\n".join(rows) + "\n")
+
+    with pytest.raises(MissingSessionsError) as excinfo:
+        capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+
+    assert excinfo.value.report.missing_days == [SESSIONS[3]]
 
 
 def test_make_minute_bars_is_deterministic_so_digests_are_reproducible() -> None:

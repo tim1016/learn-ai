@@ -15,10 +15,10 @@ module answers the question the readers do not ask:
 Coverage is resolution-aware. For ``"minute"`` a "day is available" iff
 the per-day zip ``{YYYYMMDD}_trade.zip`` exists under
 ``equity/usa/minute/{symbol}/`` in some root. For ``"daily"`` a "day is
-available" iff the single per-symbol history zip
-``equity/usa/daily/{symbol}.zip`` contains a CSV row stamped with that
-trading date in some root. The per-root ``sources`` breakdown honors the
-same reference-first merge order that the readers use.
+available" iff ``LeanDailyDataReader`` parses a bar for that trading date
+out of the per-symbol history zip ``equity/usa/daily/{symbol}.zip`` in
+some root. The per-root ``sources`` breakdown honors the same
+reference-first merge order that the readers use.
 """
 
 from __future__ import annotations
@@ -28,9 +28,12 @@ import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import InvalidOperation
 from itertools import groupby
 from pathlib import Path
 from typing import Any, Literal
+
+from app.engine.data.lean_format import LeanDailyDataReader
 
 logger = logging.getLogger(__name__)
 
@@ -60,48 +63,24 @@ def _minute_symbol_dir(root: Path, symbol: str) -> Path:
     return root / "equity" / "usa" / "minute" / symbol.lower()
 
 
-def _daily_zip_path(root: Path, symbol: str) -> Path:
-    return root / "equity" / "usa" / "daily" / f"{symbol.lower()}.zip"
+def _read_daily_dates(root: Path, symbol: str) -> set[date]:
+    """The sessions ``root``'s daily history holds a bar for, asked of the daily reader itself.
 
-
-def _read_daily_dates(zip_path: Path) -> set[date]:
-    """Extract the set of trading dates present in a LEAN daily zip.
-
-    Uses the same CSV format assumption as
-    :func:`lean_format._parse_daily_csv_bytes`: each row begins with
-    ``YYYYMMDD HH:MM``. We only need the dates for availability checks,
-    so we skip the price/volume fields entirely — this keeps the
-    availability endpoint cheap even for symbols with 20+ years of
-    history (~5000 rows).
+    ``LeanDailyDataReader`` picks the zip member and parses the rows, and it
+    drops a row it cannot read (wrong column count, a stamp without its
+    time) without a word. So a session is available exactly when the reader
+    yields a bar for it — never merely because a line begins with its date,
+    which is how a looser scan of its own here once admitted a truncated row
+    the run then skipped (#2445 review). One parser of the format. Parsing a
+    21-year history costs ~17 ms against the scan's ~1.5 ms, once per root
+    per check. A history the reader cannot decode at all holds no available
+    session.
     """
-    if not zip_path.exists():
-        return set()
-    dates: set[date] = set()
     try:
-        with zipfile.ZipFile(zip_path) as zf:
-            names = zf.namelist()
-            if not names:
-                return set()
-            with zf.open(names[0]) as f:
-                for line in f.read().decode("ascii").splitlines():
-                    if not line or len(line) < 8:
-                        continue
-                    date_str = line[:8]
-                    if not date_str.isdigit():
-                        continue
-                    try:
-                        dates.add(
-                            date(
-                                int(date_str[0:4]),
-                                int(date_str[4:6]),
-                                int(date_str[6:8]),
-                            )
-                        )
-                    except ValueError:
-                        continue
-    except (zipfile.BadZipFile, KeyError) as exc:
-        logger.warning("[AVAILABILITY] Failed reading daily zip %s: %s", zip_path, exc)
-    return dates
+        return set(LeanDailyDataReader(root).available_dates(symbol))
+    except (zipfile.BadZipFile, IndexError, ValueError, InvalidOperation) as exc:
+        logger.warning("[AVAILABILITY] Failed reading the %s daily history under %s: %s", symbol, root, exc)
+        return set()
 
 
 @dataclass
@@ -191,9 +170,9 @@ def check_availability(
 
     For ``resolution="minute"`` a day is "available" iff the per-day zip
     exists under that root. For ``resolution="daily"`` a day is
-    "available" iff the per-symbol history zip under that root contains
-    a CSV row stamped with that trading date. Each root's daily zip is
-    read at most once per call.
+    "available" iff the daily reader parses a bar for that trading date
+    out of the per-symbol history zip under that root. Each root's daily
+    zip is parsed at most once per call.
     """
     if end < start:
         raise ValueError(f"end ({end}) must not precede start ({start})")
@@ -216,7 +195,7 @@ def check_availability(
         # contributes; then walk expected sessions assigning each to the
         # first root that has it.
         per_root_dates: list[tuple[Path, set[date]]] = [
-            (root, _read_daily_dates(_daily_zip_path(root, symbol))) for root in roots
+            (root, _read_daily_dates(root, symbol)) for root in roots
         ]
         for trading_date in expected:
             for root, root_dates in per_root_dates:

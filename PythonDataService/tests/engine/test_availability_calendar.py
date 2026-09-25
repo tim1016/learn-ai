@@ -10,6 +10,7 @@ of mourning, MLK Day, Presidents' Day). PRD #1926, "Data availability".
 
 from __future__ import annotations
 
+import zipfile
 from datetime import date
 from pathlib import Path
 
@@ -67,6 +68,45 @@ def test_daily_resolution_uses_the_same_calendar(tmp_path: Path) -> None:
 
     assert report.expected_days == len(expected_sessions(*WINDOW))
     assert report.available_days == 0
+
+
+def _daily_row(day: date, *, columns: int = 6) -> str:
+    fields = [f"{day.strftime('%Y%m%d')} 00:00", "5000000", "5010000", "4990000", "5005000", "1000"]
+    return ",".join(fields[:columns])
+
+
+def _write_daily_zip(root: Path, members: dict[str, list[str]]) -> None:
+    path = root / "equity" / "usa" / "daily" / "spy.zip"
+    path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, rows in members.items():
+            zf.writestr(name, "\n".join(rows) + "\n")
+
+
+def test_a_daily_session_is_available_only_when_the_reader_parses_its_row(tmp_path: Path) -> None:
+    """A line that merely begins with the date is not a bar the run will read (#2445 review)."""
+    window = (date(2024, 11, 25), date(2024, 11, 29))
+    truncated = date(2024, 11, 29)
+    sessions = expected_sessions(*window)
+    _write_daily_zip(tmp_path, {"spy.csv": [_daily_row(day, columns=4 if day == truncated else 6) for day in sessions]})
+
+    report = check_availability([tmp_path], "SPY", *window, resolution="daily")
+
+    assert report.missing_days == [truncated]
+
+
+def test_daily_availability_reads_the_member_the_reader_reads(tmp_path: Path) -> None:
+    """The reader opens ``{symbol}.csv`` when the zip holds one, whichever member comes first."""
+    window = (date(2024, 11, 25), date(2024, 11, 29))
+    sessions = expected_sessions(*window)
+    _write_daily_zip(
+        tmp_path,
+        {"notes.csv": [_daily_row(day) for day in sessions], "spy.csv": [_daily_row(day) for day in sessions[:-1]]},
+    )
+
+    report = check_availability([tmp_path], "SPY", *window, resolution="daily")
+
+    assert report.missing_days == [sessions[-1]]
 
 
 def test_missing_sessions_either_side_of_a_closure_are_one_span(tmp_path: Path) -> None:
