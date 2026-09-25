@@ -14,6 +14,7 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -41,6 +42,10 @@ from app.schemas.signal_program_seal import (
     strip_absent_git_provenance,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.program_source_anchor import (
+    _IMPORTED_SOURCE_DIGESTS,
+    record_imported_program_sources,
+)
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QUALIFICATION_MANIFEST = _SERVICE_ROOT / "app/data/signal_program_build_receipts.json"
@@ -400,11 +405,13 @@ def prove_running_program_build(
     if failed is not None:
         return _unproven(binding.strategy_key, verified_at_ms, explanation=failed.explanation)
     try:
+        record_imported_program_sources()
         running_digest = running_artifact_digest(contract)
         # Hashed here, with the artifact digest, rather than after the receipt
         # lookup where it is used: both read files off disk and both can raise
         # on a source tree missing a declared path, and an admission check that
-        # escapes as an internal error is not failing closed.
+        # escapes as an internal error is not failing closed. The anchor shares
+        # the guard for the same reason: its import can raise on a torn tree.
         running_wiring = running_wiring_digest(contract)
         manifest = ProgramBuildQualificationManifest.model_validate_json(
             manifest_path.read_text(encoding="utf-8")
@@ -414,6 +421,38 @@ def prove_running_program_build(
             binding.strategy_key,
             verified_at_ms,
             explanation=f"Program qualification evidence is unreadable: {type(exc).__name__}.",
+        )
+    # #2450: the digests above read the disk, not memory. A clerk deploys by
+    # ``git pull`` then restart, so between the two the disk holds bytes this
+    # process never imported, and a proof computed from them would name code
+    # that is not running. Refuse until the restart makes them one again.
+    # #2450 review: this second source read stays inside the fail-closed
+    # guard too -- a checkout that removes or replaces a declared source
+    # mid-pull makes it raise, and a Start/Resume in that window must get
+    # this refusal, never an internal error escaping the boundary.
+    try:
+        drifted = imported_source_drift(contract)
+    except (OSError, ValueError) as exc:
+        return _unproven(
+            binding.strategy_key,
+            verified_at_ms,
+            explanation=(
+                "Restart needed: the code on disk became unreadable while comparing "
+                f"it against the code this process is running ({type(exc).__name__})."
+            ),
+            next_step="Restart the service so the running code is the code on disk, then try again.",
+        )
+    if drifted is not None:
+        return _unproven(
+            binding.strategy_key,
+            verified_at_ms,
+            explanation=(
+                "Restart needed: the code on disk differs from the code this process "
+                f"is running ({drifted} sources changed after import)."
+            ),
+            next_step=(
+                "Restart the service so the running code is the code on disk, then try again."
+            ),
         )
     receipt = next(
         (
@@ -485,15 +524,53 @@ def prove_running_program_build(
     )
 
 
+def _resolve_artifact(relative: str) -> Path:
+    """The one validated on-disk location for a service-relative source file."""
+    candidate = (_SERVICE_ROOT / relative).resolve()
+    if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
+        raise ValueError(f"invalid Signal Program artifact path: {relative}")
+    return candidate
+
+
+def _digest_entries(
+    paths: tuple[str, ...], digest_for: Callable[[str], str]
+) -> str:
+    """Hash a closed, ordered set of service-relative source files."""
+    entries = [{"path": relative, "sha256": digest_for(relative)} for relative in paths]
+    return semantic_payload_hash(entries)
+
+
 def _digest_paths(paths: tuple[str, ...]) -> str:
     """Hash a closed, ordered set of service-relative source files."""
-    entries: list[dict[str, str]] = []
-    for relative in paths:
-        candidate = (_SERVICE_ROOT / relative).resolve()
-        if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
-            raise ValueError(f"invalid Signal Program artifact path: {relative}")
-        entries.append({"path": relative, "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()})
-    return semantic_payload_hash(entries)
+    return _digest_entries(
+        paths, lambda relative: hashlib.sha256(_resolve_artifact(relative).read_bytes()).hexdigest()
+    )
+
+
+def _imported_digest(paths: tuple[str, ...]) -> str:
+    """The digest of ``paths`` as recorded at import time (startup)."""
+    return _digest_entries(paths, _IMPORTED_SOURCE_DIGESTS.__getitem__)
+
+
+def imported_source_drift(contract: SignalProgramContract) -> Literal["artifact", "wiring"] | None:
+    """Which half of a proof's sources changed on disk after this process imported them.
+
+    ``None`` when the on-disk bytes are still the bytes in memory, which is
+    the only case in which a proof computed from disk can name the code that
+    is running. An unrecorded path counts as drift: a proof must not claim
+    bytes it never anchored.
+    """
+    for label, paths in (
+        ("artifact", contract.artifact_paths),
+        ("wiring", contract.wiring_artifact_paths),
+    ):
+        try:
+            imported = _imported_digest(paths)
+        except KeyError:
+            return label
+        if imported != _digest_paths(paths):
+            return label
+    return None
 
 
 def running_artifact_digest(contract: SignalProgramContract) -> str:
@@ -677,13 +754,16 @@ def _unproven(
     verified_at_ms: int,
     *,
     explanation: str,
+    next_step: str = (
+        "Run golden qualification for these bytes, or deploy a newly sealed compatible instance."
+    ),
 ) -> ProgramBuildAdmissionFact:
     return ProgramBuildAdmissionFact(
         state="UNPROVEN",
         program_key=program_key,
         verified_at_ms=verified_at_ms,
         explanation=explanation,
-        next_step="Run golden qualification for these bytes, or deploy a newly sealed compatible instance.",
+        next_step=next_step,
     )
 
 
@@ -694,10 +774,12 @@ __all__ = [
     "ProgramBuildQualificationReceipt",
     "SignalProgramSealError",
     "build_start_program_seal",
+    "imported_source_drift",
     "legacy_migration_clone_instance_id",
     "prove_running_program_build",
     "qualification_receipt_payload",
     "reconstruct_legacy_program_seal",
+    "record_imported_program_sources",
     "running_artifact_digest",
     "running_wiring_digest",
 ]

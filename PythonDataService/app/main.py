@@ -15,6 +15,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+# #2450: anchor the Signal Program build proof BEFORE the imports below pull
+# in the strategy registry and its program modules. The lifespan anchor alone
+# was too late -- by then `import app.main` had already cached those modules,
+# so a `git pull` landing in between made the anchor record the new disk bytes
+# for the old running code (and the anchor now refuses outright for a module
+# that is already cached). Keep this import ahead of every other `app.`
+# import; importing the bootstrap IS the anchor.
+import app.services.program_source_bootstrap
 from app.broker.alpaca.active_binding import (
     BrokerUnbound,
     UnboundBroker,
@@ -376,6 +384,16 @@ async def _service_lifespan(
             "coordinator without its registry volume refuses to start."
         )
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
+
+    # #2450: the source anchor ran at module import (see the bootstrap at the
+    # top of this file), before the imports that cache the registry's program
+    # modules. This call is the idempotent safety net: a no-op when that
+    # anchor already recorded the sources, and a refusal (aborting startup)
+    # if some path ever gets here without it -- a process that cannot state
+    # its own sources must not start.
+    from app.services.signal_program_admission import record_imported_program_sources
+
+    record_imported_program_sources()
 
     # Root identity (#1876) — validated first, before any other subsystem
     # touches the lake: a LakeRootIdentityError here aborts startup (see
