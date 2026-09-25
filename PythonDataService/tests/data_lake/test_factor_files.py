@@ -82,19 +82,15 @@ def test_factor_multiplier_builder_round_trip() -> None:
     factors to data ≤ that row and not after — the round trip the study's
     adjustment depends on.
     """
-    from app.data_lake.factor_files import build_factor_file_bytes
+    from app.data_lake.factor_files import build_factor_file_bytes, plan_factor_file
     from app.data_lake.polygon_corp_actions import SplitEvent
 
     # 2:1 split with ex-date 2024-07-05; raw closes 200 before, 100 after.
     closes = {date(2024, 7, 1): Decimal(200), date(2024, 7, 2): Decimal(201), date(2024, 7, 3): Decimal(202), date(2024, 7, 5): Decimal(100)}
-    body = build_factor_file_bytes(
-        "SPY",
-        splits=[SplitEvent(execution_date="2024-07-05", split_from=1, split_to=2)],
-        dividends=[],
-        history_start=date(2024, 7, 1),
-        history_end=date(2024, 7, 5),
-        daily_closes=closes,
+    plan = plan_factor_file(
+        closes, [SplitEvent(execution_date="2024-07-05", split_from=1, split_to=2)], []
     )
+    body = build_factor_file_bytes("SPY", plan, closes)
     rows = parse_factor_file(body.decode("ascii"))
 
     # Pre-split data carries the 0.5 split factor; the ex-date and after do

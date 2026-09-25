@@ -246,7 +246,7 @@ class ReturnDistributionResult:
     days: tuple[DailyReturns, ...]
     bin_width_pct: float
     span_pct: float
-    adjustment: Literal["split_and_dividend", "raw"]
+    adjustment: Literal["split_and_dividend"]
 
 
 def noon_et_ms_utc(d: date) -> int:
@@ -329,10 +329,8 @@ def adjust_anchors(
     Each day's anchors are scaled by that day's multiplier; ratios *within*
     a day are unchanged and ratios *across* an ex-date pick up exactly the
     corporate action, which is what makes the return series total-return
-    consistent. Empty ``factor_rows`` returns the anchors unchanged.
+    consistent.
     """
-    if not factor_rows:
-        return list(anchors)
     out: list[DayAnchors] = []
     for a in anchors:
         m = factor_multiplier_as_of(factor_rows, a.trading_date)
@@ -684,7 +682,7 @@ def build_return_distribution(
     *,
     bin_width_pct: float = DEFAULT_BIN_WIDTH_PCT,
     span_pct: float = DEFAULT_SPAN_PCT,
-    adjustment: Literal["split_and_dividend", "raw"] = "split_and_dividend",
+    adjustment: Literal["split_and_dividend"] = "split_and_dividend",
 ) -> ReturnDistributionResult:
     """Histogram + stats + overlay for all three return kinds over ``days``.
 

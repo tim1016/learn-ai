@@ -8,8 +8,9 @@ import { ReturnsDistributionService } from '../returns-distribution.service';
 /**
  * The "inspect the day" pane: extended-session minute candles for one
  * selected trading date, fetched lazily from the study's own day-candles
- * read (same lake root and factor adjustment as the study, so the price
- * basis matches the return being inspected). The candles render through
+ * read (same lake root as the study, raw prices: one day's adjustment is
+ * one constant, so the candles' shape matches the return being
+ * inspected). The candles render through
  * the shared canonical chart; this wrapper owns only the fetch and the ET
  * date heading.
  */

@@ -30,11 +30,12 @@ actions newest-to-oldest,
 and each split contributes ``split_from / split_to`` to the cumulative
 split factor.
 
-Only corporate actions whose ex-date falls inside [history_start,
-history_end] are emitted: a windowed capture cannot price actions
-outside its own data, and a backtest in that window never encounters
-them. If an in-window action has no positive reference close in the
-capture, the build fails loudly rather than emitting a poison row.
+The builder emits exactly the actions its :class:`FactorFilePlan` keeps
+(those inside a covered span, below), between two anchor rows dated at
+the first and last captured sessions. There is no second selection rule:
+what the file holds is decided once, by :func:`plan_factor_file`, from
+every captured session. A planned action without a positive reference
+close fails the build loudly rather than emitting a poison row.
 
 Coverage (#2452)
 ----------------
@@ -72,10 +73,17 @@ there rather than silently changed here.
 The one thing a span does **not** promise is the absolute adjusted level:
 bars are on the basis of the last covered session, not of today, and a
 split in a capture gap separates the levels of the spans on either side of
-it. Ratio consumers (the return study) are exact; a level consumer (the
-day-candle pane) shows the file's basis. Moving levels to a "today" basis
-needs captured closes through today and a versioned action list — #2454's
-territory, not this module's.
+it. So no reader presents adjusted levels from this file: the return study
+reads only ratios, and its day-candle pane shows raw prices. Moving levels
+to a "today" basis needs captured closes through today and a versioned
+action list — #2454's territory, not this module's.
+
+A reference session whose close cannot be read (no regular-session bar,
+or an unreadable minute zip) ends its span there
+(``plan_factor_file(..., unpriced_sessions=...)``): the action it would
+price then falls on the next span's first session, outside every span, so
+only reads crossing that session are refused — one bad day does not
+leave the whole symbol unadjustable.
 
 A consumer **covers** a set of sessions when every run of
 scheduled-adjacent sessions in it lies inside one span
@@ -107,37 +115,46 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 _FACTOR_QUANTUM = Decimal("0.0000000001")
 
 
-class FactorFileReferenceError(ValueError):
-    """An in-window corporate action has no positive reference close."""
+class FactorFileBuildError(ValueError):
+    """The captured sessions cannot produce a factor file (a named refusal, not a crash)."""
+
+
+class FactorFileReferenceError(FactorFileBuildError):
+    """A planned corporate action has no positive reference close."""
 
 
 def build_factor_file_bytes(
     symbol: str,
-    splits: list[SplitEvent],
-    dividends: list[DividendEvent],
-    history_start: date,
-    history_end: date,
+    plan: FactorFilePlan,
     daily_closes: Mapping[date, Decimal],
 ) -> bytes:
-    """Build the deterministic factor-file CSV body for one symbol.
+    """Build the deterministic factor-file CSV body for ``plan``.
 
-    ``daily_closes`` maps each regular-trading-hours session date to its
-    RTH close. It must cover the trading session before every in-window
-    corporate action; the caller derives it from the captured minute
-    bars (see ``derived_daily.rth_daily_closes``).
+    ``daily_closes`` maps session dates to their regular-trading-hours
+    close (the caller derives it from the captured minute bars, see
+    ``derived_daily.factor_file_reference_closes``). It must hold every
+    ``plan.reference_sessions`` close; the anchor sessions' closes are used
+    when present. The returned bytes are ASCII CSV without a header row,
+    which is what LEAN expects.
 
-    Splits/dividends must be sorted ascending by date (polygon_corp_actions
-    returns them that way). The returned bytes are ASCII CSV without a
-    header row, which is what LEAN expects.
-
-    Raises ``FactorFileReferenceError`` when an in-window corporate
-    action has no positive reference close in ``daily_closes``.
+    Raises ``FactorFileReferenceError`` when a reference session has no
+    close, or a non-positive one. A missing close is refused rather than
+    looked up on an older session: that would bind the action to the wrong
+    reference price and drift silently.
     """
-    closes: dict[date, Decimal] = {d: Decimal(v) for d, v in daily_closes.items()}
+    missing = [d for d in plan.reference_sessions if d not in daily_closes]
+    if missing:
+        raise FactorFileReferenceError(
+            f"{symbol}: no regular-session close captured for "
+            f"{', '.join(d.isoformat() for d in missing)}, the session(s) before a corporate "
+            "action's ex-date; its reference price cannot be established"
+        )
+    # Only the reference and anchor sessions' closes: every reference
+    # session is present and is the scheduled session right before its
+    # ex-date, so the largest close before an ex-date is exactly it.
+    wanted = {*plan.reference_sessions, *plan.anchor_sessions}
+    closes: dict[date, Decimal] = {d: Decimal(v) for d, v in daily_closes.items() if d in wanted}
     session_dates: list[date] = sorted(closes)
-
-    events = _merge_events(splits, dividends)
-    in_window = [ev for ev in events if history_start <= _event_date(ev) <= history_end]
 
     # Walk corporate actions newest-to-oldest, accumulating the cumulative
     # price/split factors. Each event row carries the factors that apply
@@ -145,15 +162,8 @@ def build_factor_file_bytes(
     price_factor = Decimal(1)
     split_factor = Decimal(1)
     event_rows: list[tuple[date, Decimal, Decimal, Decimal]] = []
-    for ev in reversed(in_window):
-        ex_date = _event_date(ev)
-        row_date = _trading_day_before(ex_date, session_dates)
-        if row_date is None:
-            raise FactorFileReferenceError(
-                f"{symbol}: corporate action ex-date {ex_date.isoformat()} has no "
-                f"prior trading session in the capture (window starts "
-                f"{history_start.isoformat()}); cannot resolve a reference price"
-            )
+    for ev in reversed(_merge_events(plan.splits, plan.dividends)):
+        row_date = session_dates[bisect_left(session_dates, _event_date(ev)) - 1]
         reference_price = closes[row_date]
         if reference_price <= 0:
             raise FactorFileReferenceError(
@@ -169,22 +179,23 @@ def build_factor_file_bytes(
         event_rows.append((row_date, price_factor, split_factor, reference_price))
     event_rows.reverse()
 
-    # history_start carries the fully-cumulated (oldest) factors; the row
+    # The first anchor carries the fully-cumulated (oldest) factors; the row
     # is not dividend-processed by LEAN but its reference price still
     # must be positive, so anchor it to the nearest available close.
+    first_anchor, last_anchor = plan.anchor_sessions
     rows: list[tuple[date, Decimal, Decimal, Decimal]] = [
         (
-            history_start,
+            first_anchor,
             price_factor,
             split_factor,
-            _anchor_reference(history_start, closes, session_dates),
+            _anchor_reference(first_anchor, closes, session_dates),
         ),
         *event_rows,
         (
-            history_end,
+            last_anchor,
             Decimal(1),
             Decimal(1),
-            _anchor_reference(history_end, closes, session_dates),
+            _anchor_reference(last_anchor, closes, session_dates),
         ),
     ]
 
@@ -197,15 +208,11 @@ def _event_date(ev: SplitEvent | DividendEvent) -> date:
     return date.fromisoformat(raw)
 
 
-def _merge_events(splits: list[SplitEvent], dividends: list[DividendEvent]) -> list[SplitEvent | DividendEvent]:
+def _merge_events(
+    splits: Sequence[SplitEvent], dividends: Sequence[DividendEvent]
+) -> list[SplitEvent | DividendEvent]:
     """Merge splits + dividends into one chronologically-sorted list."""
     return sorted([*splits, *dividends], key=_event_date)
-
-
-def _trading_day_before(d: date, session_dates: list[date]) -> date | None:
-    """Largest session date strictly earlier than ``d``; None if none exists."""
-    idx = bisect_left(session_dates, d)
-    return session_dates[idx - 1] if idx > 0 else None
 
 
 def _anchor_reference(d: date, closes: Mapping[date, Decimal], session_dates: list[date]) -> Decimal:
@@ -214,7 +221,10 @@ def _anchor_reference(d: date, closes: Mapping[date, Decimal], session_dates: li
     if d in closes:
         return closes[d]
     if not session_dates:
-        raise FactorFileReferenceError("daily_closes is empty; cannot anchor the factor file with a reference price")
+        raise FactorFileReferenceError(
+            "no regular-session close was read for any anchor or reference session; "
+            "cannot anchor the factor file with a reference price"
+        )
     idx = bisect_left(session_dates, d)
     return closes[session_dates[idx - 1]] if idx > 0 else closes[session_dates[0]]
 
@@ -357,18 +367,36 @@ def _scheduled_runs(sessions: Iterable[date]) -> list[SessionRun]:
     return runs
 
 
+def _break_after(runs: list[SessionRun], breaks: set[date], calendar: list[date]) -> list[SessionRun]:
+    """Split each run right after every session of ``breaks`` inside it.
+
+    ``calendar`` is the scheduled sessions over the runs, so the session
+    after a break is the next run's first.
+    """
+    position = {d: i for i, d in enumerate(calendar)}
+    out: list[SessionRun] = []
+    for run in runs:
+        first = run.first_session
+        for session in sorted(d for d in breaks if run.first_session <= d < run.last_session):
+            out.append(SessionRun(first, session))
+            first = calendar[position[session] + 1]
+        out.append(SessionRun(first, run.last_session))
+    return out
+
+
 @dataclass(frozen=True)
 class FactorFilePlan:
     """What a factor file built over a set of captured sessions contains.
 
-    ``spans`` are the captured sessions' maximal scheduled runs;
-    ``splits``/``dividends`` are exactly the actions inside a span
-    (``first < ex-date <= last``); ``reference_sessions`` are the sessions
-    before those ex-dates, whose regular-session closes price them — every
-    one of them is captured by construction and none may be missing from
-    the closes the build receives. ``anchor_sessions`` are the first and
-    last captured sessions, whose closes the two anchor rows carry when
-    available (LEAN does not dividend-process an anchor row).
+    ``spans`` are the captured sessions' maximal scheduled runs, broken
+    after any unpriced session; ``splits``/``dividends`` are exactly the
+    actions inside a span (``first < ex-date <= last``);
+    ``reference_sessions`` are the sessions before those ex-dates, whose
+    regular-session closes price them — every one of them is captured by
+    construction, and one whose close cannot be read is re-planned as
+    unpriced rather than handed to the build. ``anchor_sessions`` are the
+    first and last captured sessions, whose closes the two anchor rows
+    carry when available (LEAN does not dividend-process an anchor row).
     """
 
     spans: tuple[SessionRun, ...]
@@ -382,6 +410,8 @@ def plan_factor_file(
     captured_sessions: Iterable[date],
     splits: Sequence[SplitEvent],
     dividends: Sequence[DividendEvent],
+    *,
+    unpriced_sessions: Iterable[date] = (),
 ) -> FactorFilePlan:
     """Decide what a factor file over ``captured_sessions`` holds.
 
@@ -389,15 +419,24 @@ def plan_factor_file(
     (all of them — never a request window, which is how #2452's narrow
     rebuild dropped an older split) and every corporate action the provider
     knows, and reads the returned ``reference_sessions`` closes.
+
+    ``unpriced_sessions`` are captured sessions whose close could not be
+    read. Each ends its span, so the action it would have priced falls
+    outside every span (see the module docstring); the caller re-plans with
+    the reference sessions it found no close for. Raises
+    :class:`FactorFileBuildError` when no captured date is a scheduled
+    session.
     """
     captured = sorted(set(captured_sessions))
     if not captured:
-        raise ValueError("a factor file needs at least one captured session")
+        raise FactorFileBuildError("a factor file needs at least one captured session")
     calendar = expected_sessions(captured[0], captured[-1])
     scheduled = set(calendar)
-    spans = tuple(_scheduled_runs(d for d in captured if d in scheduled))
+    spans = tuple(
+        _break_after(_scheduled_runs(d for d in captured if d in scheduled), set(unpriced_sessions), calendar)
+    )
     if not spans:
-        raise ValueError("none of the captured dates is a scheduled NYSE session")
+        raise FactorFileBuildError("none of the captured dates is a scheduled NYSE session")
 
     def inside_a_span(event: SplitEvent | DividendEvent) -> bool:
         ex_date = _event_date(event)
@@ -414,37 +453,6 @@ def plan_factor_file(
         dividends=kept_dividends,
         reference_sessions=reference_sessions,
         anchor_sessions=(spans[0].first_session, spans[-1].last_session),
-    )
-
-
-def build_planned_factor_file_bytes(
-    symbol: str,
-    plan: FactorFilePlan,
-    daily_closes: Mapping[date, Decimal],
-) -> bytes:
-    """The factor-file CSV for ``plan``, through :func:`build_factor_file_bytes`.
-
-    Refuses (``FactorFileReferenceError``) when a reference session has no
-    regular-session close: the builder's own prior-session lookup would
-    otherwise bind the action to an older close and drift silently. The
-    closes handed on are exactly the reference and anchor sessions', so the
-    builder's "largest close before the ex-date" is the exact prior session.
-    """
-    missing = [d for d in plan.reference_sessions if d not in daily_closes]
-    if missing:
-        raise FactorFileReferenceError(
-            f"{symbol}: no regular-session close captured for "
-            f"{', '.join(d.isoformat() for d in missing)}, the session(s) before a corporate "
-            "action's ex-date; its reference price cannot be established"
-        )
-    wanted = {*plan.reference_sessions, *plan.anchor_sessions}
-    return build_factor_file_bytes(
-        symbol=symbol,
-        splits=list(plan.splits),
-        dividends=list(plan.dividends),
-        history_start=plan.anchor_sessions[0],
-        history_end=plan.anchor_sessions[1],
-        daily_closes={d: close for d, close in daily_closes.items() if d in wanted},
     )
 
 

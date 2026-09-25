@@ -319,15 +319,6 @@ class FakeCatalog:
         row.update(status="fetching")
         return prior
 
-    async def restore_complete_artifact(self, artifact_id, worker_id, lease_generation) -> bool:
-        row = self.rows.get(artifact_id)
-        # Owner AND generation, like the real guard: a stale caller sharing
-        # the per-process worker id must not restore a newer generation.
-        if row is None or row["status"] != "fetching" or row["lease_generation"] != lease_generation:
-            return False
-        row.update(status="complete")
-        return True
-
     async def complete_artifact(
         self,
         artifact_id,
@@ -489,7 +480,6 @@ FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "select_complete_corp_action_artifact",
     "select_corp_action_claim_state",
     "refresh_complete_artifact",
-    "restore_complete_artifact",
     "complete_artifact",
     "publish_under_lease",
     "fail_artifact",

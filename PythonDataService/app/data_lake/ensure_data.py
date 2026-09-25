@@ -44,10 +44,10 @@ from app.data_lake.derived_daily import (
 )
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.factor_files import (
+    FactorFileBuildError,
     FactorFileNotCoveringError,
     FactorFilePlan,
-    FactorFileReferenceError,
-    build_planned_factor_file_bytes,
+    build_factor_file_bytes,
     factor_coverage_record_bytes,
     plan_factor_file,
     read_recorded_factor_file,
@@ -736,15 +736,43 @@ def _factor_file_over_captured_sessions(
     Pure CPU and file I/O, so callers run it off the event loop (#1943). Only
     the minute zips of the sessions that price a corporate action (and the
     two anchor sessions) are read — a handful, not the whole history.
+
+    A reference session without a readable regular-session close (a day
+    captured with extended-hours bars only, or a zip that no longer reads)
+    is re-planned as unpriced: its span ends there and the action it would
+    have priced is left out, so only reads crossing that session are refused
+    — never the whole symbol. Each one is logged.
     """
-    plan = plan_factor_file((r.trading_date for r in source_trade_records if r.trading_date), splits, dividends)
+    captured = [r.trading_date for r in source_trade_records if r.trading_date]
+    plan = plan_factor_file(captured, splits, dividends)
     wanted = {*plan.reference_sessions, *plan.anchor_sessions}
-    closes = factor_file_reference_closes(
+    closes, unreadable = factor_file_reference_closes(
         [r for r in source_trade_records if r.trading_date in wanted],
         lake_root=lake_root,
         fallback_date=fallback_date,
     )
-    return build_planned_factor_file_bytes(symbol, plan, closes), plan
+    for failure in unreadable:
+        logger.warning(
+            "data_lake.ensure_data: factor file for %s cannot read %s: %s",
+            symbol,
+            failure.file_path,
+            failure,
+            extra={"symbol": symbol, "file_path": failure.file_path, "action": "factor_file_zip_unreadable"},
+        )
+    unpriced = [d for d in plan.reference_sessions if d not in closes]
+    if unpriced:
+        logger.warning(
+            "data_lake.ensure_data: factor file for %s breaks its covered span after %s (no regular-session close)",
+            symbol,
+            ", ".join(d.isoformat() for d in unpriced),
+            extra={
+                "symbol": symbol,
+                "unpriced_sessions": [d.isoformat() for d in unpriced],
+                "action": "factor_file_span_broken",
+            },
+        )
+        plan = plan_factor_file(captured, splits, dividends, unpriced_sessions=unpriced)
+    return build_factor_file_bytes(symbol, plan, closes), plan
 
 
 def _factor_file_is_recorded(lake_root: Path, row: ArtifactRecord) -> bool:
@@ -755,11 +783,21 @@ def _factor_file_is_recorded(lake_root: Path, row: ArtifactRecord) -> bool:
     #2452, or one whose record write failed after the publish, covers
     nothing for the readers, and reusing it would leave them refusing
     forever. A vouched-for CSV that no longer parses (``ValueError``) is
-    rebuilt for the same reason rather than served as corruption.
+    lake corruption: it is logged and rebuilt rather than served.
     """
+    symbol = row.symbol or ""
     try:
-        recorded = read_recorded_factor_file(lake_root, market=row.market or "usa", symbol=row.symbol or "")
-    except (FactorFileNotCoveringError, ValueError):
+        recorded = read_recorded_factor_file(lake_root, market=row.market or "usa", symbol=symbol)
+    except FactorFileNotCoveringError:
+        return False
+    except ValueError as exc:
+        logger.warning(
+            "data_lake.ensure_data: factor file for %s is vouched for by its coverage record but does not "
+            "parse; rebuilding it: %s",
+            symbol,
+            exc,
+            extra={"symbol": symbol, "error": str(exc), "action": "rebuild_corrupt_factor_file"},
+        )
         return False
     return recorded.file_sha256 == row.file_sha256
 
@@ -848,9 +886,7 @@ async def _process_factor_file_artifact(
             lake_root=lake_root,
             fallback_date=spec.start_trading_date,
         )
-    except MinuteBarReadError as e:
-        return _failure("io_error", f"failed to read minute bars for factor-file reference prices: {e}")
-    except FactorFileReferenceError as e:
+    except FactorFileBuildError as e:
         return _failure("internal_error", str(e))
 
     outcome: Literal["fetched", "reused", "refreshed"] = "fetched"

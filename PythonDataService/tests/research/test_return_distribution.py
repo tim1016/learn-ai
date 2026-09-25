@@ -189,13 +189,6 @@ def test_adjust_anchors_split_continuity() -> None:
     assert returns[1].close_to_close_pct == pytest.approx(0.5, abs=1e-9)
 
 
-def test_adjust_anchors_empty_rows_identity() -> None:
-    anchors = rd.extract_day_anchors(
-        {D1: [_bar(D1, 9, 30, 100.0, 100.5), _bar(D1, 15, 59, 100.9, 101.0)]}, _windows(D1)
-    )
-    assert rd.adjust_anchors(anchors, []) == anchors
-
-
 # ---------------------------------------------------------------------------
 # compute_daily_returns — hand-computed segments + identities
 # ---------------------------------------------------------------------------

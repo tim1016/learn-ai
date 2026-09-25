@@ -12,16 +12,20 @@ the lake now holds. A capture that still leaves the window empty is
 surfaced as a typed error carrying what *is* captured and why the capture
 could not populate the symbol.
 
-The study and its candle pane are always split-and-dividend adjusted on the
-latest-known basis (owner decision #2432). Both read the factor file only
-through ``factor_files.read_covering_factor_rows`` — the one coverage check
-— over exactly the sessions they adjust. A window the file does not cover
+The study is always split-and-dividend adjusted on the latest-known basis
+(owner decision #2432). It reads the factor file only through
+``factor_files.read_covering_factor_rows`` — the one coverage check — over
+exactly the sessions it adjusts. A window the file does not cover
 (no file, a file written before coverage was recorded, or sessions outside
 its covered spans) triggers the same on-demand capture a missing session
 does, which rebuilds the file over every captured session; if the window is
 still uncovered after it, the request is refused
 (:class:`AdjustmentNotCoveredError`) with the reason, never answered with
-partially adjusted returns labelled adjusted (#2452).
+partially adjusted returns labelled adjusted (#2452). Its candle pane shows
+the day's raw prices: one day has one multiplier, a constant rescale of the
+price axis that no candle's shape depends on, and the adjusted level would
+be on the factor file's basis rather than today's (``factor_files``' module
+docstring).
 
 All math lives in ``app/research/return_distribution.py``; this module only
 loads bars, resolves the calendar windows, runs the capture boundary, and
@@ -37,15 +41,10 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from app.data_lake.factor_files import (
-    FactorFileNotCoveringError,
-    factor_multiplier_as_of,
-    read_covering_factor_rows,
-)
+from app.data_lake.factor_files import FactorFileNotCoveringError, read_covering_factor_rows
 from app.data_lake.path_policy import minute_bar_market_root, resolve_lake_root
 from app.data_lake.run_materialization import materialize_symbol_history
 from app.data_lake.types import is_lake_addressable_symbol
@@ -126,15 +125,14 @@ class AdjustmentNotCoveredError(Exception):
     Owner decision #2432: a window the adjustment data does not cover is
     refused rather than labelled adjusted. ``reason`` is the coverage
     check's own account of what is missing; ``capture_note`` says what the
-    on-demand capture (which rebuilds the factor file) did about it, or
-    ``None`` on a path that never captures (the candle pane).
+    on-demand capture (which rebuilds the factor file) did about it.
     """
 
-    def __init__(self, symbol: str, reason: str, capture_note: str | None = None) -> None:
-        message = f"the split and dividend adjustment for {symbol!r} does not cover this window: {reason}"
-        if capture_note:
-            message += f" (on-demand capture: {capture_note})"
-        super().__init__(message)
+    def __init__(self, symbol: str, reason: str, capture_note: str) -> None:
+        super().__init__(
+            f"the split and dividend adjustment for {symbol!r} does not cover this window: {reason} "
+            f"(on-demand capture: {capture_note})"
+        )
         self.symbol = symbol
         self.reason = reason
         self.capture_note = capture_note
@@ -473,10 +471,10 @@ class DayNotCapturedError(Exception):
 
 @dataclass(frozen=True)
 class DayCandlesOutcome:
-    """One day's extended-session minute bars on the study's price basis."""
+    """One day's extended-session minute bars, raw as the lake holds them."""
 
     trading_date: date
-    adjustment: Literal["split_and_dividend"]
+    adjustment: Literal["raw"]
     bars: list[TradeBar]
 
 
@@ -494,45 +492,19 @@ def _day_candles_sync(
     if not bars:
         raise DayNotCapturedError(symbol, trading_date)
 
-    # One trading date → one cumulative multiplier: prices scale, volume
-    # does not — the same LEAN semantics the study's anchors follow, from
-    # the same raw root and the same factor file behind the same coverage
-    # check, so the candle pane's basis cannot drift from the return being
-    # inspected. The level is the factor file's basis (its last covered
-    # session), not today's — see factor_files' module docstring.
-    try:
-        factor_rows = read_covering_factor_rows(lake_root, market="usa", symbol=symbol, sessions=[trading_date])
-    except FactorFileNotCoveringError as e:
-        raise AdjustmentNotCoveredError(symbol, e.reason) from e
-    multiplier = factor_multiplier_as_of(factor_rows, trading_date)
-    if multiplier == Decimal(1):
-        scaled = bars
-    else:
-        scaled = [
-            TradeBar(
-                symbol=b.symbol,
-                open=b.open * multiplier,
-                high=b.high * multiplier,
-                low=b.low * multiplier,
-                close=b.close * multiplier,
-                volume=b.volume,
-                start_ms=b.start_ms,
-                end_ms=b.end_ms,
-            )
-            for b in bars
-        ]
+    # Raw, not adjusted: the study's multiplier for one trading date is one
+    # constant, so scaling would only rescale the price axis — every candle,
+    # and every within-day segment the drill-down shows, keeps its ratios
+    # either way — while the scaled level would sit on the factor file's
+    # basis (its last covered session), not today's (#2432).
     logger.info(
         "[RETURN_DISTRIBUTION] day candles %s %s: %d bars",
         symbol,
         trading_date.isoformat(),
-        len(scaled),
-        extra={"symbol": symbol, "trading_date": trading_date.isoformat(), "bars": len(scaled)},
+        len(bars),
+        extra={"symbol": symbol, "trading_date": trading_date.isoformat(), "bars": len(bars)},
     )
-    return DayCandlesOutcome(
-        trading_date=trading_date,
-        adjustment="split_and_dividend",
-        bars=scaled,
-    )
+    return DayCandlesOutcome(trading_date=trading_date, adjustment="raw", bars=bars)
 
 
 async def compute_day_candles(
@@ -541,7 +513,7 @@ async def compute_day_candles(
     session_open_ms_utc: int,
     lake_root: Path | None = None,
 ) -> DayCandlesOutcome:
-    """Read one captured trading day's minute bars on the study's price basis.
+    """Read one captured trading day's raw minute bars.
 
     No capture-on-demand: this read serves a day a study response already
     named, so the bytes are in the lake by construction; anything else is a

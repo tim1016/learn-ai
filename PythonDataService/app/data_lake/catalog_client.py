@@ -479,9 +479,9 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # claim_* INSERT starts a row at generation INITIAL_LEASE_GENERATION,
 # steal_or_retry_minute_bar and refresh_complete_artifact each increment it
 # by exactly 1 on every reclaim, and every protected mutation
-# (publish_under_lease, complete_artifact, fail_artifact, refresh_lease,
-# restore_complete_artifact) validates the caller's recorded generation
-# atomically against the durable row instead of trusting the caller's own
+# (publish_under_lease, complete_artifact, fail_artifact, refresh_lease)
+# validates the caller's recorded generation atomically against the
+# durable row instead of trusting the caller's own
 # recollection of still holding the lease -- a check a paused/stale writer
 # will always pass. Generation, not owner, is what discriminates: every
 # writer inside one process shares a single _WORKER_ID, so an owner-only
@@ -968,44 +968,6 @@ async def publish_under_lease(
                 f"artifact {artifact_id}: completion affected no rows under the publication lock; "
                 f"rolling back generation {lease_generation}"
             )
-
-
-async def restore_complete_artifact(artifact_id: int, worker_id: str, lease_generation: int) -> bool:
-    """Undo a refresh_complete_artifact() that failed before writing anything new.
-
-    refresh_complete_artifact() only touches Status/LeaseOwner/
-    LeaseExpiresAtMs/AttemptCount when it transitions 'complete' \u2192 'fetching'
-    -- RowCount/FileSha256/FileSizeBytes/DataContractHash/FilePath all still
-    describe the pre-rebuild artifact. If the rebuild then fails before any
-    bytes were promoted (e.g. a source file read error), the old file on disk
-    was never touched either, so restoring Status alone is sufficient to put
-    the row back exactly as it was.
-
-    Callers must use this only when the failure happened before any new bytes
-    were promoted -- a failure after promotion has already replaced the file,
-    and fail_artifact() is the correct transition there instead.
-
-    Fenced on both owner and generation (issue #1888). Owner alone was not
-    enough: ``ensure_data._WORKER_ID`` is per-process, so two concurrent
-    refreshes in one process share it, and a stale one could restore the row
-    to 'complete' out from under a live reclaim -- discarding the winner's
-    work, or worse, leaving the old hash recorded while the winner's new
-    bytes sit on disk. Returns True when the row was restored, False when
-    this writer no longer holds the generation.
-    """
-    query = """
-        UPDATE "DataLakeArtifacts"
-           SET "Status" = 'complete',
-               "LeaseOwner" = NULL,
-               "LeaseExpiresAtMs" = NULL
-         WHERE "Id" = $1
-           AND "LeaseOwner" = $2
-           AND "LeaseGeneration" = $3
-           AND "Status" = 'fetching';
-    """
-    async with connection() as conn:
-        result = await conn.execute(query, artifact_id, worker_id, lease_generation)
-    return _rows_affected(result) > 0
 
 
 async def fail_artifact(

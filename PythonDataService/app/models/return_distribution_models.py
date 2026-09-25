@@ -145,7 +145,7 @@ class ReturnDistributionMeta(BaseModel):
     resolution: Literal["1m"] = "1m"
     bin_width_pct: float
     span_pct: float
-    adjustment: Literal["split_and_dividend", "raw"]
+    adjustment: Literal["split_and_dividend"]
     capture: CaptureReceiptModel | None = None
     warnings: list[str] = Field(default_factory=list)
 
@@ -254,16 +254,17 @@ class ReturnDistributionInsufficientCoverageResponse(BaseModel):
 
 class AdjustmentNotCoveredDetail(BaseModel):
     """The typed 409 body's ``detail``: the split/dividend adjustment does not
-    cover the window read, so the request is refused rather than answered
-    with returns or prices labelled adjusted that are not (#2432, #2452)."""
+    cover the window read, even after the on-demand capture rebuilt it, so
+    the study is refused rather than answered with returns labelled adjusted
+    that are not (#2432, #2452). ``capture_note`` is what that capture did."""
 
     error_code: Literal["ADJUSTMENT_NOT_COVERED"] = "ADJUSTMENT_NOT_COVERED"
     message: str
-    capture_note: str | None = None
+    capture_note: str
 
 
 class AdjustmentNotCoveredResponse(BaseModel):
-    """409 body for a study or candle read the factor file does not cover."""
+    """409 body for a study window the factor file does not cover."""
 
     detail: AdjustmentNotCoveredDetail
 
@@ -289,16 +290,16 @@ class DayCandleBarModel(BaseModel):
 
 
 class DayCandlesResponse(BaseModel):
-    """Minute candles on the study's own price basis.
+    """One day's minute candles, raw from the study's own lake root.
 
-    Read from the same raw lake root and scaled by the same LEAN
-    factor-file multiplier the study applied to that day's anchors, so the
-    candle pane cannot disagree with the return being inspected (the
-    provider-adjusted chart feed applies split-only adjustment)."""
+    Unscaled on purpose: the study's adjustment multiplies one trading date
+    by one constant, so every candle and every within-day return has the
+    same shape raw — and a scaled level would be on the factor file's basis
+    rather than today's (#2432)."""
 
     symbol: str
     session_open_ms_utc: int
-    adjustment: Literal["split_and_dividend", "raw"]
+    adjustment: Literal["raw"]
     bars: list[DayCandleBarModel]
 
 

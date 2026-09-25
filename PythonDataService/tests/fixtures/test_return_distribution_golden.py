@@ -82,9 +82,7 @@ def _run_production_pipeline(bars: pd.DataFrame):
     }
     anchors = extract_day_anchors(bars_by_day, windows)
     days = compute_daily_returns(anchors, scheduled_sessions=expected_sessions(sessions[0], sessions[-1]))
-    return build_return_distribution(
-        days, bin_width_pct=BIN_WIDTH, span_pct=SPAN, adjustment="raw"
-    )
+    return build_return_distribution(days, bin_width_pct=BIN_WIDTH, span_pct=SPAN)
 
 
 @pytest.mark.parametrize("kind", ["close_to_close", "session", "overnight"])

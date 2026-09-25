@@ -756,12 +756,13 @@ def _build_symbol_history_spec(
     adjust returns through the factor file, so a newly captured symbol
     must land with its corporate-action inputs, and this capture is also
     what rebuilds a factor file that no longer covers the window (#2452) —
-    a window it still does not cover is refused, never studied unadjusted. No daily rollup, for the same window-keyed data-contract
-    reason as the chart spec. ``run_type="chart"`` on purpose: this is a
-    UI-triggered, best-effort ingest of exactly the artifact class the
-    chart seam fetches, and sharing the label is what lets catalog claims
-    coalesce a study's cold capture with a chart's request for the same
-    sessions into one provider fetch.
+    a window it still does not cover is refused, never studied unadjusted.
+    No daily rollup, for the same reason as the chart spec (a whole-symbol
+    artifact rebuilt on every coverage change). ``run_type="chart"`` on
+    purpose: this is a UI-triggered, best-effort ingest of exactly the
+    artifact class the chart seam fetches, and sharing the label is what
+    lets catalog claims coalesce a study's cold capture with a chart's
+    request for the same sessions into one provider fetch.
     """
     from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 

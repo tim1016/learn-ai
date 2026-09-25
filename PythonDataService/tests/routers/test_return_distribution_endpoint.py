@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -592,59 +593,45 @@ def _session_open_ms(d: date) -> int:
     return _et_ms(d, 9, 30)
 
 
-@pytest.mark.asyncio
-async def test_day_candles_serve_study_price_basis(
-    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The candle pane reads the same raw root and applies the same LEAN
-    factor multiplier the study used: bars on the dividend's covered dates
-    are scaled by 0.99, post-turnover bars are not."""
-    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
-    app = _app_with(seeded_lake, monkeypatch)
-
-    covered = await _post_day_candles(
-        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[2])}
-    )
-    assert covered.status_code == 200, covered.text
-    covered_body = covered.json()
-    assert covered_body["adjustment"] == "split_and_dividend"
-    raw_bars = list(LeanMinuteDataReader([seeded_lake], session="extended").read_day(SYMBOL, sessions[2]))
-    assert len(covered_body["bars"]) == len(raw_bars)
-    first_raw = next(iter(raw_bars))
-    assert covered_body["bars"][0]["o"] == pytest.approx(float(first_raw.open) * 0.99, abs=1e-9)
-    assert covered_body["bars"][0]["t"] == first_raw.start_ms
-
-    # After the factor row dated sessions[5], the multiplier is the
-    # terminal identity row — bars are raw.
-    post = await _post_day_candles(
-        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[10])}
-    )
-    assert post.status_code == 200, post.text
-    raw_post = list(
-        LeanMinuteDataReader([seeded_lake], session="extended").read_day(SYMBOL, sessions[10])
-    )
-    assert post.json()["bars"][0]["o"] == pytest.approx(float(raw_post[0].open), abs=1e-12)
+def _assert_raw_day(body: dict[str, Any], lake: Path, day: date) -> None:
+    raw_bars = list(LeanMinuteDataReader([lake], session="extended").read_day(SYMBOL, day))
+    assert body["adjustment"] == "raw"
+    assert [(b["t"], b["o"], b["h"], b["l"], b["c"], b["v"]) for b in body["bars"]] == [
+        (b.start_ms, float(b.open), float(b.high), float(b.low), float(b.close), float(b.volume)) for b in raw_bars
+    ]
 
 
 @pytest.mark.asyncio
-async def test_day_candles_refuse_a_day_the_factor_file_does_not_cover(
-    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The candle pane runs the same coverage check as the study: a day
-    outside the recorded coverage is a typed 409, never raw prices labelled
-    adjusted."""
+async def test_day_candles_serve_the_days_raw_bars(seeded_lake: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The candle pane returns the lake's own bars, labelled raw — even on a
+    day the study scales by 0.99. One day's multiplier is one constant, so
+    scaling would only rescale the price axis, and the scaled level would
+    sit on the factor file's basis, not today's (#2432, #2452 review)."""
     sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
-    _write_factor_file(seeded_lake, f"{sessions[9].strftime('%Y%m%d')},1,1,100\n", sessions[:10])
     app = _app_with(seeded_lake, monkeypatch)
 
-    response = await _post_day_candles(
-        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[30])}
-    )
-    assert response.status_code == 409, response.text
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "ADJUSTMENT_NOT_COVERED"
-    assert detail["capture_note"] is None
-    assert sessions[30].isoformat() in detail["message"]
+    response = await _post_day_candles(app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[2])})
+
+    assert response.status_code == 200, response.text
+    _assert_raw_day(response.json(), seeded_lake, sessions[2])
+
+
+@pytest.mark.asyncio
+async def test_day_candles_do_not_depend_on_the_factor_file(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no factor file at all, the pane still serves the day: it never
+    reads one, so it has no adjustment coverage to refuse."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    paths = LeanFactorFilePath(market="usa", symbol=SYMBOL)
+    seeded_lake.joinpath(*paths.relative_path().parts).unlink()
+    seeded_lake.joinpath(*paths.coverage_record_path().parts).unlink()
+    app = _app_with(seeded_lake, monkeypatch)
+
+    response = await _post_day_candles(app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[30])})
+
+    assert response.status_code == 200, response.text
+    _assert_raw_day(response.json(), seeded_lake, sessions[30])
 
 
 @pytest.mark.asyncio

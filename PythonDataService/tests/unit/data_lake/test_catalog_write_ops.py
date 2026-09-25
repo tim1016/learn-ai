@@ -558,118 +558,6 @@ async def test_complete_artifact_leaves_data_contract_hash_untouched_when_omitte
     assert row["DataContractHash"] == "a" * 64
 
 
-async def test_restore_complete_artifact_undoes_a_refresh(clean_artifacts, pool):
-    """A rebuild that fails before writing anything new must be undoable back
-    to 'complete' with its pre-rebuild metadata intact (#1873 review fix —
-    aggregated-bar and corp-action artifacts have no steal_or_retry path, so
-    a bare fail_artifact() here would strand the row forever)."""
-    identity = _minute_identity()
-    artifact_id = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    assert artifact_id is not None
-    await catalog_client.complete_artifact(
-        artifact_id=artifact_id,
-        row_count=390,
-        first_bar_start_ms=1,
-        last_bar_start_ms=2,
-        file_size_bytes=100,
-        file_sha256="b" * 64,
-        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
-    )
-    prior = await catalog_client.refresh_complete_artifact(
-        artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000
-    )
-    assert prior is not None
-
-    # The refresh minted a new generation; the restore must present that one,
-    # not the generation the row carried before the reclaim.
-    assert (
-        await catalog_client.restore_complete_artifact(
-            artifact_id=artifact_id, worker_id="w-1", lease_generation=catalog_client.INITIAL_LEASE_GENERATION
-        )
-        is False
-    ), "a pre-refresh generation must not be able to restore the row"
-
-    restored = await catalog_client.restore_complete_artifact(
-        artifact_id=artifact_id, worker_id="w-1", lease_generation=prior.new_lease_generation
-    )
-    assert restored is True
-
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        row = await conn.fetchrow(
-            'SELECT "Status", "FileSha256", "DataContractHash", "LeaseOwner" FROM "DataLakeArtifacts" WHERE "Id" = $1',
-            artifact_id,
-        )
-    finally:
-        await conn.close()
-    assert row["Status"] == "complete"
-    assert row["FileSha256"] == "b" * 64  # untouched by the failed rebuild
-    assert row["DataContractHash"] == "a" * 64
-    assert row["LeaseOwner"] is None
-
-
-async def test_restore_complete_artifact_rejects_a_different_worker(clean_artifacts, pool):
-    """Scoped to the caller's own worker_id, same as refresh_lease — a worker
-    must not resurrect a row it doesn't hold the lease on."""
-    identity = _minute_identity()
-    artifact_id = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    assert artifact_id is not None
-    await catalog_client.complete_artifact(
-        artifact_id=artifact_id,
-        row_count=390,
-        first_bar_start_ms=1,
-        last_bar_start_ms=2,
-        file_size_bytes=100,
-        file_sha256="b" * 64,
-        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
-    )
-    await catalog_client.refresh_complete_artifact(artifact_id=artifact_id, worker_id="w-1", lease_ttl_ms=300_000)
-
-    restored = await catalog_client.restore_complete_artifact(
-        artifact_id=artifact_id, worker_id="w-2", lease_generation=catalog_client.INITIAL_LEASE_GENERATION
-    )
-    assert restored is False
-
-
-async def test_restore_complete_artifact_returns_false_when_not_fetching(clean_artifacts, pool):
-    """A row that was never refreshed (still plain 'complete') has nothing
-    to undo — the 'fetching' guard must reject it, not silently no-op true."""
-    identity = _minute_identity()
-    artifact_id = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    assert artifact_id is not None
-    await catalog_client.complete_artifact(
-        artifact_id=artifact_id,
-        row_count=390,
-        first_bar_start_ms=1,
-        last_bar_start_ms=2,
-        file_size_bytes=100,
-        file_sha256="b" * 64,
-        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
-    )
-    restored = await catalog_client.restore_complete_artifact(
-        artifact_id=artifact_id, worker_id="w-1", lease_generation=catalog_client.INITIAL_LEASE_GENERATION
-    )
-    assert restored is False
-
-
 # ---------------------------------------------------------------------------
 # Task 9: claim ops for corp-action, metadata, aggregated-bar
 # ---------------------------------------------------------------------------
@@ -1237,8 +1125,8 @@ async def test_a_stale_writer_cannot_mutate_the_winners_generation(clean_artifac
     Owner alone cannot discriminate: ensure_data's ``_WORKER_ID`` is
     per-process, so two concurrent operations in one process present the same
     lease owner and only the generation tells them apart. A stale writer that
-    could still fail, heartbeat, or restore the row would clobber the winner
-    just as surely as one that could complete it.
+    could still fail or heartbeat the row would clobber the winner just as
+    surely as one that could complete it.
     """
     rel_path = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
     artifact_id = await _claim_a(rel_path)
@@ -1276,10 +1164,6 @@ async def test_a_stale_writer_cannot_mutate_the_winners_generation(clean_artifac
         )
         is False
     ), "a stale generation must not be able to heartbeat the winner's lease"
-
-    assert (
-        await catalog_client.restore_complete_artifact(artifact_id, "writer-a", a_generation) is False
-    ), "a stale generation must not be able to restore the winner's row to complete"
 
     assert (
         await catalog_client.complete_artifact(

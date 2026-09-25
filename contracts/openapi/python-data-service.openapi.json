@@ -412,18 +412,11 @@
         "type": "object"
       },
       "AdjustmentNotCoveredDetail": {
-        "description": "The typed 409 body's ``detail``: the split/dividend adjustment does not\ncover the window read, so the request is refused rather than answered\nwith returns or prices labelled adjusted that are not (#2432, #2452).",
+        "description": "The typed 409 body's ``detail``: the split/dividend adjustment does not\ncover the window read, even after the on-demand capture rebuilt it, so\nthe study is refused rather than answered with returns labelled adjusted\nthat are not (#2432, #2452). ``capture_note`` is what that capture did.",
         "properties": {
           "capture_note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Capture Note"
+            "title": "Capture Note",
+            "type": "string"
           },
           "error_code": {
             "const": "ADJUSTMENT_NOT_COVERED",
@@ -436,13 +429,14 @@
           }
         },
         "required": [
-          "message"
+          "message",
+          "capture_note"
         ],
         "title": "AdjustmentNotCoveredDetail",
         "type": "object"
       },
       "AdjustmentNotCoveredResponse": {
-        "description": "409 body for a study or candle read the factor file does not cover.",
+        "description": "409 body for a study window the factor file does not cover.",
         "properties": {
           "detail": {
             "$ref": "#/components/schemas/AdjustmentNotCoveredDetail"
@@ -12888,15 +12882,11 @@
         "type": "object"
       },
       "DayCandlesResponse": {
-        "description": "Minute candles on the study's own price basis.\n\nRead from the same raw lake root and scaled by the same LEAN\nfactor-file multiplier the study applied to that day's anchors, so the\ncandle pane cannot disagree with the return being inspected (the\nprovider-adjusted chart feed applies split-only adjustment).",
+        "description": "One day's minute candles, raw from the study's own lake root.\n\nUnscaled on purpose: the study's adjustment multiplies one trading date\nby one constant, so every candle and every within-day return has the\nsame shape raw \u2014 and a scaled level would be on the factor file's basis\nrather than today's (#2432).",
         "properties": {
           "adjustment": {
-            "enum": [
-              "split_and_dividend",
-              "raw"
-            ],
-            "title": "Adjustment",
-            "type": "string"
+            "const": "raw",
+            "title": "Adjustment"
           },
           "bars": {
             "items": {
@@ -32541,12 +32531,8 @@
       "ReturnDistributionMeta": {
         "properties": {
           "adjustment": {
-            "enum": [
-              "split_and_dividend",
-              "raw"
-            ],
-            "title": "Adjustment",
-            "type": "string"
+            "const": "split_and_dividend",
+            "title": "Adjustment"
           },
           "bin_width_pct": {
             "title": "Bin Width Pct",
@@ -67441,7 +67427,7 @@
     },
     "/api/research/return-distribution/day-candles": {
       "post": {
-        "description": "One captured trading day's minute candles on the study's price basis.",
+        "description": "One captured trading day's raw minute candles.",
         "operationId": "run_day_candles_api_research_return_distribution_day_candles_post",
         "requestBody": {
           "content": {
@@ -67473,16 +67459,6 @@
               }
             },
             "description": "The symbol is not lake-addressable, or the lake holds no bars for that trading date."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdjustmentNotCoveredResponse"
-                }
-              }
-            },
-            "description": "The split and dividend adjustment does not cover that trading date."
           },
           "422": {
             "content": {
