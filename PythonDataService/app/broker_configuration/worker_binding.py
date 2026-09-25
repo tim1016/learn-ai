@@ -445,7 +445,7 @@ async def _attempt_apply(
             )
 
     try:
-        context = _resolve(stored, candidate, environment=environment)
+        context = resolve_revision_context(stored, environment=environment)
     except BrokerProfileError as exc:
         return f"the staged revision could not be resolved: {exc.reason}"
 
@@ -464,7 +464,7 @@ async def _bind_candidate(
     """Resolve one candidate into a context, or close the gate."""
     try:
         stored = _read_revision(service, candidate)
-        context = _resolve(stored, candidate, environment=environment)
+        context = resolve_revision_context(stored, environment=environment)
     except (BrokerConfigurationError, BrokerProfileError) as exc:
         logger.warning(
             "The effective broker revision could not be resolved; the gate is closed",
@@ -606,21 +606,34 @@ def _read_revision(
     return service.read_revision(candidate.profile_id, candidate.revision)
 
 
-def _resolve(
+def resolve_revision_context(
     stored: ProfileRevision,
-    candidate: BindingCandidate,
     *,
-    environment: AlpacaCredentialEnvironment | None,
+    environment: AlpacaCredentialEnvironment | None = None,
 ) -> AlpacaRuntimeContext:
+    """One stored revision as the runtime binding it describes.
+
+    The one mapping from a revision's stored content to
+    ``resolve_runtime_context``: the worker's bind and the operator CLIs'
+    ``cli_binding.effective_broker`` both resolve through here, so the two can
+    never disagree about which of a revision's values reach the runtime — the
+    live envelope, and a paper revision's own allowances (#2440), which reach
+    exit pricing only as the binding's settings.
+    """
     return resolve_runtime_context(
         endpoint_mode=stored.endpoint_mode,
         credential_slot=stored.credential_slot,
         live_envelope=(
             None if stored.live_envelope is None else stored.live_envelope.to_mapping()
         ),
+        paper_xh_allowances=(
+            None
+            if stored.paper_xh_allowances is None
+            else stored.paper_xh_allowances.to_mapping()
+        ),
         account_pin=stored.account_pin,
-        profile_id=candidate.profile_id,
-        revision=candidate.revision,
+        profile_id=stored.profile_id,
+        revision=stored.revision,
         environment=environment,
     )
 
@@ -736,5 +749,6 @@ __all__ = [
     "UnboundWorker",
     "UnprovableObligations",
     "acknowledge_worker_binding",
+    "resolve_revision_context",
     "resolve_worker_binding",
 ]

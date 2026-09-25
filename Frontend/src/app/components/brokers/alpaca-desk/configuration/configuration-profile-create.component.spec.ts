@@ -36,8 +36,51 @@ describe('ConfigurationProfileCreateComponent', () => {
 
     expect(created).toHaveBeenCalledWith({
       displayName: 'Paper — strategy testing',
-      content: { credential_slot: 'default', endpoint_mode: 'paper', live_envelope: null },
+      content: {
+        credential_slot: 'default',
+        endpoint_mode: 'paper',
+        live_envelope: null,
+        paper_xh_allowances: null,
+      },
     });
+  });
+
+  it('saves a paper profile with both extended-hours offsets', async () => {
+    const created = vi.fn();
+    await renderCreate(created);
+    await userEvent.type(screen.getByLabelText('Profile name'), 'Paper — regular hours');
+    await userEvent.type(
+      screen.getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }),
+      '12.5',
+    );
+    await userEvent.type(
+      screen.getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
+      '7.5',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    expect(created).toHaveBeenCalledWith({
+      displayName: 'Paper — regular hours',
+      content: {
+        credential_slot: 'default',
+        endpoint_mode: 'paper',
+        live_envelope: null,
+        paper_xh_allowances: { xh_entry_bps: 12.5, xh_exit_bps: 7.5 },
+      },
+    });
+  });
+
+  it('refuses a paper profile with one extended-hours offset of the two', async () => {
+    await renderCreate();
+    await userEvent.type(screen.getByLabelText('Profile name'), 'Paper — half set');
+    await userEvent.type(
+      screen.getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
+      '7.5',
+    );
+
+    expect(screen.getByRole('button', { name: 'Save profile' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('Set both extended-hours offsets, or leave both empty.')).toBeTruthy();
   });
 
   it('keeps a half-typed profile when the slot list is re-read', async () => {

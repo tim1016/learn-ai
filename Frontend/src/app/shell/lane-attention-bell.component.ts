@@ -17,6 +17,7 @@ import {
   laneConfirmedAccount,
   type LaneDescriptor,
 } from '../fleet/fleet-directory.types';
+import { NextAttemptComponent } from '../components/broker/shared/next-attempt/next-attempt.component';
 import { AssetIdentityComponent } from '../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../shared/pipes/receipt-label.pipe';
 import {
@@ -52,7 +53,9 @@ interface BellItem {
  * Items are the lane's clerk's own headlines (operator prose from the
  * server, so never through `receiptLabel`); `reason_code` is a backend
  * identifier and goes through the shared pipe; a symbol renders through
- * `app-asset-identity` at its compact size. Each item links into its bot's
+ * `app-asset-identity` at its compact size; when the Clerk will next try on
+ * its own (an `EXIT_NOT_FLAT`'s re-drive, #2440) renders through
+ * `app-next-attempt`, as on the desk and the bot page. Each item links into its bot's
  * workspace page when the item names a strategy and the lane's account is
  * confirmed, and an item disappears exactly when its condition resolves —
  * the bell's count is `condition_id`-deduped, so it clears only when fixed.
@@ -60,7 +63,7 @@ interface BellItem {
 @Component({
   selector: 'app-lane-attention-bell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, AssetIdentityComponent, ReceiptLabelPipe],
+  imports: [RouterLink, AssetIdentityComponent, NextAttemptComponent, ReceiptLabelPipe],
   host: {
     '(document:mousedown)': 'onDocumentMousedown($event)',
     '(keydown.escape)': 'onEscape()',
@@ -100,6 +103,7 @@ interface BellItem {
     .item__severity.is-warning { color: #ffb020; }
     .item__reason { opacity: 0.75; }
     .item__headline { font-size: var(--fs-xs); line-height: 1.35; }
+    .item__attempt { font-size: var(--fs-xs); line-height: 1.35; }
     .item__open { font-size: var(--fs-xs); color: var(--p-primary-color, #6da2ff); text-decoration: none; width: fit-content; }
     .item__open:hover { text-decoration: underline; }
     .item__open:focus-visible { outline: 2px solid var(--p-primary-color, #6da2ff); outline-offset: 2px; }
@@ -144,6 +148,7 @@ interface BellItem {
                     <span class="item__reason">{{ row.item.reason_code | receiptLabel }}</span>
                   </span>
                   <span class="item__headline">{{ row.item.headline }}</span>
+                  <app-next-attempt class="item__attempt" [facts]="row.item" />
                   @if (row.link; as link) {
                     <a class="item__open" [routerLink]="link.commands" [queryParams]="link.queryParams">
                       Open bot

@@ -310,6 +310,85 @@ async def test_a_live_revision_round_trips_its_envelope(client: AsyncClient) -> 
     assert [revision["revision"] for revision in history.json()["revisions"]] == [1, 2]
 
 
+PAPER_PAIR = {"xh_entry_bps": 12.5, "xh_exit_bps": 7.25}
+
+
+async def test_a_paper_revision_round_trips_its_own_allowances(client: AsyncClient) -> None:
+    """#2440: a paper revision carries the two allowances, and only them."""
+    created = await client.post(
+        f"{PREFIX}/profiles",
+        json={**PAPER_BODY, "display_name": "Paper — regular hours", "paper_xh_allowances": PAPER_PAIR},
+    )
+
+    assert created.status_code == 201, created.text
+    revision = created.json()["latest_revision"]
+    assert revision["paper_xh_allowances"] == PAPER_PAIR
+    assert revision["live_envelope"] is None
+    assert revision["complete"] is True
+    profile_id = created.json()["profile"]["profile_id"]
+    read = await client.get(f"{PREFIX}/profiles/{profile_id}/revisions/1")
+    assert read.json()["paper_xh_allowances"] == PAPER_PAIR
+
+    cleared = await client.post(
+        f"{PREFIX}/profiles/{profile_id}/revisions", json={"expected_revision": 1, **PAPER_BODY}
+    )
+    assert cleared.status_code == 201
+    assert cleared.json()["paper_xh_allowances"] is None
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        pytest.param({**PAPER_PAIR, "xh_exit_bps": True}, id="a-boolean"),
+        pytest.param({**PAPER_PAIR, "xh_exit_bps": "7.25"}, id="a-string"),
+        pytest.param({**PAPER_PAIR, "loss_usd": 500.0}, id="a-live-only-value"),
+        pytest.param({**PAPER_PAIR, "shadow_sessions": 3}, id="a-session-count"),
+        pytest.param({**PAPER_PAIR, "xh_exit_bps": 10_000}, id="one-hundred-percent"),
+        pytest.param({**PAPER_PAIR, "xh_entry_bps": -1}, id="negative"),
+        pytest.param({"xh_exit_bps": 7.25}, id="one-sided"),
+    ],
+)
+async def test_a_malformed_paper_pair_is_refused_at_the_boundary(
+    client: AsyncClient, pair: dict[str, object]
+) -> None:
+    response = await client.post(
+        f"{PREFIX}/profiles",
+        json={**PAPER_BODY, "display_name": "Paper — refused", "paper_xh_allowances": pair},
+    )
+
+    assert response.status_code == 422, response.text
+    listed = await client.get(f"{PREFIX}/profiles")
+    assert listed.json()["profiles"] == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            {
+                "credential_slot": "alpaca_live_primary",
+                "endpoint_mode": "live",
+                "live_envelope": LIVE_ENVELOPE_PAYLOAD,
+                "paper_xh_allowances": PAPER_PAIR,
+            },
+            id="live-revision",
+        ),
+        pytest.param(
+            {**PAPER_BODY, "live_envelope": LIVE_ENVELOPE_PAYLOAD, "paper_xh_allowances": PAPER_PAIR},
+            id="paper-revision-with-the-six-values",
+        ),
+    ],
+)
+async def test_a_paper_pair_beside_an_envelope_is_refused_with_its_reason(
+    client: AsyncClient, body: dict[str, object]
+) -> None:
+    response = await client.post(f"{PREFIX}/profiles", json={**body, "display_name": "Two pairs"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["reason"] == "paper_allowances_invalid"
+    assert response.json()["detail"]["next_step"]
+
+
 async def test_a_stale_revision_edit_returns_a_conflict_with_its_reason(
     client: AsyncClient,
 ) -> None:

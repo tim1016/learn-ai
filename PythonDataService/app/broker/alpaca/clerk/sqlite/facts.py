@@ -205,6 +205,18 @@ _REDUCING_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "limit_price": None,
     "extended_hours": False,
 }
+# The reducing order's own send bound (#2440) is absent for a regular leg and
+# for every order created before it existed; who priced it and against which
+# quote is present only on a leg the Clerk priced when it was created, which
+# always also carries its bound.
+_REDUCING_ORDER_DEFAULTS: Mapping[str, Any] = {
+    **_REDUCING_SHAPE_DEFAULTS,
+    "valid_until_ms": None,
+    "priced_by": None,
+    "reference_bid": None,
+    "reference_ask": None,
+    "reference_quote_observed_at_ms": None,
+}
 # ``reducing_side`` is what makes an accepted shape *present*: the four
 # fields above are all at their defaults for a regular-session leg, so the
 # side is the only field that can say "a deciding program recorded a shape
@@ -271,8 +283,10 @@ class ExitAcceptedFacts:
     time_in_force: str = "day"
     limit_price: float | None = None
     extended_hours: bool = False
-    # When an operator-confirmed recovery limit stops being sendable: the end
-    # of the session it was priced in (#2007). ``None`` for every other EXIT.
+    # When a recorded extended-hours limit stops being sendable: the end of
+    # the session it was priced in — an operator's or the Clerk's recovery
+    # price (#2007, #2229) or a deciding program's (#2440). ``None`` for a
+    # regular-session EXIT, which records no shape.
     reducing_valid_until_ms: int | None = None
     # The reduction the operator actually reviewed before confirming a price
     # (#2007). Cancellation resolves the real quantity several steps later; if
@@ -306,8 +320,9 @@ class ExitAcceptedFacts:
         EXIT acceptance — and every sealed receipt hashed over one. An EXIT
         with no confirmed or decided shape (a watchdog re-drive, a safe
         flatten inside the regular session) records nothing and still yields
-        market DAY. ``valid_until_ms`` bounds an operator's confirmed limit,
-        ``reference_quote`` is the quote it was priced against, and
+        market DAY. ``valid_until_ms`` bounds a recorded extended-hours limit
+        to the session it was priced in, ``reference_quote`` is the quote a
+        recovery limit was priced against, and
         ``confirmed_quantity`` is the reduction they reviewed; all three are
         recorded only with the shape they belong to.
         """
@@ -369,7 +384,19 @@ class ExitReducingOrderCreatedFacts:
     ``order_type``, ``time_in_force``, ``limit_price`` and ``extended_hours``
     carry the decision's session-dependent leg shape (ADR 0059 D5.3), so a
     resumed submission rebuilds the identical leg without being told it
-    again."""
+    again. ``valid_until_ms`` is the end of the session an extended-hours leg
+    was priced for (#2440): a resubmission past it is never sent. The leg is
+    not always the acceptance's shape — one re-priced at send time carries
+    its own bound — so the bound lives with the order, not only with the
+    EXIT.
+
+    A leg the Clerk priced when the reduction was created, rather than taking
+    it from the acceptance, also records who priced it (``priced_by="clerk"``)
+    and the live IBKR quote it was priced against — the reference its
+    realized slippage is measured from, exactly as an acceptance records a
+    recovery limit's (#2229) — so no copy ever calls it confirmed. All four
+    are absent from a leg created as its acceptance recorded it, whose
+    provenance is the acceptance's."""
 
     symbol: str
     side: str
@@ -378,9 +405,14 @@ class ExitReducingOrderCreatedFacts:
     time_in_force: str = "day"
     limit_price: float | None = None
     extended_hours: bool = False
+    valid_until_ms: int | None = None
+    priced_by: str | None = None
+    reference_bid: float | None = None
+    reference_ask: float | None = None
+    reference_quote_observed_at_ms: int | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(_omit_defaults(asdict(self), _REDUCING_SHAPE_DEFAULTS))
+        return canonicalize(_omit_defaults(asdict(self), _REDUCING_ORDER_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:
@@ -481,6 +513,9 @@ class ExternalOrderAcknowledgedFacts:
         return cls(**json.loads(facts_json))
 
 
+_UNCERTAINTY_RAISED_DEFAULTS: Mapping[str, Any] = {"next_attempt_at_ms": None}
+
+
 @dataclass(frozen=True)
 class UncertaintyRaisedFacts:
     """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
@@ -502,9 +537,14 @@ class UncertaintyRaisedFacts:
     next_step: str
     evidence_refs: list[str]
     cause_facts: dict[str, Any] = field(default_factory=dict)
+    # When the Clerk will next try to resolve the episode on its own, when it
+    # can say: the stuck-EXIT watchdog's next re-drive (#2440). An ``int64 ms
+    # UTC`` value the UI renders, never prose. Omitted when absent, so every
+    # episode without one serializes and hashes exactly as before.
+    next_attempt_at_ms: int | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        return canonicalize(_omit_defaults(asdict(self), _UNCERTAINTY_RAISED_DEFAULTS))
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> UncertaintyRaisedFacts:

@@ -12,14 +12,22 @@ move; the authoring was violating its own contract.
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
+from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
+from app.broker.alpaca.clerk.program_leg import LegRefusal, ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import flatten_send_verdict
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     BOT_COCKPIT_SAFE_FLATTEN_PREPARE_ANCHOR,
     _capability_blocker,
     _panel_action,
 )
+from app.services.session_authority import SessionAuthorityState
+from app.utils.timestamps import to_ms_utc
 
 
 def _capability(
@@ -93,12 +101,33 @@ def _available(action_id: str) -> RecoveryCapability:
     )
 
 
-@pytest.mark.parametrize("phase", ["PRE", "POST"])
-def test_in_extended_hours_the_unpriced_flatten_button_moves_to_the_priced_plan(phase: str) -> None:
-    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase=phase)
+_ET = ZoneInfo("America/New_York")
+_WEDNESDAY = date(2026, 9, 2)
+# The Alpaca paper/live authority declares the 04:00-20:00 window; a ``sim:``
+# authority (or any broker declaring none) trades the regular session only.
+_WINDOWED = ProgramLegPolicy(window=ALPACA_EXTENDED_HOURS_WINDOW, allowances=None)
+_NO_WINDOW = ProgramLegPolicy.regular_only()
+
+
+def _verdict(hour: int, minute: int, policy: ProgramLegPolicy) -> SessionAuthorityState | LegRefusal:
+    """The Clerk's own answer at that ET wall-clock instant on a full-session Wednesday."""
+    now_ms = to_ms_utc(
+        datetime(_WEDNESDAY.year, _WEDNESDAY.month, _WEDNESDAY.day, hour, minute, tzinfo=_ET)
+    )
+    return flatten_send_verdict(now_ms=now_ms, policy=policy)
+
+
+@pytest.mark.parametrize(("hour", "minute"), [(7, 0), (16, 1)], ids=["PRE", "POST"])
+def test_in_extended_hours_the_unpriced_flatten_button_moves_to_the_priced_plan(
+    hour: int, minute: int
+) -> None:
+    action = _panel_action(
+        _available("execute_safe_flatten"), 7, flatten_verdict=_verdict(hour, minute, _WINDOWED)
+    )
 
     assert action.enabled is False
     (blocker,) = action.blockers
+    assert blocker.condition.id == "EXTENDED_HOURS_FLATTEN_NEEDS_A_LIMIT"
     assert blocker.disposition == "fix_here"
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "confirm_in_form"
@@ -106,16 +135,50 @@ def test_in_extended_hours_the_unpriced_flatten_button_moves_to_the_priced_plan(
 
 
 def test_with_no_session_open_the_flatten_button_waits_with_no_move() -> None:
-    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase="CLOSED")
+    verdict = _verdict(21, 0, _WINDOWED)
+    assert isinstance(verdict, LegRefusal)
+
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_verdict=verdict)
 
     assert action.enabled is False
     (blocker,) = action.blockers
+    assert blocker.condition.id == "NO_SESSION_OPEN"
+    assert blocker.headline == verdict.explanation
+    assert verdict.available_at_ms is not None
+    assert blocker.detail == f"{verdict.next_step} Prepare safe flatten shows when."
     assert blocker.disposition == "wait"
     assert blocker.primary_move is None
 
 
+def test_after_the_close_on_an_authority_with_no_window_the_button_says_what_the_clerk_says() -> None:
+    """At 16:01 after-hours IS open; this authority just cannot price in it (#2440 review).
+
+    The page used to judge the session itself and say no session was open. It
+    now shows the Clerk's own refusal, at the Clerk's send instant.
+    """
+    verdict = _verdict(16, 1, _NO_WINDOW)
+    assert isinstance(verdict, LegRefusal)
+    assert verdict.reason_code == "EXTENDED_HOURS_PRICING_UNAVAILABLE"
+
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_verdict=verdict)
+
+    assert action.enabled is False
+    (blocker,) = action.blockers
+    assert blocker.condition.id == "EXTENDED_HOURS_PRICING_UNAVAILABLE"
+    assert blocker.headline == verdict.explanation
+    # X m7: the blocker list renders no time, so the refusal that names one
+    # points at the prepared plan, which shows it.
+    assert blocker.detail == f"{verdict.next_step} Prepare safe flatten shows when."
+    assert "No trading session would be open" not in blocker.headline
+    assert blocker.disposition == "wait"
+    assert blocker.primary_move is None
+    assert blocker.condition.evidence == {"available_at_ms": verdict.available_at_ms}
+
+
 def test_inside_the_regular_session_the_flatten_button_is_unchanged() -> None:
-    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase="RTH")
+    action = _panel_action(
+        _available("execute_safe_flatten"), 7, flatten_verdict=_verdict(11, 0, _NO_WINDOW)
+    )
 
     assert action.enabled is True
     assert action.blockers == []
@@ -124,7 +187,7 @@ def test_inside_the_regular_session_the_flatten_button_is_unchanged() -> None:
 def test_an_unanswered_session_blocks_the_unpriced_flatten_too() -> None:
     """The regular session is the only one this button can succeed in, so it is
     the only one an unanswered session may be assumed to be (CodeRabbit 2026-09-19)."""
-    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_phase=None)
+    action = _panel_action(_available("execute_safe_flatten"), 7, flatten_verdict=None)
 
     assert action.enabled is False
     (blocker,) = action.blockers
@@ -133,6 +196,8 @@ def test_an_unanswered_session_blocks_the_unpriced_flatten_too() -> None:
 
 
 def test_the_session_gates_no_other_recovery_action() -> None:
-    action = _panel_action(_available("reconcile_now"), 7, flatten_phase="CLOSED")
+    action = _panel_action(
+        _available("reconcile_now"), 7, flatten_verdict=_verdict(21, 0, _WINDOWED)
+    )
 
     assert action.enabled is True

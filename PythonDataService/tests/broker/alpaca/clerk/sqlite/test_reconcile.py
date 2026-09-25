@@ -25,7 +25,10 @@ import pytest
 
 import app.broker.alpaca.clerk.sqlite.uncertainty_policies as uncertainty_policies_module
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    RecoveryPricing,
+)
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
@@ -536,7 +539,7 @@ async def _reconcile_unknown_effect(
     trigger: Literal["AUTOMATIC", "OPERATOR_RECONCILE_NOW"] = "AUTOMATIC",
 ) -> AccountReconciliationResult:
     """Exercise recovery only through the public account-level reconciler."""
-    return await reconcile_account(repo, read=_FakeRead(), trade=trade, trigger=trigger)
+    return await reconcile_account(repo, read=_FakeRead(), trade=trade, trigger=trigger, pricing=UNPRICEABLE_RECOVERY)
 
 
 async def test_account_reconciliation_resolves_unknown_effect_to_success(repo: ClerkSqliteRepository) -> None:
@@ -705,6 +708,7 @@ async def test_account_reconciliation_delegates_an_exit_owned_entry_to_resolve_e
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(cancel_error=BrokerUnavailable("timeout")),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     effect_stuck = repo.effect_operation(accepted.effect_operation_id)
     assert effect_stuck is not None and effect_stuck.state == "unknown"
@@ -728,7 +732,7 @@ async def test_reconcile_account_raises_an_account_clerk_hold_for_a_foreign_orde
 ) -> None:
     foreign = _broker_order("manual/someone/v1:xyz", order_id="bo-foreign-1")
     read = _FakeRead(orders=[foreign])
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert result.verdict == "unexplained_order"
     hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert hold is not None and hold["state"] == "ACTIVE"
@@ -740,7 +744,7 @@ async def test_reconcile_foreign_order_records_external_observation_without_bot_
     """A foreign broker order is durable account evidence, never a bot fill."""
     foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
 
-    result = await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
+    result = await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert result.verdict == "unexplained_order"
     assert repo.external_orders() == [
@@ -783,7 +787,8 @@ async def test_reconcile_contains_an_open_unfoldable_foreign_order_and_fences_on
     readable = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
 
     result = await reconcile_account(
-        repo, read=_FakeRead(orders=[poisoned, readable]), trade=_FakeTrade()
+        repo, read=_FakeRead(orders=[poisoned, readable]), trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "unexplained_order"
@@ -799,7 +804,7 @@ async def test_reconcile_contains_an_open_unfoldable_foreign_order_and_fences_on
 
     # A second pass over the same resting order appends nothing new for it.
     before = len(repo.custody_transitions())
-    await reconcile_account(repo, read=_FakeRead(orders=[poisoned, readable]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[poisoned, readable]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert [
         row["transition_kind"] for row in repo.custody_transitions()[before:]
     ].count("UNCERTAINTY_REFRESHED") == 0
@@ -811,7 +816,7 @@ async def test_acknowledging_one_external_order_keeps_another_external_cause_hel
     """An acknowledgement can clear only the selected external-order cause."""
     first = _broker_order("alpaca-console:first", order_id="external-1")
     second = _broker_order("alpaca-console:second", order_id="external-2")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     acknowledged = acknowledge_external_order(
         repo,
@@ -836,7 +841,7 @@ async def test_acknowledging_external_order_resolves_only_its_hold_and_keeps_aud
     repo: ClerkSqliteRepository,
 ) -> None:
     foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
-    await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     repo.append_transition(_hold_transition(reason_code="STREAM_HEALTH_HOLD", evidence_refs=["stream"]))
 
     acknowledged = acknowledge_external_order(
@@ -858,7 +863,7 @@ async def test_external_order_reader_paginates_durable_observations_with_account
 ) -> None:
     first = _broker_order("alpaca-console:first", order_id="external-1")
     second = _broker_order("alpaca-console:second", order_id="external-2")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     reader = SqliteExternalOrderReader.from_repository(repo)
     try:
         first_page = reader.external_orders(page_size=1)
@@ -882,7 +887,7 @@ async def test_external_order_cursor_survives_a_later_broker_snapshot_update(
     """The cursor follows immutable first-observation custody, not mutable poll time."""
     first = _broker_order("alpaca-console:first", order_id="external-1")
     second = _broker_order("alpaca-console:second", order_id="external-2")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     reader = SqliteExternalOrderReader.from_repository(repo)
     try:
         first_page = reader.external_orders(page_size=1)
@@ -911,13 +916,14 @@ async def test_reconciliation_does_not_append_duplicate_external_fact_for_a_new_
     repo: ClerkSqliteRepository,
 ) -> None:
     foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
-    await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     before = len(repo.custody_transitions())
 
     await reconcile_account(
         repo,
         read=_FakeRead(orders=[foreign.model_copy(update={"observed_at_ms": foreign.observed_at_ms + 1})]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert len(repo.custody_transitions()) == before
@@ -929,7 +935,7 @@ async def test_external_order_reader_filters_review_state_without_cross_filter_c
     first = _broker_order("alpaca-console:first", order_id="external-1")
     second = _broker_order("alpaca-console:second", order_id="external-2")
     third = _broker_order("alpaca-console:third", order_id="external-3")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second, third]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second, third]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     acknowledge_external_order(repo, external_order_id="external-1", operator="operator-1")
     reader = SqliteExternalOrderReader.from_repository(repo)
     try:
@@ -959,10 +965,11 @@ async def test_acknowledgement_does_not_reactivate_stale_external_observations(
         repo,
         read=_FakeRead(orders=[stale_first, stale_second]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
-    await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
-    await reconcile_account(repo, read=_FakeRead(orders=[current]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(orders=[current]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     acknowledge_external_order(repo, external_order_id="external-current", operator="operator-1")
 
@@ -975,7 +982,7 @@ async def test_reconcile_account_raises_an_account_clerk_uncertainty_for_positio
     """#1380: a position_drift verdict raises a durable, ACCOUNT_CLERK-scoped
     uncertainty that blocks new exposure but still allows reduction."""
     read = _FakeRead(orders=[], positions=[_position("SPY", quantity=5)])
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert result.verdict == "position_drift"
 
     uncertainty = repo.active_uncertainty(
@@ -1024,6 +1031,7 @@ async def test_reconcile_blocks_new_exposure_on_first_indeterminate_mismatch(
         repo,
         read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "position_drift"
@@ -1089,6 +1097,7 @@ async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
         repo,
         read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert first.verdict == "position_drift"
     assert not admit_new_exposure(repo, strategy_instance_id=SID).allowed
@@ -1105,6 +1114,7 @@ async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
         repo,
         read=_FakeRead(orders=[filled], positions=[_position("SPY", quantity=5.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert second.verdict == "clean"
     assert second.indeterminate_symbols == ()
@@ -1133,6 +1143,7 @@ async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
         repo,
         read=_FakeRead(orders=[filled], positions=[_position("SPY", quantity=5.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     resolutions_after = [
         transition
@@ -1151,7 +1162,7 @@ async def test_reconcile_uses_post_recovery_broker_snapshot_for_final_verdict(
         position_snapshots=[[], [_position("SPY", quantity=5)]],
     )
 
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert result.verdict == "position_drift"
     assert result.drifted_symbols == ("SPY",)
@@ -1177,7 +1188,7 @@ async def test_reconciliation_fences_enter_before_reading_broker_truth(
             return []
 
     task = asyncio.create_task(
-        reconcile_account(repo, read=BlockingRead(), trade=_FakeTrade())
+        reconcile_account(repo, read=BlockingRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     )
     await entered.wait()
 
@@ -1219,6 +1230,7 @@ async def test_in_flight_mismatch_retains_existing_drift_episode(
         repo,
         read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=5)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "unexplained_order"
@@ -1236,7 +1248,7 @@ async def test_reconcile_account_refreshes_unchanged_position_drift_evidence(
     repo: ClerkSqliteRepository,
 ) -> None:
     read = _FakeRead(orders=[], positions=[_position("SPY", quantity=5)])
-    await reconcile_account(repo, read=read, trade=_FakeTrade())
+    await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     initial = repo.active_uncertainty(
         scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
     )
@@ -1244,7 +1256,7 @@ async def test_reconcile_account_refreshes_unchanged_position_drift_evidence(
     before = len(repo.custody_transitions())
     repo._clock.advance(1_000)  # type: ignore[attr-defined]
 
-    await reconcile_account(repo, read=read, trade=_FakeTrade())
+    await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     refreshed = repo.active_uncertainty(
         scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
     )
@@ -1270,6 +1282,7 @@ async def test_reconcile_folds_recovered_fill_before_computing_position_drift(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=1.0)]),
         trade=_FakeTrade(lookup_result=filled),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "clean"
@@ -1289,10 +1302,10 @@ async def test_reconcile_account_hold_raise_is_idempotent_across_repeated_passes
 ) -> None:
     foreign = _broker_order("manual/someone/v1:xyz", order_id="bo-foreign-1")
     read = _FakeRead(orders=[foreign])
-    await reconcile_account(repo, read=read, trade=_FakeTrade())
+    await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     before = len(repo.custody_transitions())
 
-    await reconcile_account(repo, read=read, trade=_FakeTrade())
+    await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert len(repo.custody_transitions()) == before  # still one ACTIVE hold, no second raise
 
 
@@ -1303,17 +1316,19 @@ async def test_reconcile_refreshes_changed_hold_evidence_then_resolves_it(
         repo,
         read=_FakeRead(orders=[_broker_order("manual/one", order_id="bo-1")]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     await reconcile_account(
         repo,
         read=_FakeRead(orders=[_broker_order("manual/two", order_id="bo-2")]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
     assert active is not None and "bo-2" in active["evidence_refs_json"]
     assert any(transition["transition_kind"] == "UNCERTAINTY_REFRESHED" for transition in repo.custody_transitions())
 
-    clean = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    clean = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert clean.verdict == "clean"
     assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
     assert any(transition["transition_kind"] == "UNCERTAINTY_RESOLVED" for transition in repo.custody_transitions())
@@ -1335,13 +1350,14 @@ async def test_overlapping_reconciliation_passes_apply_verdicts_in_snapshot_orde
             await release_clean_snapshot.wait()
             return []
 
-    clean_task = asyncio.create_task(reconcile_account(repo, read=BlockingCleanRead(), trade=_FakeTrade()))
+    clean_task = asyncio.create_task(reconcile_account(repo, read=BlockingCleanRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY))
     await snapshot_started.wait()
     foreign_task = asyncio.create_task(
         reconcile_account(
             repo,
             read=_FakeRead(orders=[_broker_order("manual/newer", order_id="bo-newer")]),
             trade=_FakeTrade(),
+            pricing=UNPRICEABLE_RECOVERY,
         )
     )
     await asyncio.sleep(0)
@@ -1362,10 +1378,11 @@ async def test_clean_reconciliation_resolves_position_drift_uncertainty(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=5)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None)
 
-    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert result.verdict == "clean"
     assert (
         repo.active_uncertainty(
@@ -1465,7 +1482,7 @@ async def test_reconcile_account_reports_stale_and_fails_closed_on_broker_read_f
     read = _FakeRead(error=BrokerUnavailable("down"))
     before = len(repo.custody_transitions())
 
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert result.verdict == "stale"
     assert len(repo.custody_transitions()) == before + 1
     uncertainty = repo.active_uncertainty(
@@ -1492,6 +1509,7 @@ async def test_reconcile_fails_closed_when_open_order_snapshot_hits_limit(
         repo,
         read=_FakeRead(orders=orders),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert result.verdict == "stale"
     assert repo.active_uncertainty(
@@ -1520,7 +1538,7 @@ async def test_reconcile_account_resolves_every_uncertain_order_in_one_pass(
     )
     read = _FakeRead(orders=[], positions=[])
 
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert result.resolved_count == 2
     assert repo.order(order_ref_1).broker_order_id is not None  # type: ignore[union-attr]
     assert repo.order(order_ref_2).broker_order_id is not None  # type: ignore[union-attr]
@@ -1535,7 +1553,7 @@ async def test_reconcile_account_resolved_count_excludes_orders_still_unknown(
     await _make_uncertain_order(repo)  # still within grace; lookup absent
     read = _FakeRead(orders=[], positions=[])
 
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade(lookup_absent=True))
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(lookup_absent=True), pricing=UNPRICEABLE_RECOVERY)
     assert result.resolved_count == 0
 
 
@@ -1557,7 +1575,7 @@ async def test_reconcile_account_recovers_an_unknown_manual_open_order(
     assert repo.effect_operation(submitted.leg.effect_operation_id).state == "unknown"  # type: ignore[union-attr]
 
     trade = _FakeTrade()
-    result = await reconcile_account(repo, read=_FakeRead(), trade=trade)
+    result = await reconcile_account(repo, read=_FakeRead(), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert result.resolved_count == 1
     assert trade.lookup_calls == [submitted.leg.order_ref]
@@ -1598,7 +1616,7 @@ async def test_reconcile_account_recovers_an_unknown_manual_order_after_reposito
     )
     try:
         trade = _FakeTrade()
-        result = await reconcile_account(after_restart, read=_FakeRead(), trade=trade)
+        result = await reconcile_account(after_restart, read=_FakeRead(), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
         assert result.resolved_count == 1
         assert trade.submit_calls == []
@@ -1642,6 +1660,7 @@ async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_bl
             before_restart,
             read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
             trade=_FakeTrade(),
+            pricing=UNPRICEABLE_RECOVERY,
         )
         assert result.verdict == "position_drift"
         assert result.indeterminate_symbols == ("SPY",)
@@ -1676,6 +1695,7 @@ async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_bl
             after_restart,
             read=_FakeRead(orders=[filled], positions=[_position("SPY", quantity=5.0)]),
             trade=_FakeTrade(),
+            pricing=UNPRICEABLE_RECOVERY,
         )
         assert cleared.verdict == "clean"
         # The indeterminate-mismatch blocker is gone, but the strategy's
@@ -1721,6 +1741,7 @@ async def test_reconcile_account_recovers_an_unknown_manual_closed_order(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=1.0)]),
         trade=_FakeTrade(lookup_result=closed),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.resolved_count == 1
@@ -1768,7 +1789,7 @@ async def test_reconcile_account_skips_a_claim_contended_order_but_still_resolve
         repo._conn.commit()
     read = _FakeRead(orders=[], positions=[])
 
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert result.resolved_count == 1
     assert repo.order(contended_ref).broker_order_id is None  # type: ignore[union-attr]
@@ -1812,6 +1833,7 @@ async def test_reconcile_missing_exit_entry_records_failure_and_finishes_pass(
         repo,
         read=_FakeRead(orders=[], positions=[_position("SPY", quantity=1)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.resolved_count == 1
@@ -1848,6 +1870,7 @@ async def test_reconcile_missing_enter_order_remains_unresolved(
         read=_FakeRead(),
         trade=_FakeTrade(),
         max_passes=1,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     effect = repo.effect_operation(effect_operation_id)
@@ -1871,7 +1894,7 @@ async def test_reconcile_account_operator_reconcile_now_trigger_is_recorded(
     order_ref = await _make_uncertain_order(repo)
     read = _FakeRead(orders=[], positions=[])
 
-    await reconcile_account(repo, read=read, trade=_FakeTrade(), trigger="OPERATOR_RECONCILE_NOW")
+    await reconcile_account(repo, read=read, trade=_FakeTrade(), trigger="OPERATOR_RECONCILE_NOW", pricing=UNPRICEABLE_RECOVERY)
     transitions = repo.transitions_for_order(order_ref)
     reconciliation_facts = next(t for t in transitions if t["transition_kind"] == "RECONCILIATION_ATTEMPTED")
     import json
@@ -1888,7 +1911,7 @@ def test_sqlite_sweep_direct_construction_guards_raw_broker_ports(
 ) -> None:
     read = _FakeRead()
     trade = _FakeTrade()
-    sweep = ReconciliationSweep(repo=repo, read=read, trade=trade)
+    sweep = ReconciliationSweep(repo=repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert isinstance(sweep._read, GuardedBrokerReadPort)
     assert isinstance(sweep._trade, GuardedBrokerTradePort)
@@ -1904,7 +1927,7 @@ async def test_sweep_runs_bounded_passes_via_injected_sleep(repo: ClerkSqliteRep
     async def fake_sleep(seconds: float) -> None:
         sleep_calls.append(seconds)
 
-    sweep = ReconciliationSweep(repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3)
+    sweep = ReconciliationSweep(repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3, pricing=UNPRICEABLE_RECOVERY)
     await sweep.run()
 
     assert len(sleep_calls) == 2  # sleeps between passes, not after the last
@@ -1920,7 +1943,7 @@ async def test_sweep_survives_a_broker_error_and_continues_to_the_next_pass(
     async def fake_sleep(seconds: float) -> None:
         sleep_calls.append(seconds)
 
-    sweep = ReconciliationSweep(repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3)
+    sweep = ReconciliationSweep(repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3, pricing=UNPRICEABLE_RECOVERY)
     await sweep.run()  # must not raise despite every pass hitting BrokerUnavailable
     assert sleep_calls == [30.0, 60.0]
 
@@ -1945,6 +1968,7 @@ async def test_sweep_awaits_the_after_pass_hook_after_each_successful_pass(
         sleep=fake_sleep,
         max_passes=2,
         after_pass=after_pass,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     await sweep.run()
 
@@ -1971,6 +1995,7 @@ async def test_sweep_isolates_an_after_pass_hook_failure_from_the_custody_verdic
         sleep=fake_sleep,
         max_passes=2,
         after_pass=failing_hook,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     await sweep.run()  # must not raise
 
@@ -2005,6 +2030,7 @@ async def test_sweep_skips_the_after_pass_hook_when_the_custody_verdict_is_stale
         sleep=fake_sleep,
         max_passes=2,
         after_pass=after_pass,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     await sweep.run()
@@ -2021,6 +2047,7 @@ async def test_sweep_failure_leaves_durable_admission_blocker(
         read=_FailingFinalSnapshotRead(),
         trade=_FakeTrade(),
         max_passes=1,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     await sweep.run()
@@ -2048,7 +2075,7 @@ async def test_cancelled_reconciliation_leaves_durable_admission_blocker(
             return []
 
     task = asyncio.create_task(
-        reconcile_account(repo, read=BlockingRead(), trade=_FakeTrade())
+        reconcile_account(repo, read=BlockingRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     )
     await snapshot_started.wait()
     task.cancel()
@@ -2075,6 +2102,7 @@ async def test_failed_blocker_publication_keeps_process_fence_closed(
             repo,
             read=_FailingFinalSnapshotRead(),
             trade=_FakeTrade(),
+            pricing=UNPRICEABLE_RECOVERY,
         )
 
     decision = admit_new_exposure(repo, strategy_instance_id=SID)
@@ -2090,9 +2118,10 @@ async def test_complete_reconciliation_resolves_incomplete_pass_uncertainty(
         read=_FailingFinalSnapshotRead(),
         trade=_FakeTrade(),
         max_passes=1,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
-    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert result.verdict == "clean"
     assert (
@@ -2114,12 +2143,14 @@ async def test_nonclean_completed_pass_records_truthful_incomplete_resolution(
         read=_FailingFinalSnapshotRead(),
         trade=_FakeTrade(),
         max_passes=1,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     result = await reconcile_account(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=5)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "position_drift"
@@ -2139,6 +2170,7 @@ async def test_repeated_sweep_failures_refresh_one_incomplete_pass_episode(
         read=_FailingFinalSnapshotRead(),
         trade=_FakeTrade(),
         max_passes=1,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
     initial = repo.active_uncertainty(
         scope="ACCOUNT_CLERK",
@@ -2153,6 +2185,7 @@ async def test_repeated_sweep_failures_refresh_one_incomplete_pass_episode(
         read=_FailingFinalSnapshotRead(),
         trade=_FakeTrade(),
         max_passes=1,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     refreshed = repo.active_uncertainty(
@@ -2186,6 +2219,7 @@ async def test_sweep_backoff_is_capped_and_resets_after_success(
         max_backoff_s=25.0,
         sleep=fake_sleep,
         max_passes=4,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     await sweep.run()
@@ -2222,6 +2256,7 @@ async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Pat
         read=_FakeRead(),
         trade=_FakeTrade(),
         lease_sleep=controlled_heartbeat_sleep,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         sweep.start()
@@ -2349,6 +2384,7 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
@@ -2403,7 +2439,7 @@ async def test_watchdog_does_not_redrive_when_the_broker_disagrees_on_the_symbol
     trade = _FakeTrade()
 
     with caplog.at_level(logging.WARNING):
-        await reconcile_account(repo, read=_FakeRead(positions=broker_positions), trade=trade)
+        await reconcile_account(repo, read=_FakeRead(positions=broker_positions), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     _assert_redrive_deferred(repo, episode, trade)
     deferrals = [
@@ -2432,7 +2468,8 @@ async def test_watchdog_does_not_redrive_on_a_stale_broker_snapshot(clocked_repo
     trade = _FakeTrade()
 
     result = await reconcile_account(
-        repo, read=_FakeRead(error=BrokerUnavailable("broker down")), trade=trade
+        repo, read=_FakeRead(error=BrokerUnavailable("broker down")), trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "stale"
@@ -2456,12 +2493,12 @@ async def test_watchdog_leaves_no_parked_redrive_exit_when_admission_refuses(
     )
     assert episode is not None
     positions = [_position("SPY", quantity=10.0), _position("QQQ", quantity=5.0)]
-    first = await reconcile_account(repo, read=_FakeRead(positions=positions), trade=_FakeTrade())
+    first = await reconcile_account(repo, read=_FakeRead(positions=positions), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert first.verdict == "position_drift"  # the episode was too young to re-drive
     clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     trade = _FakeTrade()
 
-    await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade)
+    await reconcile_account(repo, read=_FakeRead(positions=positions), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     _assert_redrive_deferred(repo, episode, trade)
 
@@ -2503,6 +2540,7 @@ async def test_watchdog_does_not_redrive_while_a_foreign_order_works_the_symbol(
         repo,
         read=_FakeRead(orders=[foreign], positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     _assert_redrive_deferred(repo, episode, trade)
@@ -2529,7 +2567,8 @@ async def test_watchdog_does_not_redrive_while_the_clerk_has_work_in_flight_on_t
     trade = _FakeTrade()
 
     await reconcile_account(
-        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=trade
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
@@ -2552,7 +2591,7 @@ async def test_watchdog_redrives_a_netted_account(clocked_repo) -> None:
     episode = _aged_exit_not_flat(repo, clock)
     trade = _FakeTrade()
 
-    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
     assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
@@ -2580,10 +2619,10 @@ async def test_watchdog_escalates_a_permanently_flat_broker_without_submitting(
 
     with caplog.at_level(logging.WARNING):
         for _ in range(policy.max_count + 1):
-            await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+            await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
             assert _stuck() is None
             clock.advance(policy.after_ms)
-        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade)
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert _stuck() is not None
     assert trade.submit_calls == []
@@ -2598,12 +2637,15 @@ async def test_watchdog_escalates_a_permanently_flat_broker_without_submitting(
 
 async def test_watchdog_defers_outside_the_regular_session_when_nothing_can_be_priced(
     clocked_repo,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """#2229, owner decision 2026-09-19 (evening): outside 09:30-16:00 the
     re-drive prices a limit itself when it can. With no pricing inputs handed
     to the pass — this call carries no policy and no quote source — nothing is
     priceable, so nothing is sent and no re-drive attempt is burned toward
-    EXIT_STUCK while the episode stays raised for the operator."""
+    EXIT_STUCK while the episode stays raised for the operator. The deferral
+    says why truthfully: after-hours is open, and what is missing is a window
+    to price in — not a session (#2440 review)."""
     repo, clock = clocked_repo
     await _held_position(repo)
     _walk_clock_to(repo, WATCHDOG_POST_T0)
@@ -2611,14 +2653,22 @@ async def test_watchdog_defers_outside_the_regular_session_when_nothing_can_be_p
     policy = _exit_not_flat_redrive_policy()
     trade = _FakeTrade()
 
-    for _ in range(policy.max_count + 2):
-        clock.advance(policy.after_ms + 1)
-        await reconcile_account(
-            repo,
-            read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
-            trade=trade,
-        )
+    with caplog.at_level(logging.INFO):
+        for _ in range(policy.max_count + 2):
+            clock.advance(policy.after_ms + 1)
+            await reconcile_account(
+                repo,
+                read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+                trade=trade,
+                pricing=UNPRICEABLE_RECOVERY,
+            )
 
+    unpriceable = {
+        record.reason_code
+        for record in caplog.records
+        if getattr(record, "action", None) == "exit_redrive_unpriceable"
+    }
+    assert unpriceable == {"EXTENDED_HOURS_PRICING_UNAVAILABLE"}
     assert trade.submit_calls == []
     assert repo.active_exit_for_strategy(WATCHDOG_SID) is None
     assert repo.active_uncertainty(
@@ -2717,11 +2767,108 @@ async def test_watchdog_resumes_its_first_redrive_at_the_regular_open(clocked_re
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
     assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
     assert len(trade.submit_calls) == 1
+
+
+def _watchdog_live_pricing() -> RecoveryPricing:
+    """A declared 04:00-20:00 window with an exit allowance, and a fresh touch at any instant."""
+    return RecoveryPricing(
+        policy_source=lambda: ProgramLegPolicy(
+            window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
+            allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
+        ),
+        quote_source=lambda symbol, now_ms: TopOfBookQuote(
+            symbol=symbol, bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=now_ms
+        ),
+    )
+
+
+def _raise_stale_exit_not_flat_at(repo: ClerkSqliteRepository, redrive_at_ms: int) -> dict[str, Any]:
+    """An EXIT_NOT_FLAT episode just old enough to re-drive at ``redrive_at_ms``."""
+    _walk_clock_to(repo, redrive_at_ms - _exit_not_flat_redrive_policy().after_ms - 1)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    _walk_clock_to(repo, redrive_at_ms)
+    return episode
+
+
+@pytest.mark.parametrize(
+    ("redrive_at_ms", "pricing"),
+    [
+        # 19:59:57: an after-hours limit could reach Alpaca after the 20:00 close.
+        pytest.param(1_700_096_397_000, _watchdog_live_pricing(), id="limit-at-the-after-hours-close"),
+        # 15:59:55 on an authority that prices nothing (a window-less or sim:
+        # one): the market leg could reach Alpaca after 16:00, and nothing
+        # can price the after-hours limit in its place, so it is held.
+        pytest.param(1_700_081_995_000, UNPRICEABLE_RECOVERY, id="market-at-the-regular-close"),
+    ],
+)
+async def test_watchdog_burns_no_attempt_on_a_redrive_the_send_would_refuse(
+    clocked_repo, redrive_at_ms: int, pricing: RecoveryPricing
+) -> None:
+    """#2440 review: the re-drive is judged at the send instant, before an attempt is burned.
+
+    Judged at now, the watchdog accepted re-drive attempt 1 and the send-time
+    rule — which judges now plus the guard band — then folded it unsent: one
+    of the episode's three attempts spent on an order that could never go
+    out. Judged at the same instant, it defers: nothing is accepted.
+    """
+    repo, _clock = clocked_repo
+    await _held_position(repo)
+    episode = _raise_stale_exit_not_flat_at(repo, redrive_at_ms)
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=trade,
+        pricing=pricing,
+    )
+
+    _assert_redrive_deferred(repo, episode, trade)
+
+
+async def test_watchdog_sends_the_market_leg_a_moment_before_the_regular_open(clocked_repo) -> None:
+    """09:29:55: the market leg reaches Alpaca inside the regular session, so it is sent.
+
+    Judged at now it was a pre-market instant, and an authority with no
+    extended-hours pricing deferred the re-drive to its next pass.
+    """
+    repo, _clock = clocked_repo
+    await _held_position(repo)
+    _walk_clock_to(repo, WATCHDOG_POST_T0)
+    episode = _raise_stale_exit_not_flat_at(repo, 1_700_144_995_000)  # 2023-11-16 09:29:55 ET
+    trade = _FakeTrade()
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
+    )
+
+    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+    assert len(trade.submit_calls) == 1
+    ((reducing,),) = [
+        [order for order in repo.orders_for_strategy(WATCHDOG_SID) if order.role == "REDUCING"]
+    ]
+    transition = repo.first_order_transition(
+        order_ref=reducing.order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
+    )
+    assert transition is not None
+    facts = ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
+    assert (facts.order_type, facts.extended_hours) == ("market", False)
 
 
 async def test_reconcile_account_does_not_redrive_a_fresh_exit_not_flat(clocked_repo) -> None:
@@ -2740,6 +2887,7 @@ async def test_reconcile_account_does_not_redrive_a_fresh_exit_not_flat(clocked_
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
@@ -2759,6 +2907,7 @@ async def test_reconcile_account_escalates_exit_stuck_after_redrive_cap(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     stuck = repo.active_uncertainty(
@@ -2790,6 +2939,7 @@ async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> 
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     token_a = hashlib.sha256(episode_a["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
     command_a = repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token_a}-1")
@@ -2819,7 +2969,7 @@ async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> 
         recovery_source=None,
         recovery_window_limit=None,
     )
-    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert repo.active_uncertainty(
         scope="CUSTODY_SUBJECT",
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
@@ -2864,6 +3014,7 @@ async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> 
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     token_b = hashlib.sha256(episode_b["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
@@ -2897,7 +3048,8 @@ async def test_watchdog_redrive_count_survives_episode_refresh(
     # Pass 1: one redrive, no escalation yet.
     clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     await reconcile_account(
-        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade()
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
     assert repo.active_uncertainty(
@@ -2924,7 +3076,8 @@ async def test_watchdog_redrive_count_survives_episode_refresh(
     # never escalate.
     clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
     await reconcile_account(
-        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade()
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]), trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert repo.active_uncertainty(
         scope="CUSTODY_SUBJECT",
@@ -2960,7 +3113,7 @@ async def test_exit_stuck_is_resolved_once_attributed_reaches_flat(clocked_repo)
     ) is not None
 
     # Attributed exposure is flat (operator completed the safe flatten).
-    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade())
+    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert repo.active_uncertainty(
         scope="CUSTODY_SUBJECT",
@@ -3017,6 +3170,7 @@ async def test_heartbeat_revives_an_expired_lease_and_fires_the_recovery_hook(
         trade=_FakeTrade(),
         lease_sleep=controlled_heartbeat_sleep,
         on_lease_revived=on_lease_revived,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         sweep.start()
@@ -3078,6 +3232,7 @@ async def test_revive_now_finishes_the_recovery_hook_when_its_caller_is_cancelle
         read=_FakeRead(),
         trade=_FakeTrade(),
         on_lease_revived=on_lease_revived,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         now["ms"] += 5_000  # the freeze: TTL long expired
@@ -3131,6 +3286,7 @@ async def test_revive_now_stops_waiting_for_a_stalled_revival_after_one_lease_tt
         read=_FakeRead(),
         trade=_FakeTrade(),
         on_lease_revived=on_lease_revived,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         now["ms"] += 5_000
@@ -3174,7 +3330,7 @@ async def test_an_orphaned_revival_that_fails_after_the_ttl_is_still_logged(
         raise RuntimeError("store exploded after the caller left")
 
     monkeypatch.setattr(clerk_repo, "revive_execution_lease", stalled_then_failing_revive)
-    sweep = ReconciliationSweep(repo=clerk_repo, read=_FakeRead(), trade=_FakeTrade())
+    sweep = ReconciliationSweep(repo=clerk_repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     try:
         now["ms"] += 5_000
         caller = asyncio.create_task(sweep.revive_now())
@@ -3248,6 +3404,7 @@ async def test_stop_does_not_wait_on_a_revival_stalled_inside_the_store(
         read=_FakeRead(),
         trade=_FakeTrade(),
         lease_sleep=heartbeat_sleep,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         sweep.start()
@@ -3301,6 +3458,7 @@ async def test_heartbeat_exits_without_hook_when_revival_is_refused(
         trade=_FakeTrade(),
         lease_sleep=controlled_heartbeat_sleep,
         on_lease_revived=on_lease_revived,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         sweep.start()
@@ -3359,6 +3517,7 @@ async def test_heartbeat_survives_a_transient_renewal_error(tmp_path: Path) -> N
         read=_FakeRead(),
         trade=_FakeTrade(),
         lease_sleep=controlled_heartbeat_sleep,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         sweep.start()
@@ -3385,7 +3544,7 @@ async def test_clean_pass_emits_no_fence_yield_warnings_under_strict_detection(
     an ``asyncio.to_thread`` inside ``async with intake`` made one clean pass
     emit five "yielded while held" warnings and strict mode raise."""
     intake = ReentrantAsyncLock(strict_yield_detection=True)
-    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), intake=intake)
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), intake=intake, pricing=UNPRICEABLE_RECOVERY)
 
     assert result.verdict == "clean"
     assert intake.yielded_fence_count == 0
@@ -3409,7 +3568,7 @@ async def test_reconciliation_folds_run_off_the_event_loop_thread(
     repo.begin_reconciliation = recording_begin  # type: ignore[method-assign]
     repo.end_reconciliation = recording_end  # type: ignore[method-assign]
 
-    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert result.verdict == "clean"
     main_thread = threading.current_thread()
@@ -3439,7 +3598,7 @@ async def test_cancelled_begin_releases_the_account_gate(repo: ClerkSqliteReposi
         gate.wait(timeout=5)
 
     repo.begin_reconciliation = gated_begin  # type: ignore[method-assign]
-    task = asyncio.create_task(reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade()))
+    task = asyncio.create_task(reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY))
     await asyncio.get_running_loop().run_in_executor(None, began.wait, 5)
     task.cancel()
     await asyncio.sleep(0.05)
@@ -3455,7 +3614,7 @@ async def test_cancelled_begin_releases_the_account_gate(repo: ClerkSqliteReposi
         )
         is not None
     )
-    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert result.verdict == "clean"
 
 
@@ -3494,6 +3653,7 @@ async def test_escalation_revalidates_the_episode_under_intake_instead_of_trusti
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert reads["n"] >= 2  # the escalation re-read, not just the scan

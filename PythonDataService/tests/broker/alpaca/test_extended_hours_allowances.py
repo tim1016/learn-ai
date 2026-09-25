@@ -276,7 +276,7 @@ def test_an_exit_leg_is_anchored_by_the_sealed_allowance_not_the_revision(tmp_pa
         use_rth=False,
         decision_bar=_bar(8, 0),
         policy=policy,
-    )
+    ).shape
 
     assert shape.order_type is OrderType.LIMIT
     assert shape.extended_hours is True
@@ -295,7 +295,7 @@ def test_an_entry_leg_is_anchored_by_the_sealed_allowance_too(tmp_path: Path) ->
         use_rth=False,
         decision_bar=_bar(8, 0),
         policy=policy,
-    )
+    ).shape
 
     # 10 bps above 100.00; the revision's 77 bps would be 100.77.
     assert shape.limit_price == pytest.approx(100.10, abs=1e-9)

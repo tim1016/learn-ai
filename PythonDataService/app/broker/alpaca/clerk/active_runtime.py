@@ -346,10 +346,12 @@ async def compose_repository_runtime(
             on_result=on_result,
             # Retires a run whose in-process runner is gone (#2369).
             run_ownership=facade.run_ownership,
-            # What the sweep's stuck-EXIT watchdog prices an extended-hours
-            # re-drive limit from — the facade's sealed policy (re-resolved
-            # per pass so a re-arm is picked up) and its live top-of-book
-            # quote (#2229).
+            # The facade's one pricing seam (#2440): what the sweep's
+            # stuck-EXIT watchdog prices an extended-hours re-drive limit
+            # from, and what an EXIT the sweep creates a reduction for is
+            # re-priced from — the facade's sealed policy (re-resolved per
+            # pass so a re-arm is picked up) and its live top-of-book quote
+            # (#2229).
             pricing=facade.recovery_pricing,
             # Custody first, evidence second: the symbol-validity probe runs
             # only after a succeeded pass, through the same guarded read port,

@@ -16,7 +16,11 @@ How the reduction goes out is the caller's ``confirmed_shape`` (#2007): the
 operator's confirmed extended-hours limit and the end of the session it was
 priced in, recorded on the EXIT's acceptance, or ``None`` for the
 regular-session market DAY leg. This module does not read the clock or a
-quote; the facade decides the shape before anything here runs.
+quote; the facade decides the shape before anything here runs. ``pricing`` is
+the authority's one send-time pricing seam (``recovery_pricing``), handed to
+the EXIT machine exactly as the sweep's re-drive of the same EXIT hands it, so
+a reduction that can no longer go out as recorded is treated the same whether
+this call or a later pass creates it (#2440).
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ import logging
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.program_leg import LegRefusal
-from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
+from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape, RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import (
     RecoveryRunActiveError,
     accept_recovery_exit,
@@ -86,6 +90,7 @@ async def execute_safe_flatten_plan(
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     account_id: str,
+    pricing: RecoveryPricing,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
 ) -> SafeFlattenResult:
     if plan.account_id != account_id:
@@ -156,7 +161,9 @@ async def execute_safe_flatten_plan(
                     f"A run re-activated for {leg.strategy_instance_id!r} after "
                     "the flatten was presented; stop the bot and prepare a fresh plan."
                 ) from exc
-        resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+        resolved = await resolve_accepted_exit(
+            repo, accepted=accepted, trade=trade, pricing=pricing
+        )
         assert accepted.effect_operation_id is not None
         effect = repo.effect_operation(accepted.effect_operation_id)
         if effect is not None and effect.state in _FAILED_EFFECT_STATES:

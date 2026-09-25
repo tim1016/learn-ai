@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedPosition,
     ProjectedReconciliation,
     ProjectedRun,
+    ProjectedUncertainty,
     ProjectionGuidance,
     RecoveryCapability,
 )
@@ -1434,6 +1435,83 @@ def test_sqlite_adapter_keeps_unavailable_custody_subject_blockers_on_bot_scope(
     action = _action(adapted, "reconcile_now")
     assert action.blockers[0].condition.scope == "bot"
     assert adapted.readiness_checks[0].scope == "bot"
+
+
+@pytest.mark.parametrize("overdue", [False, True])
+def test_the_mission_verdict_says_when_the_clerk_next_tries_an_exit(overdue: bool) -> None:
+    """#2440 M5: the bot page's verdict is the only bot surface with the EXIT_NOT_FLAT words.
+
+    It carries the primary episode's next automatic attempt, and whether that
+    time has passed, from the guidance it is built from — the bot page renders
+    it beside "Next:" as the desk does.
+    """
+    next_attempt_at_ms = _NOW + (-60_000 if overdue else 3_600_000)
+    episode = ProjectedUncertainty(
+        uncertainty_id="uncertainty:9",
+        scope="CUSTODY_SUBJECT",
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=SID,
+        reason_code="EXIT_NOT_FLAT",
+        headline="An exit could not be sent after its session ended; the position is still open",
+        explanation="10 SPY is still held.",
+        operator_impact="New exposure is paused for this strategy.",
+        next_step="Let the automatic re-drive reduce it at the next attempt shown with this notice.",
+        observed_at_ms=_NOW - 1_000,
+        evidence_age_ms=1_000,
+        evidence_refs=("order:exit",),
+        next_attempt_at_ms=next_attempt_at_ms,
+        next_attempt_overdue=overdue,
+    )
+    base = _rail_projection(orders=())
+    projection = replace(
+        base,
+        uncertainties=(episode,),
+        guidance=replace(
+            base.guidance,
+            explanation=episode.explanation,
+            next_step=episode.next_step,
+            next_attempt_at_ms=next_attempt_at_ms,
+            next_attempt_overdue=overdue,
+        ),
+    )
+
+    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection).mission_verdict
+
+    assert verdict.state == "blocked"
+    assert verdict.next_action == episode.next_step
+    assert (verdict.next_attempt_at_ms, verdict.next_attempt_overdue) == (next_attempt_at_ms, overdue)
+
+
+@pytest.mark.parametrize(
+    ("exit_working", "facts_unreadable"), [(True, False), (False, True)], ids=["working", "unknown"]
+)
+def test_the_mission_verdict_says_an_exit_is_working_or_its_next_try_is_unknown(
+    exit_working: bool, facts_unreadable: bool
+) -> None:
+    """#2440 review (major, Y m4): the bot page says what the desk says when there is no time.
+
+    An exit in progress is not a missed attempt, and a record that could not
+    be read is an unknown attempt, not an absent one: both ride from the
+    guidance onto the verdict.
+    """
+    base = _rail_projection(orders=())
+    projection = replace(
+        base,
+        guidance=replace(
+            base.guidance, exit_working=exit_working, facts_unreadable=facts_unreadable
+        ),
+    )
+
+    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection).mission_verdict
+
+    assert (verdict.next_attempt_at_ms, verdict.exit_working, verdict.facts_unreadable) == (
+        None,
+        exit_working,
+        facts_unreadable,
+    )
 
 
 def test_reconciled_station_requires_resolved_success_outcome() -> None:

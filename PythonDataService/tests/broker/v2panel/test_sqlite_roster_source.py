@@ -644,8 +644,8 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
 
     class _CustodyReader:
         @classmethod
-        def from_repository(cls, received_repository: _Repository) -> _CustodyReader:
-            assert received_repository is repository
+        def from_facade(cls, received_facade: SimpleNamespace) -> _CustodyReader:
+            assert received_facade is facade
             return cls()
 
         def bot_snapshot(self, strategy_instance_id: str) -> SimpleNamespace:
@@ -993,7 +993,7 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
 
     class _CustodyReader:
         @classmethod
-        def from_repository(cls, _received: _Repository) -> _CustodyReader:
+        def from_facade(cls, _received: SimpleNamespace) -> _CustodyReader:
             return cls()
 
         def bot_snapshot(self, _strategy_instance_id: str) -> None:

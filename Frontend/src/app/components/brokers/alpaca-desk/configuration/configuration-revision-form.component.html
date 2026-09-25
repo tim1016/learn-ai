@@ -35,8 +35,8 @@
     </p>
   }
 
+  <app-configuration-envelope-form [draftForm]="fields" />
   @if (isLive()) {
-    <app-configuration-envelope-form [draftForm]="fields" />
     <p class="revision-form__notice revision-form__notice--live" role="status">
       Choosing Live selects which endpoint a future restart talks to. It does not arm live
       trading and does not change any armed risk limit.

@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityEr
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import runtime as runtime_module
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     BrokerCallUnderIntakeError,
@@ -943,6 +944,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     """
     from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+    from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
     from tests.broker.alpaca.clerk.sqlite.test_exit import (
         ACCOUNT_ID,
         RUN_ID,
@@ -952,7 +954,12 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
         _make_entry,
     )
 
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    # Inside the regular session, where the market reducing leg is sent
+    # (#2440) — never the host's wall clock, which would make this pass only
+    # between 09:30 and 16:00 ET.
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(FIXTURE_RTH_MS)
+    )
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
 
@@ -969,7 +976,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     # The reducing order reaches the broker and is acked, but is still
     # working (not yet filled) — exactly the state the review comment flags.
     trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0, side="sell"))
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert result.reducing_order_ref is not None
     reducing_order = repo.order(result.reducing_order_ref)
     assert reducing_order is not None and reducing_order.role == "REDUCING"
@@ -1132,6 +1139,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
         intake=intake,
         max_passes=1,
         on_result=facade.publish_reconciliation,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     projection = await facade.custody_snapshot_projection("sid-1")
@@ -1172,6 +1180,7 @@ async def test_recovery_evaluation_observation_tracks_the_published_sweep(
         intake=intake,
         max_passes=1,
         on_result=facade.publish_sweep_reconciliation,
+        pricing=UNPRICEABLE_RECOVERY,
     ).run()
 
     after = facade.recovery_evaluation_observation()

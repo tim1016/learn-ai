@@ -55,12 +55,23 @@ class MarketDataAdmissionFact(BaseModel):
     extended_phase_proven: bool = False
 
 
+ExtendedHoursAdmissionState = Literal[
+    "NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"
+]
+
+
 class ExtendedHoursAdmissionFact(BaseModel):
-    """Whether the active authority can clock and price a ``use_rth=False`` run (ADR 0059 D5)."""
+    """Whether the active authority can clock and price a run outside regular hours (ADR 0059 D5).
+
+    ``EXIT_ALLOWANCE_UNSET`` is the regular-hours run's own state (#2440): no
+    extended session was asked for, but the exit on the day's last bar needs
+    the exit allowance. It refuses as ``ALLOWANCE_UNSET`` does, except on a
+    Resume that still holds a position (see ``run_admission``).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    state: Literal["NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET"]
+    state: ExtendedHoursAdmissionState
     observed_at_ms: int = Field(ge=0)
 
 

@@ -32,12 +32,13 @@ from typing import Any
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker_configuration import selection
 from app.broker_configuration.desk_state import WorkerRestartTarget, project_desk_state
-from app.broker_configuration.envelope import ValidatedLiveEnvelope
+from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 from app.broker_configuration.errors import (
     AccountModeDisagreement,
     AccountPinMismatch,
     CredentialSlotUnknown,
     DisplayNameConflict,
+    InvalidPaperAllowances,
     ProfileArchived,
     ProfileInUse,
     ProfileNotFound,
@@ -88,17 +89,25 @@ def revision_content_sha256(
     credential_slot: str,
     endpoint_mode: EndpointMode,
     live_envelope: ValidatedLiveEnvelope | None,
+    paper_xh_allowances: ValidatedPaperAllowances | None = None,
     schema_version: int = REVISION_SCHEMA_VERSION,
 ) -> str:
     """The canonical hash over a revision's configured, non-secret content.
 
     Deliberately **not** the envelope sha and never mistaken for it (contract
     §2.3). It covers what the operator chose — slot reference, endpoint mode,
-    envelope values, payload version — and excludes the profile ID, the author,
-    the timestamps and the account pin. Excluding the pin is what lets pinning
-    bind an existing revision without changing the identity a stale-edit check
-    compares against; excluding the profile ID is what lets a clone of
-    unchanged content hash equal to its source.
+    envelope values, a paper revision's own allowances, payload version — and
+    excludes the profile ID, the author, the timestamps and the account pin.
+    Excluding the pin is what lets pinning bind an existing revision without
+    changing the identity a stale-edit check compares against; excluding the
+    profile ID is what lets a clone of unchanged content hash equal to its
+    source.
+
+    ``paper_xh_allowances`` is **omitted** from the payload when ``None``
+    (#2440), never written as ``null``: every revision saved before the pair
+    existed — and every one saved without it since — hashes byte-identically,
+    so a stored ``content_sha256`` keeps matching its own content and a re-save
+    of unchanged content stays an idempotent no-op (ADR 0060 Decision 6).
     """
     payload: dict[str, Any] = {
         "broker": ALPACA_BROKER,
@@ -107,7 +116,39 @@ def revision_content_sha256(
         "endpoint_mode": endpoint_mode,
         "live_envelope": None if live_envelope is None else live_envelope.to_mapping(),
     }
+    if paper_xh_allowances is not None:
+        payload["paper_xh_allowances"] = paper_xh_allowances.to_mapping()
     return canonical_sha256(payload)
+
+
+def _require_one_allowance_document(
+    *,
+    endpoint_mode: EndpointMode,
+    live_envelope: ValidatedLiveEnvelope | None,
+    paper_xh_allowances: ValidatedPaperAllowances | None,
+) -> None:
+    """A revision's extended-hours allowances live in exactly one place.
+
+    A live revision's pair is inside its envelope, which the arming ceremony
+    seals; a paper revision with no envelope carries its own pair (#2440). A
+    second copy beside either would leave two answers to "what prices this
+    revision's after-close exit?", so it is refused here, and the schema's
+    CHECK refuses the same row again.
+    """
+    if paper_xh_allowances is None:
+        return
+    if endpoint_mode != "paper":
+        raise InvalidPaperAllowances(
+            "A live revision carries its extended-hours allowances inside its live "
+            "envelope, which arming seals; it cannot carry a paper pair beside them.",
+            next_step="Set xh_entry_bps and xh_exit_bps in the live envelope instead.",
+        )
+    if live_envelope is not None:
+        raise InvalidPaperAllowances(
+            "This paper revision already carries the six live envelope values, "
+            "which include both extended-hours allowances.",
+            next_step="Save either the six live values or the two allowances, not both.",
+        )
 
 
 def _is_complete(
@@ -248,6 +289,7 @@ class BrokerConfigurationService:
         credential_slot: str,
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
+        paper_xh_allowances: ValidatedPaperAllowances | None = None,
     ) -> ProfileWithRevision:
         """Create a profile and its revision 1 in one transaction."""
         self._require_known_credential_slot(credential_slot)
@@ -256,6 +298,7 @@ class BrokerConfigurationService:
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
+            paper_xh_allowances=paper_xh_allowances,
             action="profile_created",
             previous_ref=None,
         )
@@ -317,6 +360,7 @@ class BrokerConfigurationService:
             credential_slot=latest.credential_slot,
             endpoint_mode=latest.endpoint_mode,
             live_envelope=latest.live_envelope,
+            paper_xh_allowances=latest.paper_xh_allowances,
             action="profile_cloned",
             previous_ref=selection.reference(source.profile_id, latest.revision),
         )
@@ -339,6 +383,7 @@ class BrokerConfigurationService:
         credential_slot: str,
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
+        paper_xh_allowances: ValidatedPaperAllowances | None = None,
     ) -> ProfileRevision:
         """Append the next immutable revision, refusing a stale edit.
 
@@ -357,6 +402,7 @@ class BrokerConfigurationService:
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
+            paper_xh_allowances=paper_xh_allowances,
         )
         owner = self.owner()
         now = self._clock()
@@ -387,6 +433,7 @@ class BrokerConfigurationService:
                 credential_slot=credential_slot,
                 endpoint_mode=endpoint_mode,
                 live_envelope=live_envelope,
+                paper_xh_allowances=paper_xh_allowances,
                 author_owner_id=owner.owner_id,
                 created_at_ms=now,
             )
@@ -848,6 +895,7 @@ class BrokerConfigurationService:
         credential_slot: str,
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
+        paper_xh_allowances: ValidatedPaperAllowances | None,
         action: str,
         previous_ref: str | None,
     ) -> ProfileWithRevision:
@@ -873,6 +921,7 @@ class BrokerConfigurationService:
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
+            paper_xh_allowances=paper_xh_allowances,
             author_owner_id=owner.owner_id,
             created_at_ms=now,
         )
@@ -899,9 +948,16 @@ class BrokerConfigurationService:
         credential_slot: str,
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
+        paper_xh_allowances: ValidatedPaperAllowances | None,
         author_owner_id: str,
         created_at_ms: int,
     ) -> ProfileRevision:
+        """The single place a revision is built, so no path (create, save, clone) skips its checks."""
+        _require_one_allowance_document(
+            endpoint_mode=endpoint_mode,
+            live_envelope=live_envelope,
+            paper_xh_allowances=paper_xh_allowances,
+        )
         return ProfileRevision(
             profile_id=profile_id,
             revision=revision,
@@ -911,10 +967,12 @@ class BrokerConfigurationService:
             account_pin=None,
             account_pinned_at_ms=None,
             live_envelope=live_envelope,
+            paper_xh_allowances=paper_xh_allowances,
             content_sha256=revision_content_sha256(
                 credential_slot=credential_slot,
                 endpoint_mode=endpoint_mode,
                 live_envelope=live_envelope,
+                paper_xh_allowances=paper_xh_allowances,
             ),
             complete=_is_complete(
                 credential_slot=credential_slot,

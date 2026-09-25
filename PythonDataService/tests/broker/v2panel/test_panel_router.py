@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.active_authority import (
     get_active_clerk_runtime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
@@ -335,6 +336,7 @@ def lease_lost_api(tmp_path: Path):
         trade=port,  # type: ignore[arg-type]
         intake=facade.intake,
         on_lease_revived=_on_lease_revived,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     set_active_clerk_runtime(
         ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, sweep=sweep)

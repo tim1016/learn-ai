@@ -23,7 +23,7 @@ from threading import RLock
 from typing import Any
 
 from app.broker_configuration import schema
-from app.broker_configuration.envelope import ValidatedLiveEnvelope
+from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 from app.broker_configuration.errors import ProfilesDatabaseUnavailable
 from app.broker_configuration.records import (
     AccountNickname,
@@ -51,6 +51,12 @@ _ENVELOPE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("xh_entry_bps", "live_xh_entry_bps"),
     ("xh_exit_bps", "live_xh_exit_bps"),
 )
+# ``ValidatedPaperAllowances`` field -> its column, on the same one-mapping
+# rule. A paper revision's own pair (#2440); never a copy of the envelope's.
+_PAPER_ALLOWANCE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("xh_entry_bps", "paper_xh_entry_bps"),
+    ("xh_exit_bps", "paper_xh_exit_bps"),
+)
 
 _REVISION_COLUMN_NAMES: tuple[str, ...] = (
     "profile_id",
@@ -61,6 +67,7 @@ _REVISION_COLUMN_NAMES: tuple[str, ...] = (
     "account_pin",
     "account_pinned_at_ms",
     *(column for _, column in _ENVELOPE_COLUMNS),
+    *(column for _, column in _PAPER_ALLOWANCE_COLUMNS),
     "content_sha256",
     "complete",
     "author_owner_id",
@@ -414,6 +421,7 @@ class ProfilesStore:
 
     def insert_revision(self, conn: sqlite3.Connection, revision: ProfileRevision) -> None:
         envelope = revision.live_envelope
+        allowances = revision.paper_xh_allowances
         values: dict[str, Any] = {
             "profile_id": revision.profile_id,
             "revision": revision.revision,
@@ -429,6 +437,10 @@ class ProfilesStore:
             **{
                 column: (None if envelope is None else getattr(envelope, field))
                 for field, column in _ENVELOPE_COLUMNS
+            },
+            **{
+                column: (None if allowances is None else getattr(allowances, field))
+                for field, column in _PAPER_ALLOWANCE_COLUMNS
             },
         }
         conn.execute(
@@ -629,6 +641,12 @@ def _revision_from_row(row: sqlite3.Row) -> ProfileRevision:
         # affinity: this is the read path ADR 0060 Decision 6 pins.
         else ValidatedLiveEnvelope.from_mapping(stored)
     )
+    stored_allowances = {field: row[column] for field, column in _PAPER_ALLOWANCE_COLUMNS}
+    allowances = (
+        None
+        if any(value is None for value in stored_allowances.values())
+        else ValidatedPaperAllowances.from_mapping(stored_allowances)
+    )
     return ProfileRevision(
         profile_id=row["profile_id"],
         revision=int(row["revision"]),
@@ -640,6 +658,7 @@ def _revision_from_row(row: sqlite3.Row) -> ProfileRevision:
             None if row["account_pinned_at_ms"] is None else int(row["account_pinned_at_ms"])
         ),
         live_envelope=envelope,
+        paper_xh_allowances=allowances,
         content_sha256=row["content_sha256"],
         complete=bool(row["complete"]),
         author_owner_id=row["author_owner_id"],

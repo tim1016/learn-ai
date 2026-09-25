@@ -17,6 +17,7 @@ import json
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.execution_coverage import ORDER_TOTAL_PROVEN_SUMMARY_CODE
@@ -183,7 +184,8 @@ async def test_fill_on_a_failed_enter_keeps_the_position_and_raises_the_fence(
 async def _sweep(repo: ClerkSqliteRepository, *, broker_spy: float = 10.0):
     positions = [_position("SPY", quantity=broker_spy)] if broker_spy else []
     return await reconcile_account(
-        repo, read=_FakeRead(positions=positions), trade=_FakeTrade()
+        repo, read=_FakeRead(positions=positions), trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
 
@@ -372,6 +374,7 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
         trigger="OPERATOR_RECONCILE_NOW",
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert result.verdict == "clean"
     assert _fence(repo) is not None
@@ -395,6 +398,7 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
         trade=trade,
         intake=ReentrantAsyncLock(),
         account_id=ACCOUNT_ID,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert [leg.side for leg in trade.submitted_legs] == ["sell"]
     assert [leg.quantity for leg in trade.submitted_legs] == [10]
@@ -421,11 +425,12 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert drifted.verdict == "position_drift"
     assert _fence(repo) is not None
 
-    clean = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    clean = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     assert clean.verdict == "clean"
     assert _fence(repo) is None
 
@@ -545,7 +550,7 @@ async def test_never_landed_voids_cannot_starve_the_lookup_of_an_older_filled_on
 
     for _ in range(2):
         clock.advance(15_000)
-        await reconcile_account(repo, read=read, trade=trade)
+        await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
         if _fence(repo) is not None:
             break
 
@@ -568,13 +573,13 @@ async def test_an_answered_lookup_rests_until_the_recheck_window_passes(
     trade = _LookupTrade({})
     read = _FakeRead(positions=[_position("SPY", quantity=10.0)])
 
-    await reconcile_account(repo, read=read, trade=trade)
+    await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     clock.advance(TERMINAL_ENTER_LOOKUP_RECHECK_MS - 1)
-    await reconcile_account(repo, read=read, trade=trade)
+    await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert trade.lookup_calls == [order_ref]
 
     clock.advance(1)
-    await reconcile_account(repo, read=read, trade=trade)
+    await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert trade.lookup_calls == [order_ref, order_ref]
 
 
@@ -596,7 +601,7 @@ async def test_an_order_in_the_open_snapshot_spends_no_lookup_slot(
         positions=[_position("SPY", quantity=10.0)],
     )
 
-    await reconcile_account(repo, read=read, trade=trade)
+    await reconcile_account(repo, read=read, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.lookup_calls == [filled_ref]
 
@@ -634,6 +639,7 @@ async def test_proving_a_coverage_conflict_leaves_the_failed_enter_fence_standin
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=3.0)]),
         trade=_LookupTrade({order_ref: broker_view("partially_filled", 3, 100.0)}),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     fence = _fence(repo)
     assert fence is not None
@@ -650,6 +656,7 @@ async def test_proving_a_coverage_conflict_leaves_the_failed_enter_fence_standin
         repo,
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=_LookupTrade({order_ref: broker_view("canceled", 10, 100.0)}),
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert result.verdict == "clean"

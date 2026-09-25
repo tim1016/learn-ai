@@ -488,7 +488,7 @@ async def _get_panel_with_entries_from_authority(
         projection,
         economics=economics,
         repository=rail_facade.repository if rail_facade is not None else None,
-        flatten_phase=rail_facade.flatten_session().phase if rail_facade is not None else None,
+        flatten_verdict=rail_facade.flatten_send_verdict() if rail_facade is not None else None,
     )
     return panel, entries, session_fills
 

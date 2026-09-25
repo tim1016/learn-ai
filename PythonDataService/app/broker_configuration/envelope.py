@@ -1,5 +1,10 @@
 """The one validated type that constructs a ``LiveEnvelopeValues`` from storage.
 
+Also home to its paper sibling, :class:`ValidatedPaperAllowances` — the two
+extended-hours allowances a *paper* revision may carry without a live envelope
+(#2440, owner decision 2026-09-25). The two share one statement of the bps
+domain, so a paper allowance and a live one can never be bounded differently.
+
 Formula: none — this type carries no arithmetic. It carries the *domain* the
   six envelope values must satisfy and the *Python types* their canonical hash
   depends on.
@@ -31,7 +36,11 @@ from math import isfinite
 from typing import Any
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
-from app.broker_configuration.errors import InvalidLiveEnvelope
+from app.broker_configuration.errors import (
+    BrokerConfigurationError,
+    InvalidLiveEnvelope,
+    InvalidPaperAllowances,
+)
 
 # ``(field, sqlite column affinity)`` in the order the contract's §2.4 table
 # lists them. The affinities are asserted against the shipped DDL by
@@ -46,11 +55,16 @@ ENVELOPE_FIELDS: tuple[str, ...] = (
     "xh_entry_bps",
     "xh_exit_bps",
 )
+# The two extended-hours allowances. A paper revision may carry these two on
+# their own, named exactly as the envelope names them so a revision switched
+# between modes keeps one meaning per key. Both or neither:
+# ``ExtendedHoursAllowances`` has no one-sided form.
+ALLOWANCE_FIELDS: tuple[str, ...] = ("xh_entry_bps", "xh_exit_bps")
 
 _MAX_BPS = 10_000.0
 
 
-def _as_float(field: str, value: Any) -> float:
+def _as_float(field: str, value: Any, *, refusal: type[BrokerConfigurationError]) -> float:
     """Coerce exactly what ``AlpacaSettings``' ``float`` annotation would accept.
 
     ``int`` is admitted and widened, which is what a pydantic ``float`` field
@@ -63,12 +77,25 @@ def _as_float(field: str, value: Any) -> float:
     elif type(value) is int:
         result = float(value)
     else:
-        raise InvalidLiveEnvelope(
-            f"{field} must be a float; {type(value).__name__} cannot seal into a live envelope.",
+        raise refusal(
+            f"{field} must be a float; {type(value).__name__} cannot be saved as a number.",
             next_step="Send the value as a JSON number.",
         )
     if not isfinite(result):
-        raise InvalidLiveEnvelope(f"{field} must be a finite number.")
+        raise refusal(f"{field} must be a finite number.")
+    return result
+
+
+def _as_bps(field: str, value: Any, *, refusal: type[BrokerConfigurationError]) -> float:
+    """An extended-hours allowance: a float in ``[0, 10000)`` bps.
+
+    Upper-bounded because 10 000 bps is 100 %: a sell allowance at or past it
+    floors the marketable anchor to zero or below, which is not a price. The
+    one statement of the bound, for the envelope's pair and the paper pair.
+    """
+    result = _as_float(field, value, refusal=refusal)
+    if not 0 <= result < _MAX_BPS:
+        raise refusal(f"{field} must be at least 0 and less than 10000.")
     return result
 
 
@@ -104,21 +131,19 @@ class ValidatedLiveEnvelope:
 
     def __post_init__(self) -> None:
         for field in FLOAT_FIELDS:
-            object.__setattr__(self, field, _as_float(field, getattr(self, field)))
+            object.__setattr__(
+                self, field, _as_float(field, getattr(self, field), refusal=InvalidLiveEnvelope)
+            )
         for field in INT_FIELDS:
             object.__setattr__(self, field, _as_int(field, getattr(self, field)))
         _require(0 < self.loss_fraction < 1, "loss_fraction must be greater than 0 and less than 1.")
         _require(self.loss_usd > 0, "loss_usd must be greater than 0.")
         _require(self.shadow_sessions >= 1, "shadow_sessions must be at least 1.")
         _require(self.arming_max_sessions >= 1, "arming_max_sessions must be at least 1.")
-        _require(
-            0 <= self.xh_entry_bps < _MAX_BPS,
-            "xh_entry_bps must be at least 0 and less than 10000.",
-        )
-        _require(
-            0 <= self.xh_exit_bps < _MAX_BPS,
-            "xh_exit_bps must be at least 0 and less than 10000.",
-        )
+        for field in ALLOWANCE_FIELDS:
+            object.__setattr__(
+                self, field, _as_bps(field, getattr(self, field), refusal=InvalidLiveEnvelope)
+            )
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> ValidatedLiveEnvelope:
@@ -151,9 +176,66 @@ class ValidatedLiveEnvelope:
         return self.to_values().sha
 
 
+@dataclass(frozen=True)
+class ValidatedPaperAllowances:
+    """A paper revision's own extended-hours allowances, in bps (#2440).
+
+    Owner decisions 2026-09-25: Start of a regular-hours run refuses until the
+    account has an exit allowance, and so does a Resume of a flat run (a run
+    still holding a position always resumes), because that run's EXIT on the
+    day's last bar reaches the broker after the close as an after-hours limit
+    priced off the decision bar's close. A live revision carries the pair
+    inside its six-value envelope, sealed at arming; a paper revision has no
+    envelope to carry it, so it carries these two and nothing else — never a
+    loss limit or a session count, which bound real money only.
+
+    No default, exactly like the envelope: ``None`` on the revision means "not
+    set", which Start refuses; it is never read as zero.
+    """
+
+    xh_entry_bps: float
+    xh_exit_bps: float
+
+    def __post_init__(self) -> None:
+        for field in ALLOWANCE_FIELDS:
+            object.__setattr__(
+                self, field, _as_bps(field, getattr(self, field), refusal=InvalidPaperAllowances)
+            )
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any]) -> ValidatedPaperAllowances:
+        """Build from stored or request data, refusing an unknown or missing key.
+
+        An unknown key is refused rather than dropped: a live-only value
+        (``loss_usd``, a session count) offered here would otherwise be read as
+        saved when it was not.
+        """
+        supplied = set(mapping)
+        expected = set(ALLOWANCE_FIELDS)
+        missing = sorted(expected - supplied)
+        if missing:
+            raise InvalidPaperAllowances(
+                "The extended-hours allowances are set together; missing: " + ", ".join(missing),
+                next_step="Set both the entry and the exit allowance, or neither.",
+            )
+        unexpected = sorted(supplied - expected)
+        if unexpected:
+            raise InvalidPaperAllowances(
+                "A paper revision's allowances carry only xh_entry_bps and xh_exit_bps; "
+                "it does not carry " + ", ".join(unexpected) + ".",
+                next_step="Remove those values, or save the revision as live with its whole envelope.",
+            )
+        return cls(**{field: mapping[field] for field in ALLOWANCE_FIELDS})
+
+    def to_mapping(self) -> dict[str, float]:
+        return {field: getattr(self, field) for field in ALLOWANCE_FIELDS}
+
+
 __all__ = [
+    "ALLOWANCE_FIELDS",
     "ENVELOPE_FIELDS",
     "FLOAT_FIELDS",
     "INT_FIELDS",
     "ValidatedLiveEnvelope",
+    "ValidatedPaperAllowances",
 ]

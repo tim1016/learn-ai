@@ -23,6 +23,7 @@ function revision(overrides: Partial<BrokerProfileRevision> = {}): BrokerProfile
     account_pin: null,
     account_pinned_at_ms: null,
     live_envelope: null,
+    paper_xh_allowances: null,
     content_sha256: 'd'.repeat(64),
     complete: true,
     author_owner_id: 'owner-1',
@@ -74,6 +75,7 @@ describe('ConfigurationProfileDetailComponent', () => {
         credential_slot: 'alpaca_paper_primary',
         endpoint_mode: 'paper',
         live_envelope: null,
+        paper_xh_allowances: null,
       },
     });
   });
@@ -94,6 +96,49 @@ describe('ConfigurationProfileDetailComponent', () => {
     expect(
       (screen.getByRole('spinbutton', { name: 'Daily loss cap (USD)' }) as HTMLInputElement).value,
     ).toBe('5000');
+  });
+
+  it('carries a paper revision\'s offsets into the editor and saves them unchanged', async () => {
+    const revisionSaved = vi.fn();
+    const pair = { xh_entry_bps: 12.5, xh_exit_bps: 7.5 };
+    await renderDetail({ latest_revision: revision({ paper_xh_allowances: pair }) }, { revisionSaved });
+
+    expect(
+      (screen.getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }) as HTMLInputElement)
+        .value,
+    ).toBe('12.5');
+    await userEvent.click(screen.getByRole('button', { name: 'Save next revision' }));
+
+    expect(revisionSaved).toHaveBeenCalledWith({
+      expectedRevision: 3,
+      content: {
+        credential_slot: 'alpaca_paper_primary',
+        endpoint_mode: 'paper',
+        live_envelope: null,
+        paper_xh_allowances: pair,
+      },
+    });
+  });
+
+  it('keeps half-typed paper offsets across a write that did not touch the revision', async () => {
+    // The same re-seed trap as the live envelope's, on the paper fields: an
+    // account approval reloads the detail for the *same* revision.
+    const rendered = await renderDetail();
+    await userEvent.type(
+      screen.getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
+      '7.5',
+    );
+
+    rendered.fixture.componentRef.setInput(
+      'detail',
+      detail({ latest_revision: revision({ account_pin: 'PA000PAPER', account_pinned_at_ms: 1 }) }),
+    );
+    await rendered.fixture.whenStable();
+
+    expect(
+      (screen.getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }) as HTMLInputElement)
+        .value,
+    ).toBe('7.5');
   });
 
   it('re-seeds the editor when a genuinely newer revision arrives', async () => {

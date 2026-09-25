@@ -47,12 +47,14 @@ from app.broker.alpaca.clerk.program_leg import (
     with_deploy_recovery_pricing,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryLimit,
     ConfirmedRecoveryShape,
     QuoteSource,
     RecoveryPricing,
     RecoveryReductionPricing,
-    flatten_session,
+    flatten_send_verdict,
+    market_leg_sendable,
     price_recovery_reduction,
     recovery_reduction_shape,
 )
@@ -346,13 +348,26 @@ class SqliteAlpacaClerkFacade:
 
     @property
     def recovery_pricing(self) -> RecoveryPricing:
-        """The seam the stuck-EXIT watchdog prices an extended-hours re-drive from.
+        """The one seam this authority prices an automatic reduction from.
+
+        Every path that can drive an EXIT hands it to ``resolve_exit`` — the
+        deciding runner, restart recovery, the reconciliation sweep (and its
+        stuck-EXIT watchdog, which prices its extended-hours re-drives from it,
+        #2229), operator Reconcile Now and the operator's safe flatten — so an
+        EXIT whose leg can no longer go out as recorded is re-priced, or folds,
+        the same way whichever of them drives it (#2440).
 
         The policy is resolved per read (the envelope in force, never a
         boot-time snapshot) and the quote is the same live top-of-book read
         the operator's safe flatten rides — IBKR via the market-liveness
-        store, never Alpaca market data (#2229).
+        store, never Alpaca market data (#2229). A synthetic authority prices
+        nothing: it fills against retained source bars rather than the live
+        market, so pricing its reductions off live quotes would couple it to a
+        market it does not execute in (PR #2230 review); such an EXIT folds
+        for the operator instead.
         """
+        if self.authority_kind == "synthetic":
+            return UNPRICEABLE_RECOVERY
         return RecoveryPricing(
             policy_source=lambda: self.program_leg_policy,
             quote_source=self._quote_source,
@@ -701,14 +716,15 @@ class SqliteAlpacaClerkFacade:
                 operator_reason=reason,
             )
 
-    def flatten_session(self) -> SessionAuthorityState:
-        """The session an operator's flatten would go out in now (#2007).
+    def flatten_send_verdict(self) -> SessionAuthorityState | LegRefusal:
+        """The session an operator's flatten sent now goes out in, or the refusal this Clerk gives it (#2007).
 
         The canonical calendar's regular session, widened by the window this
         authority's broker declares -- the same window an extended-session
-        program leg is shaped against.
+        program leg is shaped against -- judged at the send instant, exactly
+        as every pricing entry point judges it (#2440 review).
         """
-        return flatten_session(now_ms=self._repo.clock(), policy=self.program_leg_policy)
+        return flatten_send_verdict(now_ms=self._repo.clock(), policy=self.program_leg_policy)
 
     def price_safe_flatten(
         self, plan: SafeFlattenPlan
@@ -752,6 +768,7 @@ class SqliteAlpacaClerkFacade:
             trade=self._trade,
             intake=self._intake,
             account_id=self.account_id,
+            pricing=self.recovery_pricing,
             confirmed_shape=self._safe_flatten_shape(plan, confirmed_limit),
         )
         logger.info(
@@ -968,7 +985,7 @@ class SqliteAlpacaClerkFacade:
             program_side = OrderSide.BUY if entry.position == "long" else OrderSide.SELL
             leg_side = program_side if purpose is EffectPurpose.ENTER else _REDUCING_SIDE[program_side]
             try:
-                shape = shape_program_leg(
+                program_leg = shape_program_leg(
                     side=leg_side,
                     purpose=purpose,
                     use_rth=use_rth,
@@ -981,12 +998,34 @@ class SqliteAlpacaClerkFacade:
                     explanation=exc.explanation,
                     next_step=exc.next_step,
                 )
+            if program_leg.unpriced is not None and not market_leg_sendable(self._repo.clock()):
+                # Loud, as an extended run's refusal is, but not a refusal: a
+                # refused EXIT would never reduce. The send-time rule re-prices
+                # this market leg off the live touch if it is sent after the
+                # close, or folds it for the operator (#2440 review). Only
+                # when that price is needed now: mid-session the market leg
+                # goes out as decided, and a missing after-hours anchor there
+                # is no warning (#2440 review).
+                logger.warning(
+                    "a regular-hours EXIT has no after-hours price; its market leg is "
+                    "judged again when it is sent",
+                    extra={
+                        "action": "regular_hours_exit_unpriced",
+                        "account_id": self._repo.account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                        "decision_id": decision_id,
+                        "reason_code": program_leg.unpriced.reason_code,
+                        "decision_bar_close_ms": (
+                            None if retained_source_bar is None else retained_source_bar.end_ms
+                        ),
+                    },
+                )
             if purpose is EffectPurpose.ENTER:
                 # The EXIT branch threads ``shape`` into the reducing order's
                 # durable facts instead; building a leg it discards would be a
                 # second, silent leg construction one refactor away from
                 # disagreeing with the one that ships.
-                operation_leg = shape.apply(
+                operation_leg = program_leg.shape.apply(
                     symbol=entry.instrument.underlying,
                     quantity=float(quantity * entry.qty_ratio),
                 )
@@ -1131,7 +1170,7 @@ class SqliteAlpacaClerkFacade:
                         # Durable with the acceptance, not with this call:
                         # a deferred cancel-and-prove leaves the reducing
                         # order to a later sweep that knows no decision.
-                        reducing_shape=shape,
+                        program_leg=program_leg,
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake
@@ -1177,6 +1216,7 @@ class SqliteAlpacaClerkFacade:
             self._repo,
             accepted=accepted_exit,
             trade=trade,
+            pricing=self.recovery_pricing,
         )
         order_refs = tuple(
             ref
@@ -1223,6 +1263,9 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger="AUTOMATIC",
                 intake=self._intake,
+                # A restart re-drives every EXIT it finds under the same
+                # send-time rule the runner and the sweep apply (#2440).
+                pricing=self.recovery_pricing,
                 run_ownership=self._run_ownership,
             )
         )
@@ -1284,9 +1327,10 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger=trigger,
                 intake=self._intake,
-                # The watchdog prices extended-hours re-drive limits from
-                # the same sealed policy and live quote the operator's
-                # flatten does (#2229).
+                # The same seam every other EXIT driver names (#2440): the
+                # watchdog prices extended-hours re-drive limits from it, and
+                # an EXIT this pass creates a reduction for is re-priced from
+                # it (#2229).
                 pricing=self.recovery_pricing,
                 run_ownership=self._run_ownership,
             )

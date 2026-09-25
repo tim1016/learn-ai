@@ -1,11 +1,26 @@
 """Shape one program leg from the decision bar, the session, and the operator's allowances (ADR 0059 D5.3).
 
 Inside the regular session a program leg is a market DAY order, exactly as
-before this slice. Outside it — in the broker's declared PRE or POST window —
+before this slice. Outside it — in the broker's declared PRE or POST window,
+after-hours ending at the calendar's scheduled close on an early-close day —
 the leg is a marketable DAY limit flagged for extended hours, anchored to the
-decision bar's close and widened by the policy's allowance. Anything else
-(closed, no anchor, no window, no allowance) is a typed refusal the Clerk
-turns into a rejected receipt; a program leg is never guessed.
+decision bar's close and widened by the policy's allowance. For an
+extended-hours run anything else (closed, no anchor, no window, no allowance)
+is a typed refusal the Clerk turns into a rejected receipt; a program leg is
+never guessed.
+
+A regular-hours run's EXIT takes the same shape when its decision bar closes
+at the regular close (#2440, owner decision #2431): the day's last bar closes
+*at* 16:00 — 13:00 on an early-close day, both from the canonical calendar —
+so its EXIT reaches the broker after the session it was decided in, where a
+market DAY order would be queued for the next open. Where that EXIT cannot be
+priced (no retained decision bar, no declared window, no allowance, an
+unpriceable anchor) it is not refused — an EXIT refused here would never
+reduce — but keeps the market leg and says why on ``ProgramLeg.unpriced``,
+which the Clerk logs. Whether a leg may still go out when it is actually sent
+is decided again, for every EXIT, by the send-time rule in
+``sqlite/exit_resolution.py``, which re-prices that market leg off the live
+touch after the close, or folds it loudly for the operator.
 
 Which allowance the policy carries is decided by the authority, not here: on
 the live world it is the one sealed at arming
@@ -29,7 +44,7 @@ from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.broker.contract.ports import BrokerReadPort
 from app.services.decision_session import RunDecisionSession
-from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, session_state_at_ms
+from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, order_session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar
 
 if TYPE_CHECKING:
@@ -102,12 +117,18 @@ def _sealed_allowances(context: AlpacaRuntimeContext) -> ExtendedHoursAllowances
 
 
 def _settings_allowances() -> ExtendedHoursAllowances | None:
-    """The resolved binding's own settings -- what this read was before ADR 0060.
+    """The resolved binding's own settings: a paper revision's allowances.
+
+    For a worker bound from a broker profile, these settings carry the applied
+    paper revision's own pair (``paper_xh_allowances``, #2440), bound by
+    ``profile/runtime_context.py::resolve_runtime_context``. A live revision's
+    pair is its envelope, which the caller reads first; a lane bound without a
+    profile still reads its environment here, as every read did before ADR 0060.
 
     Three ways there are none, and none of them is an exception a caller must
     handle: a synthetic (``sim:``) authority composed in a process with no
-    Alpaca credentials at all, a paper revision that declares no live envelope,
-    and a binding that was *attempted and refused*. The last is why
+    Alpaca credentials at all, a paper revision that sets no extended-hours
+    offsets, and a binding that was *attempted and refused*. The last is why
     ``BrokerUnbound`` is caught rather than propagated -- an EXIT is never
     blocked by a broker-configuration refusal (plan §0 D3). Both are logged so
     an operator can see why an extended-hours leg was refused.
@@ -312,8 +333,9 @@ class ProgramLegPolicy:
     shaping a leg stays a pure function of its arguments. On the live world the
     authority re-resolves it against the sealed envelope per decision
     (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``); the
-    pair built here from the environment is what a paper or never-armed
-    authority prices from.
+    pair resolved here from the applied profile revision -- a paper revision's
+    own pair, or a live revision's envelope -- is what a paper, ``sim:`` or
+    never-armed authority prices from.
     """
 
     window: ExtendedHoursWindow | None
@@ -355,9 +377,9 @@ class LegShape:
     ``side`` is mandatory. It was optional so the one market shape could be a
     module-level singleton, which made a discriminator hide inside an optional
     and forced two separate "is this the side we meant?" reconciliations —
-    ``apply``'s and ``_create_reducing_order``'s. There is now exactly one, in
-    ``exit_resolution._create_reducing_order`` (ruling R11), because that is the
-    only place a shape can meet a side the deciding program did not expect.
+    ``apply``'s and the reducing order's. There is now exactly one, in
+    ``exit_resolution._resolved_reducing_shape`` (ruling R11), because that is
+    the only place a shape can meet a side the deciding program did not expect.
     """
 
     order_type: OrderType
@@ -376,6 +398,40 @@ class LegShape:
             time_in_force=self.time_in_force,
             extended_hours=self.extended_hours,
         )
+
+
+@dataclass(frozen=True)
+class ProgramLeg:
+    """One decision's leg shape, and until when that shape may be sent.
+
+    ``valid_until_ms`` is the end of the session an extended-hours leg was
+    priced for — the regular open for PRE, the declared window's close for
+    POST — and is durable on the EXIT's acceptance
+    (``ExitAcceptedFacts.reducing_valid_until_ms``) exactly as a recovery
+    limit's is: ``exit_resolution`` never sends the leg past it. ``None`` for
+    the regular-session leg, which may be sent only while that session is open.
+
+    The two travel as one value from the decision to the acceptance: an
+    extended-hours shape without its bound would be read as priced for no
+    session — expired on arrival — so the pair is refused here instead.
+
+    ``unpriced`` is why a regular-hours EXIT kept its market leg when it may
+    have needed the after-hours one: this module is pure, so the Clerk that
+    shaped the leg logs it with the strategy and account it belongs to.
+    """
+
+    shape: LegShape
+    valid_until_ms: int | None = None
+    unpriced: LegRefusal | None = None
+
+    def __post_init__(self) -> None:
+        if (self.valid_until_ms is not None) != self.shape.extended_hours:
+            raise ValueError(
+                "an extended-hours program leg carries the end of the session it was "
+                "priced for, and a regular-session leg carries none"
+            )
+        if self.unpriced is not None and self.shape.extended_hours:
+            raise ValueError("only a regular-session leg stands in for an unpriced one")
 
 
 def regular_session_shape(side: OrderSide) -> LegShape:
@@ -424,13 +480,22 @@ EXTENDED_HOURS_ALLOWANCE_UNSET = LegRefusal(
     reason_code="EXTENDED_HOURS_ALLOWANCE_UNSET",
     explanation=(
         "No sealed arming and no applied broker configuration carry the extended-session "
-        "entry and exit allowances, so no extended-session program leg can be priced."
+        "entry and exit allowances, so no extended-session leg can be priced — including "
+        "a regular-hours run's exit on the day's last bar, which reaches the broker after "
+        "the close and goes out as an after-hours limit."
     ),
     # Under ADR 0060 the allowances come from the newest sealed arming, and
     # otherwise from the applied profile revision — not from the environment
     # file this used to name. Telling an operator to edit `.env` and restart
-    # would now send them somewhere that changes nothing.
-    next_step="Apply a broker configuration that carries both allowances, then re-arm.",
+    # would now send them somewhere that changes nothing. Start, and a flat
+    # Resume, of a regular-hours run refuse with this too (owner decisions 2026-09-25,
+    # #2440): the exit allowance is what prices that run's after-close exit.
+    next_step=(
+        "On the broker configuration page, save a revision of this account's profile with "
+        "both extended-hours offsets (entry and exit, in bps) — a paper revision has its "
+        "own two fields, a live revision carries them in its envelope — then stage, apply "
+        "and restart; on a live account, re-arm so the sealed envelope carries them."
+    ),
 )
 
 EXTENDED_ANCHOR_UNAVAILABLE = LegRefusal(
@@ -481,27 +546,62 @@ def shape_program_leg(
     use_rth: bool,
     decision_bar: RetainedSourceBar | None,
     policy: ProgramLegPolicy,
-) -> LegShape:
-    """The shape of the leg this decision submits (ADR 0059 D5.3).
+) -> ProgramLeg:
+    """The leg this decision submits (ADR 0059 D5.3), and until when it may be sent.
 
     The decision bar is read by its **close** (``end_ms``): a bar is filtered
     into the run by the session it opened in
     (``RunDecisionSession.includes``), but the order it drives exists — and is
     therefore priced and placed — at the instant the bucket closed. The two
     instants are deliberately different.
+
+    A regular-hours run never needed its bar to shape an ENTER, and still does
+    not. Its EXIT is shaped by the bar's close exactly as an extended run's is
+    (#2440): inside the regular session that is the market DAY leg it always
+    was, and the day's last bar — which closes *at* the regular close, POST in
+    the broker's declared window — gets the extended shape instead of a market
+    DAY order Alpaca would queue for the next open. Where that shape cannot be
+    priced (no retained decision bar, no declared window, no allowance, an
+    unpriceable anchor) the EXIT keeps the regular leg with the refusal on
+    ``unpriced`` — never refused here, since a refused EXIT never reduces —
+    and the send-time rule in ``exit_resolution`` re-prices it off the live
+    touch after the close, or folds it loudly through ``EXIT_NOT_FLAT``.
     """
     session = RunDecisionSession.resolve(use_rth=use_rth, window=policy.window)
     if session is None:
         raise ProgramLegRefused(EXTENDED_HOURS_UNSUPPORTED)
-    if session.kind == "rth":
-        return regular_session_shape(side)
+    if session.kind == "extended":
+        return _leg_at_decision_close(
+            side=side, purpose=purpose, decision_bar=decision_bar, policy=policy
+        )
+    if purpose is EffectPurpose.ENTER:
+        return ProgramLeg(regular_session_shape(side))
+    try:
+        return _leg_at_decision_close(
+            side=side, purpose=purpose, decision_bar=decision_bar, policy=policy
+        )
+    except ProgramLegRefused as exc:
+        return ProgramLeg(regular_session_shape(side), unpriced=exc.refusal)
+
+
+def _leg_at_decision_close(
+    *,
+    side: OrderSide,
+    purpose: EffectPurpose,
+    decision_bar: RetainedSourceBar | None,
+    policy: ProgramLegPolicy,
+) -> ProgramLeg:
+    """The leg for the session the decision bar closed in, or a typed refusal."""
     if decision_bar is None:
         raise ProgramLegRefused(EXTENDED_ANCHOR_UNAVAILABLE)
-    phase = session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=session.window).phase
-    if phase == "RTH":
-        return regular_session_shape(side)
-    if phase not in TRADEABLE_EXTENDED_PHASES:
-        raise ProgramLegRefused(session_closed_at_decision(phase))
+    state = order_session_state_at_ms(now_ms=decision_bar.end_ms, extended_window=policy.window)
+    if state.phase == "RTH":
+        return ProgramLeg(regular_session_shape(side))
+    if state.phase not in TRADEABLE_EXTENDED_PHASES or state.next_transition_ms is None:
+        # A tradeable extended phase always names its end (the regular open
+        # after PRE, the declared close after POST); one that did not would
+        # bound the leg by no session at all.
+        raise ProgramLegRefused(session_closed_at_decision(state.phase))
     if policy.allowances is None:
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
@@ -514,12 +614,15 @@ def shape_program_leg(
         # and killed the shielded effect task instead of writing a rejected
         # receipt. Refusals are this module's whole contract; make it one.
         raise ProgramLegRefused(EXTENDED_ANCHOR_UNPRICEABLE) from exc
-    return LegShape(
-        order_type=OrderType.LIMIT,
-        time_in_force=TimeInForce.DAY,
-        limit_price=float(price),
-        extended_hours=True,
-        side=side,
+    return ProgramLeg(
+        LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=float(price),
+            extended_hours=True,
+            side=side,
+        ),
+        valid_until_ms=state.next_transition_ms,
     )
 
 
@@ -531,6 +634,7 @@ __all__ = [
     "AllowanceResolver",
     "LegRefusal",
     "LegShape",
+    "ProgramLeg",
     "ProgramLegPolicy",
     "ProgramLegRefused",
     "regular_session_shape",

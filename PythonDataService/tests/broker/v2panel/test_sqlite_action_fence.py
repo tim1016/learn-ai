@@ -93,8 +93,8 @@ async def test_context_read_failure_releases_the_same_key_for_retry(
         lambda _broker: facade,
     )
     monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_repository",
-        lambda _repository: (_ for _ in ()).throw(RuntimeError("projection read failed")),
+        "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_facade",
+        lambda _facade: (_ for _ in ()).throw(RuntimeError("projection read failed")),
     )
 
     async def attempt() -> None:
@@ -136,8 +136,8 @@ async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
         lambda _broker: facade,
     )
     monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_repository",
-        lambda _repository: _Reader(),
+        "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_facade",
+        lambda _facade: _Reader(),
     )
     monkeypatch.setattr(
         "app.services.broker_v2_panel.sqlite_panel_source.build_recovery_catalog",

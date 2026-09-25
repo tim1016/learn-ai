@@ -53,6 +53,7 @@ Label-only edits alter no execution identity and **never invalidate an arming**.
 | `account_pin` | `str \| None` | The broker account ID observed and explicitly selected during verification. `None` on an unbound draft. |
 | `account_pinned_at_ms` | `int \| None` | |
 | `live_envelope` | object \| `None` | The six values (§2.4). Required when `endpoint_mode == "live"`; `None` is permitted on a paper revision. |
+| `paper_xh_allowances` | object \| `None` | A paper revision's own `xh_entry_bps` / `xh_exit_bps` (#2440; ADR 0060 amendment of 2026-09-25), each in §2.4's domain for that field, both or neither. Only when `endpoint_mode == "paper"` and `live_envelope` is `None`; otherwise refused as `paper_allowances_invalid` (422), and the schema's CHECK refuses the row again. Stored as `REAL` columns `paper_xh_entry_bps` / `paper_xh_exit_bps`, and **omitted** from `content_sha256`'s payload when `None`, so no earlier revision's hash changes. Not an envelope value: never sealed, never part of `LiveEnvelopeValues`; the applied revision binds it as the worker's extended-hours settings. |
 | `content_sha256` | `str` | Canonical hash over the **non-secret** revision content, for idempotency and stale-edit detection. It is **not** the envelope sha and is never mistaken for it. |
 | `complete` | `bool` | A draft may be saved; only a complete revision may be staged or applied. |
 | `author_owner_id` | `str` | |
@@ -237,6 +238,7 @@ with a generic 500.
 ## 8. Test obligations this contract creates
 
 - Store → load → `LiveEnvelopeValues.sha` equals today's sha on **every** read path; float and int types preserved; historical seals still verify (§2.4).
+- A revision without `paper_xh_allowances` hashes exactly as it did before the field existed — pinned shas, and a real schema-v2 database upgraded to v3 (`tests/broker_configuration/test_paper_extended_hours_allowances.py`).
 - No `/{broker}` route shadows `/api/brokers/alpaca/configuration` (§4).
 - A request body carrying `owner_id` / `actor` / `user_id` is refused with `owner_field_not_accepted`.
 - A slot name outside the allowlist never reaches an environment lookup.

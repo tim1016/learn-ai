@@ -7,8 +7,11 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 
-from app.broker.alpaca.clerk.program_leg import LegShape
-from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
+from app.broker.alpaca.clerk.program_leg import ProgramLeg
+from app.broker.alpaca.clerk.recovery_reduction import (
+    ConfirmedRecoveryShape,
+    RecoveryPricing,
+)
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
@@ -108,13 +111,14 @@ def _accept_exit_capture(
     entry_order_ref: str,
     resolve_run_id: Callable[[OrderResource], str],
     decision_receipt: AtomicDecisionReceipt | None,
-    reducing_shape: LegShape | None = None,
+    program_leg: ProgramLeg | None = None,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
-    A deciding program's ``reducing_shape`` or an operator's
-    ``confirmed_shape`` — never both — is durable with the acceptance.
+    A deciding program's ``program_leg`` (its shape with the end of the
+    session it was priced for) or an operator's ``confirmed_shape`` — never
+    both — is durable with the acceptance.
 
     The run identity is supplied by ``resolve_run_id``: a strategy decision
     binds to the currently ACTIVE run (``accept_exit``); a recovery EXIT binds
@@ -122,8 +126,13 @@ def _accept_exit_capture(
     (``accept_recovery_exit``), which is why crash/stop-held exposure can be
     driven to flat after ``runtime.recover()`` retired every active run.
     """
+    if program_leg is not None and confirmed_shape is not None:
+        raise ValueError("an EXIT records a deciding program's leg or a recovery price, never both")
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
+    # The one recorded leg: its shape and the end of the session it was priced
+    # for. A recovery price also carries its quote, quantity and author.
+    recorded = confirmed_shape if confirmed_shape is not None else program_leg
     idempotency_key, payload_hash, command_id, effect_idempotency_key = _exit_identity(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -167,8 +176,8 @@ def _accept_exit_capture(
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
         ).with_reducing_shape(
-            reducing_shape if confirmed_shape is None else confirmed_shape.shape,
-            valid_until_ms=None if confirmed_shape is None else confirmed_shape.valid_until_ms,
+            None if recorded is None else recorded.shape,
+            valid_until_ms=None if recorded is None else recorded.valid_until_ms,
             reference_quote=None if confirmed_shape is None else confirmed_shape.reference_quote,
             confirmed_quantity=None if confirmed_shape is None else confirmed_shape.quantity,
             # Who set the price (#2229): an operator confirmed it, or the
@@ -227,17 +236,20 @@ def accept_exit(
     lifecycle_run_id: str,
     entry_order_ref: str,
     decision_receipt: AtomicDecisionReceipt | None = None,
-    reducing_shape: LegShape | None = None,
+    program_leg: ProgramLeg | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
-    ``reducing_shape`` is the leg shape the deciding program computed for
-    this EXIT (ADR 0059 D5.3). It is durable *with the acceptance*, not with
-    the reducing order, because the two can be many passes apart: when the
-    entry is still working, cancel-and-prove defers, and whichever later pass
-    creates the reduction — the reconciliation sweep, the watchdog, recovery
-    — knows nothing about the decision. Only a non-regular shape is recorded;
-    see ``ExitAcceptedFacts.with_reducing_shape``.
+    ``program_leg`` is the leg the deciding program shaped for this EXIT
+    (ADR 0059 D5.3) — its shape, and the end of the session an extended-hours
+    shape was priced for (#2440), as the one value ``shape_program_leg``
+    returns. It is durable *with the acceptance*, not with the reducing
+    order, because the two can be many passes apart: when the entry is still
+    working, cancel-and-prove defers, and whichever later pass creates the
+    reduction — the reconciliation sweep, the watchdog, recovery — knows
+    nothing about the decision. Only a non-regular shape is recorded; see
+    ``ExitAcceptedFacts.with_reducing_shape``. Past its bound the leg is
+    never sent.
     """
     reject_colon("lifecycle_run_id", lifecycle_run_id)
 
@@ -252,7 +264,7 @@ def accept_exit(
         entry_order_ref=entry_order_ref,
         resolve_run_id=resolve_run_id,
         decision_receipt=decision_receipt,
-        reducing_shape=reducing_shape,
+        program_leg=program_leg,
     )
 
 
@@ -314,7 +326,8 @@ def accept_recovery_exit(
     is (see ``accept_exit``), together with the end of the session it was
     priced in. ``None`` — every watchdog re-drive, and a safe flatten inside
     the regular session — reduces market DAY. Either way the leg reaches the
-    broker only through ``recovery_reduction.recovery_leg_verdict``.
+    broker only through the send-time rule every EXIT passes
+    (``exit_resolution``, ``recovery_reduction.reducing_leg_verdict``).
     """
 
     def resolve_run_id(target: OrderResource) -> str:
@@ -337,34 +350,12 @@ def accept_recovery_exit(
     )
 
 
-async def submit_exit(
-    repo: ClerkSqliteRepository,
-    *,
-    account_id: str,
-    strategy_instance_id: str,
-    decision_id: str,
-    lifecycle_run_id: str,
-    entry_order_ref: str,
-    trade: BrokerTradePort,
-    decision_receipt: AtomicDecisionReceipt | None = None,
-) -> ExitSubmission:
-    accepted = accept_exit(
-        repo,
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-        decision_id=decision_id,
-        lifecycle_run_id=lifecycle_run_id,
-        entry_order_ref=entry_order_ref,
-        decision_receipt=decision_receipt,
-    )
-    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
-
-
 async def resolve_accepted_exit(
     repo: ClerkSqliteRepository,
     *,
     accepted: ExitSubmission,
     trade: BrokerTradePort,
+    pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
 ) -> ExitSubmission:
     """Drive a previously accepted EXIT outside the intake decision segment.
@@ -380,6 +371,11 @@ async def resolve_accepted_exit(
     No leg shape is threaded here: the reducing order is built from the shape
     the EXIT's own acceptance recorded (ADR 0059 D5.3), so this call and the
     sweep's re-drive of the very same EXIT cannot produce different legs.
+    ``pricing`` is what a leg that can no longer go out as recorded is
+    re-priced from at send time (#2440; see ``resolve_exit``). It has no
+    default: every caller names the authority's one pricing seam
+    (``SqliteAlpacaClerkFacade.recovery_pricing``), so the same EXIT cannot
+    be re-priced by one caller and folded by another.
 
     ``off_loop`` is the sweep's worker-thread seam for the resolution spine
     (#1993); the default keeps the pre-#1993 inline behavior.
@@ -390,6 +386,7 @@ async def resolve_accepted_exit(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            pricing=pricing,
             off_loop=off_loop,
         )
     except OperationClaimError:
@@ -430,4 +427,4 @@ def _reducing_order_ref(
     return reducing.order_ref if reducing is not None else None
 
 
-__all__ = ["ExitSubmission", "accept_exit", "resolve_accepted_exit", "resolve_exit", "submit_exit"]
+__all__ = ["ExitSubmission", "accept_exit", "resolve_accepted_exit", "resolve_exit"]

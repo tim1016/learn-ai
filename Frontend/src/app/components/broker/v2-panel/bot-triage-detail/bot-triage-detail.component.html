@@ -35,6 +35,7 @@
       @if (panelView.mission_verdict.next_action; as nextAction) {
         <p class="verdict__next"><strong>Next:</strong> {{ nextAction }}</p>
       }
+      <app-next-attempt class="verdict__next" [facts]="panelView.mission_verdict" />
     </div>
 
     @if (panelView.actions.length > 0) {

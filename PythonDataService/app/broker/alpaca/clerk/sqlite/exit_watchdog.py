@@ -41,12 +41,9 @@ from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegRefused
 from app.broker.alpaca.clerk.recovery_reduction import (
-    UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryShape,
     RecoveryPricing,
-    price_automatic_recovery_reduction,
-    quote_spread_bps,
-    regular_session_open,
+    market_leg_sendable,
 )
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
@@ -138,7 +135,7 @@ async def redrive_or_escalate_stale_exits(
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     broker_symbol: BrokerSymbolReader,
-    pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+    pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
 ) -> None:
     """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate.
@@ -147,10 +144,12 @@ async def redrive_or_escalate_stale_exits(
     against the Clerk's current attribution (#2343). It has no default: a
     caller without a broker snapshot cannot re-drive.
 
-    ``pricing`` is what an extended-hours re-drive prices from (#2229); the
-    degraded :data:`UNPRICEABLE_RECOVERY` default defers outside the regular
-    session rather than guessing a price, so a caller with no declared window
-    — a paper authority, a test — behaves exactly as before.
+    ``pricing`` is what an extended-hours re-drive prices from (#2229): the
+    authority's own ``recovery_pricing``. It has no default either — the
+    re-drive and the notice's next-attempt time must come from the same
+    seam; a caller with nothing to price from names
+    :data:`~recovery_reduction.UNPRICEABLE_RECOVERY`, which defers outside
+    the regular session rather than guessing a price.
 
     ``off_loop`` moves the episode/entry scans onto a worker thread and the
     escalation/acceptance folds through the fence's sanctioned hop (#1993);
@@ -162,7 +161,6 @@ async def redrive_or_escalate_stale_exits(
     # module constants; the watchdog keeps its execution logic and loses
     # its policy.
     redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
-    pricing_policy = pricing.policy_source()
 
     def _scan_stale_exits() -> tuple[int, list[_StaleExit]]:
         now_ms = repo.clock()
@@ -256,21 +254,22 @@ async def redrive_or_escalate_stale_exits(
             continue
         confirmed_shape = None
         quote_spread = None
-        if not regular_session_open(now_ms):
+        if not market_leg_sendable(now_ms):
             # Owner decision 2026-09-19 (evening, #2229): an extended-hours
             # re-drive prices a limit itself instead of waiting for the open.
             # A refusal (no session, no allowance, no live quote, or a spread
             # past the cap) defers — the episode stays raised and the entry
-            # stays free.
-            quote = pricing.quote_source(cause.symbol, now_ms)
+            # stays free. Read here, on the event loop (#2440 review). Both
+            # this choice and the price are judged at the send instant, as
+            # the send-time rule judges the leg, so a re-drive the rule would
+            # refuse is refused here, before an attempt is burned.
+            touch = pricing.read(cause.symbol, now_ms)
             try:
-                priced = price_automatic_recovery_reduction(
+                priced = touch.price(
                     side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,
                     symbol=cause.symbol,
                     quantity=remaining,
                     now_ms=now_ms,
-                    policy=pricing_policy,
-                    quote=quote,
                 )
             except ProgramLegRefused as exc:
                 logger.info(
@@ -285,9 +284,7 @@ async def redrive_or_escalate_stale_exits(
                         # The spread beside every refusal is the series an
                         # operator tunes ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS
                         # from — a too-tight gate should be visible in data.
-                        "quote_spread_bps": None
-                        if quote is None
-                        else quote_spread_bps(quote),
+                        "quote_spread_bps": touch.quote_spread_bps,
                     },
                 )
                 continue
@@ -309,7 +306,7 @@ async def redrive_or_escalate_stale_exits(
                 )
                 continue
             confirmed_shape = priced
-            quote_spread = quote_spread_bps(quote) if quote is not None else None
+            quote_spread = touch.quote_spread_bps
         try:
             accepted = await intake.off_loop(
                 _accept_admissible_redrive,
@@ -336,7 +333,9 @@ async def redrive_or_escalate_stale_exits(
                 )
                 continue
             _FIRST_DEFERRAL_MS.get(repo, {}).pop(episode["uncertainty_id"], None)
-            await resolve_accepted_exit(repo, accepted=accepted, trade=trade, off_loop=run)
+            await resolve_accepted_exit(
+                repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run
+            )
         except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
             logger.info(
                 "deferred a contended or policy-blocked stuck-EXIT re-drive",

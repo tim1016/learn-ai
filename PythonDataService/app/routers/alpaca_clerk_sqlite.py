@@ -180,10 +180,10 @@ def _unknown_bot_response(exc: UnknownStrategyInstanceError) -> HTTPException:
 
 
 def _read_projection(  # noqa: UP047 - Python 3.11 runtime; PEP 695 needs 3.12.
-    repo: ClerkSqliteRepository,
+    facade: SqliteAlpacaClerkFacade,
     read: Callable[[SqliteClerkProjectionReader], ReadResult],
 ) -> ReadResult:
-    reader = SqliteClerkProjectionReader.from_repository(repo)
+    reader = SqliteClerkProjectionReader.from_facade(facade)
     try:
         return read(reader)
     finally:
@@ -311,11 +311,11 @@ async def get_account_snapshot(account_id: str) -> ClerkProjectionResponse:
     )
     if failed is not None:
         return ClerkProjectionResponse.from_projection(failed)
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
     try:
         projection = await asyncio.to_thread(
             _read_projection,
-            repo,
+            facade,
             lambda reader: reader.account_snapshot(),
         )
     except ProjectionReadError as exc:
@@ -338,11 +338,11 @@ async def get_bot_snapshot(
     )
     if failed is not None:
         return ClerkProjectionResponse.from_projection(failed)
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
     try:
         projection = await asyncio.to_thread(
             _read_projection,
-            repo,
+            facade,
             lambda reader: reader.bot_snapshot(strategy_instance_id),
         )
     except ProjectionReadError as exc:
@@ -368,11 +368,11 @@ async def _timeline(
     cursor: str | None,
     page_size: int,
 ) -> TimelinePageResponse:
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
     try:
         page = await asyncio.to_thread(
             _read_projection,
-            repo,
+            facade,
             lambda reader: reader.timeline_page(
                 strategy_instance_id=strategy_instance_id,
                 order_ref=order_ref,
@@ -472,11 +472,10 @@ async def _check_recovery_action(
     suggested limit in PRE/POST, or why nothing can be sent.
     """
     facade = _active_sqlite_facade(account_id)
-    repo = facade.repository
     try:
         context = await asyncio.to_thread(
             _read_projection,
-            repo,
+            facade,
             lambda reader: reader.recovery_context(
                 strategy_instance_id=strategy_instance_id,
             ),
@@ -571,7 +570,7 @@ async def prepare_bot_historical_execution_recovery(
     try:
         context = await asyncio.to_thread(
             _read_projection,
-            facade.repository,
+            facade,
             lambda reader: reader.recovery_context(
                 strategy_instance_id=strategy_instance_id,
             ),
@@ -664,7 +663,7 @@ async def _execute_presented_recovery_action(
     async def current_context():
         context = await asyncio.to_thread(
             _read_projection,
-            facade.repository,
+            facade,
             lambda reader: reader.recovery_context(
                 strategy_instance_id=strategy_instance_id,
             ),

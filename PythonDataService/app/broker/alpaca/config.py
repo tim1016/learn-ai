@@ -106,6 +106,18 @@ class AlpacaSettings(BaseSettings):
     live_loss_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     live_shadow_sessions: int | None = Field(default=None, ge=1)
     live_arming_max_sessions: int | None = Field(default=None, ge=1)
+    # The extended-hours allowances. Unlike the four values above, these two
+    # apply in ANY mode: they price every extended-hours and after-close limit
+    # (``program_leg._settings_allowances``). On a live binding they are the
+    # envelope's pair; on a paper binding they hold the applied paper
+    # revision's own pair (``paper_xh_allowances``, #2440), bound here by
+    # ``profile/runtime_context.py`` — the ``live_`` prefix names where they
+    # came from first, not a live-only value. Neither is required on paper;
+    # unset means "not configured", never zero. Admission refuses it for an
+    # extended-hours run and, where a window is declared, for a regular-hours
+    # run's Start or the Resume of a flat one; a regular-hours run still
+    # holding a position resumes, and its after-close exit is then held back
+    # (``run_admission``, #2440).
     # Upper-bounded because 10 000 bps is 100 %: a sell allowance at or past it
     # floors the marketable anchor to zero or below, which is not a price. The
     # anchor refuses such a leg too (`EXTENDED_ANCHOR_UNPRICEABLE`); this stops

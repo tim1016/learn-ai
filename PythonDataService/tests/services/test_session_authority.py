@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import is_trading_day, session_window_for_date
 from app.lean_sidecar.trading_calendar import session_state_at_ms as calendar_session_state_at_ms
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
@@ -12,6 +13,7 @@ from app.services.session_authority import (
     CAPABILITY_MAX_AGE_MS,
     evaluate_session_submit,
     order_mechanism_sessions_from_capability,
+    order_session_state_at_ms,
     scheduled_exchange_phase_at_ms,
     scheduled_extended_session_bounds,
     session_state_at_ms,
@@ -403,3 +405,29 @@ def test_scheduled_extended_session_bounds_off_session_parity_with_trading_calen
     """No bounds exactly where ``app/lean_sidecar/trading_calendar.py`` has no session."""
     assert is_trading_day(day) is False
     assert scheduled_extended_session_bounds(day) is None
+
+
+_ALPACA_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
+
+
+@pytest.mark.parametrize(
+    ("now", "phase", "next_transition"),
+    [
+        pytest.param((2026, 11, 25, 19, 0), "POST", (2026, 11, 25, 20, 0), id="ordinary-day-declared-close"),
+        pytest.param((2026, 11, 27, 16, 30), "POST", (2026, 11, 27, 17, 0), id="half-day-calendar-close"),
+        pytest.param((2026, 11, 27, 17, 30), "CLOSED", (2026, 11, 30, 4, 0), id="half-day-past-after-hours"),
+        pytest.param((2026, 11, 27, 12, 0), "RTH", (2026, 11, 27, 13, 0), id="half-day-regular-session"),
+    ],
+)
+def test_order_session_ends_after_hours_at_the_calendars_close(
+    now: tuple[int, int, int, int, int], phase: str, next_transition: tuple[int, int, int, int, int]
+) -> None:
+    """The declared 04:00-20:00 window, bounded by the calendar's scheduled after-hours (#2440).
+
+    On 2026-11-27 the regular close is 13:00 and after-hours ends at 17:00: an
+    order placed at 17:30 would reach no session, so the instant is CLOSED
+    until Monday's declared pre-market open.
+    """
+    state = order_session_state_at_ms(now_ms=_ny_ms(*now), extended_window=_ALPACA_WINDOW)
+
+    assert (state.phase, state.next_transition_ms) == (phase, _ny_ms(*next_transition))

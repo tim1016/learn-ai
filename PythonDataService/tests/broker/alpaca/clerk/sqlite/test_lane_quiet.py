@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import record_unfoldable_broker_order
@@ -45,10 +46,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
     _broker_order_fixture,
     _broker_position_fixture,
     _clock_at,
     _TestClock,
+    _walk_clock_to,
 )
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
@@ -225,6 +228,8 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
     quiet — and a lane that still believes it holds custody would hand its
     account over.
     """
+    # The market reducing leg goes out only inside the regular session (#2440).
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
         repo,
@@ -239,7 +244,7 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
         "placeholder", side="sell", status="canceled", filled_quantity=4.0, filled_avg_price=101.0
     )
     result = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(submit_result=partial)
+        repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(submit_result=partial), pricing=UNPRICEABLE_RECOVERY
     )
     assert result.reducing_order_ref is not None
     fold_order_evidence(
@@ -247,7 +252,7 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
         effect_operation_id=accepted.effect_operation_id,
         order=partial.model_copy(update={"client_order_id": result.reducing_order_ref}),
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade())
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     episode = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=SID
     )
@@ -416,7 +421,7 @@ async def test_an_open_failed_enter_filled_fence_blocks_quiet_until_a_clean_swee
     assert blocked.broker_work_ended and blocked.intents_resolved
     assert not blocked.account_flat
 
-    swept = await reconcile_account(repo, read=_ReconcileRead(), trade=_ReconcileTrade())
+    swept = await reconcile_account(repo, read=_ReconcileRead(), trade=_ReconcileTrade(), pricing=UNPRICEABLE_RECOVERY)
 
     assert swept.verdict == "clean"
     assert (

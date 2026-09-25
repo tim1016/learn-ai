@@ -448,6 +448,16 @@ class MissionVerdictView(BaseModel):
     explanation: str
     next_action: str | None
     evaluated_at_ms: int
+    # When the Clerk next tries on its own what ``next_action`` describes —
+    # the stuck-EXIT watchdog's re-drive of an EXIT_NOT_FLAT (#2440): int64 ms
+    # UTC for the shared timestamp display. ``next_attempt_overdue`` says the
+    # time has passed without the try resolving it, so it is never shown as
+    # a future promise; ``exit_working`` that an exit is in progress, so no
+    # attempt is due; ``facts_unreadable`` that the time is unknown.
+    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    next_attempt_overdue: bool = False
+    exit_working: bool = False
+    facts_unreadable: bool = False
 
 
 class ReadinessCheckView(BaseModel):
@@ -1187,6 +1197,13 @@ class LaneAttentionItem(BaseModel):
     # EXIT_NOT_FLAT knows its symbol); None for account-scoped conditions.
     symbol: str | None = None
     headline: str
+    # When the Clerk next tries to resolve the condition on its own (an
+    # EXIT_NOT_FLAT's re-drive, #2440), whether that time has passed, whether
+    # an exit is working instead, and whether the record could not be read.
+    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    next_attempt_overdue: bool = False
+    exit_working: bool = False
+    facts_unreadable: bool = False
 
 
 class LaneAttentionRead(BaseModel):

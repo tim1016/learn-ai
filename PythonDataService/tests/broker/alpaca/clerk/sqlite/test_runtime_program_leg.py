@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -19,6 +20,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import STREAM_HEALTH_REASON_CODE, StreamHealthGate
@@ -45,8 +47,10 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal(
 _EXTENDED_POLICY = ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES)
 
 
-def _bar(hour: int, minute: int, *, phase: str, close: str = "100.00") -> RetainedSourceBar:
-    end = to_ms_utc(datetime(_DAY.year, _DAY.month, _DAY.day, hour, minute, tzinfo=_ET))
+def _bar(
+    hour: int, minute: int, *, phase: str, close: str = "100.00", day: date = _DAY
+) -> RetainedSourceBar:
+    end = to_ms_utc(datetime(day.year, day.month, day.day, hour, minute, tzinfo=_ET))
     return RetainedSourceBar(
         seq=1,
         account_id=ACCOUNT_ID,
@@ -165,12 +169,23 @@ async def _exit(
     policy: ProgramLegPolicy,
     retained_source_bar: RetainedSourceBar | None,
     live_envelope: LiveEnvelopeGate | None = None,
+    send_delay_ms: int = 0,
+    decided_at_ms: int | None = None,
 ) -> tuple[_FakeTradePort, EffectOperationState, str]:
-    """Drive one EXIT through the facade, after a filled ENTER, and report the port and the receipt."""
+    """Drive one EXIT through the facade, after a filled ENTER, and report the port and the receipt.
+
+    ``send_delay_ms`` puts the Clerk's clock that long after the decision bar's
+    close: a live EXIT reaches the Clerk seconds after its bar closes, never at
+    the closing instant itself. ``decided_at_ms`` pins the decision instant
+    when there is no bar to read it from.
+    """
+    decision_clock = (
+        _decision_clock(retained_source_bar) if decided_at_ms is None else (lambda: decided_at_ms)
+    )
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID,
         artifacts_root=tmp_path,
-        clock=_decision_clock(retained_source_bar),
+        clock=lambda: decision_clock() + send_delay_ms,
     )
     trade = _FakeTradePort()
     facade = SqliteAlpacaClerkFacade(
@@ -340,6 +355,144 @@ async def test_an_exit_decision_at_session_close_is_rejected_before_broker_conta
     assert state is EffectOperationState.REJECTED
     assert explanation.startswith("SESSION_CLOSED_AT_DECISION:")
     assert trade.submitted_legs == []
+
+
+_EARLY_CLOSE_DAY = date(2026, 11, 27)  # the day after Thanksgiving: NYSE closes at 13:00
+
+
+@pytest.mark.parametrize(
+    ("bar", "label"),
+    [
+        (_bar(16, 0, phase="RTH"), "the 15:59 bar, decided at the 16:00 close"),
+        (
+            _bar(13, 0, phase="RTH", day=_EARLY_CLOSE_DAY),
+            "the 12:59 bar of an early-close day, decided at its 13:00 close",
+        ),
+    ],
+)
+async def test_a_regular_hours_exit_decided_on_the_last_bar_goes_out_as_an_after_hours_limit(
+    tmp_path: Path, bar: RetainedSourceBar, label: str
+) -> None:
+    """#2440 (owner decision #2431): the day's last EXIT is never queued for the next open.
+
+    A regular-hours run's last bar closes *at* the regular close, so its EXIT
+    reaches the Clerk a few seconds after the session has ended. A market DAY
+    leg sent then is queued by Alpaca for the next regular open. The leg is
+    instead the extended-hours shape an extended run would send at that
+    instant: a DAY limit flagged for extended hours, the decision bar's close
+    less the exit allowance. The close is the canonical calendar's, so an
+    early-close day's 13:00 is treated exactly like 16:00.
+    """
+    trade, state, explanation = await _exit(
+        tmp_path,
+        use_rth=True,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=bar,
+        send_delay_ms=2_000,
+    )
+
+    assert state is not EffectOperationState.REJECTED, explanation
+    (leg,) = trade.submitted_legs
+    assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours, leg.side.value) == (
+        OrderType.LIMIT,
+        TimeInForce.DAY,
+        99.80,  # floor_tick(100.00 × (1 − 20 / 10⁴))
+        True,
+        "sell",
+    ), label
+
+
+async def test_a_regular_hours_exit_decided_inside_the_session_keeps_the_market_day_leg(
+    tmp_path: Path,
+) -> None:
+    """Exits sent during regular hours are unchanged (#2440)."""
+    trade, state, explanation = await _exit(
+        tmp_path,
+        use_rth=True,
+        policy=_EXTENDED_POLICY,
+        retained_source_bar=_bar(15, 59, phase="RTH"),
+        send_delay_ms=2_000,
+    )
+
+    assert state is not EffectOperationState.REJECTED, explanation
+    (leg,) = trade.submitted_legs
+    assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (
+        OrderType.MARKET,
+        TimeInForce.DAY,
+        None,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("decided_at", "warned"),
+    [
+        pytest.param((15, 30), False, id="mid-session-the-market-leg-goes-out-as-decided"),
+        pytest.param((16, 0), True, id="after-the-close-an-after-hours-price-is-needed"),
+    ],
+)
+async def test_a_regular_hours_exit_warns_it_is_unpriced_only_when_a_price_is_needed(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    decided_at: tuple[int, int],
+    warned: bool,
+) -> None:
+    """#2440 review: ``regular_hours_exit_unpriced`` means an after-hours price was needed and missing.
+
+    With no retained decision bar the EXIT can never be shaped as an
+    after-hours limit, so it always carries ``unpriced``. Mid-session that is
+    no warning — the market leg goes out as decided — and the warning used to
+    fire on every such EXIT anyway. It fires only when the market leg cannot
+    be sent at the send instant.
+    """
+    decided_at_ms = to_ms_utc(datetime(_DAY.year, _DAY.month, _DAY.day, *decided_at, tzinfo=_ET))
+
+    with caplog.at_level(logging.WARNING):
+        await _exit(
+            tmp_path,
+            use_rth=True,
+            policy=_EXTENDED_POLICY,
+            retained_source_bar=None,
+            decided_at_ms=decided_at_ms,
+            send_delay_ms=2_000,
+        )
+
+    unpriced = [r for r in caplog.records if getattr(r, "action", None) == "regular_hours_exit_unpriced"]
+    assert [r.reason_code for r in unpriced] == (["EXTENDED_ANCHOR_UNAVAILABLE"] if warned else [])
+
+
+@pytest.mark.parametrize(
+    ("account_id", "authority_kind", "prices_from_the_live_market"),
+    [("PA-TEST", "sqlite", True), ("sim:spy-bot", "synthetic", False)],
+)
+def test_a_late_exit_is_repriced_from_the_live_market_only_off_a_synthetic_authority(
+    tmp_path: Path, account_id: str, authority_kind: str, prices_from_the_live_market: bool
+) -> None:
+    """#2440: one pricing seam per authority, named by every path that drives an EXIT.
+
+    The runner, restart recovery, the sweep and its watchdog, operator
+    Reconcile Now and the operator's flatten all read ``recovery_pricing``.
+    A synthetic authority fills against retained bars, never the live market
+    (PR #2230 review), so it re-prices nothing — whichever of them drives
+    such an EXIT, it folds for the operator instead of being priced off a
+    market it does not execute in.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(),
+        trade=_FakeTradePort(),
+        authority_kind=authority_kind,
+        account_mode="paper",
+        program_leg_policy=_EXTENDED_POLICY,
+    )
+    try:
+        pricing = facade.recovery_pricing
+        assert (pricing is not UNPRICEABLE_RECOVERY) is prices_from_the_live_market
+        if prices_from_the_live_market:
+            assert pricing.policy_source() is _EXTENDED_POLICY
+    finally:
+        repo.close()
 
 
 async def test_an_extended_decision_outside_the_regular_session_submits_a_marketable_day_limit(

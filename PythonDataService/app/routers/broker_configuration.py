@@ -40,7 +40,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 
-from app.broker_configuration.envelope import ValidatedLiveEnvelope
+from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.records import ProfileWithRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
@@ -148,6 +148,13 @@ def _envelope(content: RevisionContentRequest) -> ValidatedLiveEnvelope | None:
     return ValidatedLiveEnvelope.from_mapping(content.live_envelope.model_dump())
 
 
+def _paper_allowances(content: RevisionContentRequest) -> ValidatedPaperAllowances | None:
+    """The paper pair, likewise only through its validated type."""
+    if content.paper_xh_allowances is None:
+        return None
+    return ValidatedPaperAllowances.from_mapping(content.paper_xh_allowances.model_dump())
+
+
 def _detail(record: ProfileWithRevision) -> ProfileDetailResponse:
     return ProfileDetailResponse(
         profile=ProfileResponse.from_record(record.profile),
@@ -227,6 +234,7 @@ async def create_profile(service: ServiceDep, body: ProfileCreateRequest) -> Pro
         credential_slot=body.credential_slot,
         endpoint_mode=body.endpoint_mode,
         live_envelope=_envelope(body),
+        paper_xh_allowances=_paper_allowances(body),
     )
     return _detail(created)
 
@@ -305,6 +313,7 @@ async def create_revision(
         credential_slot=body.credential_slot,
         endpoint_mode=body.endpoint_mode,
         live_envelope=_envelope(body),
+        paper_xh_allowances=_paper_allowances(body),
     )
     return RevisionResponse.from_record(revision)
 

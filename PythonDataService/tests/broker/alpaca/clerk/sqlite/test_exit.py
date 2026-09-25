@@ -12,25 +12,30 @@ import asyncio
 import json
 import threading
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.program_leg import LegShape
-from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape
+from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg, ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    ConfirmedRecoveryShape,
+    RecoveryPricing,
+)
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     RecoveryRunActiveError,
+    _accept_exit_capture,
     accept_exit,
     accept_recovery_exit,
     resolve_accepted_exit,
     resolve_exit,
-    submit_exit,
 )
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
@@ -53,6 +58,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
+from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import TopOfBookQuote
@@ -62,11 +69,44 @@ ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
 NEXT_OPEN_MS = 1_700_145_060_000  # 2023-11-16 09:31 ET, the session after FIXTURE_RTH_MS
+AFTER_HOURS_MS = FIXTURE_RTH_MS + 7 * 3_600_000 + 13 * 60_000  # 17:13 ET, POST, that day
+POST_CLOSE_MS = FIXTURE_RTH_MS + 10 * 3_600_000  # 20:00 ET, the declared close, that day
+
+
+def _live_touch_pricing() -> RecoveryPricing:
+    """An authority's live seam: a declared 04:00–20:00 window, a 20 bps exit
+    allowance, and a fresh 100.00 / 100.05 IBKR touch at whatever instant is asked."""
+    policy = ProgramLegPolicy(
+        window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
+        allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
+    )
+
+    def quote(symbol: str, now_ms: int) -> TopOfBookQuote:
+        return TopOfBookQuote(
+            symbol=symbol, bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=now_ms
+        )
+
+    return RecoveryPricing(policy_source=lambda: policy, quote_source=quote)
+
+
+# The two pricing inputs an EXIT can be driven with: nothing that can price
+# (a synthetic authority, a caller with no live market) and an authority's live
+# seam. Every driver of one EXIT names the same one (#2440).
+_BOTH_PRICING_INPUTS = pytest.mark.parametrize(
+    "pricing",
+    [
+        pytest.param(UNPRICEABLE_RECOVERY, id="nothing-can-price"),
+        pytest.param(_live_touch_pricing(), id="the-authoritys-live-seam"),
+    ],
+)
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    # Inside the regular session: every EXIT's reducing leg passes the
+    # send-time session rule (#2440), so a test about the EXIT machine sends
+    # its market DAY leg. A test about the session sets the clock itself.
+    clock = _clock_at(FIXTURE_RTH_MS)
     r = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
@@ -317,6 +357,7 @@ async def test_direct_coverage_supersession_resumes_accepted_exit_without_second
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=resumed_trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert resumed.effect_operation_id == accepted.effect_operation_id
@@ -405,6 +446,7 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     assert set(trade.lookup_calls[:2]) == {first, second}
@@ -427,6 +469,7 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert repo.position(SID, "SPY") == pytest.approx(0)
 
@@ -457,6 +500,36 @@ async def test_active_exit_fences_a_concurrent_new_enter(
         )
 
     assert raised.value.decision.reason_code == "EXIT_IN_PROGRESS"
+
+
+def test_an_exit_never_records_both_a_program_leg_and_a_recovery_price(repo: ClerkSqliteRepository) -> None:
+    """A deciding program's leg or a recovery price is the one recorded leg (#2440 review): never both."""
+    shape = LegShape(
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        limit_price=99.80,
+        extended_hours=True,
+        side=OrderSide.SELL,
+    )
+    quote = TopOfBookQuote(
+        symbol="SPY", bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=repo.clock()
+    )
+
+    with pytest.raises(ValueError, match="never both"):
+        _accept_exit_capture(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="exit-both",
+            entry_order_ref="learn-ai/spy-bot/v1:any",
+            resolve_run_id=lambda _target: RUN_ID,
+            decision_receipt=None,
+            program_leg=ProgramLeg(shape, valid_until_ms=POST_CLOSE_MS),
+            confirmed_shape=ConfirmedRecoveryShape(
+                shape=shape, valid_until_ms=POST_CLOSE_MS, reference_quote=quote, quantity=10
+            ),
+        )
+    assert repo.active_exit_for_strategy(SID) is None
 
 
 async def test_accept_exit_rejects_an_unknown_entry_order_ref(repo: ClerkSqliteRepository) -> None:
@@ -690,7 +763,7 @@ async def test_resolve_exit_cancels_the_working_entry_before_computing_quantity(
     )
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
     assert accepted.effect_operation_id is not None
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.cancel_calls == [f"bo-{entry_ref}"]
     assert trade.lookup_calls == [entry_ref]
@@ -711,7 +784,7 @@ async def test_resolve_exit_skips_cancel_when_entry_already_terminal(
     )
     trade = _FakeTrade()
     assert accepted.effect_operation_id is not None
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.cancel_calls == []  # already terminal; never attempted
 
@@ -740,7 +813,7 @@ async def test_partial_fill_during_cancel_uses_only_the_clerk_proven_remaining_q
             _broker_order(entry_ref, status="canceled", filled_quantity=4.0, filled_avg_price=100.0),
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert len(trade.submit_calls) == 1
     reducing_leg, _ = trade.submit_calls[0]
@@ -762,7 +835,7 @@ async def test_lost_cancel_response_blocks_the_closing_order(repo: ClerkSqliteRe
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(cancel_error=BrokerUnavailable("timeout"))
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.submit_calls == []  # no reducing order submitted
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -796,7 +869,7 @@ async def test_a_definitive_cancel_error_falls_through_to_the_poll(
             _broker_order(entry_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.0),
         ],
     )
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     entry_order = repo.order(entry_ref)
     assert entry_order is not None and entry_order.broker_state == "filled"
@@ -818,7 +891,7 @@ async def test_lost_poll_response_stays_uncertain(repo: ClerkSqliteRepository) -
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(lookup_error=BrokerUnavailable("timeout"))
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
@@ -847,6 +920,7 @@ async def test_cancel_error_reason_is_preserved_when_exact_poll_is_absent(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=trade,
+        pricing=UNPRICEABLE_RECOVERY,
     )
 
     uncertain = [
@@ -888,6 +962,7 @@ async def test_cancelled_cancel_retains_unknown_custody_before_claim_release(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            pricing=UNPRICEABLE_RECOVERY,
         )
     )
     await trade.cancel_started.wait()
@@ -925,7 +1000,7 @@ async def test_a_mismatched_client_order_id_on_the_cancel_poll_stays_uncertain(
             return mismatched  # returned verbatim, not forced to match
 
     verbatim_trade = _VerbatimTrade()
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=verbatim_trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=verbatim_trade, pricing=UNPRICEABLE_RECOVERY)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
@@ -949,7 +1024,7 @@ async def test_still_working_after_cancel_and_poll_leaves_no_reducing_order(
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="accepted", filled_quantity=0.0)])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.submit_calls == []
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -973,7 +1048,7 @@ async def test_zero_remaining_quantity_skips_the_reducing_order_entirely(
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.submit_calls == []
     assert result.reducing_order_ref is None
@@ -1001,7 +1076,7 @@ async def test_reducing_order_fully_filled_yields_a_succeeded_terminal_receipt(
             "placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
         )
     )
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert result.reducing_order_ref is not None
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -1021,6 +1096,7 @@ async def test_reducing_order_fully_filled_yields_a_succeeded_terminal_receipt(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "succeeded"
@@ -1045,7 +1121,7 @@ async def test_reducing_order_lost_submit_response_stays_uncertain(
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
@@ -1091,11 +1167,11 @@ async def test_a_later_resolve_call_resolves_the_reducing_orders_lost_submit(
     )
     assert accepted.effect_operation_id is not None
     first_trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=first_trade)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=first_trade, pricing=UNPRICEABLE_RECOVERY)
     assert first.reducing_order_ref is not None
 
     second_trade = _FakeTrade()  # lookup finds the reducing order landed
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=second_trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=second_trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert second_trade.submit_calls == []  # never re-submitted a duplicate
     assert second_trade.lookup_calls == [first.reducing_order_ref]
@@ -1120,6 +1196,7 @@ async def test_each_absent_reducing_poll_rearms_the_submit_grace(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(submit_error=BrokerUnavailable("timeout")),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert first.reducing_order_ref is not None
 
@@ -1129,6 +1206,7 @@ async def test_each_absent_reducing_poll_rearms_the_submit_grace(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=first_absent,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert first_absent.submit_calls == []
 
@@ -1138,6 +1216,7 @@ async def test_each_absent_reducing_poll_rearms_the_submit_grace(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=second_absent,
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert second_absent.submit_calls == []
 
@@ -1159,6 +1238,7 @@ async def test_acknowledged_reducing_order_is_polled_until_terminal(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(submit_result=_broker_order("placeholder", status="accepted")),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert first.reducing_order_ref is not None
 
@@ -1170,7 +1250,7 @@ async def test_acknowledged_reducing_order_is_polled_until_terminal(
         filled_avg_price=101,
     )
     trade = _FakeTrade(lookup_results=[terminal])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.submit_calls == []
     assert trade.lookup_calls == [first.reducing_order_ref]
@@ -1208,6 +1288,7 @@ async def test_stale_snapshot_policy_blocks_exit_before_reducing_order_creation(
             repo,
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
+            pricing=UNPRICEABLE_RECOVERY,
         )
 
     assert trade.submit_calls == []
@@ -1236,7 +1317,7 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
             "placeholder", status="canceled", filled_quantity=4.0, filled_avg_price=101.0, side="sell"
         )
     )
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert result.reducing_order_ref is not None
     fold_order_evidence(
@@ -1254,6 +1335,7 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "failed"
@@ -1291,7 +1373,7 @@ async def test_mismatched_client_order_id_on_reducing_submit_stays_uncertain(
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_client_order_id_override="learn-ai/other-bot/v1:zzz")
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
@@ -1318,7 +1400,7 @@ async def test_resolve_exit_on_an_already_succeeded_operation_is_a_true_noop(
             "placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
         )
     )
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     # The submit response says filled but carries no execution slice, so the
     # pass holds the EXIT ``unknown``; the recovery evidence it awaits (the
     # reducing order's cumulative) then lets the next pass prove it flat.
@@ -1330,13 +1412,13 @@ async def test_resolve_exit_on_an_already_succeeded_operation_is_a_true_noop(
             first.reducing_order_ref, status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
         ),
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade())
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "succeeded"
     before = len(repo.custody_transitions())
 
     trade2 = _FakeTrade()
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade2)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade2, pricing=UNPRICEABLE_RECOVERY)
 
     assert len(repo.custody_transitions()) == before
     assert trade2.submit_calls == [] and trade2.cancel_calls == [] and trade2.lookup_calls == []
@@ -1367,6 +1449,7 @@ async def test_late_and_duplicate_entry_evidence_cannot_regress_succeeded_exit(
                 filled_avg_price=101,
             )
         ),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     assert first_resolution.reducing_order_ref is not None
     fold_order_evidence(
@@ -1384,6 +1467,7 @@ async def test_late_and_duplicate_entry_evidence_cannot_regress_succeeded_exit(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     late = _broker_order(entry_ref, status="accepted").model_copy(
         update={"updated_at_ms": 1_699_999_999_000, "observed_at_ms": 1_700_000_001_000}
@@ -1433,11 +1517,11 @@ async def test_same_process_overlapping_exit_resolvers_submit_one_reduction(
             return await super().submit(leg, client_order_id=client_order_id)
 
     trade = BlockingTrade()
-    first = asyncio.create_task(resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade))
+    first = asyncio.create_task(resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY))
     await asyncio.wait_for(trade.submit_started.wait(), timeout=2)
 
     with pytest.raises(OperationClaimError):
-        await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+        await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     trade.release_submit.set()
     await first
@@ -1454,7 +1538,22 @@ async def test_same_process_overlapping_exit_resolvers_submit_one_reduction(
     )
 
 
-async def test_in_flight_duplicate_submit_exit_returns_existing_snapshot(
+async def _accept_and_resolve_exit(
+    repo: ClerkSqliteRepository, *, decision_id: str, entry_order_ref: str, trade: _FakeTrade
+) -> ExitSubmission:
+    """One program EXIT as the runtime drives it: ``accept_exit``, then ``resolve_accepted_exit``."""
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id=decision_id,
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_order_ref,
+    )
+    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+
+async def test_in_flight_duplicate_exit_returns_existing_snapshot(
     repo: ClerkSqliteRepository,
 ) -> None:
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
@@ -1480,26 +1579,14 @@ async def test_in_flight_duplicate_submit_exit_returns_existing_snapshot(
 
     trade = BlockingTrade()
     first = asyncio.create_task(
-        submit_exit(
-            repo,
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=SID,
-            decision_id="exit-in-flight-retry",
-            lifecycle_run_id=RUN_ID,
-            entry_order_ref=entry_ref,
-            trade=trade,
+        _accept_and_resolve_exit(
+            repo, decision_id="exit-in-flight-retry", entry_order_ref=entry_ref, trade=trade
         )
     )
     await trade.submit_started.wait()
 
-    duplicate = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-in-flight-retry",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=trade,
+    duplicate = await _accept_and_resolve_exit(
+        repo, decision_id="exit-in-flight-retry", entry_order_ref=entry_ref, trade=trade
     )
 
     assert duplicate.created is False
@@ -1530,7 +1617,7 @@ async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_ente
     assert accepted.effect_operation_id != enter_effect_id_before
 
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     transitions = repo.transitions_for_order(entry_ref)
     exit_accepted_seq = next(t["sequence"] for t in transitions if t["transition_kind"] == "EXIT_ACCEPTED")
@@ -1549,7 +1636,7 @@ async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_ente
         assert transition["effect_operation_id"] == enter_effect_id_before
 
 
-async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSqliteRepository) -> None:
+async def test_an_accepted_exit_drives_the_full_happy_path_in_one_resolve(repo: ClerkSqliteRepository) -> None:
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     trade = _FakeTrade(
         submit_result=_broker_order(
@@ -1557,15 +1644,7 @@ async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSql
         )
     )
 
-    result = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=trade,
-    )
+    result = await _accept_and_resolve_exit(repo, decision_id="exit-1", entry_order_ref=entry_ref, trade=trade)
 
     assert isinstance(result, ExitSubmission)
     assert result.reducing_order_ref is not None
@@ -1585,27 +1664,22 @@ async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSql
         repo,
         effect_operation_id=result.effect_operation_id,
         trade=_FakeTrade(),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     effect = repo.effect_operation(result.effect_operation_id)  # type: ignore[arg-type]
     assert effect is not None and effect.state == "succeeded"
     assert repo.position(SID, "SPY") == pytest.approx(0.0)
 
 
-async def test_submit_exit_on_a_duplicate_decision_still_advances_the_state_machine(
+async def test_an_exit_on_a_duplicate_decision_still_advances_the_state_machine(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Unlike submit_enter, submit_exit has no 'skip resolve' branch for a
-    duplicate accept — resolve_exit is safe to call every time."""
+    """Unlike submit_enter, an EXIT has no 'skip resolve' branch for a
+    duplicate accept — resolve_accepted_exit is safe to call every time."""
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     stalled_trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    first = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=stalled_trade,
+    first = await _accept_and_resolve_exit(
+        repo, decision_id="exit-1", entry_order_ref=entry_ref, trade=stalled_trade
     )
     effect = repo.effect_operation(first.effect_operation_id)  # type: ignore[arg-type]
     assert effect is not None and effect.state == "unknown"
@@ -1615,14 +1689,8 @@ async def test_submit_exit_on_a_duplicate_decision_still_advances_the_state_mach
             _broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell")
         ]
     )
-    second = await submit_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-        trade=resuming_trade,
+    second = await _accept_and_resolve_exit(
+        repo, decision_id="exit-1", entry_order_ref=entry_ref, trade=resuming_trade
     )
     assert not second.created  # accept_exit itself sees the transport retry
     assert resuming_trade.submit_calls == []  # never re-submitted a duplicate reducing order
@@ -1690,7 +1758,7 @@ async def test_resolve_accepted_exit_defers_transient_snapshot_stale_refusal(
     )
     trade = _FakeTrade(lookup_results=[recovered, recovered])
 
-    result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert result.reducing_order_ref is None
     assert trade.submit_calls == []
@@ -1730,7 +1798,7 @@ async def test_resolve_accepted_exit_reraises_terminal_refusals(
 
     with pytest.raises(AdmissionBlockedError):
         await resolve_accepted_exit(
-            repo, accepted=accepted, trade=_FakeTrade(lookup_results=[recovered, recovered])
+            repo, accepted=accepted, trade=_FakeTrade(lookup_results=[recovered, recovered]), pricing=UNPRICEABLE_RECOVERY
         )
 
 
@@ -1758,7 +1826,7 @@ async def test_resolve_accepted_exit_defers_whole_cohort_without_a_crash(
             entry_order_ref=entry_ref,
         )
         trade = _FakeTrade(lookup_results=[recovered, recovered])
-        result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+        result = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
         assert result.reducing_order_ref is None
         assert trade.submit_calls == []
 
@@ -1802,7 +1870,7 @@ async def test_accept_recovery_exit_captures_reduction_without_active_run(
         lookup_results=[recovered, recovered],
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
-    resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=UNPRICEABLE_RECOVERY)
     assert resolved.reducing_order_ref is not None
     submitted_leg, submitted_ref = trade.submit_calls[0]
     assert submitted_ref == resolved.reducing_order_ref
@@ -1810,16 +1878,24 @@ async def test_accept_recovery_exit_captures_reduction_without_active_run(
     assert submitted_leg.quantity == 10
 
 
-async def test_a_waiting_market_recovery_reduction_folds_releasably_outside_the_regular_session(
-    repo: ClerkSqliteRepository,
+@_BOTH_PRICING_INPUTS
+async def test_a_waiting_market_recovery_reduction_never_waits_outside_the_regular_session(
+    repo: ClerkSqliteRepository, pricing: RecoveryPricing
 ) -> None:
     """#2229, owner decision 2026-09-19 (evening): after-hours, a recovery EXIT
     with no recorded shape would be a market order the vendor queues to the
     next open — and while it waited it owned the entry, so the operator's own
-    priced flatten of that entry was refused until 09:30. The waiting leg now
-    folds the EXIT releasably: the effect fails through ``EXIT_NOT_FLAT``, the
-    entry is freed for a priced reduction, and the bot stays flagged."""
-    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    priced flatten of that entry was refused until 09:30.
+
+    Whatever the caller's pricing input, that market order is never sent and
+    the EXIT never waits. Nobody confirmed a price here — it is the Clerk's
+    own re-drive — so under an authority's live seam the send-time rule
+    re-prices it as the after-hours limit, recorded as the Clerk's price with
+    its reference quote (#2440). With nothing to price it, the EXIT folds
+    releasably: the effect fails through ``EXIT_NOT_FLAT``, the entry is freed
+    for a priced reduction, and the bot stays flagged."""
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -1841,8 +1917,19 @@ async def test_a_waiting_market_recovery_reduction_folds_releasably_outside_the_
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
 
-    waiting = await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+    waiting = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing)
 
+    assert all(leg.order_type != "market" for leg, _ in trade.submit_calls)
+    if pricing is not UNPRICEABLE_RECOVERY:
+        ((leg, _),) = trade.submit_calls
+        assert (leg.side, leg.order_type, leg.limit_price, leg.extended_hours) == ("sell", "limit", 99.8, True)
+        assert waiting.reducing_order_ref is not None
+        created = repo.first_order_transition(
+            order_ref=waiting.reducing_order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
+        )
+        assert created is not None
+        assert json.loads(created["facts_json"])["priced_by"] == "clerk"
+        return
     assert waiting.reducing_order_ref is None
     assert trade.submit_calls == []
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -1858,9 +1945,9 @@ async def test_a_waiting_market_recovery_reduction_folds_releasably_outside_the_
 
     # A terminal effect never re-drives: the next reduction is a fresh,
     # priced EXIT (the operator's flatten or the watchdog's re-drive).
-    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    _walk_clock_to(repo, NEXT_OPEN_MS)
     resolved = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=trade
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=pricing
     )
     assert resolved.reducing_order_ref is None
     assert trade.submit_calls == []
@@ -1894,12 +1981,12 @@ async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_rele
         lookup_results=[recovered, recovered],
         submit_error=BrokerUnavailable("broker is down"),
     )
-    await resolve_accepted_exit(repo, accepted=accepted, trade=outage)
+    await resolve_accepted_exit(repo, accepted=accepted, trade=outage, pricing=UNPRICEABLE_RECOVERY)
     assert len(outage.submit_calls) == 1
 
     _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
     after_close = _FakeTrade(lookup_results=[None])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close, pricing=UNPRICEABLE_RECOVERY)
 
     assert after_close.submit_calls == []
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -1918,22 +2005,31 @@ async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_rele
         lookup_results=[None],
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=at_open)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=at_open, pricing=UNPRICEABLE_RECOVERY)
 
     assert at_open.submit_calls == []
 
 
+@_BOTH_PRICING_INPUTS
 async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular_session(
     repo: ClerkSqliteRepository,
     caplog: pytest.LogCaptureFixture,
+    pricing: RecoveryPricing,
 ) -> None:
     """#2229, fold site 2: R11 side reconciliation replaces a limit priced for
     the wrong side with a regular-session market leg, and outside 09:30–16:00
     that leg folds releasably instead of waiting — the one wait site the
-    original tests missed (review of PR #2230, blocker 5)."""
+    original tests missed (review of PR #2230, blocker 5).
+
+    The operator priced this EXIT, so the Clerk never replaces that price with
+    its own — whichever caller drives it (#2440 review): who priced it is read
+    from the EXIT's acceptance, not from the side-reconciled market shape, and
+    not from the caller's pricing seam. Under the sweep's live seam this used
+    to send a SELL LIMIT 99.80 nobody confirmed."""
     import logging as _logging
 
-    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET, long 10
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -1956,7 +2052,7 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
         entry_order_ref=entry_ref,
         confirmed_shape=ConfirmedRecoveryShape(
             shape=wrong_side,
-            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            valid_until_ms=POST_CLOSE_MS,
             reference_quote=TopOfBookQuote(
                 symbol="SPY",
                 bid=100.00,
@@ -1974,7 +2070,7 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
     )
 
     with caplog.at_level(_logging.WARNING):
-        await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+        await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing)
 
     # The side reconciliation happened, and the market leg it produced folded.
     assert any(
@@ -1985,18 +2081,28 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "failed"
     assert repo.active_exit_for_order(entry_ref) is None
+    # The operator priced it — for the other side. The notice says that, not
+    # that a market reduction "nothing had priced" waited (#2440 review).
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=SID
+    )
+    assert episode is not None
+    assert episode["headline"] == "A confirmed flatten limit no longer fits the position"
+    assert "nothing had priced" not in episode["explanation"]
 
 
 async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_folds(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """#2229's headline, pinned end to end: a waiting market EXIT folds, and
-    the operator's priced flatten of the same entry is then accepted and sent
+    """#2229's headline, pinned end to end: a waiting market EXIT that nothing
+    can price folds, and the operator's priced flatten of the same entry is
+    then accepted and sent
     — the two gates ``execute_safe_flatten_plan`` performs are the entry
     filter (``active_exit_for_order`` — asserted here) and the acceptance
     itself, both of which the waiting EXIT used to refuse (review of PR
     #2230, blocker 6)."""
-    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -2016,7 +2122,7 @@ async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_fo
         lookup_results=[recovered] * 4,
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
-    await resolve_accepted_exit(repo, accepted=held, trade=waiting)
+    await resolve_accepted_exit(repo, accepted=held, trade=waiting, pricing=UNPRICEABLE_RECOVERY)
     effect = repo.effect_operation(held.effect_operation_id)
     assert effect is not None and effect.state == "failed"
     assert repo.active_exit_for_order(entry_ref) is None  # the executor's entry filter
@@ -2035,7 +2141,7 @@ async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_fo
                 extended_hours=True,
                 side=OrderSide.SELL,
             ),
-            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            valid_until_ms=POST_CLOSE_MS,
             reference_quote=TopOfBookQuote(
                 symbol="SPY",
                 bid=100.00,
@@ -2052,7 +2158,7 @@ async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_fo
         lookup_results=[recovered] * 4,
         submit_result=_broker_order("priced-limit", side="sell", status="accepted"),
     )
-    resolved = await resolve_accepted_exit(repo, accepted=priced, trade=trade)
+    resolved = await resolve_accepted_exit(repo, accepted=priced, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert resolved.reducing_order_ref is not None
     ((leg, _client_order_id),) = trade.submit_calls
@@ -2152,7 +2258,7 @@ async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_
         lookup_results=[recovered, recovered],
         submit_error=BrokerUnavailable("broker is down"),
     )
-    submitted = await resolve_accepted_exit(repo, accepted=accepted, trade=outage)
+    submitted = await resolve_accepted_exit(repo, accepted=accepted, trade=outage, pricing=UNPRICEABLE_RECOVERY)
     assert submitted.reducing_order_ref is not None
 
     # A partial execution slice lands for the reducing order under a null
@@ -2180,7 +2286,7 @@ async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_
 
     _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
     after_close = _FakeTrade(lookup_results=[None])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close, pricing=UNPRICEABLE_RECOVERY)
 
     assert after_close.submit_calls == []
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -2254,7 +2360,7 @@ async def test_resolve_exit_cancellation_during_the_prologue_read_leaves_no_clai
     """
     repo = _ClaimLedgerRepo()
     task = asyncio.create_task(
-        resolve_exit(repo, effect_operation_id="effect-1", trade=None, off_loop=to_thread)
+        resolve_exit(repo, effect_operation_id="effect-1", trade=None, off_loop=to_thread, pricing=UNPRICEABLE_RECOVERY)
     )
     await asyncio.get_running_loop().run_in_executor(None, repo.read_started.wait, 10)
     task.cancel()
@@ -2279,7 +2385,7 @@ async def test_resolve_exit_cancellation_inside_the_claim_waits_out_the_worker()
     repo = _ClaimLedgerRepo()
     repo.read_release.set()  # the prologue read passes straight through
     task = asyncio.create_task(
-        resolve_exit(repo, effect_operation_id="effect-1", trade=None, off_loop=to_thread)
+        resolve_exit(repo, effect_operation_id="effect-1", trade=None, off_loop=to_thread, pricing=UNPRICEABLE_RECOVERY)
     )
     await asyncio.get_running_loop().run_in_executor(None, repo.state_started.wait, 10)
     task.cancel()

@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import sqlite3
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from app.broker.alpaca.clerk.sqlite import projection_helpers
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
+    RecoveryPricing,
+    next_redrive_at_ms,
+)
+from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ActiveExecutionCoverageConflict,
     cumulative_recovery_fills_for_order,
@@ -65,11 +72,19 @@ from app.broker.alpaca.clerk.sqlite.timeline_query import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
     HOLD_REASON_CODE_SQL_PARAMS,
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import Clock, now_ms_utc
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_OPERATION_LIMIT, MAX_OPERATION_LIMIT = 50, 100
 DEFAULT_RECEIPT_LIMIT, CURRENT_STATE_LIMIT = 20, 100
@@ -80,8 +95,207 @@ _json_string_tuple = partial(projection_helpers.json_string_tuple, error_type=Pr
 timeline_sequences = projection_helpers.timeline_sequences
 
 
+type ExitsInProgress = Callable[[Collection[str]], frozenset[str]]
+"""Which of the given strategies has an exit in progress (``reads.strategies_with_active_exit``)."""
+
+
+def project_uncertainties(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    now_ms: int,
+    exits_in_progress: ExitsInProgress,
+    redrive_policy: ProgramLegPolicy,
+) -> tuple[ProjectedUncertainty, ...]:
+    """Open episodes, in the order given, each projected with the one read of its facts.
+
+    The single projection of an ``uncertainties`` row — the custody read, the
+    bot page's guidance and the lane's attention bell all come through here.
+    A recorded next attempt is the stuck-EXIT watchdog's promise, so it is
+    projected only as far as it is still true (#2440 review):
+
+    - an ``EXIT_NOT_FLAT`` whose strategy has an active ``EXIT_STUCK`` among
+      ``rows`` carries none, and its next step says automatic attempts
+      stopped: the watchdog escalated and re-drives it no more;
+    - one whose strategy has an exit in progress (``exits_in_progress``,
+      asked once about the strategies these notices name) carries none and
+      is flagged ``exit_working``: the watchdog sends nothing while an exit
+      is in progress, and nothing rewrites the recorded time when it accepts
+      one;
+    - otherwise the time is the watchdog's real next try, projected now from
+      the recorded one by the computation that recorded it
+      (``recovery_reduction.next_redrive_at_ms`` under ``redrive_policy``,
+      the authority's own ``recovery_pricing``): a deferral writes nothing,
+      so a 16:02 promise the after-hours quote could not keep reads 03:59:55
+      from 20:00. Only when that projection is itself not in the future —
+      the watchdog could have sent by now — is the recorded promise shown,
+      flagged ``next_attempt_overdue``.
+    """
+    rows = tuple(rows)
+    escalated = frozenset(
+        row["strategy_instance_id"] for row in rows if row["reason_code"] == EXIT_STUCK_REASON_CODE
+    )
+    not_flat = frozenset(
+        row["strategy_instance_id"]
+        for row in rows
+        if row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE and row["strategy_instance_id"]
+    )
+    working = exits_in_progress(not_flat)
+    return tuple(
+        _projected_uncertainty(
+            row,
+            now_ms=now_ms,
+            redrive_policy=redrive_policy,
+            redrives_stopped=(
+                row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
+                and row["strategy_instance_id"] in escalated
+            ),
+            exit_working=(
+                row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
+                and row["strategy_instance_id"] in working
+            ),
+        )
+        for row in rows
+    )
+
+
+_REDRIVES_STOPPED_NEXT_STEP = (
+    "Automatic attempts to reduce this position have stopped. Run Reconcile now, then "
+    "execute the presented safe flatten."
+)
+"""An escalated ``EXIT_NOT_FLAT``'s next step (#2440 review).
+
+The episode's own next step was written when the watchdog was still going to
+try, and may point at the time it no longer shows."""
+
+
+_UNREADABLE_LOGGED: set[tuple[str, int]] = set()
+"""Recorded episodes already logged unreadable, by ``(uncertainty_id, observed_at_ms)``.
+
+Every surface re-reads the projection every few seconds per tab; a damaged
+record is logged once per process, not once per poll. A refresh rewrites
+``observed_at_ms``, so a re-recorded episode that is still unreadable is
+logged again. Bounded by the unreadable records this process ever reads."""
+
+
+def _checked_record(
+    facts: UncertaintyRaisedFacts,
+) -> tuple[Mapping[str, Any], int | None]:
+    """The facts only the record carries — the cause and the recorded next attempt — type-checked.
+
+    ``from_facts_json`` checks the keys, not the values: a record whose cause
+    is not an object, or whose time is not an ``int64 ms UTC`` in the
+    admissible range, is unreadable like one that does not parse.
+    """
+    cause_facts, recorded = facts.cause_facts, facts.next_attempt_at_ms
+    if not isinstance(cause_facts, Mapping):
+        raise TypeError(f"cause_facts is {type(cause_facts).__name__}, not an object")
+    if recorded is not None and (
+        isinstance(recorded, bool)
+        or not isinstance(recorded, int)
+        or not 0 <= recorded <= MAX_TIMESTAMP_MS
+    ):
+        raise ValueError(f"next_attempt_at_ms {recorded!r} is not an int64 ms UTC instant")
+    return cause_facts, recorded
+
+
+def _projected_next_attempt(
+    recorded: int, *, now_ms: int, redrive_policy: ProgramLegPolicy
+) -> tuple[int, bool]:
+    """The time to show for a recorded next attempt, and whether it is past due."""
+    projected = next_redrive_at_ms(not_before_ms=max(recorded, now_ms), policy=redrive_policy)
+    return (projected, False) if projected > now_ms else (recorded, True)
+
+
+def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
+    """The symbol an episode's cause names, when it names one (an ``EXIT_NOT_FLAT`` does)."""
+    symbol = cause_facts.get("symbol")
+    return symbol if isinstance(symbol, str) and symbol else None
+
+
+def _projected_uncertainty(
+    row: Mapping[str, Any],
+    *,
+    now_ms: int,
+    redrive_policy: ProgramLegPolicy,
+    redrives_stopped: bool,
+    exit_working: bool,
+) -> ProjectedUncertainty:
+    """One open episode, projected from its columns and the facts only they cannot carry.
+
+    The facts carry what the columns do not — when the Clerk next tries
+    (#2440), and the symbol the cause names. A row whose facts cannot be read
+    — or whose next attempt cannot be projected — is still projected, flagged
+    ``facts_unreadable`` with no next attempt, and logged at error level once:
+    one bad row fails loudly on its own and never blanks the whole read
+    (#2440 review).
+    """
+    next_attempt_at_ms, next_attempt_overdue = None, False
+    try:
+        cause_facts, recorded = _checked_record(
+            UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
+        )
+        symbol = _cause_symbol(cause_facts)
+        if recorded is not None and not (redrives_stopped or exit_working):
+            next_attempt_at_ms, next_attempt_overdue = _projected_next_attempt(
+                recorded, now_ms=now_ms, redrive_policy=redrive_policy
+            )
+        facts_unreadable = False
+    except (TypeError, ValueError, OverflowError):
+        _log_unreadable_once(row)
+        symbol = None
+        facts_unreadable = True
+    return ProjectedUncertainty(
+        uncertainty_id=row["uncertainty_id"],
+        scope=row["scope"],
+        severity=row["severity"],
+        blocks_new_exposure=bool(row["blocks_new_exposure"]),
+        allows_reduction=bool(row["allows_reduction"]),
+        custody_owner=row["custody_owner"],
+        strategy_instance_id=row["strategy_instance_id"],
+        reason_code=row["reason_code"],
+        headline=row["headline"],
+        explanation=row["explanation"],
+        operator_impact=row["operator_impact"],
+        next_step=_REDRIVES_STOPPED_NEXT_STEP if redrives_stopped else row["next_step"],
+        observed_at_ms=row["observed_at_ms"],
+        evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
+        evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
+        symbol=symbol,
+        next_attempt_at_ms=next_attempt_at_ms,
+        next_attempt_overdue=next_attempt_overdue,
+        exit_working=exit_working,
+        facts_unreadable=facts_unreadable,
+    )
+
+
+def _log_unreadable_once(row: Mapping[str, Any]) -> None:
+    """Log an unreadable recorded episode at error level, once per record (:data:`_UNREADABLE_LOGGED`)."""
+    key = (row["uncertainty_id"], row["observed_at_ms"])
+    if key in _UNREADABLE_LOGGED:
+        return
+    _UNREADABLE_LOGGED.add(key)
+    logger.error(
+        "an open uncertainty's recorded facts cannot be read; projecting it without them",
+        extra={
+            "action": "uncertainty_facts_unreadable",
+            "uncertainty_id": row["uncertainty_id"],
+            "reason_code": row["reason_code"],
+            "strategy_instance_id": row["strategy_instance_id"],
+        },
+        exc_info=True,
+    )
+
+
 class SqliteClerkProjectionReader:
-    """One reusable read-only connection over an already-verified authority."""
+    """One reusable read-only connection over an already-verified authority.
+
+    ``pricing`` is the authority's own ``recovery_pricing`` — the seam its
+    stuck-EXIT watchdog re-drives from and its folds record the next attempt
+    from — so an ``EXIT_NOT_FLAT`` notice projects the watchdog's real next
+    try (``project_uncertainties``). A surface that shows that time passes
+    it; the degraded default projects the regular session only, as an
+    authority that can price nothing would re-drive.
+    """
 
     def __init__(
         self,
@@ -91,12 +305,14 @@ class SqliteClerkProjectionReader:
         authority_generation: int,
         db_identity_token: str,
         clock: Clock = now_ms_utc,
+        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
     ) -> None:
         self._db_path = db_path
         self._account_id = account_id
         self._authority_generation = authority_generation
         self._db_identity_token = db_identity_token
         self._clock = clock
+        self._pricing = pricing
         self._lock = threading.Lock()
         if not db_path.is_file():
             # A resolvable broker account whose local authority is absent is a
@@ -163,6 +379,7 @@ class SqliteClerkProjectionReader:
         repository: ClerkSqliteRepository,
         *,
         clock: Clock | None = None,
+        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
     ) -> SqliteClerkProjectionReader:
         """A reader over ``repository``, judging freshness by the repository's own clock.
 
@@ -177,7 +394,18 @@ class SqliteClerkProjectionReader:
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
             clock=clock or repository.clock,
+            pricing=pricing,
         )
+
+    @classmethod
+    def from_facade(cls, facade: SqliteAlpacaClerkFacade) -> SqliteClerkProjectionReader:
+        """A reader over an authority's repository that projects from the authority's own pricing seam.
+
+        Every surface that shows an ``EXIT_NOT_FLAT`` notice reads through
+        here, so the next attempt it shows is the one that authority's
+        watchdog will make (#2440 review).
+        """
+        return cls.from_repository(facade.repository, pricing=facade.recovery_pricing)
 
     def close(self) -> None:
         with self._lock:
@@ -732,29 +960,15 @@ class SqliteClerkProjectionReader:
         rows = self._conn.execute(
             "SELECT uncertainty_id, scope, severity, blocks_new_exposure, allows_reduction, "
             "custody_owner, strategy_instance_id, reason_code, headline, explanation, "
-            "operator_impact, next_step, observed_at_ms, evidence_refs_json FROM uncertainties "
-            f"WHERE {where} ORDER BY observed_at_ms DESC",
+            "operator_impact, next_step, observed_at_ms, evidence_refs_json, facts_json "
+            f"FROM uncertainties WHERE {where} ORDER BY observed_at_ms DESC",
             params,
         ).fetchall()
-        return tuple(
-            ProjectedUncertainty(
-                uncertainty_id=row["uncertainty_id"],
-                scope=row["scope"],
-                severity=row["severity"],
-                blocks_new_exposure=bool(row["blocks_new_exposure"]),
-                allows_reduction=bool(row["allows_reduction"]),
-                custody_owner=row["custody_owner"],
-                strategy_instance_id=row["strategy_instance_id"],
-                reason_code=row["reason_code"],
-                headline=row["headline"],
-                explanation=row["explanation"],
-                operator_impact=row["operator_impact"],
-                next_step=row["next_step"],
-                observed_at_ms=row["observed_at_ms"],
-                evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
-                evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
-            )
-            for row in rows
+        return project_uncertainties(
+            rows,
+            now_ms=now_ms,
+            exits_in_progress=partial(reads.strategies_with_active_exit, self._conn),
+            redrive_policy=self._pricing.policy_source(),
         )
 
     def _execution_coverage_conflicts(

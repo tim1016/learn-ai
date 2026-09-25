@@ -113,6 +113,25 @@ class ProjectedUncertainty:
     observed_at_ms: int
     evidence_age_ms: int
     evidence_refs: tuple[str, ...]
+    # The symbol the episode's cause names, when it names one (an
+    # EXIT_NOT_FLAT does); the lane's attention bell shows it.
+    symbol: str | None = None
+    # When the Clerk will next try to resolve this on its own, when it can say
+    # (the stuck-EXIT watchdog's next re-drive, #2440) — and never once the
+    # watchdog has escalated to EXIT_STUCK and stopped re-driving, nor while
+    # an exit is working (``exit_working``).
+    next_attempt_at_ms: int | None = None
+    # The watchdog could have tried by now and the episode is still open: the
+    # time shown is the one the notice promised, past due — never a future
+    # promise (#2440 review).
+    next_attempt_overdue: bool = False
+    # An exit for this strategy is in progress, so no automatic attempt is due
+    # while it works: the watchdog skips a strategy whose EXIT is active
+    # (#2440 review).
+    exit_working: bool = False
+    # The episode's recorded facts could not be read, so what only they carry
+    # (``next_attempt_at_ms``) is unknown, not absent (#2440 review).
+    facts_unreadable: bool = False
 
 
 @dataclass(frozen=True)
@@ -228,6 +247,13 @@ class ProjectionGuidance:
     available_safety_actions: tuple[str, ...]
     action_required: bool
     next_step: str
+    # The primary episode's next automatic attempt, projected as
+    # ``ProjectedUncertainty`` projects it (#2440): the bot page shows it
+    # beside ``next_step``.
+    next_attempt_at_ms: int | None = None
+    next_attempt_overdue: bool = False
+    exit_working: bool = False
+    facts_unreadable: bool = False
 
 
 @dataclass(frozen=True)

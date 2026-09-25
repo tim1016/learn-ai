@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
@@ -131,7 +132,8 @@ async def test_crashed_exposure_walks_to_flat_and_readmits_resume(tmp_path: Path
         recovery_window_limit=None,
     )
     await reconcile_account(
-        repo, read=_FakeReadPort(positions=[]), trade=_FakeTradePort(), trigger="AUTOMATIC"
+        repo, read=_FakeReadPort(positions=[]), trade=_FakeTradePort(), trigger="AUTOMATIC",
+        pricing=UNPRICEABLE_RECOVERY,
     )
     attributed = repo.attributed_positions_for_strategy(SID)
     assert not any(position_quantity_is_nonzero(qty) for qty in attributed.values())

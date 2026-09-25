@@ -11,12 +11,13 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
     realized_slippage_bps,
     realized_slippage_cost,
 )
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
-from app.broker.alpaca.clerk.sqlite.exit_resolution import confirmed_flatten_reference_price
+from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
@@ -58,7 +59,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     sqlite_catalog_rollup,
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
-from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, TradingSessionPhase
+from app.services.session_authority import SessionAuthorityState
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -87,7 +88,7 @@ def adapt_sqlite_panel(
     *,
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
-    flatten_phase: TradingSessionPhase | None = None,
+    flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -101,10 +102,11 @@ def adapt_sqlite_panel(
     ``projection.operations`` window (§7.1's 50/100-row cap).  Without it, a
     ref outside the window renders as "not found" rather than being resolved.
 
-    ``flatten_phase`` is the session an operator's flatten would go out in now
-    (``SqliteAlpacaClerkFacade.flatten_session``). Outside the regular session
-    the generic Execute safe flatten button is not the way to flatten (#2007):
-    see ``_flatten_session_blocker``.
+    ``flatten_verdict`` is the session an operator's flatten sent now would go
+    out in, or the refusal the Clerk gives it
+    (``SqliteAlpacaClerkFacade.flatten_send_verdict``). Outside the regular
+    session the generic Execute safe flatten button is not the way to flatten
+    (#2007): see ``_flatten_session_blocker``.
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -119,7 +121,7 @@ def adapt_sqlite_panel(
     actions = [
         *lifecycle_actions,
         *(
-            _panel_action(item, projection.control_revision, flatten_phase=flatten_phase)
+            _panel_action(item, projection.control_revision, flatten_verdict=flatten_verdict)
             for item in projection.recovery_actions
             if item.action_id not in SQLITE_PANEL_LIFECYCLE_ACTION_IDS
         ),
@@ -448,12 +450,12 @@ def _panel_action(
     capability: RecoveryCapability,
     revision: int,
     *,
-    flatten_phase: TradingSessionPhase | None = None,
+    flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
 ) -> PanelAction:
     if not capability.available:
         blocker: OperatorBlocker | None = _capability_blocker(capability)
     elif capability.action_id == "execute_safe_flatten":
-        blocker = _flatten_session_blocker(flatten_phase)
+        blocker = _flatten_session_blocker(flatten_verdict)
     else:
         blocker = None
     confirmation = capability.confirmation
@@ -503,23 +505,35 @@ _PREPARE_PRICED_FLATTEN_MOVE = OperatorMove(
 )
 
 
-def _flatten_session_blocker(phase: TradingSessionPhase | None) -> OperatorBlocker | None:
+_PREPARED_PLAN_SHOWS_WHEN = "Prepare safe flatten shows when."
+
+
+def _flatten_session_blocker(
+    verdict: SessionAuthorityState | LegRefusal | None,
+) -> OperatorBlocker | None:
     """Why the generic flatten button cannot send now, or ``None`` inside the regular session.
 
     This button sends a flatten with no price. Outside 09:30-16:00 there is
     none to send (#2007, owner decisions 2026-09-19): in PRE/POST a flatten is
     a limit the operator prices from the live bid and ask in the prepared
-    plan, which sends it through the custody route; with no session open,
-    nothing is sent at all. The Clerk refuses both at execution regardless --
-    this only keeps the button from offering a click that cannot succeed.
-    A ``None`` phase means no authority answered. That is not an RTH
+    plan, which sends it through the custody route; with no session this
+    Clerk can price in, nothing is sent at all. The Clerk refuses both at
+    execution regardless -- this only keeps the button from offering a click
+    that cannot succeed.
+
+    ``verdict`` is the Clerk's own answer (``recovery_reduction.flatten_send_verdict``),
+    so a refusal is shown in the Clerk's words -- ``NO_SESSION_OPEN``, or
+    ``EXTENDED_HOURS_PRICING_UNAVAILABLE`` when the calendar's after-hours is
+    open on an authority that declares no extended window (#2440 review) --
+    never a second reading of the session made here. The blocker list renders
+    no time, so a refusal that names one points at the prepared plan, which
+    shows it (``available_at_ms``, kept as evidence).
+    A ``None`` verdict means no authority answered. That is not an RTH
     fallback: the one session in which this button can succeed is the only
     one it may assume, so an unanswered session blocks it too (CodeRabbit
     review 2026-09-19).
     """
-    if phase == "RTH":
-        return None
-    if phase is None:
+    if verdict is None:
         return OperatorBlocker.for_host(
             condition_id="FLATTEN_SESSION_UNKNOWN",
             scope="bot",
@@ -535,30 +549,40 @@ def _flatten_session_blocker(phase: TradingSessionPhase | None) -> OperatorBlock
             applies_to="run",
             primary_move=_PREPARE_PRICED_FLATTEN_MOVE,
         )
-    priced_here = phase in TRADEABLE_EXTENDED_PHASES
+    if isinstance(verdict, LegRefusal):
+        return OperatorBlocker.for_host(
+            condition_id=verdict.reason_code,
+            scope="bot",
+            host="bot_cockpit",
+            anchor=SURFACE_ANCHOR,
+            audience="both",
+            disposition="wait",
+            headline=verdict.explanation,
+            detail=(
+                verdict.next_step
+                if verdict.available_at_ms is None
+                else f"{verdict.next_step} {_PREPARED_PLAN_SHOWS_WHEN}"
+            ),
+            applies_to="run",
+            evidence={"available_at_ms": verdict.available_at_ms},
+        )
+    if verdict.phase == "RTH":
+        return None
     return OperatorBlocker.for_host(
-        condition_id=(
-            "EXTENDED_HOURS_FLATTEN_NEEDS_A_LIMIT" if priced_here else "NO_SESSION_OPEN"
-        ),
+        condition_id="EXTENDED_HOURS_FLATTEN_NEEDS_A_LIMIT",
         scope="bot",
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
         audience="both",
-        disposition="fix_here" if priced_here else "wait",
-        headline=(
-            "Outside regular hours a flatten is a limit order you price."
-            if priced_here
-            else "No trading session is open now, so no flatten can be sent."
-        ),
+        disposition="fix_here",
+        headline="Outside regular hours a flatten is a limit order you price.",
         detail=(
             "Prepare safe flatten to see the live IBKR bid and ask, then send the limit "
             "from the prepared plan."
-            if priced_here
-            else "Flatten once the next session opens; Prepare safe flatten shows when."
         ),
         applies_to="run",
-        primary_move=_PREPARE_PRICED_FLATTEN_MOVE if priced_here else None,
-        evidence={"session_phase": phase},
+        primary_move=_PREPARE_PRICED_FLATTEN_MOVE,
+        evidence={"session_phase": verdict.phase},
     )
 
 
@@ -638,6 +662,10 @@ def _mission_verdict(
         explanation=guidance.explanation,
         next_action=guidance.next_step,
         evaluated_at_ms=projection.generated_at_ms,
+        next_attempt_at_ms=guidance.next_attempt_at_ms,
+        next_attempt_overdue=guidance.next_attempt_overdue,
+        exit_working=guidance.exit_working,
+        facts_unreadable=guidance.facts_unreadable,
     )
 
 
@@ -801,14 +829,15 @@ def _recent_fill_view(
     authority at all while its sibling decision row carries one — the exact
     asymmetry the single-authority guard exists to make impossible.
 
-    A fill of an operator-confirmed extended-hours flatten also carries its
-    realized slippage from the quote the limit was priced against (#2007).
+    A fill of a priced reducing leg — an operator's confirmed extended-hours
+    flatten (#2007), or a limit the Clerk priced itself (#2229, #2440) — also
+    carries its realized slippage from the quote the limit was priced against.
     """
     kind = authority_kind_for_account(authority_account_id)
     reference_price = (
         None
         if repository is None
-        else confirmed_flatten_reference_price(repository, fill.order_ref)
+        else priced_reduction_reference_price(repository, fill.order_ref)
     )
     return RecentFillView(
         order_ref=fill.order_ref,

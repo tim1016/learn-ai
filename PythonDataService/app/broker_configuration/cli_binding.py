@@ -32,7 +32,7 @@ from app.broker.alpaca.active_binding import (
     UnboundBroker,
 )
 from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
-from app.broker.alpaca.profile import BrokerProfileError, resolve_runtime_context
+from app.broker.alpaca.profile import BrokerProfileError
 from app.broker_configuration import runtime as broker_configuration_runtime
 from app.broker_configuration.binding_decision import NothingToBind, decide
 from app.broker_configuration.errors import (
@@ -44,6 +44,7 @@ from app.broker_configuration.records import InstallationSelection
 from app.broker_configuration.selection import reference as revision_reference
 from app.broker_configuration.service import BrokerConfigurationService
 from app.broker_configuration.store import profiles_database_exists
+from app.broker_configuration.worker_binding import resolve_revision_context
 
 
 @dataclass(frozen=True)
@@ -181,16 +182,7 @@ def effective_broker(
     except BrokerConfigurationError as exc:
         raise BrokerUnbound(_unbound_from(exc)) from exc
     try:
-        context = resolve_runtime_context(
-            endpoint_mode=stored.endpoint_mode,
-            credential_slot=stored.credential_slot,
-            live_envelope=(
-                None if stored.live_envelope is None else stored.live_envelope.to_mapping()
-            ),
-            account_pin=stored.account_pin,
-            profile_id=chosen.profile_id,
-            revision=chosen.revision,
-        )
+        context = resolve_revision_context(stored)
     except BrokerProfileError as exc:
         raise BrokerUnbound(
             UnboundBroker(

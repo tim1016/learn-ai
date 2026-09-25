@@ -9,16 +9,22 @@ when this read cannot be reached, never this route's.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_uncertainty,
     resolve_exit_not_flat_uncertainty,
@@ -26,10 +32,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
 )
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.main import app
+from app.utils.timestamps import to_ms_utc
 
 ACCOUNT = "PA-BELL-1"
 _T0 = 1_788_040_000_000  # a fixed int64 ms UTC
+_ET = ZoneInfo("America/New_York")
 
 
 class _Clock:
@@ -66,9 +75,10 @@ def _raise_exit_not_flat(
 
 
 def _repo_with_two_episodes(
-    tmp_path: Path,
+    tmp_path: Path, *, start_ms: int = _T0
 ) -> tuple[ClerkSqliteRepository, _Clock]:
     clock = _Clock()
+    clock.now_ms = start_ms
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock
     )
@@ -151,3 +161,88 @@ async def test_other_brokers_are_404() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["reason"] == "lane_attention_unsupported_broker"
+
+
+async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
+    tmp_path: Path,
+) -> None:
+    """#2440 review: the bell says when the watchdog next tries, and never promises a past time.
+
+    The route reads each episode through the one projection the bot page and
+    the desk read, priced from the lane authority's own seam: a promise the
+    watchdog could have kept by now is overdue; once no session is open, the
+    time is the watchdog's real next try — the pre-market send this lane's
+    declared window prices. An episode with unreadable facts still rings,
+    without a symbol or a time, and says so.
+    """
+    wednesday_after_hours = to_ms_utc(datetime(2026, 9, 2, 17, 0, tzinfo=_ET))
+    repo, clock = _repo_with_two_episodes(tmp_path, start_ms=wednesday_after_hours)
+    repo.register_strategy_instance(strategy_instance_id="ema-3", symbol="IWM", config_hash="h1")
+    for strategy_instance_id, symbol, next_attempt_at_ms in (
+        ("ema-1", "SPY", wednesday_after_hours + 3_600_000),
+        ("ema-2", "QQQ", wednesday_after_hours - 60_000),
+    ):
+        raise_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            reason_code=EXIT_NOT_FLAT_REASON_CODE,
+            headline="This bot's exit has not flattened its position",
+            explanation="The exit's attributed position is not flat.",
+            operator_impact="New exposure for this bot is blocked.",
+            next_step="Let the automatic re-drive reduce it.",
+            cause_facts={"symbol": symbol, "attributed_qty": 10.0},
+            severity="blocking",
+            refresh_unchanged=True,
+            next_attempt_at_ms=next_attempt_at_ms,
+        )
+    _raise_exit_not_flat(repo, strategy_instance_id="ema-3", symbol="IWM")
+    repo._conn.execute(
+        "UPDATE uncertainties SET facts_json = ? WHERE strategy_instance_id = 'ema-3'",
+        ('{"written_by_a_later_schema":true}',),
+    )
+    repo._conn.commit()
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=repo,
+        read=object(),  # type: ignore[arg-type]
+        trade=object(),  # type: ignore[arg-type]
+        program_leg_policy=ProgramLegPolicy(
+            window=ALPACA_EXTENDED_HOURS_WINDOW,
+            allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
+        ),
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT
+        )
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/brokers/alpaca/attention")
+        clock.now_ms = to_ms_utc(datetime(2026, 9, 2, 20, 30, tzinfo=_ET))
+        overnight = await client.get("/api/brokers/alpaca/attention")
+
+    assert response.status_code == 200
+    by_sid = {item["strategy_instance_id"]: item for item in response.json()["items"]}
+    assert (by_sid["ema-1"]["next_attempt_at_ms"], by_sid["ema-1"]["next_attempt_overdue"]) == (
+        wednesday_after_hours + 3_600_000,
+        False,
+    )
+    assert (by_sid["ema-2"]["next_attempt_at_ms"], by_sid["ema-2"]["next_attempt_overdue"]) == (
+        wednesday_after_hours - 60_000,
+        True,
+    )
+    unreadable = by_sid["ema-3"]
+    assert (
+        unreadable["symbol"],
+        unreadable["next_attempt_at_ms"],
+        unreadable["facts_unreadable"],
+        unreadable["exit_working"],
+    ) == (None, None, True, False)
+    overnight_ema_2 = next(
+        item for item in overnight.json()["items"] if item["strategy_instance_id"] == "ema-2"
+    )
+    assert (overnight_ema_2["next_attempt_at_ms"], overnight_ema_2["next_attempt_overdue"]) == (
+        to_ms_utc(datetime(2026, 9, 3, 3, 59, 55, tzinfo=_ET)),
+        False,
+    )

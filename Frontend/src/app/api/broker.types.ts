@@ -16985,6 +16985,16 @@ export interface components {
         LaneAttentionItem: {
             /** Condition Id */
             condition_id: string;
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /**
@@ -16992,6 +17002,13 @@ export interface components {
              * @default uncertainty
              */
             kind?: string;
+            /** Next Attempt At Ms */
+            next_attempt_at_ms?: number | null;
+            /**
+             * Next Attempt Overdue
+             * @default false
+             */
+            next_attempt_overdue?: boolean;
             /** Reason Code */
             reason_code: string;
             /** Severity */
@@ -18540,12 +18557,29 @@ export interface components {
         MissionVerdictView: {
             /** Evaluated At Ms */
             evaluated_at_ms: number;
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
             /** Explanation */
             explanation: string;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Label */
             label: string;
             /** Next Action */
             next_action: string | null;
+            /** Next Attempt At Ms */
+            next_attempt_at_ms?: number | null;
+            /**
+             * Next Attempt Overdue
+             * @default false
+             */
+            next_attempt_overdue?: boolean;
             /**
              * State
              * @enum {string}
@@ -19872,6 +19906,36 @@ export interface components {
             revision: number;
         };
         /**
+         * PaperXhAllowancesPayload
+         * @description A paper revision's own extended-hours allowances, in basis points.
+         *
+         *     How far from the price an extended-hours or after-close limit is placed:
+         *     an entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the
+         *     price for a buy and below it for a sell (a short entry sells the entry
+         *     allowance below; a cover buys the exit allowance above). The price is the
+         *     decision bar's close for a leg placed as the program decides, and the live
+         *     bid (sell) or ask (buy) for an exit priced later — the automatic re-drive,
+         *     or the send-time re-price of an exit sent after its session. A
+         *     regular-hours run's EXIT on the day's last bar goes out after the close
+         *     as such a limit, so Start of a regular-hours run refuses
+         *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
+         *     Resume of a flat run; a run still holding a position always resumes
+         *     (#2440, owner decisions 2026-09-25).
+         *
+         *     Paper only, and only the two: a live revision carries its pair inside
+         *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
+         *     value (``loss_usd``, a session count) offered here rather than dropping it,
+         *     and ``strict=True`` refuses ``true`` or ``"5"`` for the reason
+         *     ``LiveEnvelopePayload`` states. The bounds restate the envelope's; the
+         *     domain itself lives in ``ValidatedPaperAllowances``.
+         */
+        PaperXhAllowancesPayload: {
+            /** Xh Entry Bps */
+            xh_entry_bps: number;
+            /** Xh Exit Bps */
+            xh_exit_bps: number;
+        };
+        /**
          * ParamPropertySchema
          * @description One parameter's JSON-schema leaf metadata.
          */
@@ -20272,6 +20336,7 @@ export interface components {
              */
             endpoint_mode: "paper" | "live";
             live_envelope?: components["schemas"]["LiveEnvelopePayload"] | null;
+            paper_xh_allowances?: components["schemas"]["PaperXhAllowancesPayload"] | null;
         };
         /** ProfileDetailResponse */
         ProfileDetailResponse: {
@@ -20537,10 +20602,27 @@ export interface components {
             evidence_age_ms: number;
             /** Evidence Refs */
             evidence_refs: string[];
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
             /** Explanation */
             explanation: string;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
+            /** Next Attempt At Ms */
+            next_attempt_at_ms?: number | null;
+            /**
+             * Next Attempt Overdue
+             * @default false
+             */
+            next_attempt_overdue?: boolean;
             /** Next Step */
             next_step: string;
             /** Observed At Ms */
@@ -20569,14 +20651,31 @@ export interface components {
             available_safety_actions: string[];
             /** Custody Owner */
             custody_owner: string;
+            /**
+             * Exit Working
+             * @default false
+             */
+            exit_working?: boolean;
             /** Explanation */
             explanation: string;
+            /**
+             * Facts Unreadable
+             * @default false
+             */
+            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /** Impact */
             impact: string;
             /** May Create Exposure */
             may_create_exposure: boolean;
+            /** Next Attempt At Ms */
+            next_attempt_at_ms?: number | null;
+            /**
+             * Next Attempt Overdue
+             * @default false
+             */
+            next_attempt_overdue?: boolean;
             /** Next Step */
             next_step: string;
             /**
@@ -21689,6 +21788,7 @@ export interface components {
             /** Expected Revision */
             expected_revision: number;
             live_envelope?: components["schemas"]["LiveEnvelopePayload"] | null;
+            paper_xh_allowances?: components["schemas"]["PaperXhAllowancesPayload"] | null;
         };
         /** RevisionListResponse */
         RevisionListResponse: {
@@ -21717,6 +21817,7 @@ export interface components {
              */
             endpoint_mode: "paper" | "live";
             live_envelope: components["schemas"]["LiveEnvelopePayload"] | null;
+            paper_xh_allowances: components["schemas"]["PaperXhAllowancesPayload"] | null;
             /** Profile Id */
             profile_id: string;
             /** Revision */

@@ -235,6 +235,138 @@ describe('AlpacaSqliteCustodyComponent', () => {
     const botLink = await screen.findByRole('link', { name: 'Review spy-bot recovery' });
     expect(botLink.getAttribute('href'))
       .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
+    // No retry is scheduled for this cause, so no attempt time is shown.
+    expect(screen.queryByText(/Next automatic attempt/)).toBeNull();
+  });
+
+  it('says when the Clerk next tries to sell a position an exit left open (#2440)', async () => {
+    // 2026-09-03 04:00 ET: the pre-market open after an after-hours exit that
+    // could not go out. The backend sends the instant; this page formats it.
+    const nextAttemptAtMs = 1_788_422_400_000;
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:21',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: nextAttemptAtMs,
+        }],
+      }),
+    });
+
+    const attempt = await screen.findByText(/Next automatic attempt/);
+    expect(attempt.textContent).toContain('04:00');
+    expect(attempt.textContent).toContain('ET');
+    expect(attempt.textContent).not.toContain('overdue');
+  });
+
+  it('says a past next attempt is overdue, never a promise (#2440 review)', async () => {
+    // The watchdog's deferral writes nothing, so the recorded time can pass;
+    // the backend projects that as overdue and this page says so.
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:23',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: 1_788_422_400_000,
+          next_attempt_overdue: true,
+        }],
+      }),
+    });
+
+    const attempt = await screen.findByText(/Next automatic attempt/);
+    expect(attempt.textContent).toContain('overdue since');
+    expect(attempt.textContent).toContain('04:00');
+  });
+
+  it('says the next attempt is unknown when the notice record cannot be read (#2440 review)', async () => {
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:22',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: null,
+          facts_unreadable: true,
+        }],
+      }),
+    });
+
+    expect(await screen.findByText(
+      "Next automatic attempt: unknown; this notice's record could not be read.",
+    )).toBeTruthy();
+  });
+
+  it('says an exit is working instead of an overdue time while one is in progress (#2440 review)', async () => {
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:24',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: true,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXIT_NOT_FLAT',
+          headline: 'An exit could not be sent after its session ended; the position is still open',
+          explanation: '10 SPY is still held.',
+          operator_impact: 'New exposure is paused for this strategy.',
+          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['order:1'],
+          next_attempt_at_ms: null,
+          exit_working: true,
+        }],
+      }),
+    });
+
+    expect(await screen.findByText(
+      'An exit is in progress; no automatic attempt is due while it works.',
+    )).toBeTruthy();
+    expect(screen.queryByText(/overdue since/)).toBeNull();
   });
 
   function unfoldableProjection(): SqliteClerkProjection {

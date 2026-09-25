@@ -18,7 +18,7 @@ import pytest
 
 import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence
 import app.broker.alpaca.clerk.sqlite.uncertainty as uncertainty
-from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
+from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -224,6 +224,31 @@ def test_raise_uncertainty_default_shape_fails_closed(repo: ClerkSqliteRepositor
     assert uncertainty["allows_reduction"] == 0
     assert uncertainty["facts_schema_version"] == 1
     assert '"cause_facts"' in uncertainty["facts_json"]
+
+
+def test_an_episode_written_before_next_attempt_existed_parses_and_hashes_the_same() -> None:
+    """Hash-chained schema evolution (#2440): ``next_attempt_at_ms`` is omitted at its default.
+
+    Every ``UNCERTAINTY_RAISED`` row written before the field existed — and
+    every episode that schedules no retry — parses to "no next attempt" and
+    re-serializes byte-identically, so no sealed receipt hashed over one changes.
+    """
+    written_before = (
+        '{"allows_reduction":true,"blocks_new_exposure":true,'
+        '"cause_facts":{"attributed_qty":10.0,"symbol":"SPY"},"evidence_refs":["order:1"],'
+        '"explanation":"e","headline":"h","next_step":"n","operator_impact":"o",'
+        '"reason_code":"EXIT_NOT_FLAT","severity":"error"}'
+    )
+
+    parsed = UncertaintyRaisedFacts.from_facts_json(written_before)
+
+    assert parsed.next_attempt_at_ms is None
+    assert parsed.to_facts_json() == written_before
+    scheduled = dataclasses.replace(parsed, next_attempt_at_ms=1_788_422_400_000)
+    assert scheduled.to_facts_json() == written_before.replace(
+        '"next_step":"n"', '"next_attempt_at_ms":1788422400000,"next_step":"n"'
+    )
+    assert UncertaintyRaisedFacts.from_facts_json(scheduled.to_facts_json()) == scheduled
 
 
 # ── admit_new_exposure ───────────────────────────────────────────────────────

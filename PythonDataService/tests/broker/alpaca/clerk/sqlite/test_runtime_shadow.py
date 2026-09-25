@@ -10,6 +10,7 @@ import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
@@ -21,7 +22,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_window_for_date
 from app.services.broker_v2_panel.catalog_projection_service import sqlite_catalog_rollup
-from app.services.session_authority import declared_session_bounds
+from app.services.session_authority import declared_session_bounds, et_minute_of_day_ms
 from app.services.source_bar_ledger import SourceBarLedger
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import (
@@ -72,7 +73,14 @@ async def test_shadow_entry_and_exit_are_synthesized_from_their_bound_decision_b
     )
     evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
     decision = _retain(evidence, minute=600, close="100.25")
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    # The Clerk's clock sits in the session these bars decide in: the EXIT's
+    # market leg is sent only inside the regular session (#2440), so a wall
+    # clock would make this pass only between 09:30 and 16:00 ET.
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_Clock(et_minute_of_day_ms(DAY, 602)),
+    )
     facade = SqliteAlpacaClerkFacade(
         repo=repo,
         read=ports.read,
@@ -457,6 +465,7 @@ async def test_a_shadow_sweep_pass_journals_the_trading_day(tmp_path: Path) -> N
         trade=ports.trade,
         intake=facade.intake,
         on_result=lambda result: recorder.record(publish(result)),
+        pricing=UNPRICEABLE_RECOVERY,
     )
     try:
         assert await sweep._run_one_pass() is True
