@@ -40,7 +40,13 @@ from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, BrokerPosition
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    NOON,
+    TODAY_OPEN,
+    _accept_day_pnl_enter,
+    _append_day_pnl_slice,
+    _TestClock,
+)
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 
 SYNC_LOGGER = "app.broker.alpaca.clerk.sqlite.live_envelope_sync"
@@ -571,20 +577,29 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     assert reading.observation.observed_at_ms == T0
 
 
+@pytest.mark.parametrize(
+    "recorded_before_read_ms",
+    [
+        pytest.param(1, id="just-before-the-read"),
+        pytest.param(FILL_VISIBILITY_GRACE_MS, id="at-the-grace-boundary"),
+    ],
+)
 async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
     envelope_repo: ClerkSqliteRepository,
     envelope_clock: _TestClock,
     two_active_instances: tuple[tuple[str, str], tuple[str, str]],
     make_sync: Callable[..., LiveEnvelopeSync],
+    recorded_before_read_ms: int,
 ) -> None:
     """The broker's cash may lag a fill whose trade update it already delivered.
 
     Alpaca promises no ordering between the two, so a fill the Clerk recorded
-    ``FILL_VISIBILITY_GRACE_MS`` before the read was issued -- the boundary,
-    inclusive -- is not trusted to be in the answer. Here the broker still
-    reports the pre-fill $1,000, and the second instance is refused rather
-    than admitted against it. The exact boundary is pinned per order state in
-    ``test_envelope_reservations``.
+    up to ``FILL_VISIBILITY_GRACE_MS`` before the read was issued -- the
+    boundary, inclusive -- is not trusted to be in the answer. Here the broker
+    still reports the pre-fill $1,000, and the second instance is refused
+    rather than admitted against it. The 1 ms case is the one a zero grace
+    would release; the boundary case is the one a grace applied off by one
+    would.
     """
     first_instance, second_instance = two_active_instances
     first = _enter(
@@ -594,14 +609,14 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
         envelope=_observed_gate(cash=1_000.0, simulated=False),
     )
     _fill_all_ten(envelope_repo, envelope_clock, first)()
-    envelope_clock.advance(FILL_VISIBILITY_GRACE_MS)
+    envelope_clock.advance(recorded_before_read_ms)
     sync = make_sync(
         envelope_repo, _LiveBroker(now_ms=envelope_clock(), cash=1_000.0), simulated=False
     )
 
     reading = await sync.observe()
 
-    assert reading.observation.observed_at_ms == T0 + FILL_VISIBILITY_GRACE_MS
+    assert reading.observation.observed_at_ms == T0 + recorded_before_read_ms
     with pytest.raises(AdmissionBlockedError) as refused:
         _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
     assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
@@ -640,9 +655,9 @@ async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observat
 
     mid_read = (await sync.observe()).observation
     assert mid_read.cash_available_usd == pytest.approx(1_000.0)
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=mid_read.observed_at_ms) == pytest.approx(
-        1_000.0
-    )
+    assert envelope_repo.reserved_cash_usd(
+        seen_before_ms=mid_read.fills_seen_before_ms
+    ) == pytest.approx(1_000.0)
     with pytest.raises(AdmissionBlockedError) as refused:
         _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
     assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
@@ -650,5 +665,53 @@ async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observat
     envelope_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
     next_tick = (await sync.observe()).observation
     assert next_tick.cash_available_usd == pytest.approx(1_000.0)
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=next_tick.observed_at_ms) == 0.0
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=next_tick.fills_seen_before_ms) == 0.0
     assert _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope).created
+
+
+async def test_the_realized_day_pnl_window_ends_at_the_observation_instant(
+    day_pnl_repo: ClerkSqliteRepository,
+    day_pnl_clock: _TestClock,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """One observation, one instant: a lot closed during the reads is the next tick's realized.
+
+    The day-P&L window ends at ``observed_at_ms`` -- when the reads were issued
+    -- so a SELL recorded inside the round trip is not this reading's realized
+    P&L; the next observation's window covers it.
+    """
+    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-closed-mid-read")
+    _append_day_pnl_slice(
+        day_pnl_repo,
+        accepted,
+        execution_id="exec-buy-today",
+        side="BUY",
+        quantity=10.0,
+        price=100.0,
+        occurred_at_ms=TODAY_OPEN,
+    )
+    read = _FillLandsMidRead(
+        clock=day_pnl_clock,
+        cash=100_000.0,
+        during="account",
+        record_fill=lambda: _append_day_pnl_slice(
+            day_pnl_repo,
+            accepted,
+            execution_id="exec-sell-mid-read",
+            side="SELL",
+            quantity=10.0,
+            price=110.0,
+            occurred_at_ms=day_pnl_clock(),
+        ),
+    )
+    sync = make_sync(day_pnl_repo, read, simulated=False)
+
+    mid_read = await sync.observe()
+    assert mid_read.day_pnl is not None
+    assert mid_read.day_pnl.realized_usd == pytest.approx(0.0)
+    assert mid_read.observation.observed_at_ms == NOON
+
+    day_pnl_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
+    next_tick = await sync.observe()
+    assert next_tick.day_pnl is not None
+    assert next_tick.day_pnl.realized_usd == pytest.approx(100.0)

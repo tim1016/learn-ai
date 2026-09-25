@@ -124,8 +124,9 @@ notional cap, no symbol allowlist, no session restriction.
   the day-P&L window ends there too.
 - **Reservations, fills-aware.** `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
   prices the part of an accepted ENTER the latest observation cannot see. A
-  fill counts as seen only when the Clerk recorded it before
-  `observed_at_ms − FILL_VISIBILITY_GRACE_MS`. A working *or filled* order
+  fill counts as seen only when the Clerk recorded it before the observation's
+  `fills_seen_before_ms` (`observed_at_ms − FILL_VISIBILITY_GRACE_MS`, a
+  property of `AccountObservation`). A working *or filled* order
   reserves its quantity minus its seen fills; a dead order (canceled/expired/
   rejected/replaced) reserves only its unseen fills, because its unrecorded
   remainder is cancelled quantity, never cash. Corrections fold at their
@@ -133,7 +134,8 @@ notional cap, no symbol allowlist, no session restriction.
   through `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
   *root* execution's `recorded_at_ms`, because the broker's cash at that
   instant already reflected the true quantity however late the Clerk recorded
-  the restatement. `reserved_cash_usd(observed_at_ms=...)`
+  the restatement. `reserved_cash_usd(seen_before_ms=...)`, which admission
+  hands `observation.fills_seen_before_ms`,
   sums this across every accepted ENTER, and `cash_bound_admits`
   (`PythonDataService/app/broker/alpaca/clerk/live_envelope.py`) checks
   `notional + reserved <= cash_available`.

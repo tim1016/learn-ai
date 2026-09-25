@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
-    FILL_VISIBILITY_GRACE_MS,
     AccountObservation,
     LiveEnvelopeGate,
 )
@@ -67,18 +66,11 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _TestClock,
 )
 
-# What an observation whose reads were issued at ``T0`` is trusted to have
-# seen: a fill recorded before the fill-visibility grace, and none inside it.
-SEEN_AT_T0 = T0 - FILL_VISIBILITY_GRACE_MS - 1
-UNSEEN_AT_T0 = T0 - FILL_VISIBILITY_GRACE_MS
-
 # The trailing-fill timeline: terminal ack, then the cash observation, then the
-# websocket execution slice that observation cannot possibly have seen. The
-# observation is issued just past the grace after the ack, so an execution
-# recorded at the ack is one its cash is trusted to include.
+# websocket execution slice that observation cannot possibly have seen.
 T1_TERMINAL_ACK = T0 + 1_000
-T2_OBSERVATION = T1_TERMINAL_ACK + FILL_VISIBILITY_GRACE_MS + 1
-T3_TRAILING_FILL = T2_OBSERVATION + 1_000
+T2_OBSERVATION = T0 + 2_000
+T3_TRAILING_FILL = T0 + 3_000
 
 
 _CAUSE = LossHoldCause(
@@ -323,20 +315,17 @@ def test_the_reservation_never_enters_the_hash_chain(
 
 
 @pytest.mark.parametrize(
-    ("broker_state", "fills", "observed_at_ms", "expected"),
+    ("broker_state", "fills", "seen_before_ms", "expected"),
     [
         (None, [], T0, 1_000.0),  # working, unacked: full
-        ("new", [(4, SEEN_AT_T0)], T0, 600.0),  # 4 filled before the observation: remainder
+        ("new", [(4, T0 - 1)], T0, 600.0),  # 4 filled before the observation: remainder
         ("new", [(4, T0 + 1)], T0, 1_000.0),  # filled after: cash cannot reflect it yet
-        ("new", [(4, UNSEEN_AT_T0)], T0, 1_000.0),  # inside the grace before the read: not trusted as seen
-        ("filled", [(10, SEEN_AT_T0)], T0, 0.0),  # done and observed
+        ("filled", [(10, T0 - 1)], T0, 0.0),  # done and observed
         ("filled", [(10, T0 + 1)], T0, 1_000.0),  # done, not yet observed
-        ("filled", [(10, UNSEEN_AT_T0)], T0, 1_000.0),  # done at the grace boundary: still reserved
         ("filled", [], T0, 1_000.0),  # filled at submit, fill not yet recorded (the shadow case): whole notional
-        ("filled", [(4, SEEN_AT_T0)], T0, 600.0),  # filled, 4 recorded before the observation, rest unrecorded: remainder
+        ("filled", [(4, T0 - 1)], T0, 600.0),  # filled, 4 recorded before the observation, rest unrecorded: remainder
         ("canceled", [], T0, 0.0),  # dead, nothing to reserve
         ("canceled", [(3, T0 + 1)], T0, 300.0),  # dead with a fill after the observation
-        ("canceled", [(3, UNSEEN_AT_T0)], T0, 300.0),  # dead with a fill inside the grace: still unseen cash
         ("expired", [], T0, 0.0),  # dead, nothing recorded: nothing
         ("rejected", [], T0, 0.0),  # dead: nothing
         ("replaced", [], T0, 0.0),  # dead: the fourth state, pinned like its siblings
@@ -348,7 +337,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
     active_instance: tuple[str, str],
     broker_state: str | None,
     fills: list[tuple[float, int]],
-    observed_at_ms: int,
+    seen_before_ms: int,
     expected: float,
 ) -> None:
     sid, run_id = active_instance
@@ -396,7 +385,7 @@ def test_reserved_cash_prices_only_what_the_observation_cannot_see(
             ),
         )
 
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=observed_at_ms) == pytest.approx(expected)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=seen_before_ms) == pytest.approx(expected)
 
 
 def _refuse_coverage_conflict() -> TransitionInput:
@@ -502,7 +491,7 @@ def test_a_trailing_websocket_fill_on_a_terminal_order_is_still_reserved(
     )
     assert order_after["updated_at_ms"] < T2_OBSERVATION <= T3_TRAILING_FILL
 
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(1_000.0)
 
 
 def _append_slice(
@@ -659,7 +648,7 @@ def test_a_corrected_fill_reserves_at_its_restated_size(
         ).fetchone()["broker_state"]
         is None
     )
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T2_OBSERVATION) == pytest.approx(expected)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(expected)
 
 
 def test_reservations_sum_across_instances(
@@ -679,4 +668,4 @@ def test_reservations_sum_across_instances(
             reference_price=100.0,
         )
 
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(1_000.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == pytest.approx(1_000.0)

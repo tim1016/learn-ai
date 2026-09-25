@@ -61,8 +61,9 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # states an ordering or consistency guarantee between the two
 # (docs/references/alpaca-live-envelope.md cites each page). So a fill recorded
 # within this margin before the stamp stays reserved, even though the cash may
-# already include it: over-reserving refuses an ENTER that would have fit,
-# under-reserving admits a second ENTER against cash already spent.
+# already include it (``AccountObservation.fills_seen_before_ms``):
+# over-reserving refuses an ENTER that would have fit, under-reserving admits a
+# second ENTER against cash already spent.
 #
 # Five seconds: an order of magnitude above the sub-second lag "real-time"
 # implies, and under one sync interval, so a fill stays reserved at most one
@@ -172,10 +173,9 @@ class AccountObservation:
 
     ``observed_at_ms`` is the instant the reads were *issued*, not the instant
     they returned: the broker's answer is only known to be at least that
-    recent. The cash is trusted to include the fills the Clerk recorded more
-    than ``FILL_VISIBILITY_GRACE_MS`` before it, and no later ones
-    (``sqlite/envelope_reservations.reserved_cash_usd``). Freshness is aged
-    from the same instant, which errs old by the read's round trip.
+    recent. Which fills its cash is trusted to include is
+    :attr:`fills_seen_before_ms`. Freshness is aged from the same instant,
+    which errs old by the read's round trip.
     """
 
     observed_at_ms: int
@@ -186,6 +186,20 @@ class AccountObservation:
     last_equity_usd: float | None
     unrealized_pl_usd: float
     position_count: int
+
+    @property
+    def fills_seen_before_ms(self) -> int:
+        """The instant before which a fill is assumed to be in this observation's cash.
+
+        A fill the Clerk recorded strictly before this instant is assumed
+        reflected in ``broker_cash_usd``; one recorded at it or later stays
+        reserved. It sits ``FILL_VISIBILITY_GRACE_MS`` before the reads were
+        issued, because a fill recorded just before them is not trusted to be
+        in the answer either (#2441). Over-reserving is the safe side: it
+        refuses an ENTER that would have fit, where under-reserving admits one
+        against cash already spent.
+        """
+        return self.observed_at_ms - FILL_VISIBILITY_GRACE_MS
 
 
 @dataclass(frozen=True)

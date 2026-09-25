@@ -94,7 +94,7 @@ def test_an_affordable_market_enter_is_admitted_and_reserved(
     sid, run_id = active_instance
     accepted = _accept(envelope_repo, sid, run_id, decision_id="d1", leg=_leg(quantity=100), envelope=_gate())
     assert accepted.created
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == pytest.approx(10_000.0)
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == pytest.approx(10_000.0)
 
 
 def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
@@ -107,7 +107,7 @@ def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
     assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
     assert "100100.00 USD" in (exc_info.value.decision.why or "")
     assert envelope_repo.control_meta_snapshot().control_revision == before
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
 
 
 def test_two_instances_cannot_spend_the_same_cash(
@@ -214,7 +214,7 @@ def test_no_envelope_means_no_envelope_check(
         reference_price=None,
     )
     assert accepted.created
-    assert envelope_repo.reserved_cash_usd(observed_at_ms=T0) == 0.0
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
 
 
 def test_a_sell_leg_cannot_be_an_envelope_enter(

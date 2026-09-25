@@ -262,7 +262,7 @@ class LiveEnvelopeSync:
         # to be at least as recent as its request: a stamp taken on return
         # released the reservation of a fill recorded during the round trip
         # that the answer predated, and a second ENTER spent the same cash
-        # (#2441). The day-P&L window below ends at the same instant.
+        # (#2441).
         observed_at_ms = self._repo.clock()
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
@@ -308,6 +308,7 @@ class LiveEnvelopeSync:
             day_pnl=(
                 None
                 if unjudgeable
+                # The realized window deliberately ends at the observation's own instant.
                 else day_pnl_at(
                     self._reader, self._repo, observation=observation, now_ms=observed_at_ms
                 )

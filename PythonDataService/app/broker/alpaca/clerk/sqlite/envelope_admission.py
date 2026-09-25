@@ -73,7 +73,7 @@ def require_envelope_admission(
             LIVE_ENVELOPE_UNOBSERVED,
             "A market ENTER has no decision-bar price to bound it against cash.",
         )
-    reserved = repo.reserved_cash_usd(observed_at_ms=observation.observed_at_ms)
+    reserved = repo.reserved_cash_usd(seen_before_ms=observation.fills_seen_before_ms)
     # Built before the bound is asked, so the notional the refusal names and
     # the notional the reservation will claim are the same one property.
     reservation = EnvelopeReservation(quantity=leg.quantity, reference_price=price)

@@ -99,6 +99,17 @@ def test_the_fill_visibility_grace_is_positive_and_shorter_than_one_sync_interva
     assert 0 < FILL_VISIBILITY_GRACE_MS < ENVELOPE_SYNC_INTERVAL_S * 1_000
 
 
+def test_an_observation_trusts_only_fills_recorded_a_grace_before_its_reads() -> None:
+    """The boundary admission hands the reservation query (#2441).
+
+    The reads were issued at ``observed_at_ms``; a fill recorded strictly
+    before ``fills_seen_before_ms`` is assumed to be in the cash, and one at
+    it or later stays reserved -- pinned end to end, boundary included, in
+    ``sqlite/test_live_envelope_sync``.
+    """
+    assert _observation(60_000).fills_seen_before_ms == 60_000 - FILL_VISIBILITY_GRACE_MS
+
+
 def test_the_gate_serves_only_a_fresh_observation() -> None:
     gate = LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=True)
     assert gate.agreement == "unsealed"
