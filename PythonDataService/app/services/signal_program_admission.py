@@ -14,6 +14,8 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
+import importlib
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -415,6 +417,24 @@ def prove_running_program_build(
             verified_at_ms,
             explanation=f"Program qualification evidence is unreadable: {type(exc).__name__}.",
         )
+    # #2450: the digests above read the disk, not memory. A clerk deploys by
+    # ``git pull`` then restart, so between the two the disk holds bytes this
+    # process never imported, and a proof computed from them would name code
+    # that is not running. Refuse until the restart makes them one again.
+    record_imported_program_sources()
+    drifted = imported_source_drift(contract)
+    if drifted is not None:
+        return _unproven(
+            binding.strategy_key,
+            verified_at_ms,
+            explanation=(
+                "Restart needed: the code on disk differs from the code this process "
+                f"is running ({drifted} sources changed after import)."
+            ),
+            next_step=(
+                "Restart the service so the running code is the code on disk, then try again."
+            ),
+        )
     receipt = next(
         (
             candidate
@@ -494,6 +514,82 @@ def _digest_paths(paths: tuple[str, ...]) -> str:
             raise ValueError(f"invalid Signal Program artifact path: {relative}")
         entries.append({"path": relative, "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()})
     return semantic_payload_hash(entries)
+
+
+_IMPORT_LOCK = threading.Lock()
+_IMPORTED_SOURCE_DIGESTS: dict[str, str] = {}
+
+
+def _module_name(relative: str) -> str:
+    """The importable module name for one service-relative ``.py`` path."""
+    if not relative.endswith(".py"):
+        raise ValueError(f"Signal Program artifact is not a Python module: {relative}")
+    return relative[:-3].replace("/", ".")
+
+
+def record_imported_program_sources() -> None:
+    """Anchor the proof's digests to the bytes this process actually imports (#2450).
+
+    ``_digest_paths`` hashes files off disk, but a clerk bind-mounts ``app/``
+    and deploys are a ``git pull`` followed by a restart: between the two,
+    the bytes on disk are not the bytes the process imported, and a proof
+    computed from disk would name code that is not running -- including
+    modules imported lazily (``indicator_state``), which the later pull can
+    silently load mid-flight. This forces the import of every module in the
+    registered contracts' file lists and records each file's digest at that
+    moment, so the recorded digests are provably the bytes in memory. Called
+    at service startup; the first proof anchors lazily if it never ran.
+
+    Idempotent: the first recording wins, because only it describes what
+    this process imported. Raises on an unreadable or invalid path -- a
+    process that cannot state its own sources must not start.
+    """
+    with _IMPORT_LOCK:
+        if _IMPORTED_SOURCE_DIGESTS:
+            return
+        digests: dict[str, str] = {}
+        for registration in _STRATEGY_REGISTRY.values():
+            contract = registration.signal_program_contract
+            if contract is None:
+                continue
+            for relative in (*contract.artifact_paths, *contract.wiring_artifact_paths):
+                if relative in digests:
+                    continue
+                importlib.import_module(_module_name(relative))
+                candidate = (_SERVICE_ROOT / relative).resolve()
+                if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
+                    raise ValueError(f"invalid Signal Program artifact path: {relative}")
+                digests[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        _IMPORTED_SOURCE_DIGESTS.update(digests)
+
+
+def _imported_digest(paths: tuple[str, ...]) -> str:
+    """The digest of ``paths`` as recorded at import time (startup)."""
+    entries = [
+        {"path": relative, "sha256": _IMPORTED_SOURCE_DIGESTS[relative]} for relative in paths
+    ]
+    return semantic_payload_hash(entries)
+
+
+def imported_source_drift(contract: SignalProgramContract) -> Literal["artifact", "wiring"] | None:
+    """Which half of a proof's sources changed on disk after this process imported them.
+
+    ``None`` when the on-disk bytes are still the bytes in memory, which is
+    the only case in which a proof computed from disk can name the code that
+    is running. An unrecorded path counts as drift: a proof must not claim
+    bytes it never anchored.
+    """
+    for label, paths in (
+        ("artifact", contract.artifact_paths),
+        ("wiring", contract.wiring_artifact_paths),
+    ):
+        try:
+            imported = _imported_digest(paths)
+        except KeyError:
+            return label
+        if imported != _digest_paths(paths):
+            return label
+    return None
 
 
 def running_artifact_digest(contract: SignalProgramContract) -> str:
@@ -677,13 +773,16 @@ def _unproven(
     verified_at_ms: int,
     *,
     explanation: str,
+    next_step: str = (
+        "Run golden qualification for these bytes, or deploy a newly sealed compatible instance."
+    ),
 ) -> ProgramBuildAdmissionFact:
     return ProgramBuildAdmissionFact(
         state="UNPROVEN",
         program_key=program_key,
         verified_at_ms=verified_at_ms,
         explanation=explanation,
-        next_step="Run golden qualification for these bytes, or deploy a newly sealed compatible instance.",
+        next_step=next_step,
     )
 
 
@@ -694,10 +793,12 @@ __all__ = [
     "ProgramBuildQualificationReceipt",
     "SignalProgramSealError",
     "build_start_program_seal",
+    "imported_source_drift",
     "legacy_migration_clone_instance_id",
     "prove_running_program_build",
     "qualification_receipt_payload",
     "reconstruct_legacy_program_seal",
+    "record_imported_program_sources",
     "running_artifact_digest",
     "running_wiring_digest",
 ]

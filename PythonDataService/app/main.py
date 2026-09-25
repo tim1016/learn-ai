@@ -377,6 +377,16 @@ async def _service_lifespan(
         )
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
 
+    # #2450: anchor the Signal Program build proofs to the bytes this process
+    # imports right now -- deploys are a ``git pull`` followed by a restart,
+    # so without an anchor taken here, a proof computed later from disk can
+    # name code this process is not running. Forces the lazily imported
+    # program modules too; an unreadable source aborts startup because a
+    # process that cannot state its own sources must not start.
+    from app.services.signal_program_admission import record_imported_program_sources
+
+    record_imported_program_sources()
+
     # Root identity (#1876) — validated first, before any other subsystem
     # touches the lake: a LakeRootIdentityError here aborts startup (see
     # _validate_data_root_identity's docstring for why this is not

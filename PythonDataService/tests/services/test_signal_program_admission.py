@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from app.schemas.run_admission import (
     StrategyValidationAdmissionFact,
 )
 from app.schemas.signal_program_seal import semantic_payload_hash
+from app.services import signal_program_admission as admission_module
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -31,10 +33,12 @@ from app.services.signal_program_admission import (
     ProgramBuildQualificationReceipt,
     SignalProgramSealError,
     build_start_program_seal,
+    imported_source_drift,
     legacy_migration_clone_instance_id,
     prove_running_program_build,
     qualification_receipt_payload,
     reconstruct_legacy_program_seal,
+    record_imported_program_sources,
     running_wiring_digest,
 )
 
@@ -909,3 +913,93 @@ def test_receipt_without_git_provenance_keeps_its_pre_provenance_hash() -> None:
     assert "git_provenance" not in payload
     receipt = ProgramBuildQualificationReceipt.model_validate(payload)
     assert receipt.git_provenance is None
+
+
+# -- #2450: the proof names the code that is actually running --
+
+
+def _ema_contract():
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    return contract
+
+
+def _copied_source_tree(tmp_path: Path, *, drift_artifact: bool = False) -> Path:
+    """A faithful copy of the proof's source files under ``tmp_path``.
+
+    With ``drift_artifact``, one artifact file is edited after the copy --
+    the bytes a ``git pull`` lands on the bind mount while the process keeps
+    running the code it imported.
+    """
+    contract = _ema_contract()
+    root = tmp_path.resolve()
+    for relative in (*contract.artifact_paths, *contract.wiring_artifact_paths):
+        source = admission_module._SERVICE_ROOT / relative
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    if drift_artifact:
+        drifted = root / "app/engine/strategy/algorithms/ema_crossover_signal.py"
+        drifted.write_text("# drifted after import\n" + drifted.read_text())
+    return root
+
+
+def test_code_changed_on_disk_after_import_refuses_the_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#2450: a proof computed from disk used to stay PROVEN even when the disk
+    held bytes the process never imported -- the deploy window between a
+    ``git pull`` and the restart. The pull also brings the new bytes\' own
+    qualification receipt, so the disk-side digests match it perfectly and
+    the proof certified code this process is not running. The startup anchor
+    refuses until the restart makes memory and disk one again."""
+    record_imported_program_sources()  # the startup anchor, against the real tree
+    binding = _sealed_binding()  # sealed and proven against the real tree, before the pull lands
+    drifted_root = _copied_source_tree(tmp_path, drift_artifact=True)
+    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", drifted_root)
+    # The pulled tree ships its own receipt for its own bytes.
+    receipt = qualification_receipt_payload(
+        program_key="ema_crossover_signal",
+        contract=_ema_contract(),
+        qualified_at_ms=_NOW,
+        qualification_suite="drifted-tree-suite",
+    )
+    drifted_manifest = tmp_path / "drifted-receipts.json"
+    drifted_manifest.write_text(json.dumps({"schema_version": 2, "receipts": [receipt]}))
+
+    proof = prove_running_program_build(
+        binding, verified_at_ms=_NOW, manifest_path=drifted_manifest
+    )
+
+    assert proof.state == "UNPROVEN"
+    assert "Restart needed" in proof.explanation
+    assert "artifact" in proof.explanation
+    assert "Restart the service" in proof.next_step
+
+
+def test_a_unchanged_disk_after_import_still_proves(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#2450's companion: after the restart the running code is the code on
+    disk, the digests match, and admission proceeds exactly as before."""
+    record_imported_program_sources()
+    binding = _sealed_binding()
+    fresh_root = _copied_source_tree(tmp_path)
+    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", fresh_root)
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "PROVEN"
+    assert proof.wiring == "MATCHED"
+
+
+def test_the_snapshot_covers_the_lazily_imported_indicator_state_module() -> None:
+    """#2450: ``indicator_state`` is imported lazily inside strategy methods,
+    so a later ``git pull`` could otherwise load new bytes mid-flight. The
+    startup anchor forces its import and covers its file."""
+    record_imported_program_sources()
+
+    assert "app/engine/live/indicator_state.py" in admission_module._IMPORTED_SOURCE_DIGESTS
+    assert "app.engine.live.indicator_state" in sys.modules
+    assert imported_source_drift(_ema_contract()) is None
