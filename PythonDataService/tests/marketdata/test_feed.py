@@ -982,3 +982,96 @@ async def test_legacy_short_rth_minute_on_a_connected_line_fails_fast(
 
     assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
     assert excinfo.value.reason == "MINUTE_INCOMPLETE"
+
+
+# -- #2444: a bar whose values cannot be real never reaches a decision --
+
+
+def _raw_minute_with(
+    minute_start: datetime,
+    *,
+    open_: str,
+    high: str,
+    low: str,
+    close: str,
+) -> tuple[SimpleNamespace, ...]:
+    """One RTH minute's twelve 5-second prints carrying the given OHLC (#2444)."""
+    return tuple(
+        SimpleNamespace(
+            time=minute_start + timedelta(seconds=second),
+            open=Decimal(open_),
+            high=Decimal(high),
+            low=Decimal(low),
+            close=Decimal(close),
+            volume=10,
+        )
+        for second in range(0, 60, 5)
+    )
+
+
+_IMPOSSIBLE_MINUTE_CASES = [
+    dict(open_="100", high="101", low="99", close="nan"),
+    dict(open_="100", high="101", low="99", close="0"),
+    dict(open_="100", high="99", low="101", close="100"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ohlc",
+    _IMPOSSIBLE_MINUTE_CASES,
+    ids=["nan_close", "zero_close", "high_below_low"],
+)
+async def test_an_impossible_minute_is_refused_not_decided(
+    monkeypatch: pytest.MonkeyPatch, ohlc: dict[str, str]
+) -> None:
+    """#2444: a NaN, zero or high-below-low minute reached the strategy before;
+    now the run refuses it through the feed's failure path, under a reason the
+    bot page shows, and every bar before it was already delivered unchanged."""
+    feed, _fixture = _scripted_legacy_feed(
+        monkeypatch,
+        raw_minute(RTH_MINUTE, range(0, 60, 5))
+        + _raw_minute_with(RTH_MINUTE + timedelta(minutes=1), **ohlc)
+        + raw_minute(RTH_MINUTE + timedelta(minutes=2), range(0, 60, 5))
+        + raw_minute(RTH_MINUTE + timedelta(minutes=3), (0,)),
+    )
+    delivered: list[MarketDataBar] = []
+
+    async def _drain() -> None:
+        async with aclosing(feed.stream_bars("SPY")) as bars:
+            async for bar in bars:
+                delivered.append(bar)
+
+    with pytest.raises(MarketDataFeedError) as excinfo:
+        await asyncio.wait_for(_drain(), timeout=2)
+
+    assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
+    assert excinfo.value.reason == "IMPOSSIBLE_SOURCE_BAR"
+
+
+@pytest.mark.asyncio
+async def test_warmup_history_with_an_impossible_bar_refuses_under_its_own_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2444: a corrupt warmup bar is not a failed fetch. The refusal carries its
+    own reason, so the deploy page does not offer it as a retryable warmup miss
+    the way ``WARMUP_HISTORY_UNAVAILABLE`` is."""
+    from app.broker.ibkr.minute_assembler import IBKRImpossibleBarError
+
+    failure = IBKRImpossibleBarError(
+        "IBKR bar for SPY at 1 ms was refused: close price is not finite"
+    )
+
+    async def _history_corrupt(*_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
+        raise failure
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _history_corrupt
+    )
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=7)
+
+    assert refused.value.reason == "IMPOSSIBLE_SOURCE_BAR"
+    assert refused.value.__cause__ is failure

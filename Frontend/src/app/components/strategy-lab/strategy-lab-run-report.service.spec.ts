@@ -205,6 +205,43 @@ describe("StrategyLabRunReport", () => {
     await vi.advanceTimersByTimeAsync(PARITY_POLL_MS * 3);
     expect(get).toHaveBeenCalledTimes(2);
   });
+
+  it("explains a nested readiness reason with operator copy, not a bare code", async () => {
+    // #2447 review: the cross-basis outcome lives on the readiness receipt,
+    // below the top-level reason; an unavailable status without its reason
+    // reads as a dead end.
+    const verdictJson = JSON.stringify({
+      status: "agree",
+      readiness_parity: {
+        status: "unavailable",
+        reason: "readiness_statistics_basis_differs",
+        compared_field_count: 0,
+        mismatched_fields: [],
+      },
+    });
+    const run = makeRun({ parityVerdicts: [{ id: 1, status: "agree", verdictJson, createdAt: 1 }] });
+    const { report } = makeReport(of(run), run.id);
+    await Promise.resolve();
+
+    const readiness = report.parity()?.readinessParity;
+    expect(readiness?.status).toBe("unavailable");
+    expect(readiness?.reason).toBe(
+      "The engines grade different statistical bases by design (Python: the marked equity curve; " +
+        "LEAN: the shared closed-trade ledger), so readiness is not compared; the verdict rests on the common ledger.",
+    );
+  });
+
+  it("passes an unmapped nested readiness reason through for the receipt label pipe", async () => {
+    const verdictJson = JSON.stringify({
+      status: "diverged",
+      readiness_parity: { status: "mismatch", reason: "some_future_reason", compared_field_count: 2 },
+    });
+    const run = makeRun({ parityVerdicts: [{ id: 1, status: "diverged", verdictJson, createdAt: 1 }] });
+    const { report } = makeReport(of(run), run.id);
+    await Promise.resolve();
+
+    expect(report.parity()?.readinessParity?.reason).toBe("some_future_reason");
+  });
 });
 
 describe("toEngineTrade", () => {

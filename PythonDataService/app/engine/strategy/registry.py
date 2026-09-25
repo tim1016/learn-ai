@@ -24,6 +24,22 @@ from app.engine.strategy.base import Strategy
 from app.engine.strategy.params import (
     StrategyParamsBase,
 )
+from app.engine.strategy.program_sources import (
+    DEPLOYMENT_VALIDATION_ARTIFACT_PATHS,
+    DEPLOYMENT_VALIDATION_WIRING_PATHS,
+    EMA_CROSSOVER_SIGNAL_ARTIFACT_PATHS,
+    EMA_CROSSOVER_SIGNAL_WIRING_PATHS,
+    RSI_MEAN_REVERSION_ARTIFACT_PATHS,
+    RSI_MEAN_REVERSION_WIRING_PATHS,
+    SMA_CROSSOVER_ARTIFACT_PATHS,
+    SMA_CROSSOVER_WIRING_PATHS,
+    SPY_STRATEGY_A_ARTIFACT_PATHS,
+    SPY_STRATEGY_A_WIRING_PATHS,
+    SPY_STRATEGY_B_ARTIFACT_PATHS,
+    SPY_STRATEGY_B_WIRING_PATHS,
+    SPY_STRATEGY_C_ARTIFACT_PATHS,
+    SPY_STRATEGY_C_WIRING_PATHS,
+)
 from app.engine.strategy.programs.deployment_validation import (
     DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
     DeploymentValidationParams,
@@ -477,39 +493,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "rsi_max": 70.0,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            # Issue #1728 defect 2: this is not "every file the module
-            # graph reaches" — it is that transitive first-party import
-            # closure of the two roots below, MINUS the files proven (in
-            # scripts/run_signal_program_build_qualification.py's exclusion
-            # list) to be unreachable from evaluate_signal_bar()'s decision
-            # math: SignalSession.advance() (signal_program.py)
-            # builds and stores the EvaluationTrace *before* settle() ever
-            # calls commit_signal_decision(), so execution/fill/sizing/
-            # commission/Insight-publication bytes reached only through the
-            # commit path cannot retroactively change a trace that already
-            # exists. test_signal_decision_digest_closure.py recomputes the
-            # closure from these paths and fails the build if a newly
-            # introduced import isn't triaged into this list or that one.
-            artifact_paths=(
-                "app/engine/strategy/algorithms/ema_crossover_signal.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/normalized_gap.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/indicators/base.py",
-                "app/engine/indicators/ema.py",
-                "app/engine/indicators/rsi.py",
-                "app/engine/indicators/sma.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/ema_crossover_signal.py",
-                "app/engine/strategy/params.py",
-            ),
+            # Declared source closure lives in program_sources.py so the
+            # #2450 anchor can enumerate it without importing this module.
+            artifact_paths=EMA_CROSSOVER_SIGNAL_ARTIFACT_PATHS,
+            wiring_artifact_paths=EMA_CROSSOVER_SIGNAL_WIRING_PATHS,
         ),
         description=(
             "Long-only intraday EMA signal generator. Bit-exact against the "
@@ -719,32 +706,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             },
             validated_settings={"short_window": 10, "long_window": 30, "resolution_minutes": 15},
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            # Same triage rule as ema_crossover_signal's artifact_paths
-            # (issue #1728 defect 2): the transitive first-party import
-            # closure of the root below, MINUS the files in
-            # _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
-            # (scripts/run_signal_program_build_qualification.py) that are
-            # provably unreachable from evaluate_signal_bar()'s decision
-            # math. test_sma_signal_decision_digest_closure.py recomputes
-            # the closure from these paths and fails the build if a newly
-            # introduced import isn't triaged into one bucket or the other.
-            artifact_paths=(
-                "app/engine/strategy/algorithms/sma_crossover.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/indicators/base.py",
-                "app/engine/indicators/sma.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/sma_crossover.py",
-                "app/engine/strategy/params.py",
-            ),
+            artifact_paths=SMA_CROSSOVER_ARTIFACT_PATHS,
+            wiring_artifact_paths=SMA_CROSSOVER_WIRING_PATHS,
         ),
         description=(
             "Classic golden-cross / death-cross. Enters long when the short "
@@ -907,32 +870,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             },
             validated_settings={"window": 14, "oversold": 30.0, "overbought": 70.0, "resolution_minutes": 15},
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            # Same triage rule as ema_crossover_signal's and sma_crossover's
-            # artifact_paths (issue #1728 defect 2): the transitive
-            # first-party import closure of the root below, MINUS the files
-            # in _RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
-            # (scripts/run_signal_program_build_qualification.py) that are
-            # provably unreachable from evaluate_signal_bar()'s decision
-            # math. test_rsi_signal_decision_digest_closure.py recomputes the
-            # closure from these paths and fails the build if a newly
-            # introduced import isn't triaged into one bucket or the other.
-            artifact_paths=(
-                "app/engine/strategy/algorithms/rsi_mean_reversion.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/indicators/base.py",
-                "app/engine/indicators/rsi.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/rsi_mean_reversion.py",
-                "app/engine/strategy/params.py",
-            ),
+            artifact_paths=RSI_MEAN_REVERSION_ARTIFACT_PATHS,
+            wiring_artifact_paths=RSI_MEAN_REVERSION_WIRING_PATHS,
         ),
         description=(
             "Long-only RSI threshold strategy. Buys oversold (RSI < oversold), "
@@ -1132,21 +1071,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # is no additional tunable this contract pins as validated.
             validated_settings={},
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            artifact_paths=(
-                "app/engine/strategy/algorithms/deployment_validation.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/deployment_validation.py",
-                "app/engine/strategy/params.py",
-            ),
+            artifact_paths=DEPLOYMENT_VALIDATION_ARTIFACT_PATHS,
+            wiring_artifact_paths=DEPLOYMENT_VALIDATION_WIRING_PATHS,
         ),
         description=(
             "Minute-bar lifecycle validation strategy. Starting with the "
@@ -1347,38 +1273,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "resolution_minutes": 15,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            # Same triage rule as sma_crossover's artifact_paths (issue #1728
-            # defect 2): the transitive first-party import closure of the two
-            # roots below, MINUS the files in
-            # _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
-            # (scripts/run_signal_program_build_qualification.py) that are
-            # provably unreachable from evaluate_signal_bar()'s decision
-            # math. test_spy_strategy_a_signal_decision_digest_closure.py
-            # recomputes the closure from these paths and fails the build if
-            # a newly introduced import isn't triaged into one bucket or the
-            # other.
-            artifact_paths=(
-                "app/engine/strategy/algorithms/spy_strategy_a.py",
-                "app/engine/strategy/algorithms/_rsi_range_base.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/indicators/base.py",
-                "app/engine/indicators/ema.py",
-                "app/engine/indicators/sma.py",
-                "app/engine/indicators/macd.py",
-                "app/engine/indicators/rsi.py",
-                "app/engine/indicators/adx.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/spy_strategy_a.py",
-                "app/engine/strategy/params.py",
-            ),
+            artifact_paths=SPY_STRATEGY_A_ARTIFACT_PATHS,
+            wiring_artifact_paths=SPY_STRATEGY_A_WIRING_PATHS,
         ),
         description=(
             "Long-only 15-minute trend-follower. On each bar while flat, enters "
@@ -1588,43 +1484,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "resolution_minutes": 15,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            # Same triage rule as ema_crossover_signal's / sma_crossover's own
-            # artifact_paths (issue #1728 defect 2): the transitive
-            # first-party import closure of the two roots below, MINUS the
-            # files in _SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
-            # (scripts/run_signal_program_build_qualification.py) that are
-            # provably unreachable from evaluate_signal_bar()'s decision
-            # math. test_spy_strategy_b_signal_decision_digest_closure.py
-            # recomputes the closure from these paths and fails the build if
-            # a newly introduced import isn't triaged into one bucket or the
-            # other. indicators/ema.py and indicators/sma.py are both real,
-            # non-obvious members of this closure: macd.py's fast/slow lines
-            # are ExponentialMovingAverage instances, and ema.py itself seeds
-            # its warmup from SimpleMovingAverage -- both are load-bearing
-            # for the MACD entry gate, not padding.
-            artifact_paths=(
-                "app/engine/strategy/algorithms/spy_strategy_b.py",
-                "app/engine/strategy/algorithms/_rsi_range_base.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/indicators/base.py",
-                "app/engine/indicators/rsi.py",
-                "app/engine/indicators/adx.py",
-                "app/engine/indicators/supertrend.py",
-                "app/engine/indicators/macd.py",
-                "app/engine/indicators/ema.py",
-                "app/engine/indicators/sma.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/spy_strategy_b.py",
-                "app/engine/strategy/params.py",
-            ),
+            artifact_paths=SPY_STRATEGY_B_ARTIFACT_PATHS,
+            wiring_artifact_paths=SPY_STRATEGY_B_WIRING_PATHS,
         ),
         description=(
             "Long-only 15-minute momentum strategy. Same RSI-range filter as "
@@ -1833,38 +1694,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "resolution_minutes": 15,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
-            # Same triage rule as ema_crossover_signal's/sma_crossover's
-            # artifact_paths (issue #1728 defect 2): the transitive
-            # first-party import closure of the root below, MINUS the files
-            # in _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
-            # (scripts/run_signal_program_build_qualification.py) that are
-            # provably unreachable from evaluate_signal_bar()'s decision
-            # math. test_spy_strategy_c_signal_decision_digest_closure.py
-            # recomputes the closure from these paths and fails the build
-            # if a newly introduced import isn't triaged into one bucket or
-            # the other. RsiRangeStrategy (the shared base) is a root
-            # alongside the leaf module because evaluate_signal_bar/
-            # commit_signal_decision/discard_signal_decision all live on
-            # the base, not on SpyStrategyCAlgorithm itself.
-            artifact_paths=(
-                "app/engine/strategy/algorithms/spy_strategy_c.py",
-                "app/engine/strategy/algorithms/_rsi_range_base.py",
-                "app/engine/strategy/base.py",
-                "app/engine/strategy/signal_intent.py",
-                "app/engine/strategy/signal_program.py",
-                "app/engine/indicators/base.py",
-                "app/engine/indicators/adx.py",
-                "app/engine/indicators/rsi.py",
-                "app/engine/consolidators/trade_bar_consolidator.py",
-                "app/engine/data/trade_bar.py",
-                "app/engine/live/indicator_state.py",
-                "app/lean_sidecar/trading_calendar.py",
-                "app/utils/timestamps.py",
-            ),
-            wiring_artifact_paths=(
-                "app/engine/strategy/programs/spy_strategy_c.py",
-                "app/engine/strategy/params.py",
-            ),
+            artifact_paths=SPY_STRATEGY_C_ARTIFACT_PATHS,
+            wiring_artifact_paths=SPY_STRATEGY_C_WIRING_PATHS,
         ),
         description=(
             "Long-only 15-minute strategy with the simplest gate: on each "

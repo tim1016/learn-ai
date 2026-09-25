@@ -382,6 +382,9 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
         "POSITION_DRIFT",
         "UNFOLDABLE_BROKER_ORDER",
         "LIVE_ENVELOPE_LOSS_HOLD",
+        # #2460: doubts the cost of fills whose quantity both sides agree on,
+        # so it cannot move a residue.
+        "EXECUTION_PRICE_CONFLICT",
     }
     assert residue_discharge_role("NOT_A_REGISTERED_CODE") == "refuses"
 

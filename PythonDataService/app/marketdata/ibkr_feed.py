@@ -50,13 +50,17 @@ from app.broker.ibkr.bars import (
     stream_minute_bars,
 )
 from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError
-from app.broker.ibkr.minute_assembler import RTH_CONTRIBUTIONS_PER_MINUTE
+from app.broker.ibkr.minute_assembler import (
+    RTH_CONTRIBUTIONS_PER_MINUTE,
+    IBKRImpossibleBarError,
+)
 from app.lean_sidecar.trading_calendar import (
     expected_sessions,
     session_close_ms_utc,
     session_open_ms_utc,
 )
 from app.marketdata.feed import (
+    IMPOSSIBLE_SOURCE_BAR,
     WARMUP_HISTORY_UNAVAILABLE,
     BarProvenanceTag,
     ContinuityPolicy,
@@ -343,6 +347,8 @@ class IbkrMarketDataFeed:
                             "reason": str(exc),
                         },
                     )
+        except IBKRImpossibleBarError as exc:
+            raise MarketDataFeedError(str(exc), reason=IMPOSSIBLE_SOURCE_BAR) from exc
         except (IBKRBarStreamError, NotConnectedError) as exc:
             raise MarketDataFeedError(str(exc)) from exc
 
@@ -428,6 +434,8 @@ class IbkrMarketDataFeed:
                 await loop.await_recovery_after_race(exc)
             except IBKRBarRequestDeadlineExceeded as exc:
                 await loop.refuse_request_past_deadline(exc)
+            except IBKRImpossibleBarError as exc:
+                raise MarketDataFeedError(str(exc), reason=IMPOSSIBLE_SOURCE_BAR) from exc
             except IBKRBarStreamError as exc:
                 raise MarketDataFeedError(str(exc)) from exc
 
@@ -488,6 +496,25 @@ class IbkrMarketDataFeed:
                 duration=f"{lookback_days} D",
                 use_rth=use_rth,
             )
+        except IBKRImpossibleBarError as exc:
+            # A bar that cannot be real is corruption the retry cannot cure, so
+            # it refuses under its own reason rather than the retryable
+            # WARMUP_HISTORY_UNAVAILABLE a failed fetch carries (#2444).
+            logger.error(
+                "Historical warmup bars hold a bar that cannot be real; refusing to start",
+                extra={
+                    "action": "warmup_impossible_bar",
+                    "feed_id": self.feed_id,
+                    "symbol": normalized_symbol,
+                    "lookback_days": lookback_days,
+                    "error": str(exc),
+                },
+            )
+            raise MarketDataFeedError(
+                f"the {lookback_days}-day warmup history for {normalized_symbol} holds "
+                f"a bar that cannot be real: {exc}",
+                reason=IMPOSSIBLE_SOURCE_BAR,
+            ) from exc
         except (IBKRBarStreamError, BrokerError, ValueError) as exc:
             # BrokerError covers NotConnectedError and a contract that cannot
             # be qualified; the same set the go-live IBKR bar check refuses on.

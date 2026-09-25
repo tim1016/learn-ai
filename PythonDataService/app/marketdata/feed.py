@@ -75,6 +75,14 @@ RESUME_HOLE_UNFILLED = "RESUME_HOLE_UNFILLED"
 before regular-hours minutes the IBKR 1-minute history did not return (#2314).
 Warming across the hole would decide on indicators that skipped it."""
 
+IMPOSSIBLE_SOURCE_BAR = "IMPOSSIBLE_SOURCE_BAR"
+"""``MarketDataFeedError.reason`` for a run refused on a bar whose values cannot
+be real: a non-finite or non-positive price, an internally inconsistent bar
+(high below low, or an open or close outside the low–high range) or a negative
+volume (#2444). Refused on the live subscription and on the warmup history
+fetch alike, through the feed's fatal-invariant path — never dropped or
+repaired. Not retryable: the data itself is corrupt, not the fetch."""
+
 class WarmupMinutesMissing(MarketDataFeedError):
     """A warmup refusal that can name the minutes history did not return (#2410).
 
@@ -106,6 +114,21 @@ WarmupRefusalReason = Literal[
 """Every reason a run is refused during warmup, before it decided anything."""
 
 WARMUP_REFUSAL_REASONS: frozenset[str] = frozenset(get_args(WarmupRefusalReason))
+
+FEED_REFUSAL_REASON_CODES: frozenset[str] = frozenset(
+    {*WARMUP_REFUSAL_REASONS, IMPOSSIBLE_SOURCE_BAR}
+)
+"""Every ``MarketDataFeedError.reason`` a run is recorded under as its own
+duty-outcome reason, rather than ``FEED_DEATH`` — the refusals where no
+decision was ever made on the refused data (#2365, #2314, #2444).
+
+A warmup refusal never started deciding; an impossible bar was refused rather
+than decided on. Every other feed failure keeps the long-standing FEED_DEATH
+outcome code. Note the two kinds differ in phase: a warmup code can only be
+raised before the run decides, while ``IMPOSSIBLE_SOURCE_BAR`` can also end a
+run mid-flight, so a surface that means "never decided" (the deploy page's
+startup exposure notices) must key on the startup phase, not on this set
+alone."""
 
 
 BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]

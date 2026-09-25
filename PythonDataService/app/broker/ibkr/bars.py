@@ -47,8 +47,8 @@ from app.broker.ibkr.minute_assembler import (
     IBKRBarStreamError,
     MinuteAssembler,
     _bar_time_ms,
-    _contribution,
     _session_phase_for_ms,
+    _validated_contribution,
 )
 from app.utils.timestamps import now_ms_utc, ny_datetime
 
@@ -838,7 +838,7 @@ async def fetch_historical_minute_bars(
                 f"Non-monotonic IBKR historical minute bar timestamp: {start_ms} after {last_start_ms}."
             )
         last_start_ms = start_ms
-        contribution = _contribution(raw_bar)
+        contribution = _validated_contribution(raw_bar, symbol=sym, source_ms=start_ms)
         out.append(
             IbkrMinuteBar(
                 symbol=sym,
@@ -1086,7 +1086,7 @@ async def stream_raw_5s_bars(
             if leased is None:
                 continue
             source_ms = _bar_time_ms(leased.raw)
-            contribution = _contribution(leased.raw)
+            contribution = _validated_contribution(leased.raw, symbol=sym, source_ms=source_ms)
             yield IbkrMinuteBar(
                 symbol=sym,
                 start_ms=source_ms,
@@ -1174,8 +1174,10 @@ async def stream_minute_bars(
                     yield emitted
     finally:
         logger.debug(
-            "Minute-bar consumer for %s detached (skipped_duplicate=%d, applied_correction=%d)",
+            "Minute-bar consumer for %s detached "
+            "(skipped_duplicate=%d, applied_correction=%d, refused_impossible_bar=%d)",
             symbol,
             assembler.counters.skipped_duplicate,
             assembler.counters.applied_correction,
+            assembler.counters.refused_impossible_bar,
         )

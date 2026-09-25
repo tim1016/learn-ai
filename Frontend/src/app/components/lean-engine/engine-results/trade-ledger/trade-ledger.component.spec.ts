@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from '@angular/core';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type { EngineTrade } from '../engine-results.component';
+import type { EngineTrade } from '../engine-results.types';
 import { TradeLedgerComponent } from './trade-ledger.component';
 
 function trade(tradeNumber: number): EngineTrade {

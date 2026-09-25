@@ -31,6 +31,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    ExecutionPriceConflictCause,
+)
 
 _COMMAND_COLUMNS: tuple[str, ...] = (
     "command_id",
@@ -503,6 +507,21 @@ def effect_operation(conn: sqlite3.Connection, effect_operation_id: str) -> Effe
         (effect_operation_id,),
     ).fetchone()
     return EffectOperationResource(**dict(row)) if row is not None else None
+
+
+def effect_operation_subject(conn: sqlite3.Connection, effect_operation_id: str) -> str | None:
+    """The durable custody subject that owns one effect operation.
+
+    The subject-keyed lookup the #2460 price-conflict helpers use: an
+    effect's ``strategy_instance_id`` is deliberately ``None`` for manual
+    custody, so the subject is the one identity both bot and manual work
+    always carry.
+    """
+    row = conn.execute(
+        "SELECT subject_id FROM effect_operations WHERE effect_operation_id = ?",
+        (effect_operation_id,),
+    ).fetchone()
+    return row["subject_id"] if row is not None else None
 
 
 def order(conn: sqlite3.Connection, order_ref: str) -> OrderResource | None:
@@ -1318,6 +1337,60 @@ def active_uncertainty(
         (scope, reason_code, strategy_instance_id),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def active_uncertainty_for_subject(
+    conn: sqlite3.Connection, *, scope: str, reason_code: str, subject_id: str
+) -> dict | None:
+    """The active uncertainty for one ``(scope, reason_code, subject_id)``.
+
+    The subject-keyed counterpart of :func:`active_uncertainty` for causes
+    whose owning effect may carry no strategy instance (manual custody,
+    #2460 review): the episode's durable key is the custody subject, and the
+    ``strategy_instance_id`` column is only a bot compatibility projection.
+    """
+    row = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE scope = ? AND reason_code = ? AND subject_id IS ? "
+        "AND resolved_at_ms IS NULL ORDER BY observed_at_ms DESC LIMIT 1",
+        (scope, reason_code, subject_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def active_execution_price_conflicts(
+    conn: sqlite3.Connection,
+) -> tuple[tuple[str, str, ExecutionPriceConflictCause], ...]:
+    """Every active ``EXECUTION_PRICE_CONFLICT`` episode as ``(uncertainty_id,
+    subject_id, cause)`` (#2460).
+
+    The sweep re-derivation's worklist: it walks recorded evidence only, so
+    an episode whose order stopped being re-read (a terminal order's totals
+    are never re-folded) still gets its correction-explained exit. Keyed by
+    the custody subject -- the episode's durable owner, which manual custody
+    shares with bots (#2460 review) -- and the sweep's compare-and-clear
+    binds the returned ``uncertainty_id`` and ``cause`` as the expected
+    episode identity. Rows whose cause cannot be decoded are skipped -- an
+    unreadable cause is not a reason to wedge every other episode's
+    re-derivation.
+    """
+    rows = conn.execute(
+        "SELECT uncertainty_id, subject_id, facts_json FROM uncertainties "
+        "WHERE reason_code = ? AND resolved_at_ms IS NULL "
+        "ORDER BY observed_at_ms ASC, uncertainty_id ASC",
+        (EXECUTION_PRICE_CONFLICT_REASON_CODE,),
+    ).fetchall()
+    episodes: list[tuple[str, str, ExecutionPriceConflictCause]] = []
+    for row in rows:
+        try:
+            raised = json.loads(row["facts_json"])
+            cause = ExecutionPriceConflictCause.from_mapping(raised.get("cause_facts"))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if row["subject_id"] is None:
+            continue
+        episodes.append((row["uncertainty_id"], row["subject_id"], cause))
+    return tuple(episodes)
 
 
 def uncertainty_history(

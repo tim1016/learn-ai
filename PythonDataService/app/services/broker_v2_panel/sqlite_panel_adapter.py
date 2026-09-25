@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
-from app.marketdata.feed import WARMUP_REFUSAL_REASONS
+from app.marketdata.feed import FEED_REFUSAL_REASON_CODES
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -60,6 +60,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
 from app.services.session_authority import SessionAuthorityState
+from app.services.source_bar_ledger import RetainedStartupJoin
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -89,6 +90,7 @@ def adapt_sqlite_panel(
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
+    startup_join: RetainedStartupJoin | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -107,6 +109,11 @@ def adapt_sqlite_panel(
     (``SqliteAlpacaClerkFacade.flatten_send_verdict``). Outside the regular
     session the generic Execute safe flatten button is not the way to flatten
     (#2007): see ``_flatten_session_blocker``.
+
+    ``startup_join`` is the run's retained startup-join record, when the read
+    produced one.  The projected panel view drops the join for a stopped run,
+    so the startup-refusal exposure notices key their phase on this record
+    instead (#2444).
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -134,7 +141,7 @@ def adapt_sqlite_panel(
     )
     return panel.model_copy(
         update={
-            "health": _with_startup_refusal_notices(panel, projection),
+            "health": _with_startup_refusal_notices(panel, projection, startup_join),
             "updated_at_ms": projection.generated_at_ms,
             "revision": projection.control_revision,
             "mission_verdict": _mission_verdict(panel, projection),
@@ -701,7 +708,33 @@ def _may_still_fill(order: ProjectedOrder) -> bool:
     return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
 
 
-def _with_startup_refusal_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:
+def _startup_join_reached_ready(
+    panel: BotPanelView, startup_join: RetainedStartupJoin | None
+) -> bool:
+    """Whether this run's startup join completed before it stopped (#2444).
+
+    The feed-refusal codes span two phases: a warmup code can only be raised
+    before the run decides, but ``IMPOSSIBLE_SOURCE_BAR`` can also end a run
+    that had been deciding for hours. The notices below speak of a run that
+    never managed anything, so they key on the startup phase, not on the
+    reason code alone. The projected view drops the join once the run stops
+    (its preparation is history), so the phase is derived from the retained
+    join record, whose ``ready_at_ms`` outlives the run; without one, the
+    projected view still answers for a live run, and a missing view proves
+    nothing either way -- the conservative answer (not ready) keeps the
+    notices on.
+    """
+    if startup_join is not None:
+        return startup_join.ready_at_ms is not None
+    join = panel.startup_join
+    return join is not None and join.state == "ready"
+
+
+def _with_startup_refusal_notices(
+    panel: BotPanelView,
+    projection: ClerkProjection,
+    startup_join: RetainedStartupJoin | None,
+) -> BotHealthCard:
     """Say what a startup refusal left at the broker, from this SQLite cut (#2410).
 
     A run refused while it prepared never managed anything. The owner's rule:
@@ -714,7 +747,12 @@ def _with_startup_refusal_notices(panel: BotPanelView, projection: ClerkProjecti
     """
     health = panel.health
     outcome = health.duty_outcome
-    if health.running or outcome is None or outcome.reason_code not in WARMUP_REFUSAL_REASONS:
+    if (
+        health.running
+        or outcome is None
+        or outcome.reason_code not in FEED_REFUSAL_REASON_CODES
+        or _startup_join_reached_ready(panel, startup_join)
+    ):
         return health
     sid = panel.strategy_instance_id
     notices: list[ExposureNoticeView] = []

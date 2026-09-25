@@ -18,6 +18,10 @@ ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
 EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
 EXIT_STUCK_REASON_CODE = "EXIT_STUCK"
 EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
+# A broker order total that repeats the recorded fill quantity but restates
+# its average price (#2460): durable economic evidence, never a rewrite of
+# the recorded fills, and never a fence on reductions.
+EXECUTION_PRICE_CONFLICT_REASON_CODE = "EXECUTION_PRICE_CONFLICT"
 # A fill recorded on an ENTER the Clerk had already folded terminal (#2348):
 # contradicting evidence, never absorbed silently.
 FAILED_ENTER_FILLED_REASON_CODE = "FAILED_ENTER_FILLED"
@@ -55,6 +59,23 @@ HOLD_REASON_CODES: frozenset[str] = frozenset(
 # SQL and the frozenset can never name different code sets.
 HOLD_REASON_CODE_SQL_PLACEHOLDERS = ", ".join("?" * len(HOLD_REASON_CODES))
 HOLD_REASON_CODE_SQL_PARAMS: tuple[str, ...] = tuple(sorted(HOLD_REASON_CODES))
+
+# The reason codes whose open episodes make execution coverage read
+# ``incomplete``: the Clerk cannot present its recorded executions as
+# complete economic evidence while one stands. Both orders are conflict
+# codes, not holds — an episode never appears in both sets.
+EXECUTION_COVERAGE_INCOMPLETE_REASON_CODES: frozenset[str] = frozenset(
+    {
+        EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+        EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    }
+)
+EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS = ", ".join(
+    "?" * len(EXECUTION_COVERAGE_INCOMPLETE_REASON_CODES)
+)
+EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS: tuple[str, ...] = tuple(
+    sorted(EXECUTION_COVERAGE_INCOMPLETE_REASON_CODES)
+)
 
 # The stored spelling each hold cause had before v12, and the wire spelling it
 # normalises to. ``STREAM_HEALTH_HOLD`` was already stored under its wire name
@@ -326,6 +347,114 @@ class ExecutionCoverageConflictCause:
         ):
             raise ValueError("execution coverage conflict fields must be non-empty strings")
         return cls(order_ref=value["order_ref"], execution_id=value["execution_id"])
+
+
+@dataclass(frozen=True)
+class ExecutionPriceConflictOrder:
+    """One order whose broker total restated the price of its recorded fills (#2460).
+
+    Both averages are per-share currency values at the moment the conflict was
+    recorded: ``reported_avg_price`` is the broker's cumulative total,
+    ``recorded_avg_price`` the Clerk's effective fills for the same quantity.
+    ``source_event_at_ms`` is the total's own source time, so the episode keeps
+    the broker's evidence — the fills themselves are never rewritten.
+    """
+
+    order_ref: str
+    reported_avg_price: float
+    recorded_avg_price: float
+    source_event_at_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "order_ref": self.order_ref,
+            "reported_avg_price": self.reported_avg_price,
+            "recorded_avg_price": self.recorded_avg_price,
+            "source_event_at_ms": self.source_event_at_ms,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ExecutionPriceConflictOrder:
+        if not isinstance(value, dict):
+            raise ValueError("execution price conflict order must be an object")
+        _require_exact_keys(
+            value,
+            {"order_ref", "reported_avg_price", "recorded_avg_price", "source_event_at_ms"},
+        )
+        order_ref = value["order_ref"]
+        source_event_at_ms = value["source_event_at_ms"]
+        if not isinstance(order_ref, str) or not order_ref:
+            raise ValueError("execution price conflict order_ref must be a non-empty string")
+        if isinstance(source_event_at_ms, bool) or not isinstance(source_event_at_ms, int):
+            raise ValueError("execution price conflict source_event_at_ms must be an int")
+        return cls(
+            order_ref=order_ref,
+            reported_avg_price=_finite_number(
+                value["reported_avg_price"], field_name="reported_avg_price"
+            ),
+            recorded_avg_price=_finite_number(
+                value["recorded_avg_price"], field_name="recorded_avg_price"
+            ),
+            source_event_at_ms=source_event_at_ms,
+        )
+
+
+@dataclass(frozen=True)
+class ExecutionPriceConflictCause:
+    """Every order whose broker total still disagrees on price with its fills (#2460).
+
+    Orders accumulate while the episode is open, so a second conflicted order
+    on the same instance widens the episode, and an order whose total agrees
+    again is removed — the episode ends when the last order does.
+    """
+
+    orders: tuple[ExecutionPriceConflictOrder, ...]
+
+    def with_order(self, order: ExecutionPriceConflictOrder) -> ExecutionPriceConflictCause:
+        """Name ``order``, replacing any earlier record of the same order_ref."""
+        if order in self.orders:
+            return self
+        others = (existing for existing in self.orders if existing.order_ref != order.order_ref)
+        return ExecutionPriceConflictCause(
+            orders=tuple(sorted((*others, order), key=lambda item: item.order_ref))
+        )
+
+    def without_order(self, order_ref: str) -> ExecutionPriceConflictCause:
+        """The cause with ``order_ref`` removed; empty when it was the last one."""
+        return ExecutionPriceConflictCause(
+            orders=tuple(existing for existing in self.orders if existing.order_ref != order_ref)
+        )
+
+    def names(self, order_ref: str) -> bool:
+        return any(existing.order_ref == order_ref for existing in self.orders)
+
+    def entry_for(self, order_ref: str) -> ExecutionPriceConflictOrder | None:
+        """The stored evidence for ``order_ref``, or ``None`` when unnamed.
+
+        The raise/refresh/clear staleness rule compares an incoming total's
+        source time against the episode's stored ``source_event_at_ms`` for
+        the same order (#2460 review).
+        """
+        return next(
+            (existing for existing in self.orders if existing.order_ref == order_ref), None
+        )
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"orders": [order.to_mapping() for order in self.orders]}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ExecutionPriceConflictCause:
+        if not isinstance(value, dict):
+            raise ValueError("execution price conflict cause must be an object")
+        _require_exact_keys(value, {"orders"})
+        raw_orders = value["orders"]
+        if not isinstance(raw_orders, list) or not raw_orders:
+            raise ValueError("execution price conflict cause must name at least one order")
+        orders = tuple(ExecutionPriceConflictOrder.from_mapping(item) for item in raw_orders)
+        refs = [order.order_ref for order in orders]
+        if refs != sorted(set(refs)):
+            raise ValueError("execution price conflict orders must have unique sorted order_refs")
+        return cls(orders=orders)
 
 
 @dataclass(frozen=True)

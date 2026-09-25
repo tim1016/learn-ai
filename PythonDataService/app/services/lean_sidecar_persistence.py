@@ -1021,6 +1021,12 @@ def _run_verdict_fields(
     verdict = compute_run_verdict(
         {
             "statistics": dict(statistics),
+            # #2447: the LEAN companion's headline statistics are the
+            # compatibility ledger statistics (LEAN's native chart is too
+            # sparse to be a comparable marked curve); the parity comparison
+            # reads this and compares the engines on the common ledger axes
+            # instead of freezing a cross-basis readiness mismatch.
+            "statistics_basis": "closed_trade_ledger",
             "win_rate": win_rate,
             "total_trades": total_trades,
             "net_profit": total_pnl,

@@ -4,7 +4,7 @@ import { Drawer } from "primeng/drawer";
 import type {
   EngineResultData,
   LeanAnalysisFinding,
-} from "../../lean-engine/engine-results/engine-results.component";
+} from "../../lean-engine/engine-results/engine-results.types";
 import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-statistics.component";
 import { TradeLedgerComponent } from "../../lean-engine/engine-results/trade-ledger/trade-ledger.component";
 import { ValidationAtlasComponent } from "../../lean-engine/engine-results/validation-atlas/validation-atlas.component";
@@ -67,8 +67,17 @@ export class StrategyLabDeepDivesComponent {
     if (this.leanStatistics()) {
       sections.push({
         id: "statistics",
-        label: "Native LEAN statistics",
-        summary: { kind: "copy", value: "Complete engine-authored statistics catalog" },
+        // These are LEAN's own totalPerformance statistics, projected
+        // field-for-field — not the closed-trade ledger a parity verdict
+        // grades, and not a shared basis when no pair is selected. The label
+        // stays neutral; the summary states the basis relations in context.
+        label: "LEAN native statistics",
+        summary: {
+          kind: "copy",
+          value: parity
+            ? "LEAN's own statistics; the parity verdict grades the shared closed-trade ledger, and headline risk grades the marked equity curve"
+            : "LEAN's own statistics for this run; headline risk grades the marked equity curve",
+        },
       });
     }
     const analysis = this.leanAnalysis();

@@ -8,7 +8,10 @@
     <p>LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong></p>
   }
   @if (view.readinessParity; as readiness) {
-    <p>Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong></p>
+    <p>
+      Readiness fields:
+      <strong>{{ readiness.status | receiptLabel }}</strong>@if (readiness.reason) { — {{ readiness.reason | receiptLabel }} }
+    </p>
   }
   @if (view.countsByCategory.length) {
     <dl class="compatibility__counts">

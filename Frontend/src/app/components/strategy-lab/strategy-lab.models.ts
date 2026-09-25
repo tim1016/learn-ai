@@ -108,6 +108,7 @@ export interface StrategyLabParityView {
   } | null;
   readinessParity?: {
     status: string;
+    reason?: string | null;
     compared_field_count?: number;
     mismatched_fields?: string[];
   } | null;

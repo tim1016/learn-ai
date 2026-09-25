@@ -25,7 +25,13 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.desired_state import DesiredState
-from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import (
+    FEED_REFUSAL_REASON_CODES,
+    ContinuityPolicy,
+    FeedHealth,
+    MarketDataBar,
+    MarketDataFeedError,
+)
 from app.schemas.broker_bots import BotProcessFact
 from app.services import bot_runner as bot_runner_module
 from app.services.bot_runner import (
@@ -690,6 +696,36 @@ async def test_refused_warmup_records_its_own_reason_and_stops_the_run(
         [_bar(_T0)],
         mode="crash",
         error=MarketDataFeedError("refused during warmup", reason=reason),
+    )
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.running is False
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.kind == "CRASHED"
+    assert view.duty_outcome.reason_code == reason
+    assert view.desired_state == "STOPPED"
+    assert _desired_json(tmp_path)["desired_state"] == "STOPPED"
+    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", sorted(FEED_REFUSAL_REASON_CODES))
+async def test_refused_before_deciding_records_its_own_reason_and_stops_the_run(
+    tmp_path: Path, reason: str
+) -> None:
+    """#2365, #2314, #2444: through the real ``_supervise`` -> ``finalize_crash``
+    path, a run refused on data it never decided on is recorded under its typed
+    reason, reaped, and left STOPPED -- never resumed on its own and never
+    shown as FEED_DEATH. Parametrized over the production set so a new refusal
+    code cannot land without this coverage following it."""
+    feed = _FakeFeed(
+        [_bar(_T0)],
+        mode="crash",
+        error=MarketDataFeedError("refused on data it never decided on", reason=reason),
     )
     registry = _registry(tmp_path, feed)
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")

@@ -41,6 +41,13 @@ sys.path[:] = [p for p in sys.path if not p.endswith('/tests')]
 import asyncio
 import json
 
+# #2450: anchor the Signal Program sources before any import that pulls a
+# declared source (fleet_boot transitively imports
+# app.lean_sidecar.trading_calendar) -- the same order uvicorn's
+# ``app.main:app`` boot guarantees in production, where the anchor runs at
+# the top of app.main before the rest of the import block.
+import app.services.program_source_bootstrap  # noqa: F401
+
 import app.broker.alpaca.clerk.fleet_boot as fleet_boot_module
 
 _calls = {"start": 0, "stop": 0}

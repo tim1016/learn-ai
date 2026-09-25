@@ -17,6 +17,16 @@ os.environ.setdefault("POLYGON_API_KEY", "test-key-for-testing")
 os.environ["DATA_PLANE_CONTROL_SECRET"] = ""
 os.environ["DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"] = "true"
 
+# #2450: prime the Signal Program source anchor before test collection
+# imports the registry's program modules, mirroring the bootstrap at the top
+# of ``app.main``. Without this, the anchor's refuse-on-cached-modules guard
+# would fire for every mid-session anchor call, because collection has
+# already imported the declared sources by then.
+from app.services.program_source_anchor import record_imported_program_sources
+
+record_imported_program_sources()
+
+
 @pytest.fixture(autouse=True)
 def _clerk_market_liveness_defaults_tradable(monkeypatch: pytest.MonkeyPatch):
     """The Alpaca Clerk's submission-boundary liveness recheck (#1671,

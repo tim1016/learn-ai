@@ -26,6 +26,7 @@ issue #1377 onward, the effect/order) — never a separate write.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import sqlite3
@@ -94,7 +95,10 @@ from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
 from app.broker.alpaca.clerk.sqlite.repository_read_api import ClerkSqliteRepositoryReadApi
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
+    ExecutionPriceConflictCause,
+    ExecutionPriceConflictOrder,
 )
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -1473,6 +1477,152 @@ class ClerkSqliteRepository(
                 return False
             self.append_transition(build_transition(active["uncertainty_id"]))
             return True
+
+    def widen_execution_price_conflict(
+        self,
+        *,
+        effect_operation_id: str,
+        order: ExecutionPriceConflictOrder,
+        build_raise: Callable[[ExecutionPriceConflictCause], TransitionInput],
+        build_refresh: Callable[[ExecutionPriceConflictCause], TransitionInput],
+    ) -> str:
+        """Atomically raise or widen one ``EXECUTION_PRICE_CONFLICT`` episode (#2460).
+
+        The cause-accumulating merge (read active cause, add the order,
+        append) runs under one repository write lock, so callers need no
+        intake lock of their own: ``fold_order_evidence`` is reached from
+        intake-held paths (the trade-updates sink, the reconciliation
+        snapshot fold) and from broker-IO-interleaved resolution paths
+        (enter submit resolution, EXIT cancel-and-prove, manual
+        cancellation), which cannot hold the intake lock by construction.
+
+        The episode is keyed by the observing effect's durable custody
+        subject, never by ``strategy_instance_id`` alone: manual-order
+        effects carry no strategy instance, and a strategy-null raise would
+        land account-wide where neither a repeated observation nor an
+        agreeing one could ever find it again (#2460 review). The
+        staleness rule lives under the same lock — an incoming total older
+        than the stored evidence for the same order changes nothing, so a
+        delayed broker frame can neither restate an older conflicting price
+        nor clear a newer conflict.
+        Returns ``"raised"`` / ``"refreshed"`` / ``"unchanged"`` / ``"stale"``.
+        """
+        with self._write_lock:
+            subject_id = self._price_conflict_subject(effect_operation_id)
+            active = self._active_price_conflict_cause(subject_id)
+            if active is not None:
+                stored = active[1].entry_for(order.order_ref)
+                if stored is not None and order.source_event_at_ms < stored.source_event_at_ms:
+                    return "stale"
+            cause = (
+                ExecutionPriceConflictCause(orders=(order,))
+                if active is None
+                else active[1].with_order(order)
+            )
+            if active is None:
+                self.append_transition(build_raise(cause))
+                return "raised"
+            if cause == active[1]:
+                return "unchanged"
+            # A widen is a refresh, not a second raise: the one-active-cause
+            # index would refuse the insert, and the episode must stay one.
+            self.append_transition(
+                replace(build_refresh(cause), proof_reference=active[0])
+            )
+            return "refreshed"
+
+    def clear_execution_price_conflict_order(
+        self,
+        *,
+        effect_operation_id: str,
+        order_ref: str,
+        source_event_at_ms: int | None = None,
+        expected_episode: tuple[str, ExecutionPriceConflictCause] | None = None,
+        build_transition: Callable[[ExecutionPriceConflictCause], TransitionInput],
+        build_resolved: Callable[[str], TransitionInput],
+    ) -> str:
+        """Atomically drop ``order_ref`` from the open price conflict (#2460).
+
+        Same one-lock contract and subject keying as
+        :meth:`widen_execution_price_conflict`. Two guards run inside the
+        lock (#2460 review): ``source_event_at_ms`` (the incoming total's own
+        source time, when the clear answers one) must be at least as new as
+        the episode's stored evidence for the order; and ``expected_episode``
+        (the ``(uncertainty_id, cause)`` the caller read, when the clear
+        answers the sweep's re-derivation) must still match the active row,
+        so a concurrently refreshed episode is refused rather than resolved
+        by subject/order alone — compare-and-clear.
+        Returns ``"absent"`` (no open episode names the order),
+        ``"narrowed"`` (other conflicted orders remain), ``"resolved"``
+        (that was the last one), or ``"stale"`` (a guard refused the clear).
+        """
+        with self._write_lock:
+            subject_id = self._price_conflict_subject(effect_operation_id)
+            active = self._active_price_conflict_cause(subject_id)
+            if active is None or not active[1].names(order_ref):
+                return "absent"
+            if (
+                expected_episode is not None
+                and (active[0], active[1]) != expected_episode
+            ):
+                return "stale"
+            stored = active[1].entry_for(order_ref)
+            if (
+                source_event_at_ms is not None
+                and stored is not None
+                and source_event_at_ms < stored.source_event_at_ms
+            ):
+                return "stale"
+            remaining = active[1].without_order(order_ref)
+            if remaining.orders:
+                self.append_transition(
+                    replace(build_transition(remaining), proof_reference=active[0])
+                )
+                return "narrowed"
+            self.append_transition(build_resolved(active[0]))
+            return "resolved"
+
+    def _price_conflict_subject(self, effect_operation_id: str) -> str:
+        """The custody subject that owns one price-conflict observation.
+
+        The effect row is the durable owner both bot and manual custody
+        share; an effect the ledger does not know cannot observe an order
+        total, so the lookup fails closed like the fold registry's own
+        effect-bound custody resolution.
+        """
+        subject_id = reads.effect_operation_subject(self._conn, effect_operation_id)
+        if subject_id is None:
+            raise ValueError(
+                "price-conflict evidence requires its durable owning effect "
+                f"({effect_operation_id!r})"
+            )
+        return subject_id
+
+    def _active_price_conflict_cause(
+        self, subject_id: str
+    ) -> tuple[str, ExecutionPriceConflictCause] | None:
+        """The open episode's ``(uncertainty_id, cause)``, or ``None``.
+
+        Raises nothing for an unreadable cause: the write lock is held, the
+        row is mid-episode, and a decoder refusal here would poison the
+        repository handle over facts the sweep's crash-safe re-derivation
+        (``order_evidence.reconcile_execution_price_conflicts``) cannot
+        repair. An unreadable cause is surfaced by that sweep skipping the
+        episode instead.
+        """
+        active = reads.active_uncertainty_for_subject(
+            self._conn,
+            scope="CUSTODY_SUBJECT",
+            reason_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
+            subject_id=subject_id,
+        )
+        if active is None:
+            return None
+        raised = json.loads(active["facts_json"])
+        return (
+            active["uncertainty_id"],
+            ExecutionPriceConflictCause.from_mapping(raised.get("cause_facts")),
+        )
 
     # ------------------------------------------------------------------
     # Disaster recovery

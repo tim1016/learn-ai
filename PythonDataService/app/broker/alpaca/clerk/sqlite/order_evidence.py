@@ -45,10 +45,16 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    clear_execution_price_conflict_order,
     failed_enter_fill_is_answered,
+    raise_execution_price_conflict_uncertainty,
     raise_failed_enter_filled_uncertainty,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+    ExecutionPriceConflictOrder,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
@@ -67,6 +73,16 @@ def submit_absence_grace_ms() -> int:
     return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
 
 
+#: Numerical-rigor tolerance for the #2460 economic price conflict, in
+#: currency units per share. Alpaca publishes price fields at cent precision,
+#: so a same-quantity average-price difference below one cent per share cannot
+#: be distinguished from vendor rounding and raises nothing; a difference at or
+#: above it is a real economic disagreement and is recorded as
+#: ``EXECUTION_PRICE_CONFLICT``. Same $0.01/share basis as the
+#: ``FILL_PRICE_DRIFT`` default in the reconciliation taxonomy
+#: (``.claude/rules/numerical-rigor.md``). See ``docs/references/clerk-invariants.md``.
+TOTAL_PRICE_CONFLICT_ATOL = 0.01
+
 UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
 """Terminal broker states that, with no recorded execution, are proven
 unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
@@ -80,12 +96,14 @@ falls through to ``EXIT_NOT_FLAT`` on it (R12) and ENTER folds
 
 
 __all__ = [
+    "TOTAL_PRICE_CONFLICT_ATOL",
     "UNFILLED_TERMINAL_STATES",
     "entry_never_accepted_durably",
     "entry_order_symbol",
     "fence_fills_on_terminal_enters",
     "fold_enter_unfilled_if_proven",
     "fold_entry_never_accepted",
+    "fold_execution_price_conflict",
     "fold_failed",
     "fold_order_acknowledgement",
     "fold_order_evidence",
@@ -94,6 +112,7 @@ __all__ = [
     "fold_submit_absence_void",
     "fold_uncertain",
     "order_never_reached_broker",
+    "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
     "trade_port_folds_simulated_evidence",
@@ -280,6 +299,191 @@ def fold_order_evidence(
     # episode quarantined; without this a slice Alpaca never re-sends would
     # block the order's reduction for ever (#2346).
     repo.resolve_order_total_covered_coverage_conflicts(order_ref=order_ref)
+    fold_execution_price_conflict(repo, effect=effect, order=order, order_ref=order_ref)
+
+
+def fold_execution_price_conflict(
+    repo: ClerkSqliteRepository,
+    *,
+    effect: EffectOperationResource,
+    order: BrokerOrder,
+    order_ref: str,
+) -> None:
+    """Record or clear the price conflict between a total and its fills (#2460).
+
+    A cumulative total whose quantity matches the recorded effective fills but
+    whose average price disagrees beyond vendor rounding is contradictory
+    economic evidence: before #2460 the same-quantity total took the
+    acknowledgement path, which keeps only the filled quantity, and the
+    disagreement was silently discarded. Now the broker's reported average,
+    the recorded average and the total's source time are kept as a durable
+    ``EXECUTION_PRICE_CONFLICT`` episode for the observing effect's custody
+    subject -- the recorded fills, positions and FIFO P&L inputs are never
+    rewritten, and reductions are never fenced.
+
+    Both aggregate routes reach this one fold: the REST/reconciliation
+    snapshot through :func:`fold_order_evidence`, and the ``trade_updates``
+    path after its exact execution slice and acknowledgement
+    (#2460 review) -- a websocket frame's embedded order is a total too, and
+    without it a snapshot-opened conflict would keep a stale reported average
+    for ever once the order terminalized out of the open-order snapshots.
+
+    Only a quantity-matching total can raise it: while quantities differ no
+    price verdict is possible (the fill-shortfall and position-drift
+    machinery owns that gap), and a partial fill's cumulative average is not
+    comparable with a subset of its fills. A total with no source time
+    changes nothing: the staleness rule orders observations by
+    ``order.updated_at_ms``, and an untimestamped total can neither be stored
+    as the episode's evidence nor compared against it. Re-folding the same
+    conflicting total is idempotent (``"unchanged"``, nothing appended); a
+    materially different conflicting price refreshes the one episode in
+    place; a total older than the stored evidence for the same order is
+    refused (``"stale"``) -- a delayed broker frame must neither restate an
+    older conflicting price nor clear a newer conflict. A total at least as
+    new that agrees again within tolerance drops the order from the episode
+    and ends it when the last order goes. An execution correction clears it
+    the same way once the corrected fills agree with the broker's reported
+    average -- that exit is the sweep's re-derivation,
+    :func:`reconcile_execution_price_conflicts`, because a terminal order's
+    totals are never re-folded.
+
+    No intake-lock contract: the raise and the clear are atomic under the
+    repository write lock, so this runs from intake-held folds and from the
+    broker-IO-interleaved resolution paths alike.
+    """
+    if order.filled_avg_price is None or order.filled_quantity < FILL_QTY_EPSILON:
+        return
+    if order.updated_at_ms is None:
+        return
+    recorded_qty, recorded_cost = repo.effective_fill_totals_for_order(order_ref)
+    if abs(order.filled_quantity - recorded_qty) >= FILL_QTY_EPSILON:
+        return
+    # A sub-epsilon recorded quantity cannot produce a meaningful average
+    # (and would divide by ~0); the quantity guard above already sent every
+    # ordinary case away, so this is only the microscopic-quantity corner.
+    if recorded_qty < FILL_QTY_EPSILON:
+        return
+    recorded_avg_price = recorded_cost / recorded_qty
+    if abs(order.filled_avg_price - recorded_avg_price) >= TOTAL_PRICE_CONFLICT_ATOL:
+        outcome = raise_execution_price_conflict_uncertainty(
+            repo,
+            effect=effect,
+            order=ExecutionPriceConflictOrder(
+                order_ref=order_ref,
+                reported_avg_price=order.filled_avg_price,
+                recorded_avg_price=recorded_avg_price,
+                source_event_at_ms=order.updated_at_ms,
+            ),
+        )
+        if outcome == "stale":
+            logger.info(
+                "An older broker total cannot change a newer price conflict",
+                extra={
+                    "action": "execution_price_conflict_stale_total",
+                    "order_ref": order_ref,
+                    "strategy_instance_id": effect.strategy_instance_id,
+                    "reported_avg_price": order.filled_avg_price,
+                    "recorded_avg_price": recorded_avg_price,
+                    "source_event_at_ms": order.updated_at_ms,
+                },
+            )
+        elif outcome != "unchanged":
+            logger.warning(
+                "Broker order total disagrees on price with its recorded fills",
+                extra={
+                    "action": EXECUTION_PRICE_CONFLICT_REASON_CODE,
+                    "order_ref": order_ref,
+                    "strategy_instance_id": effect.strategy_instance_id,
+                    "reported_avg_price": order.filled_avg_price,
+                    "recorded_avg_price": recorded_avg_price,
+                    "filled_quantity": order.filled_quantity,
+                    "source_event_at_ms": order.updated_at_ms,
+                },
+            )
+        return
+    outcome = clear_execution_price_conflict_order(
+        repo,
+        effect=effect,
+        order_ref=order_ref,
+        source_event_at_ms=order.updated_at_ms,
+    )
+    if outcome == "stale":
+        logger.info(
+            "An older agreeing broker total cannot clear a newer price conflict",
+            extra={
+                "action": "execution_price_conflict_stale_total",
+                "order_ref": order_ref,
+                "strategy_instance_id": effect.strategy_instance_id,
+                "recorded_avg_price": recorded_avg_price,
+                "source_event_at_ms": order.updated_at_ms,
+            },
+        )
+
+
+def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
+    """Re-derive open price conflicts from recorded fills on every pass (#2460).
+
+    A terminal order's totals stop being re-folded -- the reconciliation
+    sweep reads open orders, and the exact-lookup folds end with their
+    effects -- so the clear-on-agreeing-total path alone could strand an
+    episode. This gives the issue's second exit its mechanism: when an
+    identified execution correction changed the recorded fills, the
+    corrected effective average is compared against the broker's last
+    reported average (kept in the cause as evidence), and the order drops
+    out of the episode when they now agree within tolerance. Recorded
+    evidence only, no broker I/O; idempotent through the atomic clear.
+
+    The clear is compare-and-clear (#2460 review): the sweep passes the
+    ``(uncertainty_id, cause)`` it derived from as the expected episode, and
+    the locked clear refuses when a concurrent fold refreshed the episode in
+    between -- the next pass re-derives against the refreshed evidence. The
+    transitions bind to each conflicted order's owning effect, the durable
+    subject-bound anchor manual custody shares with bots. Returns the number
+    of orders dropped.
+    """
+    dropped = 0
+    for uncertainty_id, _subject_id, cause in repo.active_execution_price_conflicts():
+        for conflicted in cause.orders:
+            recorded_qty, recorded_cost = repo.effective_fill_totals_for_order(
+                conflicted.order_ref
+            )
+            if recorded_qty < FILL_QTY_EPSILON:
+                continue
+            corrected_avg_price = recorded_cost / recorded_qty
+            if (
+                abs(conflicted.reported_avg_price - corrected_avg_price)
+                >= TOTAL_PRICE_CONFLICT_ATOL
+            ):
+                continue
+            owning_order = repo.order(conflicted.order_ref)
+            owning = (
+                repo.effect_operation(owning_order.effect_operation_id)
+                if owning_order is not None
+                else None
+            )
+            if owning is None:
+                continue
+            if (
+                clear_execution_price_conflict_order(
+                    repo,
+                    effect=owning,
+                    order_ref=conflicted.order_ref,
+                    expected_episode=(uncertainty_id, cause),
+                )
+                in {"narrowed", "resolved"}
+            ):
+                logger.info(
+                    "Execution correction explained a price conflict; dropping the order",
+                    extra={
+                        "action": "execution_price_conflict_correction_cleared",
+                        "order_ref": conflicted.order_ref,
+                        "strategy_instance_id": owning.strategy_instance_id,
+                        "reported_avg_price": conflicted.reported_avg_price,
+                        "corrected_avg_price": corrected_avg_price,
+                    },
+                )
+                dropped += 1
+    return dropped
 
 
 #: The execution-id namespaces the deterministic no-submit worlds mint

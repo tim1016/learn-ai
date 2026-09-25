@@ -2,7 +2,7 @@ import { Component, input, provideZonelessChangeDetection } from "@angular/core"
 import { TestBed } from "@angular/core/testing";
 import { describe, expect, it } from "vitest";
 
-import type { EngineResultData, LeanStatistics } from "../../lean-engine/engine-results/engine-results.component";
+import type { EngineResultData, LeanStatistics } from "../../lean-engine/engine-results/engine-results.types";
 import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-statistics.component";
 import { StrategyLabDeepDivesComponent } from "./strategy-lab-deep-dives.component";
 
@@ -62,7 +62,8 @@ describe("StrategyLabDeepDivesComponent", () => {
       .find((button) => button.textContent?.includes("Compatibility evidence"));
     expect(compatibility?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(root.querySelector("details")).toBeNull();
-    expect(root.textContent).toContain("Native LEAN statistics");
+    expect(root.textContent).toContain("LEAN native statistics");
+    expect(root.textContent).toContain("the parity verdict grades the shared closed-trade ledger");
     expect(root.textContent).toContain("Sharpe–P&L divergence");
     expect(root.textContent).toContain("20-session Sharpe versus cumulative P&L");
 
