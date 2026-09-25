@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from dataclasses import replace
@@ -48,11 +49,14 @@ _NOW = 1_787_356_800_000
 
 @pytest.fixture(autouse=True)
 def _own_imported_source_digests():
-    """Own the session-global anchor locally: clear it after each test so a
-    test that patches ``_SERVICE_ROOT`` before the first anchor cannot poison
-    every later drift assertion."""
+    """Own the session-global anchor locally: restore the conftest-primed
+    digest set after each test so a test that clears the dict (or patches
+    ``_SERVICE_ROOT`` before re-anchoring) cannot poison every later drift
+    assertion."""
+    primed = dict(admission_module._IMPORTED_SOURCE_DIGESTS)
     yield
     admission_module._IMPORTED_SOURCE_DIGESTS.clear()
+    admission_module._IMPORTED_SOURCE_DIGESTS.update(primed)
 
 
 def _binding(**updates: object) -> BrokerBotBinding:
@@ -1012,3 +1016,93 @@ def test_the_snapshot_covers_the_lazily_imported_indicator_state_module() -> Non
     assert "app/engine/live/indicator_state.py" in admission_module._IMPORTED_SOURCE_DIGESTS
     assert "app.engine.live.indicator_state" in sys.modules
     assert imported_source_drift(_ema_contract()) is None
+
+
+def test_a_cached_program_module_and_newer_disk_bytes_refuse_the_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#2450 review (Codex + CodeRabbit): ``import app.main`` pulls in the
+    strategy registry -- and with it the registered program modules -- long
+    before the lifespan anchor ran. A ``git pull`` landing in that window let
+    the old anchor hash the *new* disk bytes while ``import_module`` handed
+    back the *cached old* module: the recorded digest then described code
+    this process was never running, and a receipt minted for the pulled tree
+    proved PROVEN against it. The anchor must refuse to record a disk digest
+    for a module that is already cached -- it cannot know which bytes memory
+    holds."""
+    binding = _sealed_binding()  # sealed and proven against the real tree, before the pull lands
+    admission_module._IMPORTED_SOURCE_DIGESTS.clear()  # a process whose anchor has not run yet
+    root = _copied_source_tree(tmp_path)
+    # Scope the anchor's work to exactly the two modules under control by
+    # standing in a one-program registry whose contract declares only them;
+    # `normalized_gap` is a pure leaf (imports only Decimal), so it can be
+    # loaded from the copy without dragging the rest of the tree along.
+    minimal_contract = replace(
+        _ema_contract(),
+        artifact_paths=("app/engine/live/indicator_state.py",),
+        wiring_artifact_paths=("app/engine/strategy/normalized_gap.py",),
+    )
+    monkeypatch.setattr(
+        admission_module,
+        "_STRATEGY_REGISTRY",
+        {
+            "ema_crossover_signal": replace(
+                _STRATEGY_REGISTRY["ema_crossover_signal"],
+                signal_program_contract=minimal_contract,
+            )
+        },
+    )
+    # The process imported both declared modules from THIS tree earlier --
+    # the exact state ``app.main``'s import chain leaves behind.
+    for name, relative in (
+        ("app.engine.live.indicator_state", "app/engine/live/indicator_state.py"),
+        ("app.engine.strategy.normalized_gap", "app/engine/strategy/normalized_gap.py"),
+    ):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+        spec = importlib.util.spec_from_file_location(name, root / relative)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, module)
+        spec.loader.exec_module(module)
+    # ...then the pull rewrote one of them after that import.
+    (root / "app/engine/live/indicator_state.py").write_text(
+        "# pulled after the import\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", root)
+    # The pulled tree ships its own receipt for its own bytes.
+    receipt = qualification_receipt_payload(
+        program_key="ema_crossover_signal",
+        contract=minimal_contract,
+        qualified_at_ms=_NOW,
+        qualification_suite="cached-module-suite",
+    )
+    manifest = tmp_path / "cached-module-receipts.json"
+    manifest.write_text(json.dumps({"schema_version": 2, "receipts": [receipt]}))
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW, manifest_path=manifest)
+
+    assert proof.state == "UNPROVEN"
+    assert "unreadable" in proof.explanation or "Restart needed" in proof.explanation
+
+
+def test_a_source_read_that_fails_during_the_drift_comparison_refuses_with_a_restart_next_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2450 review (Codex P2): the drift comparison re-reads the declared
+    sources off disk, and a checkout that removes or replaces one mid-``git
+    pull`` makes that read raise from inside ``imported_source_drift``. A
+    Start/Resume in that window must get an UNPROVEN refusal with the
+    restart next_step -- never an internal error escaping the admission
+    boundary."""
+
+    def _torn_tree(contract: object) -> str:
+        raise OSError("source vanished mid-pull")
+
+    binding = _sealed_binding()
+    monkeypatch.setattr(admission_module, "imported_source_drift", _torn_tree)
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert "Restart needed" in proof.explanation
+    assert "Restart the service" in proof.next_step

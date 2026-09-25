@@ -14,8 +14,6 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
-import importlib
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +42,10 @@ from app.schemas.signal_program_seal import (
     strip_absent_git_provenance,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.program_source_anchor import (
+    _IMPORTED_SOURCE_DIGESTS,
+    record_imported_program_sources,
+)
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QUALIFICATION_MANIFEST = _SERVICE_ROOT / "app/data/signal_program_build_receipts.json"
@@ -424,7 +426,22 @@ def prove_running_program_build(
     # ``git pull`` then restart, so between the two the disk holds bytes this
     # process never imported, and a proof computed from them would name code
     # that is not running. Refuse until the restart makes them one again.
-    drifted = imported_source_drift(contract)
+    # #2450 review: this second source read stays inside the fail-closed
+    # guard too -- a checkout that removes or replaces a declared source
+    # mid-pull makes it raise, and a Start/Resume in that window must get
+    # this refusal, never an internal error escaping the boundary.
+    try:
+        drifted = imported_source_drift(contract)
+    except (OSError, ValueError) as exc:
+        return _unproven(
+            binding.strategy_key,
+            verified_at_ms,
+            explanation=(
+                "Restart needed: the code on disk became unreadable while comparing "
+                f"it against the code this process is running ({type(exc).__name__})."
+            ),
+            next_step="Restart the service so the running code is the code on disk, then try again.",
+        )
     if drifted is not None:
         return _unproven(
             binding.strategy_key,
@@ -528,71 +545,6 @@ def _digest_paths(paths: tuple[str, ...]) -> str:
     return _digest_entries(
         paths, lambda relative: hashlib.sha256(_resolve_artifact(relative).read_bytes()).hexdigest()
     )
-
-
-_IMPORT_LOCK = threading.Lock()
-_IMPORTED_SOURCE_DIGESTS: dict[str, str] = {}
-
-
-def _module_name(relative: str) -> str:
-    """The importable module name for one service-relative ``.py`` path."""
-    if not relative.endswith(".py"):
-        raise ValueError(f"Signal Program artifact is not a Python module: {relative}")
-    return relative[:-3].replace("/", ".")
-
-
-def record_imported_program_sources() -> None:
-    """Anchor the proof's digests to the bytes this process actually imports (#2450).
-
-    ``_digest_paths`` hashes files off disk, but a clerk bind-mounts ``app/``
-    and deploys are a ``git pull`` followed by a restart: between the two,
-    the bytes on disk are not the bytes the process imported, and a proof
-    computed from disk would name code that is not running -- including
-    modules imported lazily (``indicator_state``), which the later pull can
-    silently load mid-flight. This forces the import of every module in the
-    registered contracts and records each file's digest at that moment, so
-    the recorded digests are the bytes in memory for every module the anchor
-    imports itself (the lazily imported ones) and fail closed on any
-    observable divergence for the rest. Called at service startup; the first
-    proof anchors lazily if it never ran -- which honestly describes the
-    bytes only under the startup caller's assumption that no pull landed
-    between process start and the anchor.
-
-    Idempotent: the first recording wins, because only it describes what
-    this process imported. Raises on an unreadable or invalid path -- a
-    process that cannot state its own sources must not start.
-    """
-    with _IMPORT_LOCK:
-        if _IMPORTED_SOURCE_DIGESTS:
-            return
-        digests: dict[str, str] = {}
-        for registration in _STRATEGY_REGISTRY.values():
-            contract = registration.signal_program_contract
-            if contract is None:
-                continue
-            for relative in (*contract.artifact_paths, *contract.wiring_artifact_paths):
-                if relative in digests:
-                    continue
-                # Hash first, import second: a pull landing between the two
-                # reads leaves the anchor on the pre-pull bytes while memory
-                # holds the post-pull ones -- which the drift check then
-                # catches and refuses, instead of anchoring the post-pull
-                # bytes for pre-pull memory and never seeing the change.
-                candidate = _resolve_artifact(relative)
-                digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
-                module = importlib.import_module(_module_name(relative))
-                # The import resolves through sys.path, the digest through
-                # _SERVICE_ROOT; nothing else reconciles the two. A shadowing
-                # copy on sys.path would otherwise anchor bytes the process
-                # never executed, failing open forever.
-                if Path(module.__file__ or "").resolve() != candidate:
-                    raise ValueError(
-                        f"Signal Program artifact {relative} imported from "
-                        f"{module.__file__}, not {_SERVICE_ROOT}; the proof cannot "
-                        "name code this process is not running"
-                    )
-                digests[relative] = digest
-        _IMPORTED_SOURCE_DIGESTS.update(digests)
 
 
 def _imported_digest(paths: tuple[str, ...]) -> str:
