@@ -41,6 +41,42 @@ describe('configuration revision draft', () => {
   it('lets a paper draft save with no envelope at all', () => {
     expect(draftProblems(emptyDraft('default'), SLOTS)).toEqual([]);
     expect(toRevisionContent(emptyDraft('default')).live_envelope).toBeNull();
+    expect(toRevisionContent(emptyDraft('default')).paper_xh_allowances).toBeNull();
+  });
+
+  it('sends a paper draft\'s two extended-hours offsets, and no other envelope value', () => {
+    // A value typed while the draft was live stays in the draft but is not a
+    // paper revision's to send: the service refuses a loss limit on paper.
+    const draft = { ...emptyDraft('default'), loss_usd: 5000, xh_entry_bps: 12.5, xh_exit_bps: 7.5 };
+
+    expect(draftProblems(draft, SLOTS)).toEqual([]);
+    expect(toRevisionContent(draft)).toEqual({
+      credential_slot: 'default',
+      endpoint_mode: 'paper',
+      live_envelope: null,
+      paper_xh_allowances: { xh_entry_bps: 12.5, xh_exit_bps: 7.5 },
+    });
+  });
+
+  it('refuses a paper draft with one offset of the two, and never sends half a pair', () => {
+    const draft = { ...emptyDraft('default'), xh_exit_bps: 7.5 };
+
+    expect(draftProblems(draft, SLOTS)).toEqual([
+      'Set both extended-hours offsets, or leave both empty.',
+    ]);
+    expect(() => toRevisionContent(draft)).toThrowError(/both extended-hours offsets or neither/);
+  });
+
+  it('holds a paper offset to the same bounds as a live one', () => {
+    const paper = { ...emptyDraft('default'), xh_entry_bps: 0, xh_exit_bps: 7.5 };
+
+    expect(draftProblems(paper, SLOTS)).toEqual([]);
+    expect(draftProblems({ ...paper, xh_exit_bps: 10_000 }, SLOTS)).toHaveLength(1);
+    expect(draftProblems({ ...paper, xh_entry_bps: -1 }, SLOTS)).toHaveLength(1);
+  });
+
+  it('never sends a paper pair beside a live envelope', () => {
+    expect(toRevisionContent(liveDraft()).paper_xh_allowances).toBeNull();
   });
 
   it('names every live value the operator has not supplied', () => {
@@ -88,6 +124,7 @@ describe('configuration revision draft', () => {
         xh_entry_bps: 11,
         xh_exit_bps: 17.5,
       },
+      paper_xh_allowances: null,
       content_sha256: 'a'.repeat(64),
       complete: true,
       author_owner_id: 'owner-1',
@@ -96,6 +133,28 @@ describe('configuration revision draft', () => {
 
     expect(toRevisionContent(draftFromRevision(stored)).live_envelope).toEqual(
       stored.live_envelope,
+    );
+  });
+
+  it('carries a stored paper revision\'s offsets forward unchanged', () => {
+    const stored: BrokerProfileRevision = {
+      profile_id: 'p2',
+      revision: 2,
+      schema_version: 1,
+      credential_slot: 'default',
+      endpoint_mode: 'paper',
+      account_pin: 'PA000PAPER',
+      account_pinned_at_ms: 1_757_000_000_000,
+      live_envelope: null,
+      paper_xh_allowances: { xh_entry_bps: 12.5, xh_exit_bps: 7.5 },
+      content_sha256: 'e'.repeat(64),
+      complete: true,
+      author_owner_id: 'owner-1',
+      created_at_ms: 1_757_000_000_000,
+    };
+
+    expect(toRevisionContent(draftFromRevision(stored)).paper_xh_allowances).toEqual(
+      stored.paper_xh_allowances,
     );
   });
 

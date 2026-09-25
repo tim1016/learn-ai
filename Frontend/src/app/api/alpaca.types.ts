@@ -84,6 +84,9 @@ export type BrokerInstallationSelection = components['schemas']['SelectionRespon
 export type BrokerObservedAccount = components['schemas']['ObservedAccountResponse'];
 export type BrokerAccountNickname = components['schemas']['NicknameResponse'];
 export type BrokerLiveEnvelope = components['schemas']['LiveEnvelopePayload'];
+// A paper revision's own extended-hours offsets (#2440); a live revision keeps
+// its pair inside `BrokerLiveEnvelope`.
+export type BrokerPaperXhAllowances = components['schemas']['PaperXhAllowancesPayload'];
 export type AlpacaDeskState = components['schemas']['AlpacaDeskStateResponse'];
 export type AlpacaDeskAccountChoice = components['schemas']['DeskAccountChoiceResponse'];
 export type AlpacaDeskSelectionSummary = components['schemas']['DeskSelectionSummaryResponse'];

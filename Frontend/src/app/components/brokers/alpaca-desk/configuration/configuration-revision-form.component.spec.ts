@@ -1,6 +1,6 @@
 import { Component, signal } from '@angular/core';
 import { form } from '@angular/forms/signals';
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -50,11 +50,46 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(screen.getByText(/this page cannot make it/)).toBeTruthy();
   });
 
+  it('shows a paper endpoint only the two extended-hours offsets, and says what they do', async () => {
+    await render(HostComponent);
+
+    const offsets = screen.getByRole('group', { name: 'Extended-hours offsets' });
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(2);
+    expect(
+      within(offsets).getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }),
+    ).toBeTruthy();
+    expect(
+      within(offsets).getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('spinbutton', { name: 'Daily loss fraction' })).toBeNull();
+    expect(within(offsets).getByText(/a sell goes the exit offset below it/)).toBeTruthy();
+    expect(within(offsets).getByText(/refuse until both are set/)).toBeTruthy();
+    expect(screen.queryByText(/It does not arm live trading/)).toBeNull();
+  });
+
+  it('keeps typed offsets when the endpoint switches between paper and live', async () => {
+    const rendered = await render(HostComponent);
+    await userEvent.type(
+      screen.getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }),
+      '12.5',
+    );
+    await userEvent.selectOptions(screen.getByLabelText('Endpoint'), 'live');
+    await rendered.fixture.whenStable();
+
+    expect(
+      (screen.getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }) as HTMLInputElement)
+        .value,
+    ).toBe('12.5');
+    expect(rendered.fixture.componentInstance.draft().xh_entry_bps).toBe(12.5);
+  });
+
   it('reveals the six envelope fields for a live endpoint, and states that Live never arms', async () => {
     const rendered = await render(HostComponent);
     await userEvent.selectOptions(screen.getByLabelText('Endpoint'), 'live');
     await rendered.fixture.whenStable();
 
+    expect(screen.getByRole('group', { name: 'Live risk envelope' })).toBeTruthy();
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(6);
     expect(screen.getByRole('spinbutton', { name: 'Daily loss fraction' })).toBeTruthy();
     expect(screen.getByRole('spinbutton', { name: 'Sessions one arming covers' })).toBeTruthy();
     expect(screen.getByText(/It does not arm live trading/)).toBeTruthy();

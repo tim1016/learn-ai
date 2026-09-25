@@ -15,6 +15,7 @@ function revision(overrides: Partial<BrokerProfileRevision> = {}): BrokerProfile
     account_pin: null,
     account_pinned_at_ms: null,
     live_envelope: null,
+    paper_xh_allowances: null,
     content_sha256: 'b'.repeat(64),
     complete: true,
     author_owner_id: 'owner-1',

@@ -11,6 +11,12 @@
 // default with a nicer name: it would put a limit nobody chose in front of an
 // operator about to bound real money. An empty field is refused by
 // `draftProblems` until the operator types a value.
+//
+// A paper draft uses two of the same fields, `xh_entry_bps` and
+// `xh_exit_bps` (#2440): a paper revision may carry its own extended-hours
+// offsets, both or neither, and no other envelope value. They are the same
+// draft fields a live draft uses, so switching the endpoint keeps what was
+// typed and one key keeps one meaning.
 
 import type {
   BrokerCredentialSlot,
@@ -65,9 +71,14 @@ export function emptyDraft(credentialSlot: string): RevisionDraft {
   };
 }
 
-/** The draft that edits an existing revision, carrying its stored values forward. */
+/**
+ * The draft that edits an existing revision, carrying its stored values forward.
+ * A revision names its extended-hours offsets in its envelope or, on paper
+ * without one, in `paper_xh_allowances` — never both.
+ */
 export function draftFromRevision(revision: BrokerProfileRevision): RevisionDraft {
   const envelope = revision.live_envelope;
+  const offsets = envelope ?? revision.paper_xh_allowances;
   return {
     credential_slot: revision.credential_slot,
     endpoint_mode: revision.endpoint_mode,
@@ -75,8 +86,8 @@ export function draftFromRevision(revision: BrokerProfileRevision): RevisionDraf
     loss_usd: envelope?.loss_usd ?? null,
     shadow_sessions: envelope?.shadow_sessions ?? null,
     arming_max_sessions: envelope?.arming_max_sessions ?? null,
-    xh_entry_bps: envelope?.xh_entry_bps ?? null,
-    xh_exit_bps: envelope?.xh_exit_bps ?? null,
+    xh_entry_bps: offsets?.xh_entry_bps ?? null,
+    xh_exit_bps: offsets?.xh_exit_bps ?? null,
   };
 }
 
@@ -110,6 +121,23 @@ function offsetBelow(value: number | null, label: string, max: number): string |
   if (value === null || !Number.isFinite(value)) return `${label} needs a number.`;
   if (value < 0 || value >= max) return `${label} must be 0 or more and below ${max}.`;
   return null;
+}
+
+/**
+ * A paper draft's offsets: both or neither, each in the same domain as a live
+ * envelope's. Neither is valid — Start of a regular-hours run then refuses and
+ * says so, which is the backend's call, not this form's.
+ */
+function paperOffsetProblems(draft: RevisionDraft): readonly (string | null)[] {
+  const { xh_entry_bps: entry, xh_exit_bps: exit } = draft;
+  if (entry === null && exit === null) return [];
+  if (entry === null || exit === null) {
+    return ['Set both extended-hours offsets, or leave both empty.'];
+  }
+  return [
+    offsetBelow(entry, ENVELOPE_LABELS.xh_entry_bps, 10_000),
+    offsetBelow(exit, ENVELOPE_LABELS.xh_exit_bps, 10_000),
+  ];
 }
 
 function wholeAtLeastOne(value: number | null, label: string): string | null {
@@ -153,7 +181,9 @@ export function draftProblems(
 ): readonly string[] {
   const slotProblem = slotProblemFor(draft.credential_slot, slots);
   if (slotProblem !== null) return [slotProblem];
-  if (draft.endpoint_mode !== 'live') return [];
+  if (draft.endpoint_mode !== 'live') {
+    return paperOffsetProblems(draft).filter((problem): problem is string => problem !== null);
+  }
   return [
     betweenExclusive(draft.loss_fraction, ENVELOPE_LABELS.loss_fraction, 0, 1),
     aboveZero(draft.loss_usd, ENVELOPE_LABELS.loss_usd),
@@ -166,8 +196,8 @@ export function draftProblems(
 
 /**
  * The request body for this draft. Callers must check `draftProblems` first —
- * a live draft with a missing value throws rather than substituting a number
- * nobody chose.
+ * a live draft with a missing value, or a paper draft with one offset of the
+ * two, throws rather than substituting a number nobody chose.
  */
 export function toRevisionContent(draft: RevisionDraft): RevisionContent {
   if (draft.endpoint_mode !== 'live') {
@@ -175,6 +205,7 @@ export function toRevisionContent(draft: RevisionDraft): RevisionContent {
       credential_slot: draft.credential_slot,
       endpoint_mode: draft.endpoint_mode,
       live_envelope: null,
+      paper_xh_allowances: paperOffsets(draft),
     };
   }
   const {
@@ -207,5 +238,15 @@ export function toRevisionContent(draft: RevisionDraft): RevisionContent {
       xh_entry_bps,
       xh_exit_bps,
     },
+    paper_xh_allowances: null,
   };
+}
+
+function paperOffsets(draft: RevisionDraft): RevisionContent['paper_xh_allowances'] {
+  const { xh_entry_bps, xh_exit_bps } = draft;
+  if (xh_entry_bps === null && xh_exit_bps === null) return null;
+  if (xh_entry_bps === null || xh_exit_bps === null) {
+    throw new Error('A paper revision sets both extended-hours offsets or neither.');
+  }
+  return { xh_entry_bps, xh_exit_bps };
 }

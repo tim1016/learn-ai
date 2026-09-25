@@ -14,16 +14,22 @@ import type {
   BrokerInstallationSelection,
   BrokerLiveEnvelope,
   BrokerObservedAccount,
+  BrokerPaperXhAllowances,
   BrokerProfile,
   BrokerProfileDetail,
   BrokerProfileRevision,
 } from '../../../../api/alpaca.types';
 
-/** The revision content a create or a new revision carries. Never a secret. */
+/**
+ * The revision content a create or a new revision carries. Never a secret.
+ * At most one of `live_envelope` and `paper_xh_allowances` is set: a live
+ * revision's extended-hours offsets live in its envelope.
+ */
 export interface RevisionContent {
   readonly credential_slot: string;
   readonly endpoint_mode: BrokerEndpointMode;
   readonly live_envelope: BrokerLiveEnvelope | null;
+  readonly paper_xh_allowances: BrokerPaperXhAllowances | null;
 }
 
 /**

@@ -1,30 +1,44 @@
 @let fields = draftForm();
 <fieldset class="envelope">
-  <legend>Live risk envelope</legend>
-  <p class="envelope__note">
-    These six values are saved with the revision. They govern nothing on their own:
-    a running instance is bound by the envelope sealed into its arming record, and
-    arming — or loosening an armed limit — happens only in the host CLI ceremony the
-    owner runs. This page cannot arm anything.
-  </p>
+  @if (isLive()) {
+    <legend>Live risk envelope</legend>
+    <p class="envelope__note">
+      These six values are saved with the revision. They govern nothing on their own:
+      a running instance is bound by the envelope sealed into its arming record, and
+      arming — or loosening an armed limit — happens only in the host CLI ceremony the
+      owner runs. This page cannot arm anything.
+    </p>
+  } @else {
+    <legend>Extended-hours offsets</legend>
+    <p class="envelope__note">
+      How far past the last price an extended-hours or after-close limit order is placed,
+      in basis points (1 bps = 0.01%): a buy goes the entry offset above the decision
+      bar's close, a sell goes the exit offset below it. A regular-hours bot's exit on the
+      day's last bar goes out after the close as such a limit, so Start and Resume of a
+      regular-hours run refuse until both are set. Set both or leave both empty; they take
+      effect when this revision is applied and the worker restarts.
+    </p>
+  }
 
   <div class="envelope__grid">
-    <label class="envelope__field">
-      <span>{{ labels.loss_fraction }}</span>
-      <input type="number" step="0.001" [formField]="fields.loss_fraction" />
-    </label>
-    <label class="envelope__field">
-      <span>{{ labels.loss_usd }}</span>
-      <input type="number" step="0.01" [formField]="fields.loss_usd" />
-    </label>
-    <label class="envelope__field">
-      <span>{{ labels.shadow_sessions }}</span>
-      <input type="number" step="1" [formField]="fields.shadow_sessions" />
-    </label>
-    <label class="envelope__field">
-      <span>{{ labels.arming_max_sessions }}</span>
-      <input type="number" step="1" [formField]="fields.arming_max_sessions" />
-    </label>
+    @if (isLive()) {
+      <label class="envelope__field">
+        <span>{{ labels.loss_fraction }}</span>
+        <input type="number" step="0.001" [formField]="fields.loss_fraction" />
+      </label>
+      <label class="envelope__field">
+        <span>{{ labels.loss_usd }}</span>
+        <input type="number" step="0.01" [formField]="fields.loss_usd" />
+      </label>
+      <label class="envelope__field">
+        <span>{{ labels.shadow_sessions }}</span>
+        <input type="number" step="1" [formField]="fields.shadow_sessions" />
+      </label>
+      <label class="envelope__field">
+        <span>{{ labels.arming_max_sessions }}</span>
+        <input type="number" step="1" [formField]="fields.arming_max_sessions" />
+      </label>
+    }
     <label class="envelope__field">
       <span>{{ labels.xh_entry_bps }}</span>
       <input type="number" step="0.1" [formField]="fields.xh_entry_bps" />
