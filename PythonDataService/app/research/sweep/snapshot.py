@@ -122,7 +122,19 @@ def capture_data_snapshot(
     Presence is ``check_availability``'s answer — the question a Grid Search
     preflight asks of the same roots — and each artifact is hashed from the
     root that answer resolved its session to.
+
+    A daily snapshot binds one root. The daily reader merges the symbol's
+    history from every root, but all copies share one root-relative path,
+    so a manifest keyed by it can receipt only one of them: the other
+    copies would be read unreceipted, and the bound reader refuses a root
+    that lacks the receipted archive. Sweeps read the lake alone, so this
+    refuses only a caller that passes more roots (#2475 review).
     """
+    if resolution == "daily" and len(roots) > 1:
+        raise ValueError(
+            f"a daily data snapshot binds one root, got {len(roots)}: the daily reader merges "
+            f"{symbol.upper()}'s history from every root, and one digest cannot receipt more than one archive"
+        )
     coverage = check_availability(roots, symbol, data_start, data_end, resolution=resolution)
     if not coverage.is_complete:
         raise MissingSessionsError(coverage)

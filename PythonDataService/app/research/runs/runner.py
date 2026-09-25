@@ -396,6 +396,7 @@ def run_strategy_spec(
                     "run_id": rid,
                     "symbol": exc.report.symbol,
                     "missing_sessions": len(exc.report.missing_days),
+                    "unreadable_sessions": len(exc.report.unreadable_days),
                     "expected_sessions": exc.report.expected_days,
                 },
             )

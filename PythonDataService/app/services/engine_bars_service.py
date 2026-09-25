@@ -75,7 +75,7 @@ def read_consolidated_bars(
         source_bars = list(LeanMinuteDataReader(roots, session=session).iter_bars(symbol, start, end))
         coverage_resolution = "minute"
 
-    coverage = check_availability(roots, symbol, start, end, resolution=coverage_resolution)
+    coverage = check_availability(roots, symbol, start, end, resolution=coverage_resolution, session=session)
 
     consolidator = TradeBarConsolidator(_period_for(timespan, multiplier))
     fired: list[TradeBar] = []

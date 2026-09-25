@@ -116,10 +116,12 @@ def _default_data_source_factory(symbol: str, start: Date, end: Date) -> LeanMin
     """Build the LEAN minute reader for ``symbol`` over ``[start, end]``, once the window is admitted.
 
     Reads the legacy ``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` folders. The
-    reader skips a session with no zip, so the window is checked here first,
-    against the canonical calendar: every scheduled session in it (half days
-    included, closures not) must be on disk, or ``MissingSessionsError``
-    names the gaps (#2445). The research-run routers share this factory.
+    reader skips a session with no zip, or whose zip holds no regular-hours
+    bar, so the window is checked here first, against the canonical
+    calendar: the reader must read bars for every scheduled session in it
+    (half days included, closures not), or ``MissingSessionsError`` names
+    the gaps and any unreadable file (#2445). The research-run routers
+    share this factory.
     Tests override via ``app.dependency_overrides[get_data_source_factory]``.
     """
     import os
@@ -290,6 +292,7 @@ def run_spec_backtest(
                 "strategy": spec.name,
                 "symbol": exc.report.symbol,
                 "missing_sessions": len(exc.report.missing_days),
+                "unreadable_sessions": len(exc.report.unreadable_days),
                 "expected_sessions": exc.report.expected_days,
             },
         )

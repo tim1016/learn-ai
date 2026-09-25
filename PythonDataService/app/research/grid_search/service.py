@@ -100,8 +100,14 @@ class GridSearchRefusal(ValueError):
 
 
 def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
-    """The gaps, the lake tree the sweep read them from, and the remedy."""
+    """The gaps, the lake tree the sweep read them from, and the remedy when a backfill is one.
+
+    A file that is on disk but cannot be read is not repaired by a backfill,
+    so that refusal names the file and prescribes nothing (#2489).
+    """
     mode = polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
+    if missing.report.unreadable_files:
+        return GridSearchRefusal(f"{missing} (read from the {mode} lake)", code="DATA_UNREADABLE")
     return GridSearchRefusal(
         f"{missing} (read from the {mode} lake); backfill {missing.report.symbol} in {mode} mode and launch again",
         code="DATA_MISSING",

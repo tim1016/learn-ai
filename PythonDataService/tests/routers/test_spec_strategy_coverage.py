@@ -7,10 +7,12 @@ past their last session — reported ``success=True`` with zero trades and the
 starting cash untouched: indistinguishable from a strategy that simply never
 fired. Codex review V3 reproduced it at the real route boundary.
 
-A window can also be admitted and still read nothing — it holds no trading
-session at all (a weekend, a holiday), or its zips hold no regular-hours bar.
-The run then evaluated zero bars, and says so the way Strategy Lab does
-instead of reporting the untouched starting cash as a result.
+A zip on disk is not yet a session: one holding no regular-hours bar is
+missing to the regular-session reader, and one the reader cannot decode is
+refused as unreadable, by path. A window can still be admitted and read
+nothing — it holds no trading session at all (a weekend, a holiday). The run
+then evaluated zero bars, and says so the way Strategy Lab does instead of
+reporting the untouched starting cash as a result.
 
 These tests drive the real default data-source factory (no dependency
 override) against a temporary LEAN root, so the refusal is proven where
@@ -19,23 +21,20 @@ production meets it.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import date
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
-from app.engine.data.trade_bar import TradeBar
+from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.strategy.spec import StrategySpec
 from app.lean_sidecar.trading_calendar import expected_sessions, is_early_close
 from app.main import app
 from app.routers.spec_strategy import _FIXTURES_DIR, get_data_source_factory
-from tests._helpers.lean_store import seed_store_day
+from tests._helpers.lean_store import seed_pre_market_day, seed_store_day
 
 # Thanksgiving fortnight: 2024-11-28 is a closure and 2024-11-29 closes at
 # 13:00 ET, so the window carries both calendar cases the check must honour.
@@ -157,34 +156,55 @@ async def test_spec_backtest_on_a_window_with_no_session_fails_instead_of_report
     assert body["final_equity"] == 0.0
 
 
-def _pre_market_bars(symbol: str, day: date) -> list[TradeBar]:
-    """An hour of 07:00 ET bars: a zip that exists but holds no regular-hours minute."""
-    open_et = datetime(day.year, day.month, day.day, 7, 0, tzinfo=ZoneInfo("America/New_York"))
-    price = Decimal(500)
-    return [
-        TradeBar(
-            symbol=symbol,
-            time=open_et + timedelta(minutes=i),
-            end_time=open_et + timedelta(minutes=i + 1),
-            open=price,
-            high=price,
-            low=price,
-            close=price,
-            volume=100,
-        )
-        for i in range(60)
-    ]
-
-
-async def test_spec_backtest_on_zips_with_no_regular_hours_bar_fails(lean_root: Path) -> None:
-    """Every session's zip is on disk, so admission passes; the regular-session reader yields nothing."""
-    for day in expected_sessions(*WINDOW):
-        write_lean_day_zip(lean_root, "SPY", day, _pre_market_bars("SPY", day))
+async def test_spec_backtest_on_zips_with_no_regular_hours_bar_is_refused_as_missing(lean_root: Path) -> None:
+    """Every session's zip is on disk, but the regular-session reader reads no bar from any of them."""
+    sessions = expected_sessions(*WINDOW)
+    for day in sessions:
+        seed_pre_market_day(lean_root, "SPY", day)
 
     body = await _post_backtest(_sma_spec(), *WINDOW)
 
     assert body["success"] is False, body
-    assert body["error"] == ZERO_BARS
+    assert body["error"] == (
+        f"missing data: SPY has no minute bars for {len(sessions)} of {len(sessions)} trading sessions "
+        "in 2024-11-25..2024-12-06 — missing 2024-11-25..2024-12-06"
+    )
+
+
+async def test_spec_backtest_with_one_session_holding_no_regular_hours_bar_fails_naming_it(lean_root: Path) -> None:
+    """The other sessions produce bars, so the zero-bar backstop cannot catch the hole (#2475 review, Codex P1).
+
+    Before the fix the zip's mere presence admitted the session, and the run
+    completed on the eight sessions the reader did read.
+    """
+    sessions = expected_sessions(*WINDOW)
+    hole = date(2024, 12, 3)
+    _seed(lean_root, "SPY", [day for day in sessions if day != hole])
+    seed_pre_market_day(lean_root, "SPY", hole)
+
+    body = await _post_backtest(_sma_spec(), *WINDOW)
+
+    assert body["success"] is False, body
+    assert body["error"] == (
+        f"missing data: SPY has no minute bars for 1 of {len(sessions)} trading sessions "
+        "in 2024-11-25..2024-12-06 — missing 2024-12-03"
+    )
+
+
+async def test_spec_backtest_on_a_zip_the_reader_cannot_decode_fails_naming_the_file(lean_root: Path) -> None:
+    """A damaged zip is reported as unreadable, by path — not as a missing session a backfill would fill."""
+    sessions = expected_sessions(*WINDOW)
+    _seed(lean_root, "SPY", sessions)
+    damaged = lean_root / "equity" / "usa" / "minute" / "spy" / "20241203_trade.zip"
+    damaged.write_bytes(b"not a zip")
+
+    body = await _post_backtest(_sma_spec(), *WINDOW)
+
+    assert body["success"] is False, body
+    assert body["error"] == (
+        f"unreadable data: SPY minute data for 1 of {len(sessions)} trading sessions in 2024-11-25..2024-12-06 "
+        f"is on disk but cannot be read — {damaged} (BadZipFile: File is not a zip file)"
+    )
 
 
 async def test_spec_backtest_with_an_end_before_its_start_is_a_bad_request(lean_root: Path) -> None:

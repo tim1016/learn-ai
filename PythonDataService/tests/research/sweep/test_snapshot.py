@@ -21,7 +21,7 @@ from app.research.sweep.snapshot import (
     capture_data_snapshot,
     verify_data_snapshot,
 )
-from tests._helpers.lean_store import make_minute_bars, seed_store_day
+from tests._helpers.lean_store import make_minute_bars, seed_pre_market_day, seed_store_day
 
 WINDOW = (date(2025, 1, 2), date(2025, 1, 10))
 SESSIONS = expected_sessions(*WINDOW)
@@ -154,6 +154,31 @@ def test_daily_capture_refuses_a_session_whose_row_the_reader_cannot_parse(tmp_p
         capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
 
     assert excinfo.value.report.missing_days == [SESSIONS[3]]
+
+
+def test_capture_refuses_a_session_whose_zip_holds_no_regular_hours_bar(tmp_path: Path) -> None:
+    """A zip on disk that the regular-session reader reads no bar from is a missing session (#2475 review)."""
+    _seed_minutes(tmp_path)
+    seed_pre_market_day(tmp_path, "SPY", SESSIONS[2])
+
+    with pytest.raises(MissingSessionsError) as excinfo:
+        capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="minute", data_start=WINDOW[0], data_end=WINDOW[1])
+
+    assert excinfo.value.report.missing_days == [SESSIONS[2]]
+
+
+def test_daily_capture_refuses_more_than_one_root(tmp_path: Path) -> None:
+    """Two roots' histories share one root-relative path, so one digest could bind only one of them (#2475 review).
+
+    Before, the capture hashed the first root's archive alone and the second
+    root's sessions entered the window unreceipted.
+    """
+    first, second = tmp_path / "first", tmp_path / "second"
+    write_lean_daily_zip(first, "SPY", [_daily_bar(day, "500") for day in SESSIONS[:3]])
+    write_lean_daily_zip(second, "SPY", [_daily_bar(day, "501") for day in SESSIONS[3:]])
+
+    with pytest.raises(ValueError, match="a daily data snapshot binds one root, got 2"):
+        capture_data_snapshot(roots=[first, second], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
 
 
 def test_make_minute_bars_is_deterministic_so_digests_are_reproducible() -> None:
