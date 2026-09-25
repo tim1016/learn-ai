@@ -540,6 +540,15 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.fills_for_order(self._conn, order_ref)
 
+    def active_execution_price_conflicts(self: ClerkSqliteRepository):
+        """Every open ``EXECUTION_PRICE_CONFLICT`` episode (#2460).
+
+        The sweep re-derivation's worklist; see
+        ``order_evidence.reconcile_execution_price_conflicts``.
+        """
+        with self._write_lock:
+            return reads.active_execution_price_conflicts(self._conn)
+
     def effective_fill_totals_for_order(
         self: ClerkSqliteRepository,
         order_ref: str,

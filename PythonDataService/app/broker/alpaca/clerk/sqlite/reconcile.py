@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
     fold_order_evidence,
+    reconcile_execution_price_conflicts,
     resolve_order_submission,
     trade_port_folds_simulated_evidence,
 )
@@ -1156,6 +1157,10 @@ def _finalize_reconciliation_verdict(
     # Independent of the coverage proof above: that proof resolves only its
     # own episode and moves no fill, so it can neither clear nor hide a fence.
     fence_fills_on_terminal_enters(repo)
+    # #2460: same re-derivation discipline -- a terminal order's totals are
+    # never re-folded, so the price conflict's correction-explained exit runs
+    # here from recorded evidence on every pass that reaches a verdict.
+    reconcile_execution_price_conflicts(repo)
     instances = repo.strategy_instances()
     plan = plan_account_reconciliation(
         namespaces=frozenset(

@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
@@ -247,6 +248,88 @@ async def test_sqlite_websocket_fill_records_exact_execution_and_separate_ack(
         assert "EXECUTION_SLICE_FILLED" in transition_kinds
         assert "ORDER_SUBMIT_ACKED" in transition_kinds
         assert "ORDER_FILL_OBSERVED" not in transition_kinds
+    finally:
+        repo.close()
+
+
+def _active_price_conflict_count(repo: ClerkSqliteRepository) -> int:
+    from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+        EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    )
+
+    row = repo._conn.execute(
+        "SELECT COUNT(*) AS n FROM uncertainties WHERE reason_code = ? AND resolved_at_ms IS NULL",
+        (EXECUTION_PRICE_CONFLICT_REASON_CODE,),
+    ).fetchone()
+    return int(row["n"])
+
+
+async def test_a_websocket_aggregate_clears_a_price_conflict_opened_by_a_snapshot(
+    tmp_path: Path,
+) -> None:
+    """#2460 review: a REST partial-order snapshot can open an
+    ``EXECUTION_PRICE_CONFLICT``; when a later websocket fill's exact slice
+    advances the recorded fills and its aggregate now agrees, that frame must
+    clear the conflict -- otherwise the stored reported average goes stale the
+    moment the order terminalizes out of the open-order snapshots and the
+    sweep compares against it for ever."""
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    try:
+        # Websocket fill #1: exact 2 @ 100 with a matching aggregate.
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=order_ref,
+            event=BrokerOrderEvent(
+                event_type="partial_fill",
+                occurred_at_ms=1_700_000_000_050,
+                price=100.0,
+                quantity=2.0,
+                execution_id="exec-001",
+            ),
+            event_key="exec:exec-001",
+            order=_owned_order(order_ref).model_copy(
+                update={"filled_quantity": 2.0, "filled_avg_price": 100.0}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        # A REST partial-order snapshot restates the same quantity at 90.
+        fold_order_evidence(
+            repo,
+            effect_operation_id=repo.order(order_ref).effect_operation_id,
+            order=_owned_order(order_ref).model_copy(
+                update={
+                    "filled_quantity": 2.0,
+                    "filled_avg_price": 90.0,
+                    "updated_at_ms": 1_700_000_000_200,
+                }
+            ),
+        )
+        assert _active_price_conflict_count(repo) == 1
+
+        # Websocket fill #2: exact 3 @ 100; the frame's aggregate (5 @ 100)
+        # now agrees with the recorded fills and must clear the conflict.
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=order_ref,
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=1_700_000_000_300,
+                price=100.0,
+                quantity=3.0,
+                execution_id="exec-002",
+            ),
+            event_key="exec:exec-002",
+            order=_owned_order(order_ref, status="filled").model_copy(
+                update={
+                    "filled_quantity": 5.0,
+                    "filled_avg_price": 100.0,
+                    "updated_at_ms": 1_700_000_000_400,
+                }
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert _active_price_conflict_count(repo) == 0
     finally:
         repo.close()
 
@@ -525,8 +608,15 @@ async def test_manual_changed_execution_redelivery_raises_one_subject_conflict(
         assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
         assert repo.attributed_positions_for_subject(accepted.ticket.subject_id) == {"SPY": 1.0}
         uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
-        assert len(uncertainty) == 1
-        assert uncertainty[0]["reason_code"] == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        # Two distinct truths, one episode each: the identity replay raises the
+        # coverage conflict, and the changed frame's aggregate (1 @ 101 against
+        # the recorded 1 @ 100) is the same-quantity price restatement #2460
+        # records from websocket totals too -- subject-scoped, never a second
+        # coverage conflict per redelivery.
+        assert {row["reason_code"] for row in uncertainty} == {
+            EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            EXECUTION_PRICE_CONFLICT_REASON_CODE,
+        }
     finally:
         repo.close()
 

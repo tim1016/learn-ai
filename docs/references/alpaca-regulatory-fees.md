@@ -63,7 +63,7 @@ grace period, a `FEE` row without `net_amount`, or an incomplete activity read),
 fill-window read — a row-count guard or a malformed row). `unavailable` also covers
 incomplete Clerk fill evidence: `account_fill_window` refuses rather than return a fill
 set it cannot vouch for when the window contains cumulative-recovery rows, an unresolved
-execution-coverage conflict is open anywhere on the account, or a filled external order
+execution conflict (coverage or price) is open anywhere on the account, or a filled external order
 exists. A broker other than Alpaca is not `unavailable`: the endpoint refuses it before any
 verdict is computed, with HTTP 404 and reason `fee_reconciliation_unsupported_broker`.
 Implementation: `PythonDataService/app/services/alpaca_fee_reconciliation.py`.

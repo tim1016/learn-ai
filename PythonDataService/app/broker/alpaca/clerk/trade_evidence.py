@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
     fold_enter_unfilled_if_proven,
+    fold_execution_price_conflict,
     fold_order_acknowledgement,
     fold_order_evidence,
 )
@@ -244,6 +245,17 @@ class SqliteTradeUpdateEvidenceSink:
                 self._repo,
                 effect_operation_id=owner.effect_operation_id,
                 order=order,
+            )
+            # The frame's embedded order is a cumulative total too (#2460
+            # review): once its exact slice advanced the recorded fills, the
+            # same price-conflict fold the REST snapshot runs must see this
+            # aggregate -- otherwise a snapshot-opened conflict keeps a stale
+            # reported average for ever once the order terminalizes.
+            fold_execution_price_conflict(
+                self._repo,
+                effect=owner,
+                order=order,
+                order_ref=local_order.order_ref,
             )
             if event.event_type in {"fill", "partial_fill"}:
                 # Early, for latency only: every reconciliation pass is the

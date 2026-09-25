@@ -475,6 +475,9 @@ def test_every_registered_reason_declares_its_lane_quiet_answer() -> None:
         "EXIT_STUCK": True,
         FAILED_ENTER_FILLED_REASON_CODE: True,
         EXECUTION_COVERAGE_CONFLICT_REASON_CODE: False,
+        # #2460: says nothing about any attributed quantity -- the quantity is
+        # what both sides agree on -- so it cannot keep a flat lane unanswered.
+        "EXECUTION_PRICE_CONFLICT": False,
         "UNEXPLAINED_ORDER_HOLD": False,
         UNFOLDABLE_BROKER_ORDER_REASON_CODE: False,
         "STREAM_HEALTH_HOLD": False,
