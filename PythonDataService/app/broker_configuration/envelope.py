@@ -64,9 +64,7 @@ ALLOWANCE_FIELDS: tuple[str, ...] = ("xh_entry_bps", "xh_exit_bps")
 _MAX_BPS = 10_000.0
 
 
-def _as_float(
-    field: str, value: Any, *, refusal: type[BrokerConfigurationError] = InvalidLiveEnvelope
-) -> float:
+def _as_float(field: str, value: Any, *, refusal: type[BrokerConfigurationError]) -> float:
     """Coerce exactly what ``AlpacaSettings``' ``float`` annotation would accept.
 
     ``int`` is admitted and widened, which is what a pydantic ``float`` field
@@ -88,9 +86,7 @@ def _as_float(
     return result
 
 
-def _as_bps(
-    field: str, value: Any, *, refusal: type[BrokerConfigurationError] = InvalidLiveEnvelope
-) -> float:
+def _as_bps(field: str, value: Any, *, refusal: type[BrokerConfigurationError]) -> float:
     """An extended-hours allowance: a float in ``[0, 10000)`` bps.
 
     Upper-bounded because 10 000 bps is 100 %: a sell allowance at or past it
@@ -135,7 +131,9 @@ class ValidatedLiveEnvelope:
 
     def __post_init__(self) -> None:
         for field in FLOAT_FIELDS:
-            object.__setattr__(self, field, _as_float(field, getattr(self, field)))
+            object.__setattr__(
+                self, field, _as_float(field, getattr(self, field), refusal=InvalidLiveEnvelope)
+            )
         for field in INT_FIELDS:
             object.__setattr__(self, field, _as_int(field, getattr(self, field)))
         _require(0 < self.loss_fraction < 1, "loss_fraction must be greater than 0 and less than 1.")
@@ -143,7 +141,9 @@ class ValidatedLiveEnvelope:
         _require(self.shadow_sessions >= 1, "shadow_sessions must be at least 1.")
         _require(self.arming_max_sessions >= 1, "arming_max_sessions must be at least 1.")
         for field in ALLOWANCE_FIELDS:
-            object.__setattr__(self, field, _as_bps(field, getattr(self, field)))
+            object.__setattr__(
+                self, field, _as_bps(field, getattr(self, field), refusal=InvalidLiveEnvelope)
+            )
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> ValidatedLiveEnvelope:
@@ -180,8 +180,9 @@ class ValidatedLiveEnvelope:
 class ValidatedPaperAllowances:
     """A paper revision's own extended-hours allowances, in bps (#2440).
 
-    Owner decision 2026-09-25: Start and Resume of a regular-hours run refuse
-    until the account has an exit allowance, because that run's EXIT on the
+    Owner decisions 2026-09-25: Start of a regular-hours run refuses until the
+    account has an exit allowance, and so does a Resume of a flat run (a run
+    still holding a position always resumes), because that run's EXIT on the
     day's last bar reaches the broker after the close as an after-hours limit
     priced off the decision bar's close. A live revision carries the pair
     inside its six-value envelope, sealed at arming; a paper revision has no

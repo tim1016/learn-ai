@@ -834,6 +834,20 @@ def _tradeable_state(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthori
     raise ProgramLegRefused(no_session_open(state.next_transition_ms))
 
 
+def flatten_send_verdict(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthorityState | LegRefusal:
+    """The session an operator's flatten sent at ``now_ms`` goes out in, or the refusal the Clerk gives it.
+
+    :func:`_tradeable_state`'s own answer, returned rather than raised, for a
+    surface that shows it before anything is sent (the bot page's flatten
+    button), so the page says what the Clerk would, judged at the same send
+    instant -- never a second session reading of its own (#2440 review).
+    """
+    try:
+        return _tradeable_state(now_ms=now_ms, policy=policy)
+    except ProgramLegRefused as exc:
+        return exc.refusal
+
+
 def _extended_phase(state: SessionAuthorityState) -> ExtendedPhase:
     return "PRE" if state.phase == "PRE" else "POST"
 
@@ -861,6 +875,7 @@ __all__ = [
     "ReducingLegVerdict",
     "RegularSessionReduction",
     "extended_hours_pricing_unavailable",
+    "flatten_send_verdict",
     "flatten_session",
     "market_leg_sendable",
     "next_redrive_at_ms",

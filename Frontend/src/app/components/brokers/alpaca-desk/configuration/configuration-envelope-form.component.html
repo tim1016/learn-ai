@@ -11,12 +11,14 @@
   } @else {
     <legend>Extended-hours offsets</legend>
     <p class="envelope__note">
-      How far past the last price an extended-hours or after-close limit order is placed,
-      in basis points (1 bps = 0.01%): a buy goes the entry offset above the decision
-      bar's close, a sell goes the exit offset below it. A regular-hours bot's exit on the
-      day's last bar goes out after the close as such a limit, so Start and Resume of a
-      regular-hours run refuse until both are set. Set both or leave both empty; they take
-      effect when this revision is applied and the worker restarts.
+      How far past the decision bar's close an extended-hours or after-close limit order is
+      placed, in basis points (1 bps = 0.01%): an entry uses the entry offset and an exit the
+      exit offset, above the close for a buy and below it for a sell — so a short cover goes
+      the exit offset above it. A regular-hours bot's exit on the day's last bar goes out
+      after the close as such a limit, so a regular-hours run will not Start until both are
+      set, and will not Resume while it holds no position; a run still holding a position
+      always resumes. Set both or leave both empty; they take effect when this revision is
+      applied and the worker restarts.
     </p>
   }
 

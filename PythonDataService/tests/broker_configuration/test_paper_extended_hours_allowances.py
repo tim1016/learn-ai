@@ -432,6 +432,26 @@ def test_a_paper_revision_holding_the_six_live_values_cannot_also_carry_the_pair
     assert [revision.revision for revision in service.list_revisions(source.profile_id)] == [1]
 
 
+def test_a_clone_is_held_to_the_one_document_rule(
+    service: BrokerConfigurationService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every revision is built in one place, so a clone cannot skip the service's refusal.
+
+    The schema CHECK stops such a row from being stored, so the source is
+    forged at the read: without the service's guard the clone would reach that
+    CHECK as a raw ``IntegrityError`` instead of the typed refusal.
+    """
+    source = _paper_with_pair(service)
+    forged = replace(source, live_envelope=ValidatedLiveEnvelope.from_mapping(LIVE_ENVELOPE_PAYLOAD))
+    monkeypatch.setattr(ProfilesStore, "latest_revision", lambda _store, _profile_id: forged)
+
+    with pytest.raises(InvalidPaperAllowances):
+        service.clone_profile(source.profile_id, display_name="Paper — forged clone")
+
+    monkeypatch.undo()
+    assert [profile.profile_id for profile in service.list_profiles()] == [source.profile_id]
+
+
 def _raw_revision(base: ProfileRevision, **changes: object) -> ProfileRevision:
     """A revision written straight to the store, so only the schema can refuse it."""
     return replace(base, revision=base.revision + 1, **changes)  # type: ignore[arg-type]

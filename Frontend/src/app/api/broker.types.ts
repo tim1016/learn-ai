@@ -19867,8 +19867,9 @@ export interface components {
          *     limit is placed: a buy ``xh_entry_bps`` above it, a sell ``xh_exit_bps``
          *     below it (a cover uses the exit allowance, above). A regular-hours run's
          *     EXIT on the day's last bar goes out after the close as such a limit, so
-         *     Start and Resume of a regular-hours run refuse ``EXTENDED_HOURS_ALLOWANCE_UNSET``
-         *     until both are set (#2440, owner decision 2026-09-25).
+         *     Start of a regular-hours run refuses ``EXTENDED_HOURS_ALLOWANCE_UNSET``
+         *     until both are set, and so does a Resume of a flat run; a run still
+         *     holding a position always resumes (#2440, owner decisions 2026-09-25).
          *
          *     Paper only, and only the two: a live revision carries its pair inside
          *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only

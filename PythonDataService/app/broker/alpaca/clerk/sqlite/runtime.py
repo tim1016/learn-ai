@@ -53,7 +53,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     QuoteSource,
     RecoveryPricing,
     RecoveryReductionPricing,
-    flatten_session,
+    flatten_send_verdict,
     market_leg_sendable,
     price_recovery_reduction,
     recovery_reduction_shape,
@@ -716,14 +716,15 @@ class SqliteAlpacaClerkFacade:
                 operator_reason=reason,
             )
 
-    def flatten_session(self) -> SessionAuthorityState:
-        """The session an operator's flatten would go out in now (#2007).
+    def flatten_send_verdict(self) -> SessionAuthorityState | LegRefusal:
+        """The session an operator's flatten sent now goes out in, or the refusal this Clerk gives it (#2007).
 
         The canonical calendar's regular session, widened by the window this
         authority's broker declares -- the same window an extended-session
-        program leg is shaped against.
+        program leg is shaped against -- judged at the send instant, exactly
+        as every pricing entry point judges it (#2440 review).
         """
-        return flatten_session(now_ms=self._repo.clock(), policy=self.program_leg_policy)
+        return flatten_send_verdict(now_ms=self._repo.clock(), policy=self.program_leg_policy)
 
     def price_safe_flatten(
         self, plan: SafeFlattenPlan

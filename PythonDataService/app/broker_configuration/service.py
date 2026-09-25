@@ -293,11 +293,6 @@ class BrokerConfigurationService:
     ) -> ProfileWithRevision:
         """Create a profile and its revision 1 in one transaction."""
         self._require_known_credential_slot(credential_slot)
-        _require_one_allowance_document(
-            endpoint_mode=endpoint_mode,
-            live_envelope=live_envelope,
-            paper_xh_allowances=paper_xh_allowances,
-        )
         return self._create_profile(
             display_name=display_name,
             credential_slot=credential_slot,
@@ -403,11 +398,6 @@ class BrokerConfigurationService:
         constraint error instead of the contract's ``revision_conflict``.
         """
         self._require_known_credential_slot(credential_slot)
-        _require_one_allowance_document(
-            endpoint_mode=endpoint_mode,
-            live_envelope=live_envelope,
-            paper_xh_allowances=paper_xh_allowances,
-        )
         content_sha256 = revision_content_sha256(
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
@@ -962,6 +952,12 @@ class BrokerConfigurationService:
         author_owner_id: str,
         created_at_ms: int,
     ) -> ProfileRevision:
+        """The single place a revision is built, so no path (create, save, clone) skips its checks."""
+        _require_one_allowance_document(
+            endpoint_mode=endpoint_mode,
+            live_envelope=live_envelope,
+            paper_xh_allowances=paper_xh_allowances,
+        )
         return ProfileRevision(
             profile_id=profile_id,
             revision=revision,

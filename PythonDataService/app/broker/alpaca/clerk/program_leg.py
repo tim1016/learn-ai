@@ -117,12 +117,18 @@ def _sealed_allowances(context: AlpacaRuntimeContext) -> ExtendedHoursAllowances
 
 
 def _settings_allowances() -> ExtendedHoursAllowances | None:
-    """The resolved binding's own settings -- what this read was before ADR 0060.
+    """The resolved binding's own settings: a paper revision's allowances.
+
+    For a worker bound from a broker profile, these settings carry the applied
+    paper revision's own pair (``paper_xh_allowances``, #2440), bound by
+    ``profile/runtime_context.py::resolve_runtime_context``. A live revision's
+    pair is its envelope, which the caller reads first; a lane bound without a
+    profile still reads its environment here, as every read did before ADR 0060.
 
     Three ways there are none, and none of them is an exception a caller must
     handle: a synthetic (``sim:``) authority composed in a process with no
-    Alpaca credentials at all, a paper revision that declares no live envelope,
-    and a binding that was *attempted and refused*. The last is why
+    Alpaca credentials at all, a paper revision that sets no extended-hours
+    offsets, and a binding that was *attempted and refused*. The last is why
     ``BrokerUnbound`` is caught rather than propagated -- an EXIT is never
     blocked by a broker-configuration refusal (plan §0 D3). Both are logged so
     an operator can see why an extended-hours leg was refused.
@@ -327,8 +333,9 @@ class ProgramLegPolicy:
     shaping a leg stays a pure function of its arguments. On the live world the
     authority re-resolves it against the sealed envelope per decision
     (``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``); the
-    pair built here from the environment is what a paper or never-armed
-    authority prices from.
+    pair resolved here from the applied profile revision -- a paper revision's
+    own pair, or a live revision's envelope -- is what a paper, ``sim:`` or
+    never-armed authority prices from.
     """
 
     window: ExtendedHoursWindow | None

@@ -62,8 +62,11 @@ describe('ConfigurationRevisionFormComponent', () => {
       within(offsets).getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
     ).toBeTruthy();
     expect(screen.queryByRole('spinbutton', { name: 'Daily loss fraction' })).toBeNull();
-    expect(within(offsets).getByText(/a sell goes the exit offset below it/)).toBeTruthy();
-    expect(within(offsets).getByText(/refuse until both are set/)).toBeTruthy();
+    const note = within(offsets).getByText(/an exit the\s+exit offset/);
+    expect(note.textContent).toMatch(/a short cover goes\s+the exit offset above it/);
+    expect(note.textContent).toMatch(/will not Start until both are\s+set/);
+    expect(note.textContent).toMatch(/will not Resume while it holds no position/);
+    expect(note.textContent).toMatch(/a run still holding a position\s+always resumes/);
     expect(screen.queryByText(/It does not arm live trading/)).toBeNull();
   });
 
