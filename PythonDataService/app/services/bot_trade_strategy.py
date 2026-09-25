@@ -8,8 +8,8 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -44,10 +44,15 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.marketdata.feed import (
+    WARMUP_REFUSAL_REASONS,
+    ContinuityEventRef,
     ContinuityPolicy,
+    FeedContinuityEvent,
     FeedHealth,
     MarketDataBar,
     MarketDataFeed,
+    MarketDataFeedError,
+    WarmupMinutesMissing,
 )
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
@@ -65,8 +70,9 @@ from app.services.market_liveness import (
     market_data_bars_live,
     market_liveness_fact,
 )
-from app.services.retained_tail_join import warmup_rows_after_join
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.retained_tail_join import join_fresh_warmup, warmup_rows_after_join
+from app.services.source_bar_ledger import RetainedSourceBar, RetainedStartupJoin, SourceBarLedger
+from app.services.startup_join import LiveStartBuffer, StartupDeadline, StreamSeam
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -74,6 +80,7 @@ if TYPE_CHECKING:
     from app.services.bot_runner import BrokerBotBinding
 
 logger = logging.getLogger(__name__)
+_MINUTE_MS = 60_000
 
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
@@ -198,6 +205,10 @@ class _RetainedSourceBarFeed:
     Also the run's continuity boundary (#1921): it hands the source the policy
     this run was constructed with, and admits -- or refuses -- each recovered
     bar on delivery, before the observation reaches the ledger or the session.
+
+    And the run's startup join (#2410): warmup opens the live stream first and
+    ends exactly where that stream takes over, so the two meet without a hole
+    (see ``startup_join``).
     """
 
     def __init__(
@@ -213,7 +224,17 @@ class _RetainedSourceBarFeed:
         self._ledger = ledger
         self._run_id = run_id
         self._session = session
-        self._continuity = continuity
+        self._authored_continuity = continuity
+        # The policy handed to the source records every continuity fact
+        # through the run's own sink, then shows it to the startup buffer:
+        # the stream reports the minute it joined partway through as a
+        # ``stream_joined`` gap, and that is where warmup must end (#2410).
+        self._continuity = (
+            None
+            if continuity is None
+            else replace(continuity, record_event=self._showing_live(continuity.record_event))
+        )
+        self._live: LiveStartBuffer | None = None
         self.feed_id = source.feed_id
         # The one place every retained run records the session it decided
         # under, beside the bars and continuity facts that session governs.
@@ -223,6 +244,31 @@ class _RetainedSourceBarFeed:
         # run, and a replay generated on demand or during boot repair must
         # not need an authority to be active at all.
         ledger.record_decision_session(session, run_id=run_id, recorded_at_ms=now_ms_utc())
+
+    def _showing_live(
+        self, record: Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]
+    ) -> Callable[[FeedContinuityEvent], Awaitable[ContinuityEventRef]]:
+        async def _record(event: FeedContinuityEvent) -> ContinuityEventRef:
+            ref = await record(event)
+            if self._live is not None:
+                self._live.note_event(event)
+            return ref
+
+        return _record
+
+    async def _retain(self, bar: MarketDataBar) -> None:
+        await admit_on_delivery(self._continuity, bar)
+        self._ledger.append(bar, run_id=self._run_id)
+
+    def _open_live(self, symbol: str) -> LiveStartBuffer:
+        """Subscribe now and hold every delivered bar until the run asks for it."""
+        live = LiveStartBuffer(
+            self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity),
+            retain=self._retain,
+        )
+        self._live = live
+        live.start()
+        return live
 
     @property
     def capability_account_id(self) -> str | None:
@@ -264,28 +310,36 @@ class _RetainedSourceBarFeed:
         # parameter satisfies the MarketDataFeed Protocol; honouring a
         # *different* policy would silently retarget the run's evidence, so a
         # caller in the wrapper chain may only pass the one it was built with.
-        if continuity is not None and continuity is not self._continuity:
+        if continuity is not None and continuity is not self._authored_continuity:
             raise ValueError(
                 "_RetainedSourceBarFeed streams under the continuity policy its run was "
                 "constructed with; a caller may not substitute a different one."
             )
         session = self._require_own_session(use_rth)
+        # Warmup opened the stream before it fetched history, so the bars
+        # held since then come first; they were never retained or decided on.
+        prepared = self._live is not None
+        live = self._live if self._live is not None else self._open_live(symbol)
         # Capture first, then apply the sealed session policy locally. Asking
         # the provider for RTH-only data would make the authority ledger
         # depend on a lossy upstream filter and prevent a later program from
         # replaying its own session rule over the same observations.
-        async for bar in self._source.stream_bars(symbol, use_rth=False, continuity=self._continuity):
-            await admit_on_delivery(self._continuity, bar)
-            self._ledger.append(bar, run_id=self._run_id)
-            if session.includes(bar):
-                yield bar
-            else:
-                # The session only consumes (and pops) a captured evaluation
-                # mode for bars it actually evaluates, and it never sees a bar
-                # we filter here. Consume the mode ourselves so an upstream
-                # PauseAwareFeed's captured-mode map cannot grow unbounded over
-                # a long-running paper session.
-                self.evaluation_mode_for(bar)
+        try:
+            await live.release()
+            if prepared:
+                self._ledger.mark_startup_ready(run_id=self._run_id, at_ms=now_ms_utc())
+            async for bar in live.bars():
+                if session.includes(bar):
+                    yield bar
+                else:
+                    # The session only consumes (and pops) a captured evaluation
+                    # mode for bars it actually evaluates, and it never sees a bar
+                    # we filter here. Consume the mode ourselves so an upstream
+                    # PauseAwareFeed's captured-mode map cannot grow unbounded over
+                    # a long-running paper session.
+                    self.evaluation_mode_for(bar)
+        finally:
+            await live.aclose()
 
     async def recent_closed_bars(
         self,
@@ -294,53 +348,113 @@ class _RetainedSourceBarFeed:
         use_rth: bool = True,
         lookback_days: int = 5,
     ) -> list[MarketDataBar]:
+        """Open the live stream, then warm up exactly through where it takes over (#2410).
+
+        The run waits for its stream to join -- there is nothing to repair
+        before the first print -- then fetches warmup history through the seam
+        under one fixed deadline. A resumed run joins its retained bars to the
+        seam (#2314); a fresh one warms on the sealed lookback. Every step is
+        stamped on the run's startup join, so the panel can show which one the
+        run is in and, on a refusal, what it could not fill.
+        """
         session = self._require_own_session(use_rth)
-        retained = self._ledger.bars(provider=self.feed_id, symbol=symbol)
-        if retained:
-            # Recovery must rebuild the session from the precise observations
-            # that drove its first run. A provider's corrected history is new
-            # information, not safe warmup input for an already-running bot --
-            # except across the hole after the last retained bar, which no run
-            # observed and which is filled from history or refused (#2314).
-            warmup_rows = await warmup_rows_after_join(
-                self._source,
-                self._ledger,
-                run_id=self._run_id,
-                session=session,
-                symbol=symbol,
-                retained=retained,
-                lookback_days=lookback_days,
-                now_ms=now_ms_utc(),
-            )
-            return [
-                MarketDataBar(
-                    symbol=row.symbol,
-                    start_ms=row.start_ms,
-                    end_ms=row.end_ms,
-                    open=row.open,
-                    high=row.high,
-                    low=row.low,
-                    close=row.close,
-                    volume=row.volume,
-                    fetched_at_ms=row.fetched_at_ms,
-                    feed_id=row.provider,
-                    session_phase=row.session_phase,
-                    # Carry the continuity chain through the rebuild (ruling
-                    # P4): a resumed run must not warm up on bars that claim
-                    # to be ordinary when a reconnect produced them.
-                    provenance=row.provenance,
-                    authorization_id=row.authorization_id,
-                    continuity_event_ref=row.continuity_event_ref,
+        live = self._open_live(symbol)
+        try:
+            seam = await live.seam()
+            known_at_ms = now_ms_utc()
+            deadline = StartupDeadline.for_seam(seam, known_at_ms=known_at_ms)
+            self._ledger.record_startup_seam(
+                RetainedStartupJoin(
+                    run_id=self._run_id,
+                    live_from_ms=seam.live_from_ms,
+                    joined_minute_start_ms=seam.joined_minute_start_ms,
+                    deadline_ms=deadline.deadline_ms,
+                    recorded_at_ms=known_at_ms,
                 )
-                for row in warmup_rows
-                if session.includes(row)
-            ]
-        bars = await self._source.recent_closed_bars(
-            symbol, use_rth=False, lookback_days=lookback_days
+            )
+            try:
+                warmup = await self._warm_through_seam(
+                    symbol, session=session, seam=seam, deadline=deadline, lookback_days=lookback_days
+                )
+            except MarketDataFeedError as exc:
+                if exc.reason in WARMUP_REFUSAL_REASONS:
+                    missing = exc if isinstance(exc, WarmupMinutesMissing) else None
+                    self._ledger.mark_startup_refused(
+                        run_id=self._run_id,
+                        at_ms=now_ms_utc(),
+                        reason_code=exc.reason,
+                        missing_start_ms=None if missing is None else missing.first_missing_end_ms - _MINUTE_MS,
+                        missing_end_ms=None if missing is None else missing.last_missing_end_ms,
+                    )
+                raise
+        except BaseException:
+            await live.aclose()
+            raise
+        self._ledger.mark_startup_history_joined(run_id=self._run_id, at_ms=now_ms_utc())
+        return [bar for bar in warmup if session.includes(bar)]
+
+    async def _warm_through_seam(
+        self,
+        symbol: str,
+        *,
+        session: RunDecisionSession,
+        seam: StreamSeam,
+        deadline: StartupDeadline,
+        lookback_days: int,
+    ) -> list[MarketDataBar]:
+        retained = self._ledger.bars(provider=self.feed_id, symbol=symbol)
+        if not retained:
+            bars = await deadline.run(
+                lambda: join_fresh_warmup(
+                    self._source,
+                    symbol=symbol,
+                    session=session,
+                    seam=seam,
+                    lookback_days=lookback_days,
+                ),
+                symbol=symbol,
+            )
+            for bar in bars:
+                self._ledger.append_history(bar, run_id=self._run_id)
+            return bars
+        # Recovery must rebuild the session from the precise observations
+        # that drove its first run. A provider's corrected history is new
+        # information, not safe warmup input for an already-running bot --
+        # except across the hole after the last retained bar, which no run
+        # observed and which is filled from history or refused (#2314).
+        warmup_rows = await warmup_rows_after_join(
+            self._source,
+            self._ledger,
+            run_id=self._run_id,
+            session=session,
+            symbol=symbol,
+            retained=retained,
+            lookback_days=lookback_days,
+            seam=seam,
+            deadline=deadline,
         )
-        for bar in bars:
-            self._ledger.append_history(bar, run_id=self._run_id)
-        return [bar for bar in bars if session.includes(bar)]
+        return [
+            MarketDataBar(
+                symbol=row.symbol,
+                start_ms=row.start_ms,
+                end_ms=row.end_ms,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+                fetched_at_ms=row.fetched_at_ms,
+                feed_id=row.provider,
+                session_phase=row.session_phase,
+                # Carry the continuity chain through the rebuild (ruling
+                # P4): a resumed run must not warm up on bars that claim
+                # to be ordinary when a reconnect produced them.
+                provenance=row.provenance,
+                authorization_id=row.authorization_id,
+                continuity_event_ref=row.continuity_event_ref,
+            )
+            for row in warmup_rows
+        ]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._source.health(symbol)

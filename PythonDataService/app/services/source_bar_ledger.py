@@ -191,6 +191,49 @@ class RetainedWarmupJoin(BaseModel):
         return self
 
 
+class RetainedStartupJoin(BaseModel):
+    """How one run's warmup met its live stream at startup (#2410).
+
+    Recorded once the stream says where it takes over (``live_from_ms``, and
+    ``joined_minute_start_ms`` when it joined the minute before partway
+    through), with the one fixed ``deadline_ms`` the history fill is held to.
+    Its three outcomes are each stamped once, in order: ``history_joined_at_ms``
+    when warmup history through the seam was retained, ``ready_at_ms`` when the
+    rebuilt strategy began taking live bars, or ``refused_at_ms`` with the
+    refusal's ``reason_code`` and, when it could say, the interval history did
+    not return (``missing_start_ms``..``missing_end_ms``). A run with no row has
+    not yet seen its stream join.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: str
+    live_from_ms: _Instant
+    joined_minute_start_ms: _Instant | None = None
+    deadline_ms: _Instant
+    recorded_at_ms: _Instant
+    history_joined_at_ms: _Instant | None = None
+    ready_at_ms: _Instant | None = None
+    refused_at_ms: _Instant | None = None
+    reason_code: WarmupRefusalReason | None = None
+    missing_start_ms: _Instant | None = None
+    missing_end_ms: _Instant | None = None
+
+    @model_validator(mode="after")
+    def _outcomes_in_order(self) -> RetainedStartupJoin:
+        if (self.refused_at_ms is None) != (self.reason_code is None):
+            raise ValueError("exactly a refused startup join carries a refusal reason")
+        if (self.missing_start_ms is None) != (self.missing_end_ms is None):
+            raise ValueError("a missing interval names both ends")
+        if self.missing_start_ms is not None and self.refused_at_ms is None:
+            raise ValueError("only a refusal names a missing interval")
+        if self.ready_at_ms is not None and self.history_joined_at_ms is None:
+            raise ValueError("a run is ready only after its history joined")
+        if self.refused_at_ms is not None and self.ready_at_ms is not None:
+            raise ValueError("a refused run never became ready")
+        return self
+
+
 class SourceBarConflictError(RuntimeError):
     """A provider reused evidence identity or violated delivery monotonicity."""
 
@@ -472,12 +515,7 @@ class SourceBarLedger:
 
     def _has_warmup_join_table(self) -> bool:
         """A pre-#2314 file opened read-only has no join table, and so no joins."""
-        return (
-            self._conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'source_run_warmup_join'"
-            ).fetchone()
-            is not None
-        )
+        return self._has_table("source_run_warmup_join")
 
     def warmup_join(self, *, run_id: str) -> RetainedWarmupJoin | None:
         """The run's recorded join, or ``None`` for a fresh run or a pre-#2314 file."""
@@ -488,6 +526,107 @@ class SourceBarLedger:
                 "SELECT * FROM source_run_warmup_join WHERE run_id = ?", (run_id,)
             ).fetchone()
         return None if row is None else RetainedWarmupJoin.model_validate(dict(row))
+
+    def record_startup_seam(self, join: RetainedStartupJoin) -> None:
+        """Record where a run's stream took over and its deadline, keep-first (#2410)."""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO source_run_startup_join (
+                    run_id, live_from_ms, joined_minute_start_ms, deadline_ms, recorded_at_ms
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (
+                    join.run_id,
+                    join.live_from_ms,
+                    join.joined_minute_start_ms,
+                    join.deadline_ms,
+                    join.recorded_at_ms,
+                ),
+            )
+
+    def mark_startup_history_joined(self, *, run_id: str, at_ms: int) -> None:
+        """Stamp that warmup history through the seam is retained."""
+        self._stamp_startup(
+            "history_joined_at_ms = ?",
+            (at_ms,),
+            run_id=run_id,
+            unless="history_joined_at_ms IS NOT NULL OR refused_at_ms IS NOT NULL",
+        )
+
+    def mark_startup_ready(self, *, run_id: str, at_ms: int) -> None:
+        """Stamp that the rebuilt strategy began taking live bars."""
+        self._stamp_startup(
+            "ready_at_ms = ?",
+            (at_ms,),
+            run_id=run_id,
+            unless="ready_at_ms IS NOT NULL OR history_joined_at_ms IS NULL OR refused_at_ms IS NOT NULL",
+        )
+
+    def mark_startup_refused(
+        self,
+        *,
+        run_id: str,
+        at_ms: int,
+        reason_code: WarmupRefusalReason,
+        missing_start_ms: int | None = None,
+        missing_end_ms: int | None = None,
+    ) -> None:
+        """Stamp that the startup join was refused, and what it could not fill."""
+        self._stamp_startup(
+            "refused_at_ms = ?, reason_code = ?, missing_start_ms = ?, missing_end_ms = ?",
+            (at_ms, reason_code, missing_start_ms, missing_end_ms),
+            run_id=run_id,
+            unless="refused_at_ms IS NOT NULL OR ready_at_ms IS NOT NULL",
+        )
+
+    def _stamp_startup(
+        self, assignment: str, values: tuple[object, ...], *, run_id: str, unless: str
+    ) -> None:
+        """Set one outcome of a run's startup join once; a later stamp is a no-op.
+
+        Each outcome is a fact the run observed once. A second stamp -- a
+        re-entered run -- never overwrites the first, and the model re-validates
+        the row so an out-of-order stamp fails loudly instead of persisting.
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    f"UPDATE source_run_startup_join SET {assignment} "
+                    f"WHERE run_id = ? AND NOT ({unless})",
+                    (*values, run_id),
+                )
+                row = self._conn.execute(
+                    "SELECT * FROM source_run_startup_join WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"run {run_id} has no startup join to stamp")
+                RetainedStartupJoin.model_validate(dict(row))
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def startup_join(self, *, run_id: str) -> RetainedStartupJoin | None:
+        """The run's startup join, or ``None`` before its stream joined or in a pre-#2410 file."""
+        with self._lock:
+            if not self._has_table("source_run_startup_join"):
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM source_run_startup_join WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return None if row is None else RetainedStartupJoin.model_validate(dict(row))
+
+    def _has_table(self, name: str) -> bool:
+        """A file opened read-only keeps whatever tables its writer's version created."""
+        return (
+            self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+            ).fetchone()
+            is not None
+        )
 
     def append_event(self, event: FeedContinuityEvent, *, run_id: str) -> ContinuityEventRef:
         """Persist one continuity fact and its journal position in one transaction.

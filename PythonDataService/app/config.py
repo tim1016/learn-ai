@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from pydantic import ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Compose's own service-name shape: lowercase alphanumerics plus `_`, `.` and
@@ -253,6 +253,16 @@ class Settings(BaseSettings):
     # Account-level half of the two-key carryover permission. A deployment
     # must also opt in explicitly; the default remains flat-only Resume.
     ALPACA_PAPER_CARRYOVER_ENABLED: bool = False
+    # Startup join (#2410): how long a starting or resuming bot may spend
+    # filling the minutes before its live stream from IBKR history, counted
+    # from the close of the minute the stream joined. One fixed deadline per
+    # preparation; a retry or an in-flight request never extends it, and a
+    # change here applies to preparations that begin afterwards.
+    STARTUP_JOIN_BUDGET_MS: int = Field(default=180_000, ge=1_000, le=3_600_000)
+    # How long after that close history is first asked for. IBKR serves the
+    # closing minute's row at once but revised it up to ~1.3 s later in
+    # 3 of 16 minutes measured (docs/references/ibkr-history-resume-fill.md).
+    STARTUP_JOIN_SETTLE_MS: int = Field(default=5_000, ge=0, le=60_000)
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
     # live/production path — it exists to rehearse reject/throttle/conflict/

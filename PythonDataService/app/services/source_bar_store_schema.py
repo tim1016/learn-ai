@@ -162,6 +162,28 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             CHECK((outcome = 'filled') = (filled_start_ms IS NOT NULL AND filled_end_ms IS NOT NULL)),
             CHECK((outcome = 'refused') = (reason_code IS NOT NULL))
         );
+        CREATE TABLE IF NOT EXISTS source_run_startup_join (
+            run_id TEXT PRIMARY KEY,
+            live_from_ms INTEGER NOT NULL CHECK(live_from_ms BETWEEN 0 AND 253402300799999),
+            joined_minute_start_ms INTEGER
+                CHECK(joined_minute_start_ms BETWEEN 0 AND 253402300799999),
+            deadline_ms INTEGER NOT NULL CHECK(deadline_ms BETWEEN 0 AND 253402300799999),
+            recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms BETWEEN 0 AND 253402300799999),
+            history_joined_at_ms INTEGER
+                CHECK(history_joined_at_ms BETWEEN 0 AND 253402300799999),
+            ready_at_ms INTEGER CHECK(ready_at_ms BETWEEN 0 AND 253402300799999),
+            refused_at_ms INTEGER CHECK(refused_at_ms BETWEEN 0 AND 253402300799999),
+            reason_code TEXT CHECK(reason_code IN (
+                'WARMUP_HISTORY_UNAVAILABLE','RESUME_HOLE_AFTER_HOURS','RESUME_HOLE_UNFILLED'
+            )),
+            missing_start_ms INTEGER CHECK(missing_start_ms BETWEEN 0 AND 253402300799999),
+            missing_end_ms INTEGER CHECK(missing_end_ms BETWEEN 0 AND 253402300799999),
+            CHECK((refused_at_ms IS NULL) = (reason_code IS NULL)),
+            CHECK((missing_start_ms IS NULL) = (missing_end_ms IS NULL)),
+            CHECK(missing_start_ms IS NULL OR refused_at_ms IS NOT NULL),
+            CHECK(ready_at_ms IS NULL OR history_joined_at_ms IS NOT NULL),
+            CHECK(refused_at_ms IS NULL OR ready_at_ms IS NULL)
+        );
         CREATE TABLE IF NOT EXISTS source_evidence_journal (
             evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
 from itertools import pairwise
@@ -72,13 +74,26 @@ def _regular_bars(day: date, *, until_end_ms: int | None = None) -> list[MarketD
 
 
 class _HistoryFeed:
-    """IBKR's history endpoint: serves fixed bars and records each lookback asked for."""
+    """IBKR: serves fixed history, records each lookback asked for, and streams live.
+
+    The live stream delivers one realtime bar opening at ``live_from_ms`` --
+    where it takes over from warmup (#2410) -- then stays open.
+    """
 
     feed_id = "ibkr"
 
-    def __init__(self, bars: list[MarketDataBar]) -> None:
+    def __init__(self, bars: list[MarketDataBar], *, live_from_ms: int | None = None) -> None:
         self._bars = bars
+        self._live_from_ms = live_from_ms
         self.lookbacks: list[int] = []
+
+    async def stream_bars(
+        self, symbol: str, *, use_rth: bool = True, continuity: object = None
+    ) -> AsyncIterator[MarketDataBar]:
+        del symbol, use_rth, continuity
+        assert self._live_from_ms is not None, "this test's run never reaches its live stream"
+        yield _minute_bar(self._live_from_ms).model_copy(update={"provenance": "realtime"})
+        await asyncio.Event().wait()
 
     async def recent_closed_bars(
         self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5
@@ -270,6 +285,16 @@ def _filled_join(run_id: str, start_ms: int) -> RetainedWarmupJoin:
     )
 
 
+def _pin_clock(monkeypatch: pytest.MonkeyPatch, now_ms: int) -> None:
+    """One clock for the run and its startup deadline, so the budget is live."""
+    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    monkeypatch.setattr("app.services.startup_join.now_ms_utc", lambda: now_ms)
+
+
+def _minute_open(instant_ms: int) -> int:
+    return instant_ms - instant_ms % _MIN
+
+
 def _ledger_with_live_bars_through(tmp_path: Path, end_ms: int) -> SourceBarLedger:
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:resume")
     for bar in _regular_bars(_THU, until_end_ms=end_ms):
@@ -283,11 +308,14 @@ async def test_a_resumed_run_warms_on_a_series_with_no_hole(
 ) -> None:
     """#2314 regression: Stop at 10:07, Resume at 13:00 -- warmup used to jump the gap."""
     now_ms = _et(_THU, 13, 0) + 30_000
-    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    _pin_clock(monkeypatch, now_ms)
     ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
     try:
         feed = _RetainedSourceBarFeed(
-            _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms)), ledger, run_id="run-2", session=_RTH
+            _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms), live_from_ms=_minute_open(now_ms)),
+            ledger,
+            run_id="run-2",
+            session=_RTH,
         )
 
         warmup = await feed.recent_closed_bars("SPY", use_rth=True)
@@ -310,12 +338,12 @@ async def test_a_resumed_run_warms_on_a_series_with_no_hole(
 async def test_a_resumed_run_with_nothing_missing_records_a_contiguous_join(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "app.services.bot_trade_strategy.now_ms_utc", lambda: _et(_THU, 10, 7) + 20_000
-    )
+    _pin_clock(monkeypatch, _et(_THU, 10, 7) + 20_000)
     ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
     try:
-        feed = _RetainedSourceBarFeed(_HistoryFeed([]), ledger, run_id="run-2", session=_RTH)
+        feed = _RetainedSourceBarFeed(
+            _HistoryFeed([], live_from_ms=_et(_THU, 10, 7)), ledger, run_id="run-2", session=_RTH
+        )
 
         warmup = await feed.recent_closed_bars("SPY", use_rth=True)
 
@@ -331,10 +359,14 @@ async def test_an_unfillable_hole_refuses_the_run_and_records_why(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     now_ms = _et(_THU, 13, 0) + 30_000
-    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    _pin_clock(monkeypatch, now_ms)
+    # The budget is already spent, so the one attempt's refusal is the run's.
+    monkeypatch.setattr("app.config.settings.STARTUP_JOIN_BUDGET_MS", 1_000)
     ledger = _ledger_with_live_bars_through(tmp_path, _et(_THU, 10, 7))
     try:
-        feed = _RetainedSourceBarFeed(_HistoryFeed([]), ledger, run_id="run-2", session=_RTH)
+        feed = _RetainedSourceBarFeed(
+            _HistoryFeed([], live_from_ms=_minute_open(now_ms)), ledger, run_id="run-2", session=_RTH
+        )
 
         with pytest.raises(MarketDataFeedError) as refused:
             await feed.recent_closed_bars("SPY", use_rth=True)
@@ -352,14 +384,16 @@ async def test_a_hole_past_the_lookback_drops_the_stale_retained_bars_from_warmu
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     now_ms = _et(_THU, 13, 0) + 30_000
-    monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+    _pin_clock(monkeypatch, now_ms)
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="paper:resume")
     stale_day = date(2026, 9, 16)
     for bar in _regular_bars(stale_day, until_end_ms=_et(stale_day, 10, 7)):
         ledger.append(bar.model_copy(update={"provenance": "realtime"}), run_id="run-1")
     history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
     try:
-        feed = _RetainedSourceBarFeed(_HistoryFeed(history), ledger, run_id="run-2", session=_RTH)
+        feed = _RetainedSourceBarFeed(
+            _HistoryFeed(history, live_from_ms=_minute_open(now_ms)), ledger, run_id="run-2", session=_RTH
+        )
 
         warmup = await feed.recent_closed_bars("SPY", use_rth=True, lookback_days=2)
 
@@ -456,14 +490,14 @@ async def test_a_later_resume_inherits_the_warm_floor_of_an_outrun_hole(
     now_ms = _et(_THU, 13, 0) + 30_000
     history = [*_regular_bars(_WED), *_regular_bars(_THU, until_end_ms=now_ms)]
     try:
-        monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms)
+        _pin_clock(monkeypatch, now_ms)
         await _RetainedSourceBarFeed(
-            _HistoryFeed(history), ledger, run_id="run-2", session=_RTH
+            _HistoryFeed(history, live_from_ms=_minute_open(now_ms)), ledger, run_id="run-2", session=_RTH
         ).recent_closed_bars("SPY", use_rth=True, lookback_days=2)
 
-        monkeypatch.setattr("app.services.bot_trade_strategy.now_ms_utc", lambda: now_ms + 10_000)
+        _pin_clock(monkeypatch, now_ms + 10_000)
         warmup = await _RetainedSourceBarFeed(
-            _HistoryFeed([]), ledger, run_id="run-3", session=_RTH
+            _HistoryFeed([], live_from_ms=_minute_open(now_ms)), ledger, run_id="run-3", session=_RTH
         ).recent_closed_bars("SPY", use_rth=True, lookback_days=2)
 
         assert warmup[0].start_ms == history[0].start_ms
