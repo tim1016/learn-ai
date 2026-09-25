@@ -122,6 +122,8 @@ _METADATA_FILE_NAMES: dict[MetadataKind, str] = {
 _WORKER_ID = __name__  # distinct lease-owner label from ensure_data._WORKER_ID
 _LEASE_TTL_MS = 300_000
 _MAX_CLAIM_RETRIES = 3
+# A launcher outage is retried however many attempts it has cost (#1889).
+_RETRY_CEILING_EXEMPT_ERRORS = frozenset({"launcher_unreachable"})
 _LOCK_POLL_INTERVAL_S = 0.05
 _LOCK_TIMEOUT_S = 60.0
 
@@ -587,14 +589,15 @@ async def _claim_or_reclaim_metadata_row(
     way; only what the caller does once it holds the lease differs
     (complete vs. fail).
 
-    Reclaiming an existing row passes ``bypass_retry_ceiling=True`` to
-    ``catalog_client.steal_or_retry_minute_bar`` whenever the row's last
-    recorded failure was ``launcher_unreachable`` (#1889): that specific
-    reason is knowably transient (the launcher being down is never something
-    more attempts fix faster, and must stay retryable no matter how long the
-    outage lasts), so it is exempt from the normal ``AttemptCount`` ceiling
-    other failures are still subject to. No caller of this function chooses
-    that -- it is derived here, from the row's own recorded ``LastError``.
+    Reclaiming goes through ``catalog_client.reclaim_after_lost_claim``, the
+    one reclaim protocol every artifact kind shares, with
+    ``launcher_unreachable`` exempt from the retry ceiling (#1889): that
+    specific reason is knowably transient (the launcher being down is never
+    something more attempts fix faster, and must stay retryable no matter
+    how long the outage lasts), so it is exempt from the normal
+    ``AttemptCount`` ceiling other failures are still subject to. No caller
+    of this function chooses that -- it is keyed on the row's own recorded
+    ``LastError``.
     """
     artifact_id = await catalog_client.claim_metadata_artifact(
         identity=identity, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, data_contract_hash=dch, file_path=file_path
@@ -606,30 +609,18 @@ async def _claim_or_reclaim_metadata_row(
     if existing is not None:
         return _MetadataRowClaim(None, existing, None)
 
-    row_state = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
-    if row_state is None:
-        return _MetadataRowClaim(None, None, "lease_timeout")
-
-    reclaimed_generation = await catalog_client.steal_or_retry_minute_bar(
-        artifact_id=row_state.id,
+    reclaim = await catalog_client.reclaim_after_lost_claim(
+        lambda: catalog_client.select_metadata_claim_state(dch, data_root_id=root_id),
         worker_id=_WORKER_ID,
         lease_ttl_ms=_LEASE_TTL_MS,
         max_retries=_MAX_CLAIM_RETRIES,
-        bypass_retry_ceiling=(row_state.last_error == "launcher_unreachable"),
+        retry_ceiling_exempt_errors=_RETRY_CEILING_EXEMPT_ERRORS,
     )
-    if reclaimed_generation is not None:
-        # The reclaim minted a new generation; the row's previous one is
-        # stale from this moment, so the caller must carry this value.
-        return _MetadataRowClaim(row_state.id, None, None, reclaimed_generation)
-
-    # row_state is a pre-reclaim snapshot; a concurrent winner can flip
-    # 'failed' -> 'fetching' between it and this check (same race
-    # app.data_lake.ensure_data's old bootstrap guarded against). Re-read
-    # before deciding rather than trusting the stale snapshot.
-    current = await catalog_client.select_metadata_claim_state(dch, data_root_id=root_id)
-    if current is not None and current.status == "failed":
-        return _MetadataRowClaim(None, None, "fetch_timeout")
-    return _MetadataRowClaim(None, None, "lease_timeout")
+    if isinstance(reclaim, catalog_client.ReclaimRefused):
+        return _MetadataRowClaim(None, None, reclaim.reason)
+    # The reclaim minted a new generation; the row's previous one is stale
+    # from this moment, so the caller must carry this value.
+    return _MetadataRowClaim(reclaim.artifact_id, None, None, reclaim.lease_generation)
 
 
 def _metadata_row_dch_and_identity(spec: DataRunSpec, kind: MetadataKind, root_id: UUID) -> tuple[str, ArtifactIdentity]:

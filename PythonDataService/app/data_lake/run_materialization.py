@@ -120,9 +120,8 @@ def _build_engine_run_spec(
     per-symbol daily zip, which the lake derives from them) and never
     opens a factor file or a map file — those are LEAN's corp-action
     inputs and belong to the sidecar's spec, not this one. Asking for
-    them here would buy two extra provider round-trips per run plus a
-    window-keyed data contract that makes the *next* window's run report
-    a contract mismatch.
+    them here would buy provider round-trips per run for files this
+    engine never reads.
     """
     # Imported here rather than at module scope: the digest is the sidecar
     # package's to publish, and the lake should not depend on it to import.
@@ -305,9 +304,17 @@ def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: Engin
     aggregate to ever catch it. Every ``time_series_bars`` failure therefore
     withholds a daily run, unconditionally.
 
+    A factor-file failure withholds what the run reads whenever it occurs:
+    only a spec that asks for the factor file can fail on one, and the one
+    spec that does (:func:`_build_symbol_history_spec`) asks because its
+    study adjusts every bar it reads through that file (#2452). Contention
+    on it is therefore waited out like contention on a bar.
+
     Metadata failures mean the lake fell back to its hardcoded calendar —
     bad, and logged — but they withhold no bars, at either resolution.
     """
+    if failure.artifact_kind == "factor_file":
+        return True
     if failure.artifact_kind != "time_series_bars":
         return False
     if resolution == "daily":
@@ -755,13 +762,15 @@ def _build_symbol_history_spec(
 
     Minute trade bars plus the factor and map files: the research reads
     adjust returns through the factor file, so a newly captured symbol
-    must land with its corporate-action inputs or degrade (documented) to
-    raw returns. No daily rollup, for the same window-keyed data-contract
-    reason as the chart spec. ``run_type="chart"`` on purpose: this is a
-    UI-triggered, best-effort ingest of exactly the artifact class the
-    chart seam fetches, and sharing the label is what lets catalog claims
-    coalesce a study's cold capture with a chart's request for the same
-    sessions into one provider fetch.
+    must land with its corporate-action inputs, and this capture is also
+    what rebuilds a factor file that no longer covers the window (#2452) —
+    a window it still does not cover is refused, never studied unadjusted.
+    No daily rollup, for the same reason as the chart spec (a whole-symbol
+    artifact rebuilt on every coverage change). ``run_type="chart"`` on
+    purpose: this is a UI-triggered, best-effort ingest of exactly the
+    artifact class the chart seam fetches, and sharing the label is what
+    lets catalog claims coalesce a study's cold capture with a chart's
+    request for the same sessions into one provider fetch.
     """
     from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 
@@ -805,11 +814,9 @@ async def materialize_symbol_history(
     live on the request loop. Unlike a bare :func:`ensure_data` call, the
     capture here goes through :func:`_materialize_run_data`, so it (a) waits
     out a sibling fetch that owns the catalog claim instead of returning
-    its ``lease_timeout`` as a final answer, and (b) is bounded by
-    ``fetch_timeout_seconds`` wall-clock. Contention on artifacts this
-    consumer only benefits from (a factor file still being fetched
-    elsewhere) is not waited out — the study degrades to raw returns with a
-    warning rather than blocking on it, exactly as it would alone.
+    its ``lease_timeout`` as a final answer — a factor file another capture
+    is still building included — and (b) is bounded by
+    ``fetch_timeout_seconds`` wall-clock.
 
     Never raises for a data reason; every failure lands in the receipt's
     ``failed``/``skipped`` status and ``detail``.

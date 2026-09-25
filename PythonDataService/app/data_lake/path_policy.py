@@ -266,6 +266,18 @@ class LeanFactorFilePath:
     def relative_path(self) -> PurePosixPath:
         return PurePosixPath("equity") / self.market / "factor_files" / f"{self.symbol.lower()}.csv"
 
+    def coverage_record_path(self) -> PurePosixPath:
+        """The factor file's coverage record: the sessions its corporate
+        actions cover, bound to the CSV's bytes (#2452,
+        ``factor_files.FactorCoverageRecord``).
+
+        Beside the CSV but never a ``.csv`` itself: LEAN's local-disk factor
+        provider opens ``factor_files/<symbol>.csv`` by exact name, and the
+        sidecar staging lists only ``*.csv``, so the record cannot be read as
+        a factor file by either.
+        """
+        return PurePosixPath("equity") / self.market / "factor_files" / f"{self.symbol.lower()}.coverage.json"
+
 
 @dataclass(frozen=True)
 class LeanMapFilePath:

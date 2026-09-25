@@ -12,13 +12,17 @@ Tests updated to mock the launcher endpoint + corp-action endpoints.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import re
 import threading
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import httpx
@@ -28,7 +32,17 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import ArtifactIdentity, DataRunSpec, trading_date_to_calendar_anchor_ms
+from app.data_lake.factor_files import (
+    SessionRun,
+    factor_coverage_record_bytes,
+    factor_multiplier_as_of,
+    parse_factor_file,
+)
+from app.data_lake.path_policy import LeanFactorFilePath
+from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord, DataRunSpec, trading_date_to_calendar_anchor_ms
+from app.engine.data.lean_format import write_lean_day_zip
+from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar import config as sidecar_config
 
 
@@ -580,17 +594,204 @@ async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(c
 
 
 # ---------------------------------------------------------------------------
-# P1 #2: Factor-file DCH varies with history window
+# P1 #2: Factor-file DCH follows the captured source set, not the window (#2452)
 # ---------------------------------------------------------------------------
 
 
-def test_factor_file_dch_differs_across_windows():
-    """Two ensure_data calls with different windows must produce different factor-file DCHs."""
+def _minute_source(artifact_id: int, trading_date: date, sha: str) -> ArtifactRecord:
+    return ArtifactRecord(
+        id=artifact_id,
+        artifact_kind="time_series_bars",
+        market="usa",
+        symbol="SPY",
+        trading_date=trading_date,
+        resolution="minute",
+        data_type="trade",
+        provider="polygon",
+        price_adjustment_mode="raw",
+        data_contract_hash="d" * 64,
+        file_path=f"equity/usa/minute/spy/{trading_date:%Y%m%d}_trade.zip",
+        file_sha256=sha,
+        row_count=390,
+        first_bar_start_ms=None,
+        last_bar_start_ms=None,
+    )
+
+
+def test_factor_file_dch_follows_the_captured_source_set():
+    """A grown source set or a re-fetched day's bytes change the factor-file
+    DCH (the file must be rebuilt); the order the catalog returns them in
+    does not."""
     from app.data_lake.ensure_data import _factor_file_dch
 
-    dch_narrow = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 22), "raw")
-    dch_wide = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 24), "raw")
-    assert dch_narrow != dch_wide, "factor-file data_contract_hash must differ when history windows differ"
+    narrow = [_minute_source(1, date(2024, 5, 20), "a" * 64), _minute_source(2, date(2024, 5, 21), "b" * 64)]
+    wide = [*narrow, _minute_source(3, date(2024, 5, 22), "c" * 64)]
+    refetched = [narrow[0], _minute_source(2, date(2024, 5, 21), "e" * 64)]
+
+    assert _factor_file_dch(narrow, "raw") != _factor_file_dch(wide, "raw")
+    assert _factor_file_dch(narrow, "raw") != _factor_file_dch(refetched, "raw")
+    assert _factor_file_dch(narrow, "raw") == _factor_file_dch(list(reversed(narrow)), "raw")
+
+
+# ---------------------------------------------------------------------------
+# #2452 review: one unpriceable session costs one span, not the symbol's file
+# ---------------------------------------------------------------------------
+
+_ET = ZoneInfo("America/New_York")
+# 07-04 is a holiday: one captured span 07-01..07-08. 07-03 prices the 07-05
+# split and 07-05 the 07-08 dividend.
+_CAPTURED = [date(2024, 7, d) for d in (1, 2, 3, 5, 8)]
+_SPLIT = SplitEvent(execution_date="2024-07-05", split_from=1, split_to=2)
+_DIVIDEND = DividendEvent(ex_dividend_date="2024-07-08", cash_amount=1.0)
+
+
+def _write_one_bar_day(lake_root: Path, day: date, hour: int, minute: int, price: str) -> None:
+    start_ms = int(datetime(day.year, day.month, day.day, hour, minute, tzinfo=_ET).timestamp() * 1000)
+    p = Decimal(price)
+    write_lean_day_zip(
+        lake_root,
+        "SPY",
+        day,
+        [TradeBar(symbol="SPY", open=p, high=p, low=p, close=p, volume=100, start_ms=start_ms, end_ms=start_ms + 60_000)],
+    )
+
+
+@pytest.mark.parametrize("bad_day", ["extended_hours_only", "zip_missing"])
+def test_an_unpriceable_reference_session_breaks_one_span_not_the_file(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, bad_day: str
+) -> None:
+    """07-03 has no readable regular-session close. The file is still built:
+    its span ends at 07-03, so the 07-05 split it would price falls outside
+    every span (reads crossing 07-03 → 07-05 are refused), while the 07-08
+    dividend in the rest of the span stays priced on 07-05's close. Before
+    the fix the whole build refused and the symbol could never be studied."""
+    from app.data_lake.ensure_data import _factor_file_over_captured_sessions
+
+    for day in _CAPTURED:
+        if day != date(2024, 7, 3):
+            _write_one_bar_day(tmp_path, day, 15, 59, "100" if day < date(2024, 7, 5) else "50")
+    if bad_day == "extended_hours_only":
+        _write_one_bar_day(tmp_path, date(2024, 7, 3), 8, 0, "100")
+    sources = [_minute_source(i, day, f"{i:064x}") for i, day in enumerate(_CAPTURED, start=1)]
+
+    with caplog.at_level(logging.WARNING, logger="app.data_lake.ensure_data"):
+        payload, plan = _factor_file_over_captured_sessions(
+            "SPY", [_SPLIT], [_DIVIDEND], sources, lake_root=tmp_path, fallback_date=_CAPTURED[0]
+        )
+
+    assert plan.spans == (
+        SessionRun(date(2024, 7, 1), date(2024, 7, 3)),
+        SessionRun(date(2024, 7, 5), date(2024, 7, 8)),
+    )
+    assert plan.splits == ()
+    assert plan.dividends == (_DIVIDEND,)
+    rows = parse_factor_file(payload.decode("ascii"))
+    ratio = factor_multiplier_as_of(rows, date(2024, 7, 5)) / factor_multiplier_as_of(rows, date(2024, 7, 8))
+    assert float(ratio) == pytest.approx(1 - 1.0 / 50, abs=1e-9, rel=0)
+    assert any(getattr(r, "action", None) == "factor_file_span_broken" for r in caplog.records)
+
+
+def test_an_actionless_file_whose_anchor_sessions_have_no_close_anchors_on_the_nearest_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 on #2481: no corporate action falls inside the span, and the
+    first and last captured sessions hold extended-hours bars only. The
+    build read just those two zips, found no close, and refused
+    (``FactorFileReferenceError``), so the capture failed and every study of
+    the symbol was refused (409). Each anchor row takes the nearest session
+    inward that has a close, the one a read of every session gave it before
+    #2452 (first anchor: the earliest close; last: the nearest earlier one),
+    reading one more zip at a time: 07-03 is never opened."""
+    from app.data_lake import derived_daily
+    from app.data_lake.ensure_data import _factor_file_over_captured_sessions
+
+    first, last = _CAPTURED[0], _CAPTURED[-1]
+    _write_one_bar_day(tmp_path, first, 8, 0, "99")
+    _write_one_bar_day(tmp_path, date(2024, 7, 2), 15, 59, "101")
+    _write_one_bar_day(tmp_path, date(2024, 7, 3), 15, 59, "102")
+    _write_one_bar_day(tmp_path, date(2024, 7, 5), 15, 59, "103")
+    _write_one_bar_day(tmp_path, last, 17, 0, "104")
+    sources = [_minute_source(i, day, f"{i:064x}") for i, day in enumerate(_CAPTURED, start=1)]
+    real_read = derived_daily.read_minute_trade_bars
+    opened: list[str] = []
+
+    def _recording_read(file_path: str, lake_root: Path):
+        opened.append(file_path)
+        return real_read(file_path, lake_root)
+
+    monkeypatch.setattr(derived_daily, "read_minute_trade_bars", _recording_read)
+
+    payload, plan = _factor_file_over_captured_sessions(
+        "SPY", [], [], sources, lake_root=tmp_path, fallback_date=first
+    )
+
+    assert plan.spans == (SessionRun(first, last),)
+    assert payload == b"20240701,1,1,101\n20240708,1,1,103\n"
+    assert sorted(opened) == sorted(
+        f"equity/usa/minute/spy/{day:%Y%m%d}_trade.zip"
+        for day in (first, date(2024, 7, 2), date(2024, 7, 5), last)
+    )
+
+
+def test_a_vouched_for_factor_file_that_does_not_parse_is_logged_and_rebuilt(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Lake corruption the coverage record vouches for is rebuilt, never
+    reused — and never silently: the rebuild says why."""
+    from app.data_lake.ensure_data import _factor_file_is_recorded
+
+    body = b"not,a,factor-file\n"
+    paths = LeanFactorFilePath(market="usa", symbol="SPY")
+    csv_path = tmp_path.joinpath(*paths.relative_path().parts)
+    csv_path.parent.mkdir(parents=True)
+    csv_path.write_bytes(body)
+    tmp_path.joinpath(*paths.coverage_record_path().parts).write_bytes(
+        factor_coverage_record_bytes("SPY", body, [SessionRun(date(2024, 7, 1), date(2024, 7, 8))])
+    )
+    row = _minute_source(1, date(2024, 7, 1), hashlib.sha256(body).hexdigest()).model_copy(
+        update={"artifact_kind": "factor_file", "trading_date": None, "file_path": str(paths.relative_path())}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.data_lake.ensure_data"):
+        assert _factor_file_is_recorded(tmp_path, row) is False
+
+    assert any(getattr(r, "action", None) == "rebuild_corrupt_factor_file" for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_factor_file_with_no_scheduled_captured_session_is_a_named_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source set holding no scheduled NYSE session cannot anchor a factor
+    file: that is the artifact's typed failure, not an exception escaping
+    ensure_data as a 500."""
+    from app.data_lake import ensure_data as ensure_data_module
+
+    async def _sources(*args: object, **kwargs: object) -> list[ArtifactRecord]:
+        return [_minute_source(1, date(2024, 7, 6), "a" * 64)]  # a Saturday
+
+    async def _none(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def _no_actions(*args: object, **kwargs: object) -> list[object]:
+        return []
+
+    monkeypatch.setattr(catalog_client, "select_coverage_minute_bars", _sources)
+    monkeypatch.setattr(catalog_client, "select_complete_corp_action_artifact", _none)
+    monkeypatch.setattr(ensure_data_module, "fetch_splits", _no_actions)
+    monkeypatch.setattr(ensure_data_module, "fetch_dividends", _no_actions)
+    identity = ArtifactIdentity(
+        artifact_kind="factor_file", market="usa", symbol="SPY", provider="polygon", price_adjustment_mode="raw"
+    )
+
+    record, failure, _outcome = await ensure_data_module._process_factor_file_artifact(
+        identity, _spec_narrow(["SPY"]), tmp_path
+    )
+
+    assert record is None
+    assert failure is not None
+    assert failure.reason == "internal_error"
+    assert "scheduled NYSE session" in failure.detail
 
 
 # ---------------------------------------------------------------------------
@@ -700,8 +901,8 @@ async def test_daily_artifact_rebuilds_onto_a_wider_window(clean_artifacts, pool
         if f.reason == "data_contract_mismatch" and f.artifact_kind == "time_series_bars"
     ]
     assert not mismatch_failures, f"expected no data_contract_mismatch failure, got: {result_wide.failures}"
-    # 2, not 1: the factor_file's DCH is also window-scoped (_factor_file_dch)
-    # and rebuilds onto the wider history window alongside the daily-trade
+    # 2, not 1: the factor_file's DCH is also keyed by the symbol's captured
+    # source set (_factor_file_dch) and rebuilds onto it alongside the daily-trade
     # artifact — see test_factor_file_rebuilds_onto_a_wider_window for that
     # rebuild in isolation.
     assert result_wide.refreshed_artifact_count == 2, "both the daily and factor-file rebuilds must count as refreshed"
@@ -731,8 +932,9 @@ async def test_daily_artifact_rebuilds_onto_a_wider_window(clean_artifacts, pool
 @pytest.mark.asyncio
 async def test_factor_file_rebuilds_onto_a_wider_window(clean_artifacts, pool, tmp_lake):
     """Same #1870 rebuild-on-mismatch model as the daily-trade artifact,
-    applied to factor_file: a wider window changes _factor_file_dch (see
-    test_factor_file_dch_differs_across_windows), and the existing complete
+    applied to factor_file: a wider window grows the captured source set
+    _factor_file_dch is keyed by (see
+    test_factor_file_dch_follows_the_captured_source_set), and the existing complete
     row must rebuild onto it instead of silently keeping the narrower
     window's split/dividend history bounds (#1873 review fix — this gap
     would have produced incorrect adjusted results after a widened

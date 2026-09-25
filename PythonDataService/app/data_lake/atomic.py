@@ -44,6 +44,7 @@ import contextlib
 import hashlib
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from uuid import UUID
 
@@ -225,6 +226,7 @@ async def publish_artifact(
     first_bar_start_ms: int,
     last_bar_start_ms: int,
     data_contract_hash: str | None = None,
+    companions: Sequence[tuple[PurePosixPath, bytes]] = (),
 ) -> str:
     """Publish one artifact under its catalog lease (issue #1888).
 
@@ -240,26 +242,48 @@ async def publish_artifact(
        lock, writes the completion receipt in the same transaction, and
        commits.
 
+    ``companions`` are ``(rel_lake_path, bytes)`` files that describe the
+    artifact and must never be on the lake without it, nor it without them
+    (the factor file's coverage record, #2452). They are staged with the
+    artifact and renamed under the same lock, before it: the artifact the
+    receipt describes is renamed last, immediately before the receipt
+    commits, so a row the catalog reads ``'complete'`` always has its
+    companions beside it, and a writer that lost its lease replaces none of
+    them. A crash between the renames rolls the receipt back (the row stays
+    ``'fetching'`` until its lease expires and is reclaimed) and leaves a
+    companion describing bytes the artifact path does not hold yet -- a
+    companion that binds the artifact's hash, as the coverage record does,
+    therefore reads as not vouching for the file, never as vouching for the
+    wrong one. The catalog records only the artifact's own hash.
+
     Returns the SHA-256 hex digest of the published bytes. Raises
     :class:`ArtifactLeaseLostError` when the catalog refuses to authorize
-    the publication -- the canonical file is untouched, the staged bytes are
-    removed, and the caller must not retry this attempt or call
+    the publication -- the canonical files are untouched, the staged bytes
+    are removed, and the caller must not retry this attempt or call
     ``fail_artifact`` (the row is no longer theirs to transition).
 
-    The staged file is removed on every failure path, not just the refusal:
-    staging is request/worker/attempt-scoped with no sweeper behind it, so a
-    contended path that leaked its staged copy would accumulate full
-    artifacts on the lake filesystem indefinitely.
+    Every staged file that was not promoted is removed on every failure path,
+    not just the refusal: staging is request/worker/attempt-scoped with no
+    sweeper behind it, so a contended path that leaked its staged copies
+    would accumulate full artifacts on the lake filesystem indefinitely.
     """
-    staged, sha = stage_content(content, lake_root, staging_root, rel_lake_path, request_id, worker_id, attempt)
-    promoted = False
+    # Companions first, the artifact last: the promotion order.
+    to_promote: list[tuple[Path, PurePosixPath]] = []
+    promoted: set[Path] = set()
 
     def _promote() -> None:
-        nonlocal promoted
-        promote_staged(staged, lake_root, rel_lake_path)
-        promoted = True
+        for staged_path, rel_path in to_promote:
+            promote_staged(staged_path, lake_root, rel_path)
+            promoted.add(staged_path)
 
     try:
+        for companion_path, companion_content in companions:
+            companion_staged, _ = stage_content(
+                companion_content, lake_root, staging_root, companion_path, request_id, worker_id, attempt
+            )
+            to_promote.append((companion_staged, companion_path))
+        staged, sha = stage_content(content, lake_root, staging_root, rel_lake_path, request_id, worker_id, attempt)
+        to_promote.append((staged, rel_lake_path))
         await catalog_client.publish_under_lease(
             artifact_id=artifact_id,
             worker_id=worker_id,
@@ -273,20 +297,23 @@ async def publish_artifact(
             data_contract_hash=data_contract_hash,
         )
     finally:
-        # promote_staged renames the staged path away on success, so there is
-        # nothing left to unlink then. Every other exit -- refusal, a failed
-        # rename, a rolled-back completion -- leaves it behind.
-        if not promoted:
+        # promote_staged renames a staged path away on success, so there is
+        # nothing left to unlink for it then. Every other exit -- refusal, a
+        # failed stage or rename, a rolled-back completion -- leaves the
+        # unpromoted ones behind.
+        staging_prefix = os.path.realpath(staging_root) + os.sep
+        for staged_path, _ in to_promote:
+            if staged_path in promoted:
+                continue
             # Re-anchor the delete inside the staging tree rather than trust
-            # it transitively. ``rel_lake_path`` was already validated by
+            # it transitively. Every rel path was already validated by
             # ``stage_content`` (no absolute paths, no '..', no empty
             # segments) and ``stage_path_for`` roots the result under
             # ``staging_root``, so this cannot fail in practice -- but a
             # delete keyed on caller-supplied path components deserves its
             # own containment check, and this is the prefix form static
             # analysis recognizes as one.
-            staging_prefix = os.path.realpath(staging_root) + os.sep
-            staged_real = os.path.realpath(staged)
+            staged_real = os.path.realpath(staged_path)
             if staged_real.startswith(staging_prefix):
                 with contextlib.suppress(OSError):
                     os.unlink(staged_real)

@@ -90,7 +90,7 @@ export interface CaptureReceipt {
 }
 
 export interface ReturnDistributionStudy {
-  adjustment: 'split_and_dividend' | 'raw';
+  adjustment: 'split_and_dividend';
   warnings: readonly string[];
   capture: CaptureReceipt | null;
   coverage: StudyCoverage;
@@ -193,9 +193,9 @@ export class ReturnsDistributionService {
   }
 
   /** One trading day's extended-session minute candles for the drill-down,
-   * on the study's own price basis: the same raw lake root scaled by the
-   * same LEAN factor-file multiplier the study applied, so the candle pane
-   * cannot disagree with the return being inspected. */
+   * raw from the study's own lake root: the study's adjustment scales one
+   * day by one constant, so the candles' shape — every within-day return
+   * the drill-down shows — is the same raw. */
   minuteCandles(ticker: string, sessionOpenMsUtc: number): Observable<StockAggregate[]> {
     const body: DayCandlesRequestDto = {
       symbol: ticker,

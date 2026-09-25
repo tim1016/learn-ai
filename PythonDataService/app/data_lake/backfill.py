@@ -600,13 +600,12 @@ async def run_backfill(
     # Pass 1 retry a failure that already happened once this run — repeating
     # a doomed auth/rate-limit call in the fatal case, or just duplicating
     # the same failure in the report otherwise.
-    # This can under-cover the factor_file's history window when a later day
-    # past the first failure succeeded (its own window is spec-scoped, unlike
-    # the daily-trade artifact's, whose source set is read from the full
-    # catalog regardless of this spec's window — see ensure_data.
-    # _process_daily_trade_artifact) — an acceptable trade-off since a later
-    # ensure_data/backfill call over that wider range naturally rebuilds it
-    # once the underlying provider issue is resolved.
+    # The truncation cannot under-cover the derived artifacts: the factor
+    # file and the daily-trade artifact are both built over the symbol's
+    # full catalogued minute-trade set regardless of this spec's window
+    # (ensure_data._process_factor_file_artifact /
+    # _process_daily_trade_artifact), so a later day past the first failure
+    # that succeeded is still included.
     attempted_sessions = sessions[: len(sessions) - days_unattempted]
     rollup_sessions = (
         attempted_sessions[: first_bar_failure_day_index - 1]

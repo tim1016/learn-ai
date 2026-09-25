@@ -12,6 +12,23 @@ the lake now holds. A capture that still leaves the window empty is
 surfaced as a typed error carrying what *is* captured and why the capture
 could not populate the symbol.
 
+The study is always split-and-dividend adjusted on the latest-known basis
+(owner decision #2432). It reads the factor file only through
+``factor_files.read_covering_factor_rows`` — the one coverage check — over
+exactly the sessions whose adjusted prices its returns read
+(``sessions_read_by_returns``: each returned day and the close it returns
+against, never the rest of the lead-in). A window the file does not cover
+(no file, a file written before coverage was recorded, or sessions outside
+its covered spans) triggers the same on-demand capture a missing session
+does, which rebuilds the file over every captured session; if the window is
+still uncovered after it, the request is refused
+(:class:`AdjustmentNotCoveredError`) with the reason, never answered with
+partially adjusted returns labelled adjusted (#2452). Its candle pane shows
+the day's raw prices: one day has one multiplier, a constant rescale of the
+price axis that no candle's shape depends on, and the adjusted level would
+be on the factor file's basis rather than today's (``factor_files``' module
+docstring).
+
 All math lives in ``app/research/return_distribution.py``; this module only
 loads bars, resolves the calendar windows, runs the capture boundary, and
 keeps the heavy zip parse + reduction off the event loop
@@ -26,11 +43,11 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
-from app.data_lake.factor_files import factor_multiplier_as_of, read_factor_rows
+from app.data_lake.factor_files import FactorFileNotCoveringError, read_covering_factor_rows
 from app.data_lake.path_policy import minute_bar_market_root, resolve_lake_root
 from app.data_lake.run_materialization import materialize_symbol_history
 from app.data_lake.types import is_lake_addressable_symbol
@@ -39,11 +56,13 @@ from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions, session_windows_ms_utc
 from app.lean_sidecar.workspace import SymbolValidationError, validate_symbol
 from app.research.return_distribution import (
+    DayAnchors,
     ReturnDistributionResult,
     adjust_anchors,
     build_return_distribution,
     compute_daily_returns,
     extract_day_anchors,
+    sessions_read_by_returns,
 )
 from app.services.chart_bar_source import split_sessions_at_boundary
 from app.services.chart_service import resolve_request_dates
@@ -105,6 +124,25 @@ class SymbolNotCapturedError(Exception):
         self.lake_addressable = lake_addressable
 
 
+class AdjustmentNotCoveredError(Exception):
+    """The lake's split/dividend adjustment does not cover the sessions read.
+
+    Owner decision #2432: a window the adjustment data does not cover is
+    refused rather than labelled adjusted. ``reason`` is the coverage
+    check's own account of what is missing; ``capture_note`` says what the
+    on-demand capture (which rebuilds the factor file) did about it.
+    """
+
+    def __init__(self, symbol: str, reason: str, capture_note: str) -> None:
+        super().__init__(
+            f"the split and dividend adjustment for {symbol!r} does not cover this window: {reason} "
+            f"(on-demand capture: {capture_note})"
+        )
+        self.symbol = symbol
+        self.reason = reason
+        self.capture_note = capture_note
+
+
 class InsufficientCoverageError(Exception):
     """The lake holds fewer than MIN_SESSIONS sessions in the requested window."""
 
@@ -147,12 +185,32 @@ class StudyOutcome:
 
 
 @dataclass(frozen=True)
-class _CoverageProbe:
-    """Whether the lake already covers the window, and the capture span if not."""
+class _SessionProbe:
+    """The read window's completed sessions, and whether the lake misses any.
 
-    needs_capture: bool
-    capture_start: date | None
-    capture_end: date | None
+    ``capture_span`` is ``None`` when the window holds no completed session,
+    so there is nothing a capture could fetch.
+    """
+
+    capture_span: tuple[date, date] | None
+    sessions_missing: bool
+
+
+@dataclass(frozen=True)
+class _StudyRead:
+    """What the lake holds for the read window, reduced to the day anchors.
+
+    ``adjusted_sessions`` is the set the factor file must cover
+    (``sessions_read_by_returns``): each returned day and the session it
+    returns against. It is derived once per read and used both to decide
+    whether to capture (``adjustment_covered``) and by the study's own
+    check, so the two can never disagree.
+    """
+
+    lake_dates: list[date]
+    anchors: list[DayAnchors]
+    adjusted_sessions: list[date]
+    adjustment_covered: bool
 
 
 _NOT_ATTEMPTED = CaptureReceipt(status="not_attempted", fetched_artifact_count=0)
@@ -165,14 +223,22 @@ def _captured_symbols(root: Path) -> list[str]:
     return sorted(p.name.upper() for p in minute_root.iterdir() if p.is_dir())
 
 
-def _probe_lake_coverage(
+def _factor_file_covers(lake_root: Path, symbol: str, sessions: list[date]) -> bool:
+    try:
+        read_covering_factor_rows(lake_root, market="usa", symbol=symbol, sessions=sessions)
+    except FactorFileNotCoveringError:
+        return False
+    return True
+
+
+def _probe_lake_sessions(
     *,
     symbol: str,
     from_date: date,
     to_date: date,
     lake_root: Path,
     now_ms: int,
-) -> _CoverageProbe:
+) -> _SessionProbe:
     """Does the lake already hold every completed session of the read window?
 
     The read window — and therefore the capture span — starts at the
@@ -182,7 +248,7 @@ def _probe_lake_coverage(
     them is still missing data this study reads. The span is the
     completed-session prefix of that window (the same calendar split the
     chart composer uses, so the two can never disagree about which sessions
-    are immutable history).
+    are immutable history). Only the dates are listed; no bar is parsed.
     """
     read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
     completed, _live, _boundary = split_sessions_at_boundary(
@@ -198,16 +264,42 @@ def _probe_lake_coverage(
         session="extended",
     )
     if not completed:
-        return _CoverageProbe(needs_capture=False, capture_start=None, capture_end=None)
+        return _SessionProbe(capture_span=None, sessions_missing=False)
     capture_start, capture_end = completed[0].session_date, completed[-1].session_date
     reader = LeanMinuteDataReader([lake_root], session="extended")
     lake_dates = set(reader.iter_dates(symbol, read_start, to_date))
-    window_sessions = expected_sessions(capture_start, capture_end)
-    needs = any(d not in lake_dates for d in window_sessions)
-    return _CoverageProbe(
-        needs_capture=needs,
-        capture_start=capture_start if needs else None,
-        capture_end=capture_end if needs else None,
+    return _SessionProbe(
+        capture_span=(capture_start, capture_end),
+        sessions_missing=any(d not in lake_dates for d in expected_sessions(capture_start, capture_end)),
+    )
+
+
+def _read_study_window(*, symbol: str, from_date: date, to_date: date, lake_root: Path) -> _StudyRead:
+    """Parse the read window's bars once, into day anchors and the adjusted-session set.
+
+    The lead-in is read so the first returned day has a previous close,
+    and for nothing else: ``sessions_read_by_returns`` keeps only that one
+    lead-in session. A factor file whose coverage breaks elsewhere in the
+    lead-in (after a reference session it could not price) is no reason to
+    refuse; one that breaks between a returned day and the close it returns
+    against is.
+    """
+    read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
+    reader = LeanMinuteDataReader([lake_root], session="extended")
+    lake_dates = list(reader.iter_dates(symbol, read_start, to_date))
+    windows = {
+        w.session_date: (w.open_ms_utc, w.close_ms_utc)
+        for w in session_windows_ms_utc(read_start, to_date)
+    }
+    anchors = extract_day_anchors({d: reader.read_day(symbol, d) for d in lake_dates}, windows)
+    adjusted_sessions = sessions_read_by_returns(
+        anchors, scheduled_sessions=expected_sessions(read_start, to_date), since=from_date
+    )
+    return _StudyRead(
+        lake_dates=lake_dates,
+        anchors=anchors,
+        adjusted_sessions=adjusted_sessions,
+        adjustment_covered=_factor_file_covers(lake_root, symbol, adjusted_sessions),
     )
 
 
@@ -251,13 +343,12 @@ def _compute_sync(
     bin_width_pct: float,
     span_pct: float,
     lake_root: Path,
+    read: _StudyRead,
     capture: CaptureReceipt,
 ) -> StudyOutcome:
     read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
-    reader = LeanMinuteDataReader([lake_root], session="extended")
 
-    lake_dates = list(reader.iter_dates(symbol, read_start, to_date))
-    in_range = [d for d in lake_dates if d >= from_date]
+    in_range = [d for d in read.lake_dates if d >= from_date]
     if not in_range:
         capture_note = (
             capture.detail if capture.status not in ("not_attempted",) else "capture was not attempted"
@@ -267,27 +358,17 @@ def _compute_sync(
         )
     expected = expected_sessions(from_date, to_date)
 
-    windows = {
-        w.session_date: (w.open_ms_utc, w.close_ms_utc)
-        for w in session_windows_ms_utc(read_start, to_date)
-    }
-    bars_by_day = {d: reader.read_day(symbol, d) for d in lake_dates}
-    anchors = extract_day_anchors(bars_by_day, windows)
-
-    factor_rows = read_factor_rows(lake_root, market="usa", symbol=symbol)
-    warnings: list[str] = []
-    adjustment: Literal["split_and_dividend", "raw"]
-    if factor_rows:
-        adjustment = "split_and_dividend"
-    else:
-        adjustment = "raw"
-        warnings.append(
-            "no factor file captured for this symbol: returns are unadjusted for "
-            "splits and dividends, so corporate-action days can appear as outlier moves"
+    try:
+        factor_rows = read_covering_factor_rows(
+            lake_root, market="usa", symbol=symbol, sessions=read.adjusted_sessions
         )
+    except FactorFileNotCoveringError as e:
+        capture_note = capture.status + (f": {capture.detail}" if capture.detail else "")
+        raise AdjustmentNotCoveredError(symbol, e.reason, capture_note) from e
+    warnings: list[str] = []
 
     scheduled = expected_sessions(read_start, to_date)
-    all_days = compute_daily_returns(adjust_anchors(anchors, factor_rows), scheduled_sessions=scheduled)
+    all_days = compute_daily_returns(adjust_anchors(read.anchors, factor_rows), scheduled_sessions=scheduled)
     days = [d for d in all_days if d.trading_date >= from_date]
 
     # The statistics floor applies to *usable* observations, after the
@@ -325,21 +406,19 @@ def _compute_sync(
         days,
         bin_width_pct=bin_width_pct,
         span_pct=span_pct,
-        adjustment=adjustment,
+        adjustment="split_and_dividend",
     )
     logger.info(
-        "[RETURN_DISTRIBUTION] %s %s..%s: %d sessions, adjustment=%s",
+        "[RETURN_DISTRIBUTION] %s %s..%s: %d sessions",
         symbol,
         from_date.isoformat(),
         to_date.isoformat(),
         len(days),
-        adjustment,
         extra={
             "symbol": symbol,
             "from_date": from_date.isoformat(),
             "to_date": to_date.isoformat(),
             "sessions": len(days),
-            "adjustment": adjustment,
         },
     )
     return StudyOutcome(
@@ -389,20 +468,27 @@ async def compute_return_distribution(
     to_d = date.fromisoformat(to_iso)
 
     probe = await asyncio.to_thread(
-        _probe_lake_coverage,
+        _probe_lake_sessions,
         symbol=validated,
         from_date=from_d,
         to_date=to_d,
         lake_root=root,
         now_ms=now_ms_utc(),
     )
+    read_window = partial(_read_study_window, symbol=validated, from_date=from_d, to_date=to_d, lake_root=root)
+    span = probe.capture_span
     capture = _NOT_ATTEMPTED
-    if probe.needs_capture and probe.capture_start is not None and probe.capture_end is not None:
-        capture = await _capture_missing_sessions(
-            symbol=validated,
-            start=probe.capture_start,
-            end=probe.capture_end,
-        )
+    if span is not None and probe.sessions_missing:
+        capture = await _capture_missing_sessions(symbol=validated, start=span[0], end=span[1])
+    read = await asyncio.to_thread(read_window)
+    # Bars alone are not enough (#2452): a chart or backtest capture writes
+    # raw bars without factor files, so a lake can hold every session while
+    # its factor file covers only an older window. The capture is what
+    # rebuilds the file, so an uncovered read captures too (once: a capture
+    # that already ran has rebuilt it) and is read again.
+    if span is not None and capture is _NOT_ATTEMPTED and not read.adjustment_covered:
+        capture = await _capture_missing_sessions(symbol=validated, start=span[0], end=span[1])
+        read = await asyncio.to_thread(read_window)
 
     return await asyncio.to_thread(
         _compute_sync,
@@ -412,6 +498,7 @@ async def compute_return_distribution(
         bin_width_pct=bin_width_pct,
         span_pct=span_pct,
         lake_root=root,
+        read=read,
         capture=capture,
     )
 
@@ -430,10 +517,10 @@ class DayNotCapturedError(Exception):
 
 @dataclass(frozen=True)
 class DayCandlesOutcome:
-    """One day's extended-session minute bars on the study's price basis."""
+    """One day's extended-session minute bars, raw as the lake holds them."""
 
     trading_date: date
-    adjustment: Literal["split_and_dividend", "raw"]
+    adjustment: Literal["raw"]
     bars: list[TradeBar]
 
 
@@ -451,44 +538,19 @@ def _day_candles_sync(
     if not bars:
         raise DayNotCapturedError(symbol, trading_date)
 
-    # One trading date → one cumulative multiplier: prices scale, volume
-    # does not — the same LEAN semantics the study's anchors follow, from
-    # the same raw root and the same factor file, so the candle pane's
-    # basis cannot drift from the return being inspected.
-    factor_rows = read_factor_rows(lake_root, market="usa", symbol=symbol)
-    multiplier = factor_multiplier_as_of(factor_rows, trading_date)
-    adjustment: Literal["split_and_dividend", "raw"] = (
-        "split_and_dividend" if factor_rows else "raw"
-    )
-    if multiplier == Decimal(1):
-        scaled = bars
-    else:
-        scaled = [
-            TradeBar(
-                symbol=b.symbol,
-                open=b.open * multiplier,
-                high=b.high * multiplier,
-                low=b.low * multiplier,
-                close=b.close * multiplier,
-                volume=b.volume,
-                start_ms=b.start_ms,
-                end_ms=b.end_ms,
-            )
-            for b in bars
-        ]
+    # Raw, not adjusted: the study's multiplier for one trading date is one
+    # constant, so scaling would only rescale the price axis — every candle,
+    # and every within-day segment the drill-down shows, keeps its ratios
+    # either way — while the scaled level would sit on the factor file's
+    # basis (its last covered session), not today's (#2432).
     logger.info(
-        "[RETURN_DISTRIBUTION] day candles %s %s: %d bars, adjustment=%s",
+        "[RETURN_DISTRIBUTION] day candles %s %s: %d bars",
         symbol,
         trading_date.isoformat(),
-        len(scaled),
-        adjustment,
-        extra={"symbol": symbol, "trading_date": trading_date.isoformat(), "bars": len(scaled)},
+        len(bars),
+        extra={"symbol": symbol, "trading_date": trading_date.isoformat(), "bars": len(bars)},
     )
-    return DayCandlesOutcome(
-        trading_date=trading_date,
-        adjustment=adjustment,
-        bars=scaled,
-    )
+    return DayCandlesOutcome(trading_date=trading_date, adjustment="raw", bars=bars)
 
 
 async def compute_day_candles(
@@ -497,7 +559,7 @@ async def compute_day_candles(
     session_open_ms_utc: int,
     lake_root: Path | None = None,
 ) -> DayCandlesOutcome:
-    """Read one captured trading day's minute bars on the study's price basis.
+    """Read one captured trading day's raw minute bars.
 
     No capture-on-demand: this read serves a day a study response already
     named, so the bytes are in the lake by construction; anything else is a

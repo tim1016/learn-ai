@@ -14,7 +14,7 @@ import json
 import logging
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -479,9 +479,9 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # claim_* INSERT starts a row at generation INITIAL_LEASE_GENERATION,
 # steal_or_retry_minute_bar and refresh_complete_artifact each increment it
 # by exactly 1 on every reclaim, and every protected mutation
-# (publish_under_lease, complete_artifact, fail_artifact, refresh_lease,
-# restore_complete_artifact) validates the caller's recorded generation
-# atomically against the durable row instead of trusting the caller's own
+# (publish_under_lease, complete_artifact, fail_artifact, refresh_lease)
+# validates the caller's recorded generation atomically against the
+# durable row instead of trusting the caller's own
 # recollection of still holding the lease -- a check a paused/stale writer
 # will always pass. Generation, not owner, is what discriminates: every
 # writer inside one process shares a single _WORKER_ID, so an owner-only
@@ -643,8 +643,10 @@ class ArtifactClaimState:
     no way to find its ``Id`` (needed by :func:`steal_or_retry_minute_bar`,
     itself generic over artifact kind) or to tell that case apart from a
     live, actively-leased fetch. This is that lookup's result — shared by
-    :func:`select_minute_bar_claim_state` and :func:`select_metadata_claim_state`
-    since the shape carries no kind-specific field.
+    :func:`select_minute_bar_claim_state`, :func:`select_metadata_claim_state`
+    and :func:`select_corp_action_claim_state` since the shape carries no
+    kind-specific field, and read by :func:`reclaim_after_lost_claim` on
+    either side of its steal.
     """
 
     id: int
@@ -723,6 +725,46 @@ async def select_metadata_claim_state(
     """
     async with connection() as conn:
         row = await conn.fetchrow(query, data_contract_hash, root_id)
+    if row is None:
+        return None
+    return ArtifactClaimState(
+        id=row["Id"],
+        status=row["Status"],
+        attempt_count=row["AttemptCount"],
+        last_error=row["LastError"],
+    )
+
+
+async def select_corp_action_claim_state(identity: ArtifactIdentity) -> ArtifactClaimState | None:
+    """Look up the existing factor_file / map_file row's claim state, at any status.
+
+    The corp-action twin of :func:`select_minute_bar_claim_state`: matches
+    ``claim_corp_action_artifact``'s partial unique index plus
+    ``identity.data_root_id``. Without it a settled ``'failed'`` factor-file
+    row read as live contention forever (#2452) — every later capture
+    reported "in-flight elsewhere" and, with the return study refusing an
+    uncovered window, the symbol could never be studied again.
+    """
+    query = """
+        SELECT "Id", "Status", "AttemptCount", "LastError"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = $1
+           AND "Market" = $2
+           AND "Symbol" = $3
+           AND "Provider" = $4
+           AND "PriceAdjustmentMode" = $5
+           AND "DataRootId" = $6
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.artifact_kind,
+            identity.market,
+            identity.symbol,
+            identity.provider,
+            identity.price_adjustment_mode,
+            identity.data_root_id,
+        )
     if row is None:
         return None
     return ArtifactClaimState(
@@ -929,44 +971,6 @@ async def publish_under_lease(
             )
 
 
-async def restore_complete_artifact(artifact_id: int, worker_id: str, lease_generation: int) -> bool:
-    """Undo a refresh_complete_artifact() that failed before writing anything new.
-
-    refresh_complete_artifact() only touches Status/LeaseOwner/
-    LeaseExpiresAtMs/AttemptCount when it transitions 'complete' \u2192 'fetching'
-    -- RowCount/FileSha256/FileSizeBytes/DataContractHash/FilePath all still
-    describe the pre-rebuild artifact. If the rebuild then fails before any
-    bytes were promoted (e.g. a source file read error), the old file on disk
-    was never touched either, so restoring Status alone is sufficient to put
-    the row back exactly as it was.
-
-    Callers must use this only when the failure happened before any new bytes
-    were promoted -- a failure after promotion has already replaced the file,
-    and fail_artifact() is the correct transition there instead.
-
-    Fenced on both owner and generation (issue #1888). Owner alone was not
-    enough: ``ensure_data._WORKER_ID`` is per-process, so two concurrent
-    refreshes in one process share it, and a stale one could restore the row
-    to 'complete' out from under a live reclaim -- discarding the winner's
-    work, or worse, leaving the old hash recorded while the winner's new
-    bytes sit on disk. Returns True when the row was restored, False when
-    this writer no longer holds the generation.
-    """
-    query = """
-        UPDATE "DataLakeArtifacts"
-           SET "Status" = 'complete',
-               "LeaseOwner" = NULL,
-               "LeaseExpiresAtMs" = NULL
-         WHERE "Id" = $1
-           AND "LeaseOwner" = $2
-           AND "LeaseGeneration" = $3
-           AND "Status" = 'fetching';
-    """
-    async with connection() as conn:
-        result = await conn.execute(query, artifact_id, worker_id, lease_generation)
-    return _rows_affected(result) > 0
-
-
 async def fail_artifact(
     artifact_id: int,
     last_error: str,
@@ -1081,6 +1085,15 @@ async def steal_or_retry_minute_bar(
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
 
+    Generic over artifact kind despite its name, which dates from minute bars
+    being its first caller: the UPDATE is keyed on row id alone, and every
+    kind's row -- minute bar, factor file, map file, metadata -- carries the
+    same Status / lease / AttemptCount columns it reads. A caller that lost a
+    ``claim_*`` insert should not call this directly; go through
+    :func:`reclaim_after_lost_claim`, which pairs it with the claim-state
+    lookup before and the re-read after that a refusal needs to be classified
+    correctly.
+
     Eligibility:
       - Status='fetching' AND LeaseExpiresAtMs < now_ms  (lease expired), OR
       - Status='failed' AND (AttemptCount < max_retries OR bypass_retry_ceiling)
@@ -1121,7 +1134,7 @@ async def steal_or_retry_minute_bar(
     ceiling -- callers pass ``bypass_retry_ceiling=True`` only for the
     specific reason they know is infinitely retryable, never as a default.
     Default ``False`` preserves this function's existing behaviour for every
-    other caller (minute bars, factor files, map files) unchanged.
+    other caller (minute bars and factor files) unchanged.
 
     Returns the new fencing generation (issue #1888; always
     ``> INITIAL_LEASE_GENERATION`` since this always increments) when the
@@ -1161,6 +1174,88 @@ async def steal_or_retry_minute_bar(
             max_retries,
             bypass_retry_ceiling,
         )
+
+
+@dataclass(frozen=True)
+class ReclaimedLease:
+    """A lost claim turned into a held lease: the caller now owns the row at
+    ``lease_generation`` and must publish, complete, or fail it with that
+    generation."""
+
+    artifact_id: int
+    lease_generation: int
+
+
+@dataclass(frozen=True)
+class ReclaimRefused:
+    """Why a lost claim could not be reclaimed, as an ``ArtifactFailure`` reason.
+
+    ``lease_timeout`` is contention and clears by itself: a live lease
+    elsewhere, or a row another worker reclaimed, completed, or re-failed
+    within its budget a moment ago. ``fetch_timeout`` is terminal: the row is
+    ``'failed'`` with its retry budget spent, and asking again changes
+    nothing, so the run-materialization wait must not poll it.
+    """
+
+    reason: Literal["lease_timeout", "fetch_timeout"]
+    detail: str
+    attempt_count: int
+
+
+async def reclaim_after_lost_claim(
+    read_claim_state: Callable[[], Awaitable[ArtifactClaimState | None]],
+    *,
+    worker_id: str,
+    lease_ttl_ms: int,
+    max_retries: int,
+    retry_ceiling_exempt_errors: frozenset[str] = frozenset(),
+) -> ReclaimedLease | ReclaimRefused:
+    """Reclaim a row this caller's ``claim_*`` insert lost to, or say why not.
+
+    The one reclaim protocol for every artifact kind. A caller reaches it
+    after its claim returned ``None`` and the row turned out not to be a
+    usable ``'complete'`` one; ``read_claim_state`` is that kind's
+    ``select_*_claim_state`` lookup, bound to the caller's identity.
+
+    The steal's own ``WHERE`` clause decides eligibility (an expired lease, a
+    ``'failed'`` row under ``max_retries``, a ``'stale'`` row). When it
+    refuses, the row is **re-read** before the refusal is classified: the
+    first lookup is a snapshot from before the steal, and another worker can
+    reclaim that very row in between. Trusting the snapshot reported such a
+    row -- live, and about to complete -- as terminally "exhausted", which
+    the run-materialization wait then refused to wait out. Only a re-read
+    ``'failed'`` row past the same retry ceiling the steal applies is
+    ``fetch_timeout``; everything else is ``lease_timeout``.
+
+    ``retry_ceiling_exempt_errors`` names ``LastError`` values that are
+    retried no matter the attempt count (the metadata bootstrap's
+    ``launcher_unreachable``, #1889): the ceiling is lifted for the steal and
+    never reported as exhausted.
+    """
+    state = await read_claim_state()
+    if state is not None:
+        generation = await steal_or_retry_minute_bar(
+            artifact_id=state.id,
+            worker_id=worker_id,
+            lease_ttl_ms=lease_ttl_ms,
+            max_retries=max_retries,
+            bypass_retry_ceiling=state.last_error in retry_ceiling_exempt_errors,
+        )
+        if generation is not None:
+            return ReclaimedLease(artifact_id=state.id, lease_generation=generation)
+        state = await read_claim_state()
+    if (
+        state is not None
+        and state.status == "failed"
+        and state.attempt_count >= max_retries
+        and state.last_error not in retry_ceiling_exempt_errors
+    ):
+        return ReclaimRefused(
+            reason="fetch_timeout",
+            detail=f"exhausted {state.attempt_count} attempt(s); last error: {state.last_error}",
+            attempt_count=state.attempt_count,
+        )
+    return ReclaimRefused(reason="lease_timeout", detail="another worker holds the lease", attempt_count=1)
 
 
 @dataclass(frozen=True)
@@ -1422,6 +1517,8 @@ async def refresh_complete_artifact(
     artifact_id: int,
     worker_id: str,
     lease_ttl_ms: int,
+    *,
+    expected_data_contract_hash: str | None = None,
 ) -> PriorArtifactMetadata | None:
     """Force-refresh transition: 'complete' → 'fetching' for a re-fetch or rebuild.
 
@@ -1429,7 +1526,7 @@ async def refresh_complete_artifact(
     day-refresh (a provider correction), for rebuilding a daily-trade
     aggregate whose source minute set has grown or changed (see
     ``ensure_data._process_daily_trade_artifact``), and for rebuilding a
-    factor_file whose history window has widened (see
+    factor_file whose captured-session source set has changed (see
     ``ensure_data._process_factor_file_artifact``). Returns the prior
     file_path + file_sha256 so the caller can preserve them if the new write
     fails validation, plus the fencing generation this reclaim minted
@@ -1437,6 +1534,13 @@ async def refresh_complete_artifact(
     publish_under_lease calls target the right generation. Returns None
     when the row isn't currently 'complete' (refresh has no work to do —
     e.g. a race with another worker).
+
+    ``expected_data_contract_hash`` makes the transition a compare-and-swap
+    on the row the caller judged: it is taken only while its
+    DataContractHash is still the one the caller read, and None comes back
+    otherwise. The factor-file rebuild passes it (#2481 review): a sibling
+    that published another source set between that read and this refresh
+    keeps its file, instead of having an older build published over it.
     """
     now_ms = int(time.time() * 1000)
     query = """
@@ -1448,6 +1552,7 @@ async def refresh_complete_artifact(
                "AttemptCount" = "AttemptCount" + 1
          WHERE "Id" = $1
            AND "Status" = 'complete'
+           AND ($4::text IS NULL OR "DataContractHash" = $4)
         RETURNING "FilePath", "FileSha256", "LeaseGeneration";
     """
     async with connection() as conn:
@@ -1456,6 +1561,7 @@ async def refresh_complete_artifact(
             artifact_id,
             worker_id,
             now_ms + lease_ttl_ms,
+            expected_data_contract_hash,
         )
     if row is None:
         return None

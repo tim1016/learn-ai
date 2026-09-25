@@ -171,7 +171,7 @@ describe('ReturnsDistributionService', () => {
     request.flush({
       symbol: 'SPY',
       session_open_ms_utc: sessionOpenMs,
-      adjustment: 'split_and_dividend',
+      adjustment: 'raw',
       bars: [{ t: 1719907200000, o: 545.1, h: 545.2, l: 545.0, c: 545.15, v: 1200 }],
     });
 

@@ -11,7 +11,7 @@ from uuid import UUID
 
 import pytest
 
-from app.data_lake import catalog_client
+from app.data_lake import atomic, catalog_client
 from app.data_lake.atomic import (
     ArtifactLeaseLostError,
     AtomicRenameUnsafeError,
@@ -397,3 +397,91 @@ class TestPublishArtifact:
 
         leftovers = [p for p in staging_root.rglob("*") if p.is_file()]
         assert leftovers == [], f"staged bytes survived a failed publication: {leftovers}"
+
+    @pytest.mark.asyncio
+    async def test_companions_are_promoted_under_the_lease_before_the_artifact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """#2452 review: a file that describes the artifact (the factor
+        file's coverage record) lands in the same fenced step, renamed
+        before the artifact the receipt describes -- never after the
+        receipt, where a reader saw a complete row with no record."""
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        record = PurePosixPath("factor_files/spy.coverage.json")
+        artifact = PurePosixPath("factor_files/spy.csv")
+        renamed: list[PurePosixPath] = []
+        real_promote_staged = atomic.promote_staged
+
+        def _recording_promote(staged: Path, root: Path, rel: PurePosixPath) -> None:
+            renamed.append(rel)
+            real_promote_staged(staged, root, rel)
+
+        monkeypatch.setattr(atomic, "promote_staged", _recording_promote)
+        on_disk_before_promote: list[bool] = []
+
+        async def fake_publish(**kwargs):
+            on_disk_before_promote.extend((lake_root / str(p)).exists() for p in (record, artifact))
+            kwargs["promote"]()
+
+        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
+
+        sha = await publish_artifact(
+            content=b"csv bytes",
+            lake_root=lake_root,
+            staging_root=staging_root,
+            rel_lake_path=artifact,
+            request_id=UUID("12345678-1234-5678-1234-567812345678"),
+            worker_id="w-1",
+            attempt=1,
+            artifact_id=7,
+            lease_generation=1,
+            row_count=1,
+            first_bar_start_ms=0,
+            last_bar_start_ms=0,
+            companions=((record, b"record bytes"),),
+        )
+
+        assert on_disk_before_promote == [False, False], "nothing may reach the lake before the catalog authorizes"
+        assert renamed == [record, artifact], "the artifact the receipt describes is renamed last"
+        assert (lake_root / str(record)).read_bytes() == b"record bytes"
+        assert (lake_root / str(artifact)).read_bytes() == b"csv bytes"
+        assert sha == hashlib.sha256(b"csv bytes").hexdigest(), "the receipt hashes the artifact, not a companion"
+        assert [p for p in staging_root.rglob("*") if p.is_file()] == []
+
+    @pytest.mark.asyncio
+    async def test_a_refused_publication_promotes_no_companion_and_leaves_none_staged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        record = PurePosixPath("factor_files/spy.coverage.json")
+
+        async def fake_publish(**kwargs):
+            raise ArtifactLeaseLostError("artifact 7: not authorized to publish")
+
+        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
+
+        with pytest.raises(ArtifactLeaseLostError):
+            await publish_artifact(
+                content=b"stale csv",
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=PurePosixPath("factor_files/spy.csv"),
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w-1",
+                attempt=1,
+                artifact_id=7,
+                lease_generation=1,
+                row_count=1,
+                first_bar_start_ms=0,
+                last_bar_start_ms=0,
+                companions=((record, b"stale record"),),
+            )
+
+        assert not (lake_root / str(record)).exists(), "a writer that lost its lease replaces no companion"
+        assert [p for p in staging_root.rglob("*") if p.is_file()] == []

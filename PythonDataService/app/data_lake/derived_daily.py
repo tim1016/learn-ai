@@ -22,8 +22,9 @@ sourced and use slightly different bar boundaries). Repo-internal
 consistency only.
 
 This module also owns the *read* side of that reduction —
-``read_minute_trade_bars`` and the two whole-history reductions built on it —
-so the minute-to-daily fold lives in one place. They are pure functions of
+``read_minute_trade_bars`` and the two reductions built on it (the
+whole-history daily rollup and the factor file's reference closes) — so the
+minute-to-daily fold lives in one place. They are pure functions of
 bars and paths, with no catalog, lease or async concern, and every caller runs
 them off the event loop (#1943).
 """
@@ -267,10 +268,10 @@ def _read_history_minute_bars(
     """Every captured minute bar for a symbol's whole history, ascending by session.
 
     Hundreds of zips for a multi-year backfill, and about 960 bars in each
-    once extended hours are captured. The two callers below reduce the list
-    immediately, so neither returns it — both run this and their reduction in
-    one thread and hand back only the small result, which keeps the bar list
-    from crossing the thread boundary at all (#1943).
+    once extended hours are captured. The daily rollup below reduces the
+    list immediately, running this and its reduction in one thread and
+    handing back only the small result, which keeps the bar list from
+    crossing the thread boundary at all (#1943).
     """
     all_bars: list[MinuteTradeBar] = []
     for src in sorted(records, key=lambda r: r.trading_date or fallback_date):
@@ -283,19 +284,29 @@ def _read_history_minute_bars(
 
 def factor_file_reference_closes(
     records: Sequence[ArtifactRecord], *, lake_root: Path, fallback_date: date
-) -> dict[date, Decimal]:
-    """RTH close per session across a symbol's history — the factor file's reference prices.
+) -> tuple[dict[date, Decimal], list[MinuteBarReadError]]:
+    """RTH close per session of ``records`` — the factor file's reference prices —
+    and the records whose zip could not be read.
 
-    Pure CPU and file I/O; callers run it off the event loop. Measured at
-    ~1.2 s for 523 sessions (~500k bars) — about 0.9 s of zip parsing and
-    0.3 s of reduction. The nine-minute freeze #1943 reported was the
-    per-bar calendar rebuild inside :func:`rth_daily_closes`, fixed
-    separately; what is left is seconds, and seconds on a loop that also
-    runs live execution and the Alpaca lease heartbeat is still a stall.
-    The daily rollup repeats this read once per backfilled day, so the cost
-    recurs across a backfill rather than being paid once.
+    Pure CPU and file I/O; callers run it off the event loop (#1943: the
+    nine-minute freeze was the per-bar calendar rebuild inside
+    :func:`rth_daily_closes`, fixed separately; parsing is still ~1 s per
+    500 sessions, a stall on a loop that also runs live execution).
+
+    Unlike the daily rollup, one unreadable zip does not fail the read: its
+    session simply has no close, which the factor-file build treats as an
+    unpriced session (``factor_files.plan_factor_file``) — adjusted reads
+    across that one session are refused instead of the whole symbol. The
+    failures come back so the caller can report them.
     """
-    return rth_daily_closes(_read_history_minute_bars(records, lake_root=lake_root, fallback_date=fallback_date))
+    bars: list[MinuteTradeBar] = []
+    unreadable: list[MinuteBarReadError] = []
+    for src in sorted(records, key=lambda r: r.trading_date or fallback_date):
+        try:
+            bars.extend(read_minute_trade_bars(src.file_path, lake_root))
+        except (OSError, zipfile.BadZipFile, ValueError, IndexError) as e:
+            unreadable.append(MinuteBarReadError(src.file_path, e))
+    return rth_daily_closes(bars), unreadable
 
 
 def daily_zip_from_minute_history(

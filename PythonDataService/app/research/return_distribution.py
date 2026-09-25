@@ -72,6 +72,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -246,7 +247,7 @@ class ReturnDistributionResult:
     days: tuple[DailyReturns, ...]
     bin_width_pct: float
     span_pct: float
-    adjustment: Literal["split_and_dividend", "raw"]
+    adjustment: Literal["split_and_dividend"]
 
 
 def noon_et_ms_utc(d: date) -> int:
@@ -329,10 +330,8 @@ def adjust_anchors(
     Each day's anchors are scaled by that day's multiplier; ratios *within*
     a day are unchanged and ratios *across* an ex-date pick up exactly the
     corporate action, which is what makes the return series total-return
-    consistent. Empty ``factor_rows`` returns the anchors unchanged.
+    consistent.
     """
-    if not factor_rows:
-        return list(anchors)
     out: list[DayAnchors] = []
     for a in anchors:
         m = factor_multiplier_as_of(factor_rows, a.trading_date)
@@ -367,6 +366,49 @@ def _ln_later_over_earlier(later: Decimal, earlier: Decimal) -> float:
     return math.log(float(later) / float(earlier))
 
 
+def _return_bases(anchors: Sequence[DayAnchors], scheduled_sessions: Sequence[date]) -> dict[date, DayAnchors]:
+    """Each session's close-to-close base: the previous scheduled session's
+    anchors, where that session has an RTH close (the adjacency rule of
+    :func:`compute_daily_returns`)."""
+    anchor_by_date = {a.trading_date: a for a in anchors}
+    sessions = sorted(set(scheduled_sessions))
+    bases: dict[date, DayAnchors] = {}
+    for previous, session in pairwise(sessions):
+        base = anchor_by_date.get(previous)
+        if base is not None and base.rth_close is not None:
+            bases[session] = base
+    return bases
+
+
+def sessions_read_by_returns(
+    anchors: Sequence[DayAnchors],
+    *,
+    scheduled_sessions: Sequence[date],
+    since: date,
+) -> list[date]:
+    """The sessions whose prices the returns of the days from ``since`` on read.
+
+    Each such day with RTH anchors, and the session its close-to-close and
+    overnight returns are taken against (:func:`compute_daily_returns`'
+    adjacency). Nothing else: not the rest of a lead-in read only to find
+    that base, and not a captured day without a regular session, which no
+    return compares. These are exactly the prices whose adjustment the
+    returns depend on, and every two scheduled-adjacent sessions in the set
+    are a pair some return compares, so an adjustment check over this set
+    refuses exactly the comparisons it cannot vouch for.
+    """
+    bases = _return_bases(anchors, scheduled_sessions)
+    read: set[date] = set()
+    for a in anchors:
+        if a.trading_date < since or a.rth_open is None or a.rth_close is None:
+            continue
+        read.add(a.trading_date)
+        base = bases.get(a.trading_date)
+        if base is not None:
+            read.add(base.trading_date)
+    return sorted(read)
+
+
 def compute_daily_returns(
     anchors: Sequence[DayAnchors],
     *,
@@ -388,9 +430,7 @@ def compute_daily_returns(
     a multi-session move and label it a daily return, contaminating the
     histogram and every tail statistic downstream.
     """
-    anchor_by_date = {a.trading_date: a for a in anchors}
-    sessions = sorted(set(scheduled_sessions))
-    previous_scheduled = {sessions[i]: (sessions[i - 1] if i > 0 else None) for i in range(len(sessions))}
+    bases = _return_bases(anchors, scheduled_sessions)
 
     out: list[DailyReturns] = []
     for a in anchors:
@@ -416,8 +456,7 @@ def compute_daily_returns(
         else:
             after_hours_log = None
 
-        prev_date = previous_scheduled.get(a.trading_date)
-        prev = anchor_by_date.get(prev_date) if prev_date is not None else None
+        prev = bases.get(a.trading_date)
         if prev is not None and prev.rth_close is not None:
             close_to_close_log = _ln_later_over_earlier(a.rth_close, prev.rth_close)
             overnight_log = _ln_later_over_earlier(a.rth_open, prev.rth_close)
@@ -684,7 +723,7 @@ def build_return_distribution(
     *,
     bin_width_pct: float = DEFAULT_BIN_WIDTH_PCT,
     span_pct: float = DEFAULT_SPAN_PCT,
-    adjustment: Literal["split_and_dividend", "raw"] = "split_and_dividend",
+    adjustment: Literal["split_and_dividend"] = "split_and_dividend",
 ) -> ReturnDistributionResult:
     """Histogram + stats + overlay for all three return kinds over ``days``.
 
