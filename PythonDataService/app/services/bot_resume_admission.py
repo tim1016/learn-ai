@@ -7,7 +7,6 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -129,7 +128,7 @@ class BotResumeAdmission:
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
         legacy_migration_repository: LegacyMigrationLineageWriter | None = None,
-        program_leg_policy: Callable[[], ProgramLegPolicy] = active_program_leg_policy,
+        program_leg_policy: Callable[[BrokerBotBinding], ProgramLegPolicy],
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._now_ms = now_ms
@@ -316,7 +315,7 @@ class BotResumeAdmission:
                     mutating=mutating,
                 )
                 proposed = proposed.model_copy(update={"program_build": program_build})
-                policy = self._program_leg_policy()
+                policy = self._program_leg_policy(prior)
                 facts = ResumeRunFacts(
                     strategy_instance_id=prior.strategy_instance_id,
                     proposed_run_id=proposed.run_id,

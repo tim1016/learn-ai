@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import DatabaseMissingAfterEstablishment
 
@@ -31,6 +32,7 @@ def test_reader_over_a_missing_database_raises_the_typed_clerk_error(tmp_path: P
             account_id="PA-TEST",
             authority_generation=1,
             db_identity_token="0" * 32,
+            pricing=UNPRICEABLE_RECOVERY,
         )
 
     assert str(missing) in str(excinfo.value)
@@ -93,6 +95,7 @@ def test_a_database_removed_during_connect_is_still_a_clerk_state(
             account_id="PA-TEST",
             authority_generation=1,
             db_identity_token="token",
+            pricing=UNPRICEABLE_RECOVERY,
         )
 
 
@@ -114,4 +117,5 @@ def test_an_unrelated_sqlite_failure_still_propagates(
             account_id="PA-TEST",
             authority_generation=1,
             db_identity_token="token",
+            pricing=UNPRICEABLE_RECOVERY,
         )

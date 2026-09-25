@@ -254,6 +254,9 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
     monkeypatch: pytest.MonkeyPatch,
     mode: Literal["trade", "dry_run", "log_only"],
 ) -> None:
+    from tests._helpers.bot_runner.custody import configure_execution_allowances
+
+    configure_execution_allowances(monkeypatch)
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
         artifacts_root=tmp_path / "clerk",

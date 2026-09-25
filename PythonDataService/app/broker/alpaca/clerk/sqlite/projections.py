@@ -20,9 +20,10 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
-    UNPRICEABLE_RECOVERY,
+    EXIT_SEND_GUARD_BAND_MS,
     RecoveryPricing,
     next_redrive_at_ms,
+    send_arrival_ms,
 )
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -31,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     execution_coverage_proof,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
+from app.broker.alpaca.clerk.sqlite.models import DEFAULT_RECONCILIATION_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     OrderProjectionReadError,
     read_current_orders,
@@ -78,7 +80,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
@@ -110,25 +112,12 @@ def project_uncertainties(
 
     The single projection of an ``uncertainties`` row — the custody read, the
     bot page's guidance and the lane's attention bell all come through here.
-    A recorded next attempt is the stuck-EXIT watchdog's promise, so it is
-    projected only as far as it is still true (#2440 review):
-
-    - an ``EXIT_NOT_FLAT`` whose strategy has an active ``EXIT_STUCK`` among
-      ``rows`` carries none, and its next step says automatic attempts
-      stopped: the watchdog escalated and re-drives it no more;
-    - one whose strategy has an exit in progress (``exits_in_progress``,
-      asked once about the strategies these notices name) carries none and
-      is flagged ``exit_working``: the watchdog sends nothing while an exit
-      is in progress, and nothing rewrites the recorded time when it accepts
-      one;
-    - otherwise the time is the watchdog's real next try, projected now from
-      the recorded one by the computation that recorded it
-      (``recovery_reduction.next_redrive_at_ms`` under ``redrive_policy``,
-      the authority's own ``recovery_pricing``): a deferral writes nothing,
-      so a 16:02 promise the after-hours quote could not keep reads 03:59:55
-      from 20:00. Only when that projection is itself not in the future —
-      the watchdog could have sent by now — is the recorded promise shown,
-      flagged ``next_attempt_overdue``.
+    A recorded next attempt marks earliest eligibility, not a scheduled
+    broker submission. Quotes, custody evidence and the periodic sweep can
+    delay it. Closed sessions project forward under the authority's own
+    recovery policy; an open session allows one sweep plus the send guard
+    before reporting that a retry is still waiting. An active EXIT hides the
+    timestamp and an EXIT_STUCK episode stops automatic attempts entirely.
     """
     rows = tuple(rows)
     escalated = frozenset(
@@ -201,9 +190,20 @@ def _checked_record(
 def _projected_next_attempt(
     recorded: int, *, now_ms: int, redrive_policy: ProgramLegPolicy
 ) -> tuple[int, bool]:
-    """The time to show for a recorded next attempt, and whether it is past due."""
+    """Earliest retry eligibility, with one sweep and send guard before a waiting status.
+
+    A quote or custody refusal may defer a retry through a closed session
+    without rewriting its record. Re-anchor to this trading day's opening
+    once eligible again; never resurrect yesterday's expired timestamp.
+    """
     projected = next_redrive_at_ms(not_before_ms=max(recorded, now_ms), policy=redrive_policy)
-    return (projected, False) if projected > now_ms else (recorded, True)
+    if projected > now_ms:
+        return projected, False
+    day_floor_ms = et_midnight_ms(et_date_at_ms(send_arrival_ms(now_ms))) - EXIT_SEND_GUARD_BAND_MS
+    window_start_ms = next_redrive_at_ms(not_before_ms=day_floor_ms, policy=redrive_policy)
+    eligible_at_ms = max(recorded, window_start_ms)
+    grace_ms = DEFAULT_RECONCILIATION_INTERVAL_MS + EXIT_SEND_GUARD_BAND_MS
+    return eligible_at_ms, now_ms > eligible_at_ms + grace_ms
 
 
 def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
@@ -291,10 +291,9 @@ class SqliteClerkProjectionReader:
 
     ``pricing`` is the authority's own ``recovery_pricing`` — the seam its
     stuck-EXIT watchdog re-drives from and its folds record the next attempt
-    from — so an ``EXIT_NOT_FLAT`` notice projects the watchdog's real next
-    try (``project_uncertainties``). A surface that shows that time passes
-    it; the degraded default projects the regular session only, as an
-    authority that can price nothing would re-drive.
+    from — so an ``EXIT_NOT_FLAT`` notice projects retry eligibility
+    under the same authority. Required: callers must name the pricing seam,
+    including an explicitly unpriceable seam for an isolated reader.
     """
 
     def __init__(
@@ -305,7 +304,7 @@ class SqliteClerkProjectionReader:
         authority_generation: int,
         db_identity_token: str,
         clock: Clock = now_ms_utc,
-        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+        pricing: RecoveryPricing,
     ) -> None:
         self._db_path = db_path
         self._account_id = account_id
@@ -379,7 +378,7 @@ class SqliteClerkProjectionReader:
         repository: ClerkSqliteRepository,
         *,
         clock: Clock | None = None,
-        pricing: RecoveryPricing = UNPRICEABLE_RECOVERY,
+        pricing: RecoveryPricing,
     ) -> SqliteClerkProjectionReader:
         """A reader over ``repository``, judging freshness by the repository's own clock.
 

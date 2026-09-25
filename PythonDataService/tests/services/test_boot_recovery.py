@@ -52,6 +52,7 @@ from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
 )
+from app.services.bot_runner_errors import RunAdmissionRefusedError
 from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard, _lifecycle_json
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
@@ -147,7 +148,7 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     assert view.running is False
     assert view.phase == "ON_DUTY"  # the stale record, rendered as-is, not repaired
     assert view.duty_outcome is None
-    with pytest.raises(BootRecoveryIncompleteError, match="lifecycle authority"):
+    with pytest.raises(RunAdmissionRefusedError, match="account Clerk is not installed"):
         await rebooted.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
@@ -1072,13 +1073,16 @@ async def test_a_native_bindings_genuine_identity_refusal_still_aborts_the_sweep
         await registry.run_boot_recovery()
 
 
-async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path) -> None:
+async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``sim:`` binding is excluded by where it routes, not by how its id reads.
 
     Its custody id never equals the primary's, so an account comparison alone
     would call every Dry Run bot foreign. The registry routes it to its own
     per-instance authority, and that is what decides.
     """
+    from tests._helpers.bot_runner.custody import configure_execution_allowances
+
+    configure_execution_allowances(monkeypatch)
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()

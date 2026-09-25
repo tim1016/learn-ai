@@ -29,11 +29,11 @@
     @if (isLive()) {
       <label class="envelope__field">
         <span>{{ labels.loss_fraction }}</span>
-        <input type="number" step="0.001" [formField]="fields.loss_fraction" />
+        <input type="number" step="any" [formField]="fields.loss_fraction" />
       </label>
       <label class="envelope__field">
         <span>{{ labels.loss_usd }}</span>
-        <input type="number" step="0.01" [formField]="fields.loss_usd" />
+        <input type="number" step="any" [formField]="fields.loss_usd" />
       </label>
       <label class="envelope__field">
         <span>{{ labels.shadow_sessions }}</span>
@@ -46,11 +46,11 @@
     }
     <label class="envelope__field">
       <span>{{ labels.xh_entry_bps }}</span>
-      <input type="number" step="0.1" [formField]="fields.xh_entry_bps" />
+      <input type="number" step="any" [formField]="fields.xh_entry_bps" />
     </label>
     <label class="envelope__field">
       <span>{{ labels.xh_exit_bps }}</span>
-      <input type="number" step="0.1" [formField]="fields.xh_exit_bps" />
+      <input type="number" step="any" [formField]="fields.xh_exit_bps" />
     </label>
   </div>
 </fieldset>

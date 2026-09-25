@@ -118,14 +118,14 @@ describe('LaneAttentionBellComponent', () => {
 
     await fireEvent.click(bellButton());
 
-    const [promised, overdue] = screen.getAllByText(/Next automatic attempt/);
+    const [promised, overdue] = screen.getAllByText(/Automatic retry/);
     expect(promised.textContent).toContain('04:00');
     expect(promised.textContent).toContain('ET');
     expect(promised.textContent).not.toContain('overdue');
-    expect(overdue.textContent).toContain('overdue since');
+    expect(overdue.textContent).toContain('waiting; eligible since');
     expect(overdue.textContent).toContain('04:00');
     // A condition with no scheduled attempt says nothing about one.
-    expect(screen.getAllByText(/Next automatic attempt/).length).toBe(2);
+    expect(screen.getAllByText(/Automatic retry/).length).toBe(2);
   });
 
   it('says an exit is working, or that the next try is unknown, as the desk does (#2440 review)', async () => {
@@ -149,7 +149,7 @@ describe('LaneAttentionBellComponent', () => {
       screen.getByText('An exit is in progress; no automatic attempt is due while it works.'),
     ).toBeTruthy();
     expect(
-      screen.getByText("Next automatic attempt: unknown; this notice's record could not be read."),
+      screen.getByText("Automatic retry: eligibility unknown; this notice's record could not be read."),
     ).toBeTruthy();
     expect(screen.queryByText(/overdue/)).toBeNull();
   });

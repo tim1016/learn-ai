@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     RecoveryEvaluationObservation,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedHealth
@@ -716,6 +717,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
         )
 
     admission = BotStartAdmission(
+        program_leg_policy=lambda binding: ProgramLegPolicy.regular_only(),
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,

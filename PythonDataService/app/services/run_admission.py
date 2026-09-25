@@ -409,7 +409,10 @@ def evaluate_run_admission(
     # unset allowances started a run that then rejected every extended decision
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
     # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
-    extended_refusal = _EXTENDED_HOURS_REFUSALS.get(bot.extended_hours.state)
+    extended_refusal = (
+        bot.extended_hours.configuration_refusal
+        or _EXTENDED_HOURS_REFUSALS.get(bot.extended_hours.state)
+    )
     if extended_refusal is not None and not _resumes_holding_without_exit_allowance(bot, clerk):
         return decide(
             allowed=False,

@@ -296,7 +296,7 @@ def _active_readers(
     if clerk is None:
         return None
     return (
-        SqliteClerkProjectionReader.from_repository(clerk.repository),
+        SqliteClerkProjectionReader.from_facade(clerk),
         SqliteEconomicProjectionReader.from_repository(clerk.repository),
     )
 
@@ -386,7 +386,7 @@ def _all_transaction_history(
         limit=limit,
     )
     visible = pointers[:limit]
-    reader = SqliteClerkProjectionReader.from_repository(clerk.repository)
+    reader = SqliteClerkProjectionReader.from_facade(clerk)
     economic_reader = SqliteEconomicProjectionReader.from_repository(clerk.repository)
     try:
         operation_ids = tuple(

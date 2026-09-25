@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+from app.broker.alpaca.active_binding import active_alpaca_binding_refusal
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
-from app.broker.alpaca.clerk.active_authority import active_program_leg_policy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, RecoveryEvaluationObservation
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -22,6 +22,7 @@ from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
+    AdmissionConfigurationRefusal,
     ExtendedHoursAdmissionFact,
     ExtendedHoursAdmissionState,
     MarketDataAdmissionFact,
@@ -338,7 +339,7 @@ async def resolve_start_runtime_fact(
 def extended_hours_admission_fact(
     *, use_rth: bool, policy: ProgramLegPolicy, observed_at_ms: int
 ) -> ExtendedHoursAdmissionFact:
-    """Pure: what the active authority can price for this run outside regular hours.
+    """What the selected authority can price for this run outside regular hours.
 
     An extended-hours run needs the declared window and both allowances. A
     regular-hours run asks for no extended session, but its exit on the day's
@@ -367,7 +368,17 @@ def extended_hours_admission_fact(
         state = "ALLOWANCE_UNSET"
     else:
         state = "READY"
-    return ExtendedHoursAdmissionFact(state=state, observed_at_ms=observed_at_ms)
+    binding_refusal = active_alpaca_binding_refusal()
+    configuration_refusal = None
+    if state in {"ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"} and binding_refusal is not None:
+        configuration_refusal = AdmissionConfigurationRefusal(
+            reason_code=binding_refusal.reason,
+            explanation=binding_refusal.message,
+            next_step=binding_refusal.next_step,
+        )
+    return ExtendedHoursAdmissionFact(
+        state=state, observed_at_ms=observed_at_ms, configuration_refusal=configuration_refusal
+    )
 
 
 def _admission_clerk(binding: BrokerBotBinding) -> ActiveAlpacaClerk:
@@ -481,7 +492,7 @@ class BotStartAdmission:
         activate: CustodyBoundActivator,
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
-        program_leg_policy: Callable[[], ProgramLegPolicy] = active_program_leg_policy,
+        program_leg_policy: Callable[[BrokerBotBinding], ProgramLegPolicy],
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._now_ms = now_ms
@@ -568,7 +579,7 @@ class BotStartAdmission:
                     verified_at_ms=observed_at_ms,
                 )
                 binding = binding.model_copy(update={"program_build": program_build})
-                policy = self._program_leg_policy()
+                policy = self._program_leg_policy(binding)
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,

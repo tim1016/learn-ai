@@ -20,6 +20,9 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 
 
+DEFAULT_RECONCILIATION_INTERVAL_MS = 15_000
+"""Default gap between periodic custody passes and the retry-status grace floor."""
+
 @dataclass(frozen=True)
 class TransitionInput:
     """Everything a caller supplies for one ``custody_transitions`` append.

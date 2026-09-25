@@ -60,6 +60,16 @@ ExtendedHoursAdmissionState = Literal[
 ]
 
 
+class AdmissionConfigurationRefusal(BaseModel):
+    """The binding failure that prevents the selected Clerk from pricing a leg."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason_code: str
+    explanation: str
+    next_step: str
+
+
 class ExtendedHoursAdmissionFact(BaseModel):
     """Whether the active authority can clock and price a run outside regular hours (ADR 0059 D5).
 
@@ -72,6 +82,7 @@ class ExtendedHoursAdmissionFact(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: ExtendedHoursAdmissionState
+    configuration_refusal: AdmissionConfigurationRefusal | None = None
     observed_at_ms: int = Field(ge=0)
 
 

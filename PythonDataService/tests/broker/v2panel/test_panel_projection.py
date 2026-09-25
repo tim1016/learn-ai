@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     ReconciliationSummary,
 )
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -861,7 +862,7 @@ def test_transaction_rail_resolves_old_transaction_outside_bounded_window(
     repo = _real_repo(tmp_path)
     try:
         old_ref, newest_ref = _two_real_operations(repo)
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             # A window of 1 only carries the newest operation (EXIT); the
             # ENTER `old_ref` genuinely exists in storage but falls outside it.
@@ -893,7 +894,7 @@ def test_transaction_rail_reports_explicit_absence_for_a_ref_that_does_not_exist
     repo = _real_repo(tmp_path)
     try:
         _old_ref, newest_ref = _two_real_operations(repo)
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             projection = reader.bot_snapshot(SID)
         finally:
@@ -936,7 +937,7 @@ def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
             leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         )
 
-        reader = SqliteClerkProjectionReader.from_repository(repo)
+        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
         try:
             projection = reader.bot_snapshot(SID)
         finally:

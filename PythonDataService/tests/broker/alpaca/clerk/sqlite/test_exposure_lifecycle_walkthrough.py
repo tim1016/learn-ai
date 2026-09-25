@@ -76,7 +76,9 @@ async def test_crashed_exposure_walks_to_flat_and_readmits_resume(tmp_path: Path
     await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
 
     async def current_context():
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        reader = SqliteClerkProjectionReader.from_repository(
+            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
         finally:

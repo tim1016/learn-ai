@@ -25,14 +25,10 @@ type NextAttemptLine =
  * rendering for every surface that shows it: the account desk, the bot page's
  * verdict and the lane's attention bell.
  *
- * The backend projects it on every read: while an exit is in progress no
- * attempt is due, so that is said instead of a time — never "overdue", which
- * would read as a failed automatic sell and invite a second, manual one. A
- * time is the watchdog's real next try; "overdue since" only when it could
- * have sent by now. A record that could not be read is an unknown attempt,
- * not an absent one. Rendered in ET: a session-clock instant, like the
- * pre-market open it usually names. Nothing renders when there is nothing to
- * say.
+ * The backend owns eligibility and waiting status. A timestamp is the
+ * earliest retry opportunity, not a promised submission: quotes or custody
+ * evidence may still prevent it. An active exit takes precedence over the
+ * timestamp. Session eligibility renders in ET.
  */
 @Component({
   selector: 'app-next-attempt',
@@ -45,12 +41,12 @@ type NextAttemptLine =
       @if (shown.kind === 'working') {
         An exit is in progress; no automatic attempt is due while it works.
       } @else if (shown.kind === 'at') {
-        Next automatic attempt: @if (shown.overdue) {overdue since }<app-timestamp-display
+        Automatic retry: @if (shown.overdue) {waiting; eligible since } @else {eligible from }<app-timestamp-display
           [value]="shown.atMs"
           mode="et"
         />
       } @else {
-        Next automatic attempt: unknown; this notice's record could not be read.
+        Automatic retry: eligibility unknown; this notice's record could not be read.
       }
     }
   `,

@@ -14,6 +14,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
     evidence_account_id_for,
@@ -29,6 +30,7 @@ from app.broker.alpaca.clerk.active_authority import (
     unregister_clerk_runtime,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
@@ -55,6 +57,10 @@ class BindingAuthority:
 
     def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
         """Custody for a read: projects the sweep's verdict, never reconciles."""
+        raise NotImplementedError
+
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        """Read the policy of the Clerk whose custody guard admission holds."""
         raise NotImplementedError
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
@@ -120,6 +126,14 @@ class PrimaryAccountBindingAuthority(BindingAuthority):
             return self.external_start_guard(self.binding.strategy_instance_id)
         return default_start_custody_projection(self.binding)
 
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        clerk = get_alpaca_clerk()
+        if clerk is None:
+            raise StartAdmissionUnavailable(
+                "The account Clerk is not installed.", detail="Restore the account Clerk before starting a bot."
+            )
+        return clerk.program_leg_policy
+
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         return self.projector
 
@@ -153,6 +167,15 @@ class SyntheticBindingAuthority(BindingAuthority):
 
     def start_custody_projection(self) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
         return self._start_custody_guard(project=True)
+
+    def program_leg_policy(self) -> ProgramLegPolicy:
+        runtime = get_clerk_runtime(self.account_id)
+        if runtime is None or runtime.clerk is None:
+            raise StartAdmissionUnavailable(
+                "Dry Run synthetic authority is unavailable.",
+                detail="Activate the isolated synthetic Clerk before judging its execution policy.",
+            )
+        return runtime.clerk.program_leg_policy
 
     def lifecycle_projector(self) -> AlpacaLifecycleProjector:
         runtime = get_clerk_runtime(self.account_id)

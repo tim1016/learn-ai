@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
@@ -164,6 +165,7 @@ def _admission(
         raise AssertionError("activate must not be called when admission is refused")
 
     return BotResumeAdmission(
+        program_leg_policy=lambda binding: ProgramLegPolicy.regular_only(),
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,

@@ -496,7 +496,11 @@ def get_active_clerk_runtime() -> ActiveClerkRuntime | None:
 
 
 def active_program_leg_policy() -> ProgramLegPolicy:
-    """The active authority's leg policy; regular-only while none is active."""
+    """The primary account's policy for account-level market projections.
+
+    Run admission reads its selected BindingAuthority instead: a Dry Run
+    trades on its own synthetic Clerk, not necessarily the primary account.
+    """
     runtime = get_active_clerk_runtime()
     if runtime is None or runtime.clerk is None:
         return ProgramLegPolicy.regular_only()

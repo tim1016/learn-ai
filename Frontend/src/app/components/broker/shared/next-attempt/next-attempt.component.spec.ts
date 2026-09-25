@@ -16,7 +16,7 @@ describe('NextAttemptComponent (#2440)', () => {
   it('names the time of the next automatic attempt in ET', async () => {
     await renderAttempt({ next_attempt_at_ms: PRE_MARKET_TRY_MS, next_attempt_overdue: false });
 
-    const line = screen.getByText(/Next automatic attempt/);
+    const line = screen.getByText(/Automatic retry/);
     expect(line.textContent).toContain('03:59:55');
     expect(line.textContent).toContain('ET');
     expect(line.textContent).not.toContain('overdue');
@@ -25,7 +25,7 @@ describe('NextAttemptComponent (#2440)', () => {
   it('says a past time is overdue, never promising it', async () => {
     await renderAttempt({ next_attempt_at_ms: PRE_MARKET_TRY_MS, next_attempt_overdue: true });
 
-    expect(screen.getByText(/Next automatic attempt/).textContent).toContain('overdue since');
+    expect(screen.getByText(/Automatic retry/).textContent).toContain('waiting; eligible since');
   });
 
   it('says an exit is working instead of a time, and never that it is overdue', async () => {
@@ -41,14 +41,14 @@ describe('NextAttemptComponent (#2440)', () => {
       screen.getByText('An exit is in progress; no automatic attempt is due while it works.'),
     ).toBeTruthy();
     expect(screen.queryByText(/overdue/)).toBeNull();
-    expect(screen.queryByText(/Next automatic attempt/)).toBeNull();
+    expect(screen.queryByText(/Automatic retry/)).toBeNull();
   });
 
   it('says the attempt is unknown when the record could not be read', async () => {
     await renderAttempt({ next_attempt_at_ms: null, facts_unreadable: true });
 
     expect(
-      screen.getByText("Next automatic attempt: unknown; this notice's record could not be read."),
+      screen.getByText("Automatic retry: eligibility unknown; this notice's record could not be read."),
     ).toBeTruthy();
   });
 

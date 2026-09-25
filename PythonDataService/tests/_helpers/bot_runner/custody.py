@@ -16,6 +16,8 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -115,3 +117,17 @@ def _registry(
 def _lifecycle_json(tmp_path: Path, sid: str = _SID) -> dict:
     path = tmp_path / "live_state" / sid / "lifecycle_state.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def configure_execution_allowances(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run mechanics fixtures explicitly opt into the after-close exit allowance.
+
+    A refused profile binding still raises before these settings are read.
+    Tests of an unconfigured lane can clear the pair themselves.
+    """
+    from app.broker.alpaca import config
+
+    monkeypatch.setattr(config, "_settings", config.AlpacaSettings(
+        _env_file=None, api_key_id="test-key", api_secret_key="test-secret",
+        live_xh_entry_bps=10, live_xh_exit_bps=20,
+    ))

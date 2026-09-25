@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.schemas.run_admission import (
@@ -138,6 +139,7 @@ def _minimal_admission(**overrides: object) -> BotResumeAdmission:
         raise AssertionError("activate must not be called")
 
     kwargs: dict[str, object] = {
+        "program_leg_policy": lambda binding: ProgramLegPolicy.regular_only(),
         "now_ms": lambda: 1_000,
         "feed_resolver": lambda: None,
         "process_fact": process_fact,
@@ -260,6 +262,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
         )
 
     admission = BotResumeAdmission(
+        program_leg_policy=lambda binding: ProgramLegPolicy.regular_only(),
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,

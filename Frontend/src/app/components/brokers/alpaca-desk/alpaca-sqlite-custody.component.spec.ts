@@ -236,7 +236,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(botLink.getAttribute('href'))
       .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
     // No retry is scheduled for this cause, so no attempt time is shown.
-    expect(screen.queryByText(/Next automatic attempt/)).toBeNull();
+    expect(screen.queryByText(/Automatic retry/)).toBeNull();
   });
 
   it('says when the Clerk next tries to sell a position an exit left open (#2440)', async () => {
@@ -267,7 +267,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
       }),
     });
 
-    const attempt = await screen.findByText(/Next automatic attempt/);
+    const attempt = await screen.findByText(/Automatic retry/);
     expect(attempt.textContent).toContain('04:00');
     expect(attempt.textContent).toContain('ET');
     expect(attempt.textContent).not.toContain('overdue');
@@ -301,8 +301,8 @@ describe('AlpacaSqliteCustodyComponent', () => {
       }),
     });
 
-    const attempt = await screen.findByText(/Next automatic attempt/);
-    expect(attempt.textContent).toContain('overdue since');
+    const attempt = await screen.findByText(/Automatic retry/);
+    expect(attempt.textContent).toContain('waiting; eligible since');
     expect(attempt.textContent).toContain('04:00');
   });
 
@@ -333,7 +333,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     });
 
     expect(await screen.findByText(
-      "Next automatic attempt: unknown; this notice's record could not be read.",
+      "Automatic retry: eligibility unknown; this notice's record could not be read.",
     )).toBeTruthy();
   });
 
@@ -366,7 +366,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByText(
       'An exit is in progress; no automatic attempt is due while it works.',
     )).toBeTruthy();
-    expect(screen.queryByText(/overdue since/)).toBeNull();
+    expect(screen.queryByText(/waiting; eligible since/)).toBeNull();
   });
 
   function unfoldableProjection(): SqliteClerkProjection {

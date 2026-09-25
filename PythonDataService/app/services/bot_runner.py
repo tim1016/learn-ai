@@ -42,7 +42,6 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
-    active_program_leg_policy,
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
@@ -524,7 +523,7 @@ class BotTaskRegistry:
             activate=self._activate_start_binding,
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
-            program_leg_policy=active_program_leg_policy,
+            program_leg_policy=lambda binding: self._authority_for(binding).program_leg_policy(),
             arming_fact=arming_fact,
         )
         self._resume_admission = BotResumeAdmission(
@@ -542,7 +541,7 @@ class BotTaskRegistry:
             session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
             legacy_migration_repository=self._bindings,
-            program_leg_policy=active_program_leg_policy,
+            program_leg_policy=lambda binding: self._authority_for(binding).program_leg_policy(),
             arming_fact=arming_fact,
         )
         self._run_evidence = BotRunEvidenceService(

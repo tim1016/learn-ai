@@ -139,7 +139,7 @@ describe('BotTriageDetailComponent', () => {
     expect(screen.getByText('+12 SPY')).toBeTruthy();
     expect(screen.getByText('+$402.85')).toBeTruthy();
     // No automatic attempt is scheduled, so none is promised.
-    expect(screen.queryByText(/Next automatic attempt/)).toBeNull();
+    expect(screen.queryByText(/Automatic retry/)).toBeNull();
   });
 
   it.each([false, true])('says when the Clerk next tries to sell an exit left open (overdue: %s) (#2440)', async (overdue) => {
@@ -158,16 +158,16 @@ describe('BotTriageDetailComponent', () => {
       }),
     );
 
-    const attempt = await screen.findByText(/Next automatic attempt/);
+    const attempt = await screen.findByText(/Automatic retry/);
     // A time already past is said to be overdue, never shown as a promise.
-    expect(attempt.textContent?.includes('overdue since')).toBe(overdue);
+    expect(attempt.textContent?.includes('waiting; eligible since')).toBe(overdue);
     expect(attempt.textContent).toContain('04:00');
     expect(attempt.textContent).toContain('ET');
   });
 
   it.each([
     [{ exit_working: true }, 'An exit is in progress; no automatic attempt is due while it works.'],
-    [{ facts_unreadable: true }, "Next automatic attempt: unknown; this notice's record could not be read."],
+    [{ facts_unreadable: true }, "Automatic retry: eligibility unknown; this notice's record could not be read."],
   ])('says what the desk says when the verdict carries no time (%o) (#2440 review)', async (facts, text) => {
     await renderDetail(
       fakeBotPanelView({
@@ -184,7 +184,7 @@ describe('BotTriageDetailComponent', () => {
     );
 
     expect(await screen.findByText(text)).toBeTruthy();
-    expect(screen.queryByText(/overdue since/)).toBeNull();
+    expect(screen.queryByText(/waiting; eligible since/)).toBeNull();
   });
 
   it('puts unavailable commands first, with their reason', async () => {

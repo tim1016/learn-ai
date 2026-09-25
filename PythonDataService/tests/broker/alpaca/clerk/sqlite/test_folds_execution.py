@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import repository as repository_module
 from app.broker.alpaca.clerk.sqlite import repository_execution_coverage_api as coverage_api_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
@@ -1781,7 +1782,9 @@ async def test_presented_coverage_resolution_replays_its_original_receipt(
         assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_quarantined"
 
         async def current_context() -> RecoveryPolicyContext:
-            reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+            reader = SqliteClerkProjectionReader.from_repository(
+                repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            )
             try:
                 context = reader.recovery_context(
                     strategy_instance_id="presented-cover"
