@@ -444,6 +444,17 @@ notice's message tells the two apart. The one typed reason such a run can carry 
 None of these is an operator action. Each is a completed, evidence-backed stop: read the notice,
 then redeploy through the panel's normal admitted action once the feed is healthy.
 
+Two data refusals sit outside this vocabulary because no decision was ever at risk of being made on
+bad connectivity: a run that never started deciding is recorded under its own duty-outcome reason
+code rather than `FEED_DEATH`. A warmup that could not be fetched or covered refuses as
+`WARMUP_HISTORY_UNAVAILABLE` / `RESUME_HOLE_AFTER_HOURS` / `RESUME_HOLE_UNFILLED` (#2365, #2314), and
+a bar whose values cannot be real — a non-finite or non-positive price, a bar with high below low or
+an open or close outside the low–high range, or a negative volume — refuses as
+`IMPOSSIBLE_SOURCE_BAR` (#2444), identically on the live subscription and on the warmup history
+fetch. `FEED_DEATH` would point the operator at a running bot's stream or at connectivity; these say
+the data itself is the problem, and `IMPOSSIBLE_SOURCE_BAR` is not retryable — check the broker's
+data quality before redeploying.
+
 ## 10. What this document replaced
 
 `docs/broker-v2-operator-manual.md` was generated under

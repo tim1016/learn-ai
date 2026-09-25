@@ -63,7 +63,12 @@ from app.engine.live.desired_state import (
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.marketdata.feed import WARMUP_REFUSAL_REASONS, MarketDataFeed, MarketDataFeedError
+from app.marketdata.feed import (
+    IMPOSSIBLE_SOURCE_BAR,
+    WARMUP_REFUSAL_REASONS,
+    MarketDataFeed,
+    MarketDataFeedError,
+)
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
     BotProcessFact,
@@ -1847,16 +1852,19 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
-            # A refused warmup never started deciding, so it is recorded under
-            # its own reason: "the feed died" would send the operator looking
-            # at a running bot's stream (#2365, #2314). Every other feed failure
-            # keeps the long-standing FEED_DEATH code the manual and panel describe.
+            # A refused warmup never started deciding, and a bar whose values
+            # cannot be real was refused rather than decided on, so each is
+            # recorded under its own reason: "the feed died" would send the
+            # operator looking at a running bot's stream (#2365, #2314), or at
+            # connectivity when the data itself is corrupt (#2444). Every other
+            # feed failure keeps the long-standing FEED_DEATH code the manual
+            # and panel describe.
             await self._terminal.finalize_crash(
                 binding,
                 exc,
                 reason_code=(
                     exc.reason
-                    if exc.reason in WARMUP_REFUSAL_REASONS
+                    if exc.reason in WARMUP_REFUSAL_REASONS | {IMPOSSIBLE_SOURCE_BAR}
                     else "FEED_DEATH"
                 ),
             )

@@ -22,6 +22,7 @@ from app.broker.ibkr.bars import (
 )
 from app.broker.ibkr.minute_assembler import (
     SPARSE_MINUTE_EMIT_GRACE_MS,
+    IBKRImpossibleBarError,
     LiveBarCounters,
     aggregate_realtime_bar,
 )
@@ -605,6 +606,35 @@ async def test_fetch_historical_minute_bars_stamps_provenance() -> None:
     assert bars[0].session_phase == "RTH"
     assert bars[0].use_rth is False
     assert client.ib.historical_use_rth_seen is False
+
+
+_HISTORY_IMPOSSIBLE_CASES = [
+    (dict(close=Decimal("nan")), "not finite"),
+    (dict(close=Decimal("0")), "not positive"),
+    (dict(high=Decimal("99"), low=Decimal("101")), "high is below low"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "violation"),
+    _HISTORY_IMPOSSIBLE_CASES,
+    ids=["nan_close", "zero_close", "high_below_low"],
+)
+async def test_fetch_historical_minute_bars_refuses_an_impossible_bar(
+    case: dict, violation: str
+) -> None:
+    """#2444: warmup bars fetched from IBKR history pass the same impossibility
+    check as live 5-second prints. Before the fix a NaN, zero or high-below-low
+    minute was returned to the run and warmed the indicators with it."""
+    base = dict(open=Decimal("100"), high=Decimal("101"), low=Decimal("99"), close=Decimal("100.5"))
+    client = _FakeClient()
+    client.ib.historical_bars = [
+        SimpleNamespace(date=datetime(2026, 5, 4, 14, 30, tzinfo=UTC), volume=20, **(base | case))
+    ]
+
+    with pytest.raises(IBKRImpossibleBarError, match=violation):
+        await fetch_historical_minute_bars(client, "SPY", use_rth=False)
 
 
 @pytest.mark.asyncio

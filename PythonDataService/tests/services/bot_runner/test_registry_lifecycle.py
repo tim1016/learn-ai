@@ -706,6 +706,35 @@ async def test_refused_warmup_records_its_own_reason_and_stops_the_run(
 
 
 @pytest.mark.asyncio
+async def test_impossible_bar_refusal_records_its_own_reason_and_stops_the_run(
+    tmp_path: Path,
+) -> None:
+    """#2444: a run refused on a bar whose values cannot be real says so through
+    the outcome's reason code; ``FEED_DEATH`` would point the operator at
+    connectivity instead of the data."""
+    feed = _FakeFeed(
+        [_bar(_T0)],
+        mode="crash",
+        error=MarketDataFeedError(
+            "IBKR bar for SPY at 1 ms was refused: close price is not finite",
+            reason="IMPOSSIBLE_SOURCE_BAR",
+        ),
+    )
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.running is False
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.kind == "CRASHED"
+    assert view.duty_outcome.reason_code == "IMPOSSIBLE_SOURCE_BAR"
+    assert view.desired_state == "STOPPED"
+    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == "IMPOSSIBLE_SOURCE_BAR"
+
+
+@pytest.mark.asyncio
 async def test_other_typed_feed_refusals_keep_the_feed_death_code(tmp_path: Path) -> None:
     feed = _FakeFeed(
         [_bar(_T0)],

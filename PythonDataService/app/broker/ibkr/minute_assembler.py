@@ -100,6 +100,18 @@ class IBKRBarStreamError(Exception):
     """Raised when IBKR real-time bars violate timestamp invariants."""
 
 
+class IBKRImpossibleBarError(IBKRBarStreamError):
+    """Raised when an IBKR bar's prices or volume cannot be real (#2444).
+
+    A non-finite or non-positive price, an internally inconsistent bar (high
+    below low, or an open or close outside the low–high range) or a negative
+    volume never reaches indicator state or a bot decision: the bar is refused
+    through the feed's fatal-invariant path, surfaced -- never silently
+    dropped or repaired -- exactly like a timestamp violation. IBKR has
+    already delivered $0.00 snapshot prices (#2407), so the case is real.
+    """
+
+
 @dataclass
 class LiveBarCounters:
     """Observable counters for idempotent live redelivery handling.
@@ -114,6 +126,9 @@ class LiveBarCounters:
     ignored_post_emit_correction: int = 0
     #: A new print for a minute already emitted by the sparse-minute timer (#2376).
     ignored_late_print_after_emit: int = 0
+    #: A 5-second print refused because its values cannot be real (#2444).
+    #: The refusal is fatal, so this is ever 0 or 1 on one assembler.
+    refused_impossible_bar: int = 0
 
 
 def _to_utc_ms(value: datetime | int | float | str) -> int:
@@ -266,6 +281,74 @@ def _contribution(bar) -> _Contribution:
     )
 
 
+def _impossibility(contribution: _Contribution) -> str | None:
+    """Why ``contribution`` cannot be a real bar, or ``None`` if it can.
+
+    Finiteness is decided for all four prices before any ordering
+    comparison: a ``Decimal`` NaN makes ``<``/`>`` raise ``InvalidOperation``,
+    and a bar the vendor delivered as NaN must be refused, not crash the
+    comparison. Zero volume is real (IBKR prints a volume-0 bar when nothing
+    traded); only negative volume is impossible.
+    """
+    for name in ("open", "high", "low", "close"):
+        price = getattr(contribution, name)
+        if not price.is_finite():
+            return f"{name} price is not finite"
+        if price <= 0:
+            return f"{name} price is not positive"
+    if contribution.high < contribution.low:
+        return "high is below low"
+    if contribution.low > contribution.open or contribution.open > contribution.high:
+        return "open is outside the low-high range"
+    if contribution.low > contribution.close or contribution.close > contribution.high:
+        return "close is outside the low-high range"
+    if contribution.volume < 0:
+        return "volume is negative"
+    return None
+
+
+def _validated_contribution(
+    bar,
+    *,
+    symbol: str,
+    source_ms: int,
+    counters: LiveBarCounters | None = None,
+) -> _Contribution:
+    """Read one bar's OHLCV and refuse it if its values cannot be real (#2444).
+
+    The single admission check both IBKR feed paths fold through: the live
+    5-second subscription (``aggregate_realtime_bar``) and the historical
+    fetch (``fetch_historical_minute_bars``) warm up on. The refusal is
+    surfaced -- logged with a structured action, counted on the live
+    counters -- and fatal through the same path a timestamp violation takes.
+    """
+    contribution = _contribution(bar)
+    violation = _impossibility(contribution)
+    if violation is not None:
+        if counters is not None:
+            counters.refused_impossible_bar += 1
+        logger.error(
+            "Refusing IBKR bar with impossible values",
+            extra={
+                "action": "ibkr_impossible_bar_refused",
+                "symbol": symbol,
+                "source_ms": source_ms,
+                "violation": violation,
+                "open": str(contribution.open),
+                "high": str(contribution.high),
+                "low": str(contribution.low),
+                "close": str(contribution.close),
+                "volume": contribution.volume,
+            },
+        )
+        raise IBKRImpossibleBarError(
+            f"IBKR bar for {symbol} at {source_ms} ms was refused: {violation} "
+            f"(open={contribution.open}, high={contribution.high}, low={contribution.low}, "
+            f"close={contribution.close}, volume={contribution.volume})"
+        )
+    return contribution
+
+
 def _handle_duplicate(
     current: _MinuteAccumulator | None,
     source_ms: int,
@@ -348,7 +431,7 @@ def aggregate_realtime_bar(
     minute stitched across a reconnect emits with ``spans_interruption``.
     """
     source_ms = _bar_time_ms(bar)
-    incoming = _contribution(bar)
+    incoming = _validated_contribution(bar, symbol=symbol, source_ms=source_ms, counters=counters)
 
     if last_source_ms is not None:
         if source_ms == last_source_ms:

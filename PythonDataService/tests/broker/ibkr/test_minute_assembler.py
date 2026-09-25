@@ -12,6 +12,7 @@ from app.broker.ibkr.minute_assembler import (
     RTH_CONTRIBUTIONS_PER_MINUTE,
     SPARSE_MINUTE_EMIT_GRACE_MS,
     IBKRBarStreamError,
+    IBKRImpossibleBarError,
     MinuteAssembler,
 )
 
@@ -174,6 +175,73 @@ def test_a_later_minute_after_a_flush_opens_a_fresh_accumulator() -> None:
     assert assembler.feed(_next_minute_raw(), symbol="SPY", generation=2, venue=None, use_rth=True) is None
     assert assembler.open_minute_start_ms is not None
     assert assembler.counters.skipped_duplicate == 0
+
+
+# -- #2444: a bar whose values cannot be real is refused before the fold --
+
+
+def _raw_with(
+    second: int,
+    *,
+    open_: str = "100",
+    high: str = "101",
+    low: str = "99",
+    close: str = "100.5",
+    volume: int = 10,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        time=_MINUTE.replace(second=second),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=volume,
+    )
+
+
+_IMPOSSIBLE_CASES = [
+    (dict(close="nan"), "not finite"),
+    (dict(close="0"), "not positive"),
+    (dict(high="99", low="101"), "high is below low"),
+    (dict(open_="101.5"), "outside the low"),
+    (dict(volume=-1), "volume is negative"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "violation"),
+    _IMPOSSIBLE_CASES,
+    ids=["nan_close", "zero_close", "high_below_low", "open_outside_range", "negative_volume"],
+)
+def test_impossible_contribution_is_refused_before_folding(case: dict, violation: str) -> None:
+    """#2444: a NaN, zero, inconsistent or negative-volume 5-second print never
+    reaches the fold, the open minute is left exactly as it was, and the refusal
+    is counted once on the assembler's observable counters."""
+    assembler = MinuteAssembler()
+    assert assembler.feed(_raw(0), symbol="SPY", generation=1, venue=None, use_rth=True) is None
+
+    with pytest.raises(IBKRImpossibleBarError, match=violation):
+        assembler.feed(_raw_with(5, **case), symbol="SPY", generation=1, venue=None, use_rth=True)
+
+    assert assembler.counters.refused_impossible_bar == 1
+    # The refusal changed nothing: the open minute still holds only its valid
+    # first print, so a healthy line resumes folding into it.
+    assert assembler.open_minute_start_ms == int(_MINUTE.timestamp() * 1000)
+    assert assembler.counters.skipped_duplicate == 0
+    assert assembler.last_source_ms == int(_MINUTE.replace(second=0).timestamp() * 1000)
+
+
+def test_a_volume_zero_bar_is_admitted() -> None:
+    """IBKR prints a volume-0 bar when nothing traded in the 5 seconds (#2299
+    evidence); zero volume is real, so only negative volume is impossible."""
+    assembler = MinuteAssembler()
+
+    emitted = assembler.feed(_raw_with(0, volume=0), symbol="SPY", generation=1, venue=None, use_rth=True)
+
+    assert emitted is None
+    assert assembler.open_minute_start_ms == int(_MINUTE.timestamp() * 1000)
+    assert assembler.counters.refused_impossible_bar == 0
+
 
 
 def test_exact_redelivery_under_a_new_generation_leaves_the_minute_unflagged() -> None:

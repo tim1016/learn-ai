@@ -75,6 +75,14 @@ RESUME_HOLE_UNFILLED = "RESUME_HOLE_UNFILLED"
 before regular-hours minutes the IBKR 1-minute history did not return (#2314).
 Warming across the hole would decide on indicators that skipped it."""
 
+IMPOSSIBLE_SOURCE_BAR = "IMPOSSIBLE_SOURCE_BAR"
+"""``MarketDataFeedError.reason`` for a run refused on a bar whose values cannot
+be real: a non-finite or non-positive price, an internally inconsistent bar
+(high below low, or an open or close outside the low–high range) or a negative
+volume (#2444). Refused on the live subscription and on the warmup history
+fetch alike, through the feed's fatal-invariant path — never dropped or
+repaired. Not retryable: the data itself is corrupt, not the fetch."""
+
 class WarmupMinutesMissing(MarketDataFeedError):
     """A warmup refusal that can name the minutes history did not return (#2410).
 
