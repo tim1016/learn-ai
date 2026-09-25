@@ -112,11 +112,22 @@ notional cap, no symbol allowlist, no session restriction.
   subtracts `account_net_cash_spent_usd()` — what the Clerk's own synthesized
   fills would have spent — to get `cash_available_usd`; under real custody the
   broker's own cash already reflects it.
+- **The observation is dated when its reads are issued** (fixed 2026-09-24,
+  #2441). `observed_at_ms` is stamped before `get_account` and
+  `list_positions` go out, never when they return: a broker answer is only
+  known to be at least as recent as its request. Stamped on return, the
+  observation released the reservation of a fill the Clerk recorded during
+  the round trip — which the broker's answer could predate — and a second
+  instance was admitted against cash the first had already spent. One slow
+  account read was enough; the parallel positions read was not the cause.
+  Freshness is aged from the same instant (it errs old by the round trip), and
+  the day-P&L window ends there too.
 - **Reservations, fills-aware.** `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
   prices the part of an accepted ENTER the latest observation cannot see. A
-  working *or filled* order reserves its quantity minus whatever was
-  recorded before the observation; a dead order (canceled/expired/rejected/
-  replaced) reserves only its post-observation fills, because its unrecorded
+  fill counts as seen only when the Clerk recorded it before
+  `observed_at_ms − FILL_VISIBILITY_GRACE_MS`. A working *or filled* order
+  reserves its quantity minus its seen fills; a dead order (canceled/expired/
+  rejected/replaced) reserves only its unseen fills, because its unrecorded
   remainder is cancelled quantity, never cash. Corrections fold at their
   restated size: only the head of each correction chain counts (resolved
   through `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
@@ -126,6 +137,40 @@ notional cap, no symbol allowlist, no session restriction.
   sums this across every accepted ENTER, and `cash_bound_admits`
   (`PythonDataService/app/broker/alpaca/clerk/live_envelope.py`) checks
   `notional + reserved <= cash_available`.
+- **The fill-visibility grace.** `FILL_VISIBILITY_GRACE_MS = 5_000`
+  (`live_envelope.py`): a fill the Clerk recorded up to 5 s *before* the reads
+  were issued stays reserved too, because nothing Alpaca publishes says its
+  account cash reflects a fill by the time that fill's trade update reaches
+  us. What the primary sources do and do not say (checked 2026-09-24):
+  - The Broker API FAQ says account values without a `last_` prefix are
+    "updated Real-Time post trade executions", and that `cash` moves once a
+    SELL fills ([Broker API FAQs](https://docs.alpaca.markets/us/docs/broker-api-faq)).
+    Real-time is a latency description, not an ordering promise against the
+    stream.
+  - The Trading API account endpoint describes `cash` only as the cash
+    balance, with nothing on update timing or consistency with fills
+    ([Get account](https://docs.alpaca.markets/reference/getaccount-1)); the
+    positions endpoint likewise says only that market values update as prices
+    do ([All open positions](https://docs.alpaca.markets/us/reference/getallopenpositions)).
+  - The `trade_updates` stream defines `fill` and `partial_fill` (with the
+    position size after the event) but states no delivery, ordering or
+    consistency guarantee relative to the REST account view
+    ([Websocket streaming](https://docs.alpaca.markets/us/docs/websocket-streaming)).
+
+  So the grace stays. Five seconds is an order of magnitude over the
+  sub-second lag "real-time" implies and under one 15 s sync interval, so a
+  fill stays reserved at most one observation longer than it otherwise would
+  (`tests/broker/alpaca/clerk/test_live_envelope.py` pins it below the
+  interval). Over-reserving refuses an ENTER that would have fit;
+  under-reserving admits a second ENTER against cash already spent. The value
+  is a judgement, not a measurement — revisit it with a measured
+  trade-update-to-account-cash lag.
+- **Under shadow a fill can count twice, never zero times.** Simulated custody
+  subtracts `account_net_cash_spent_usd()`, read *after* the broker answered,
+  so a fill recorded during the read (or inside the grace) is both subtracted
+  from `cash_available_usd` and still reserved until the next observation
+  issued past the grace. For up to one tick the rehearsal refuses an ENTER
+  the true free cash would cover; it never admits one that cash cannot.
 - **Day P&L, the unknown rule.** `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py::day_pnl_at`
   composes realized FIFO P&L (via `SqliteEconomicProjectionReader.account_pnl_attribution`)
   less reported fees, plus the same tick's broker-observed `unrealized_pl_usd`.

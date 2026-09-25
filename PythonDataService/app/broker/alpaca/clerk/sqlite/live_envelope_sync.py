@@ -256,11 +256,18 @@ class LiveEnvelopeSync:
         never touches the gate and the last observation ages out on its own.
         """
         self._refresh_arming()
+        # Stamped before the reads are issued, never when they return. The
+        # stamp is the observation's claim about which fills its cash already
+        # includes (``AccountObservation``), and a broker answer is only known
+        # to be at least as recent as its request: a stamp taken on return
+        # released the reservation of a fill recorded during the round trip
+        # that the answer predated, and a second ENTER spent the same cash
+        # (#2441). The day-P&L window below ends at the same instant.
+        observed_at_ms = self._repo.clock()
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
         self._observed_account_id = account.account_id
-        observed_at_ms = self._repo.clock()
         # Under simulated custody the broker's cash never moved, so the
         # envelope subtracts what the Clerk's own fills would have spent
         # (plan R2); under real custody the broker's cash already reflects it.

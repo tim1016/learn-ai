@@ -2,14 +2,18 @@
 
 A reservation prices the part of an ENTER the latest cash observation
 cannot see: the unfilled remainder of a working order, plus any fill the
-Clerk recorded at or after the observation. A filled order reserves
-everything not recorded before the observation — its later fills and its
-not-yet-recorded ones alike, because a filled order's quantity is known. A
-dead order (canceled, expired, rejected, replaced) reserves only its
-post-observation fills; its unrecorded remainder is cancelled quantity,
-never cash. The shadow book fills at submit while the sweep records the
-fill later, so a filled order with no fill row is the common case there,
-not a corner.
+observation's cash is not trusted to include. That is every fill the Clerk
+recorded at or after ``observed_at_ms − FILL_VISIBILITY_GRACE_MS``: the
+observation is stamped when its reads were issued, so a fill recorded during
+the read is unseen, and one recorded just before it may be too, because
+Alpaca promises no ordering between the trade update it delivers and the
+account cash it reports (#2441). A filled order reserves everything not
+recorded before that boundary — its later fills and its not-yet-recorded ones
+alike, because a filled order's quantity is known. A dead order (canceled,
+expired, rejected, replaced) reserves only its unseen fills; its unrecorded
+remainder is cancelled quantity, never cash. The shadow book fills at submit
+while the sweep records the fill later, so a filled order with no fill row is
+the common case there, not a corner.
 
 Corrections fold at their restated size. Each order contributes its
 *effective* fills — the head of every correction chain, whatever its
@@ -32,7 +36,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+from app.broker.alpaca.clerk.live_envelope import FILL_VISIBILITY_GRACE_MS, EnvelopeReservation
 
 _DEAD_ORDER_STATES = ("canceled", "expired", "rejected", "replaced")
 
@@ -59,18 +63,20 @@ def append_envelope_reservation_row(
 
 
 def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float:
-    """The reserved notional an observation taken at ``observed_at_ms`` misses.
+    """The reserved notional an observation whose reads were issued at ``observed_at_ms`` misses.
 
-    Every reservation is summed; a dead order with no post-observation fill
-    contributes zero on its own arithmetic; a filled order with no recorded
-    fill contributes its whole notional. Nothing is pruned on
-    ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill without
-    touching ``orders``, and the websocket's acknowledgement is skipped when
-    the snapshot has not moved, so a dead order's ``updated_at_ms`` can
-    sit *before* an observation that has not seen its fills. Only a fill's own
-    ``recorded_at_ms`` can say what an observation could have seen — and for a
-    corrected execution that is the *root's* ``recorded_at_ms``, which
-    ``roots`` supplies.
+    A fill counts as seen only when recorded before
+    ``observed_at_ms − FILL_VISIBILITY_GRACE_MS``; one recorded at that
+    boundary or later stays reserved. Every reservation is summed; a dead
+    order with no unseen fill contributes zero on its own arithmetic; a filled
+    order with no recorded fill contributes its whole notional. Nothing is
+    pruned on ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a
+    fill without touching ``orders``, and the websocket's acknowledgement is
+    skipped when the snapshot has not moved, so a dead order's
+    ``updated_at_ms`` can sit *before* an observation that has not seen its
+    fills. Only a fill's own ``recorded_at_ms`` can say what an observation
+    could have seen — and for a corrected execution that is the *root's*
+    ``recorded_at_ms``, which ``roots`` supplies.
     """
     # Imported here, not at module scope: ``repository`` imports this module,
     # and ``economic_projection`` imports ``repository``. The canonical CTE
@@ -79,6 +85,7 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
         EFFECTIVE_FILL_LINEAGE_CTE,
     )
 
+    seen_before_ms = observed_at_ms - FILL_VISIBILITY_GRACE_MS
     rows = conn.execute(
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
         "SELECT r.quantity AS quantity, r.reference_price AS reference_price, "
@@ -94,7 +101,7 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, observed_at_ms: int) -> float
         "                  WHERE s.superseded_execution_ref = f.execution_id) "
         "LEFT JOIN roots r2 ON r2.effective_fill_id = f.fill_id "
         "GROUP BY r.effect_operation_id",
-        (observed_at_ms, observed_at_ms),
+        (seen_before_ms, seen_before_ms),
     ).fetchall()
     total = 0.0
     for row in rows:
