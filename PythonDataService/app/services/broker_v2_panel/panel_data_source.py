@@ -489,6 +489,7 @@ async def _get_panel_with_entries_from_authority(
         economics=economics,
         repository=rail_facade.repository if rail_facade is not None else None,
         flatten_verdict=rail_facade.flatten_send_verdict() if rail_facade is not None else None,
+        startup_join=None if source_evidence is None else source_evidence.startup_join,
     )
     return panel, entries, session_fills
 
