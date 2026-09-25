@@ -16,12 +16,17 @@
         <app-asset-identity [symbol]="result.symbol" size="sm" />
       </div>
       <p>{{ result.message }}</p>
+      @if (result.startupJoin; as startup) {
+        <app-startup-join-status [view]="startup" />
+      }
       @switch (result.state) {
         @case ('warming') {
-          <p class="resume-bots__muted">Warming up — checking how the gap since it stopped was joined…</p>
+          @if (!result.startupJoin) {
+            <p class="resume-bots__muted">Starting — waiting for the bot to report its preparation…</p>
+          }
         }
         @case ('unreported') {
-          <p class="resume-bots__muted">The bot has not reported its warmup yet. Open it to follow the run.</p>
+          <p class="resume-bots__muted">The bot is still preparing. Open it to follow the run.</p>
         }
         @case ('unreadable') {
           <p class="resume-bots__muted">This page could not read the bot after Resume. Open it to see how its run started.</p>
@@ -42,9 +47,11 @@
                 </div>
               </dl>
             }
-          } @else if (result.dutyOutcome; as duty) {
+          }
+          @if (result.dutyOutcome; as duty) {
             <p class="resume-bots__verdict">{{ duty.label }}</p>
             <p>{{ duty.explanation }}</p>
+            <app-exposure-notices [notices]="duty.exposure_notices ?? []" />
           }
         }
       }

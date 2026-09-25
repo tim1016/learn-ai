@@ -22,6 +22,12 @@ window a fresh deploy warms on. A hole longer than that leaves the retained
 bars before it outside the warmup horizon, so the run warms like a fresh
 deploy: from the lookback's history alone, with ``warm_from_ms`` recording
 where that warmup began so the replay proof replays the same bars.
+
+"The present" is the live stream's seam (#2410): the run subscribes before it
+warms up, and both joins here -- a resumed run's, and a fresh run's
+(:func:`join_fresh_warmup`) -- run exactly through where that stream takes
+over, owing the minute it joined partway through. ``startup_join`` orchestrates
+the wait, the settle time and the deadline these joins are retried under.
 """
 
 from __future__ import annotations

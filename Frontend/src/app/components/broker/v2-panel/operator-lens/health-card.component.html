@@ -37,6 +37,13 @@
       </dd>
     </div>
 
+    @if (startupJoin(); as join) {
+      <div class="health-card__fact--wide">
+        <dt>Startup</dt>
+        <dd><app-startup-join-status [view]="join" /></dd>
+      </div>
+    }
+
     @if (health().duty_outcome) {
       @let outcome = health().duty_outcome!;
       <div class="health-card__fact--wide">
@@ -49,6 +56,7 @@
           @if (outcome.recorded_at_ms) {
             <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" />
           }
+          <app-exposure-notices [notices]="outcome.exposure_notices ?? []" />
         </dd>
       </div>
     }
