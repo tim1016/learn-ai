@@ -45,10 +45,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
     _broker_order_fixture,
     _broker_position_fixture,
     _clock_at,
     _TestClock,
+    _walk_clock_to,
 )
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
@@ -225,6 +227,8 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
     quiet — and a lane that still believes it holds custody would hand its
     account over.
     """
+    # The market reducing leg goes out only inside the regular session (#2440).
+    _walk_clock_to(repo, FIXTURE_RTH_MS)
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
         repo,

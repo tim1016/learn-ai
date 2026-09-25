@@ -45,8 +45,11 @@ from app.broker.contract.models import (
     OrderType,
     TimeInForce,
 )
+from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
+    AFTER_HOURS_MS,
+    POST_CLOSE_MS,
     RUN_ID,
     SID,
     _broker_order,
@@ -537,6 +540,68 @@ async def test_exit_reducing_order_cancelled_unfilled_is_an_uncertainty_immediat
     assert first.reducing_order_ref in evidence_refs
 
 
+async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operator_the_position_is_open(
+    repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
+) -> None:
+    """#2440 (owner decision #2431): the after-hours limit is not queued, and not silent.
+
+    The day's last EXIT goes out at 16:00 as an extended-hours DAY limit. If
+    the after-hours session ends without filling it, Alpaca ends the order;
+    the first pass that observes that raises the operator-visible
+    ``EXIT_NOT_FLAT`` episode — the bot page's evidence and the lane's
+    attention bell both read it — saying the position is still open. Nothing
+    is resubmitted for the next day.
+    """
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-last-bar",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+        reducing_shape=LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=99.80,
+            extended_hours=True,
+            side=OrderSide.SELL,
+        ),
+        reducing_valid_until_ms=POST_CLOSE_MS,
+    )
+    assert accepted.effect_operation_id is not None
+    working = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=working)
+    assert first.reducing_order_ref is not None
+    assert repo.active_uncertainties() == []
+
+    _walk_clock_to(repo, POST_CLOSE_MS + 5_000)
+    expired = _FakeTrade(
+        lookup_results=[
+            _broker_order(first.reducing_order_ref, side="sell", status="expired", filled_quantity=0.0)
+        ]
+    )
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=expired)
+
+    assert expired.submit_calls == []
+    assert repo.position(SID, "SPY") == 10
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    # The attention bell's input is exactly the active uncertainty set.
+    [episode] = repo.active_uncertainties()
+    assert episode["reason_code"] == "EXIT_NOT_FLAT"
+    assert episode["strategy_instance_id"] == SID
+    assert episode["headline"] == (
+        "An extended-hours exit ended unfilled; the position is still open"
+    )
+    assert episode["explanation"] == (
+        "The extended-hours limit to sell 10 SPY at 99.8 ended expired without "
+        "flattening the position; 10 SPY is still held."
+    )
+    assert "Nothing was queued for the next open." in episode["next_step"]
+
+
 async def test_next_exit_decision_reissues_at_the_new_anchor(
     repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
 ) -> None:
@@ -572,6 +637,9 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
         extended_hours=True,
         side=OrderSide.SELL,
     )
+    # The next decision lands after the close: an extended-hours anchor,
+    # sendable until the declared close (#2440).
+    _walk_clock_to(repo, AFTER_HOURS_MS)
     try:
         second_accepted = accept_exit(
             repo,
@@ -581,6 +649,7 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
             lifecycle_run_id=RUN_ID,
             entry_order_ref=entry_ref,
             reducing_shape=new_anchor,
+            reducing_valid_until_ms=POST_CLOSE_MS,
         )
     except AdmissionBlockedError as exc:
         pytest.fail(

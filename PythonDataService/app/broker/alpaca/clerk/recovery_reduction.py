@@ -226,13 +226,13 @@ type PricingProvenance = Literal["operator", "clerk"]
 computed it for an automatic re-drive (#2229). The quantity-guard and expiry
 copy select their words from this — a trader must never be told to confirm a
 price nobody confirmed."""
-type RecoveryLegVerdict = Literal["send", "wait", "expired"]
-"""May a recovery EXIT's reducing leg go to the broker now?
+type ReducingLegVerdict = Literal["send", "wait", "expired"]
+"""May an EXIT's reducing leg go to the broker now?
 
-``send`` — yes. ``wait`` — a market leg outside the regular session: hold it,
-the next pass inside the regular session sends it. ``expired`` — an
-operator-confirmed limit past the end of the session it was priced in: it is
-never sent, and the EXIT fails so the operator can price again.
+``send`` — yes. ``wait`` — a market leg outside the regular session, which
+Alpaca would queue for the next open: it is not sent now. ``expired`` — a limit
+past the end of the session it was priced in: it is never sent into another
+session. What happens instead is ``exit_resolution``'s send-time rule.
 """
 
 
@@ -462,6 +462,11 @@ def price_automatic_recovery_reduction(
 ) -> ConfirmedRecoveryShape | None:
     """Price an automatic recovery reduction from the current instant (#2229).
 
+    Also the send-time re-pricing of any EXIT whose recorded leg can no longer
+    go out when its reduction is created (#2440, ``exit_resolution``): an EXIT
+    decided in the regular session but delayed past the close goes out as
+    this limit.
+
     Owner decision 2026-09-19 (evening), superseding "automatic re-drives wait
     for the operator outside the regular session": in an extended session the
     stuck-EXIT watchdog's re-drive is a limit the Clerk prices itself — the
@@ -525,14 +530,16 @@ def price_automatic_recovery_reduction(
     )
 
 
-def recovery_leg_verdict(
+def reducing_leg_verdict(
     *, extended_hours: bool, valid_until_ms: int | None, now_ms: int
-) -> RecoveryLegVerdict:
-    """The one rule every recovery EXIT's reducing leg passes before the broker sees it.
+) -> ReducingLegVerdict:
+    """The one rule every EXIT's reducing leg passes before the broker sees it.
 
-    Applied to the leg actually about to be sent — after the side
-    reconciliation that can turn a confirmed limit into a market leg (R11),
-    and on every resubmission — so no path reaches the broker around it.
+    Program and recovery EXITs alike (#2440): applied to the leg actually about
+    to be created — after the side reconciliation that can turn a limit into a
+    market leg (R11) — and on every resubmission, so no path reaches the broker
+    around it. An extended-hours leg with no recorded bound was priced for no
+    session this rule can name, so it is ``expired``.
     """
     if extended_hours:
         return "send" if valid_until_ms is not None and now_ms < valid_until_ms else "expired"
@@ -662,16 +669,16 @@ __all__ = [
     "ExtendedPhase",
     "PricingProvenance",
     "QuoteSource",
-    "RecoveryLegVerdict",
     "RecoveryPricing",
     "RecoveryReductionPricing",
+    "ReducingLegVerdict",
     "RegularSessionReduction",
     "flatten_session",
     "no_session_open",
     "price_automatic_recovery_reduction",
     "price_recovery_reduction",
     "realized_slippage_bps",
-    "recovery_leg_verdict",
     "recovery_reduction_shape",
+    "reducing_leg_verdict",
     "regular_session_open",
 ]

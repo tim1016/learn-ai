@@ -62,11 +62,16 @@ ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
 NEXT_OPEN_MS = 1_700_145_060_000  # 2023-11-16 09:31 ET, the session after FIXTURE_RTH_MS
+AFTER_HOURS_MS = FIXTURE_RTH_MS + 7 * 3_600_000 + 13 * 60_000  # 17:13 ET, POST, that day
+POST_CLOSE_MS = FIXTURE_RTH_MS + 10 * 3_600_000  # 20:00 ET, the declared close, that day
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    # Inside the regular session: every EXIT's reducing leg passes the
+    # send-time session rule (#2440), so a test about the EXIT machine sends
+    # its market DAY leg. A test about the session sets the clock itself.
+    clock = _clock_at(FIXTURE_RTH_MS)
     r = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
@@ -1819,7 +1824,8 @@ async def test_a_waiting_market_recovery_reduction_folds_releasably_outside_the_
     priced flatten of that entry was refused until 09:30. The waiting leg now
     folds the EXIT releasably: the effect fails through ``EXIT_NOT_FLAT``, the
     entry is freed for a priced reduction, and the bot stays flagged."""
-    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -1858,7 +1864,7 @@ async def test_a_waiting_market_recovery_reduction_folds_releasably_outside_the_
 
     # A terminal effect never re-drives: the next reduction is a fresh,
     # priced EXIT (the operator's flatten or the watchdog's re-drive).
-    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    _walk_clock_to(repo, NEXT_OPEN_MS)
     resolved = await resolve_exit(
         repo, effect_operation_id=accepted.effect_operation_id, trade=trade
     )
@@ -1933,7 +1939,8 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
     original tests missed (review of PR #2230, blocker 5)."""
     import logging as _logging
 
-    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET, long 10
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -1956,7 +1963,7 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
         entry_order_ref=entry_ref,
         confirmed_shape=ConfirmedRecoveryShape(
             shape=wrong_side,
-            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            valid_until_ms=POST_CLOSE_MS,
             reference_quote=TopOfBookQuote(
                 symbol="SPY",
                 bid=100.00,
@@ -1996,7 +2003,8 @@ async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_fo
     filter (``active_exit_for_order`` — asserted here) and the acceptance
     itself, both of which the waiting EXIT used to refuse (review of PR
     #2230, blocker 6)."""
-    entry_ref, recovered = await _filled_entry_with_position(repo)  # 17:13 ET
+    _walk_clock_to(repo, AFTER_HOURS_MS)
+    entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -2035,7 +2043,7 @@ async def test_the_operators_priced_flatten_is_accepted_once_the_waiting_exit_fo
                 extended_hours=True,
                 side=OrderSide.SELL,
             ),
-            valid_until_ms=1_700_076_000_000,  # 20:00 ET the same day
+            valid_until_ms=POST_CLOSE_MS,
             reference_quote=TopOfBookQuote(
                 symbol="SPY",
                 bid=100.00,

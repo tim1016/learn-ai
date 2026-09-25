@@ -31,6 +31,8 @@ from app.schemas.market_liveness import TopOfBookQuote
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
+    AFTER_HOURS_MS,
+    POST_CLOSE_MS,
     RUN_ID,
     SID,
     _broker_order,
@@ -160,6 +162,8 @@ def test_an_extended_shape_is_carried_in_the_reducing_facts_json() -> None:
 async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitted_identically(
     repo: ClerkSqliteRepository,  # noqa: F811 — the imported fixture
 ) -> None:
+    # A POST-session decision, sendable until the declared close (#2440).
+    _walk_clock_to(repo, AFTER_HOURS_MS)
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     accepted = accept_exit(
         repo,
@@ -169,6 +173,7 @@ async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitt
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
         reducing_shape=_XH_SELL,
+        reducing_valid_until_ms=POST_CLOSE_MS,
     )
     assert accepted.effect_operation_id is not None
 
@@ -296,6 +301,8 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
     acceptance it built a regular-session market DAY reduction, which Alpaca
     queues to the next 09:30 while the extended-hours exposure stands.
     """
+    # A POST-session decision, sendable until the declared close (#2440).
+    _walk_clock_to(repo, AFTER_HOURS_MS)
     entry_ref = await _make_entry(repo, quantity=10, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
         repo,
@@ -305,6 +312,7 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
         reducing_shape=_XH_SELL,
+        reducing_valid_until_ms=POST_CLOSE_MS,
     )
     assert accepted.effect_operation_id is not None
 

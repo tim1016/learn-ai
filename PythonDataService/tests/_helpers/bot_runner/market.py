@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+import app.broker.alpaca.clerk.recovery_reduction as recovery_reduction
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_runner as bot_runner
 import app.services.bot_trade_strategy as bot_trade_strategy
@@ -84,6 +85,14 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
+    # #2440: the Clerk sends an EXIT's market leg only while the regular
+    # session is open, judged on its own clock when the leg is sent. These
+    # suites replay historical bars against a wall-clock Clerk as if the
+    # market were live and open -- the market clock above says OPEN -- so the
+    # send-time session judgement says so too; on the host's clock a replayed
+    # round trip would otherwise pass only between 09:30 and 16:00 ET. The
+    # rule itself is pinned by the Clerk's own suites on pinned clocks.
+    monkeypatch.setattr(recovery_reduction, "regular_session_open", lambda _now_ms: True)
 
 
 def patch_wall_clock_to_the_fed_bar(monkeypatch: pytest.MonkeyPatch) -> None:

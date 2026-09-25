@@ -943,6 +943,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     """
     from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+    from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
     from tests.broker.alpaca.clerk.sqlite.test_exit import (
         ACCOUNT_ID,
         RUN_ID,
@@ -952,7 +953,12 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
         _make_entry,
     )
 
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    # Inside the regular session, where the market reducing leg is sent
+    # (#2440) — never the host's wall clock, which would make this pass only
+    # between 09:30 and 16:00 ET.
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(FIXTURE_RTH_MS)
+    )
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
 

@@ -187,7 +187,10 @@ DRILL_CAPABILITIES = ALPACA_PAPER_CAPABILITIES.revised(
 
 
 class TickClock:
-    def __init__(self, value: int = 1_786_200_000_000) -> None:
+    # 2026-08-10 10:00 ET, a Monday inside the regular session: a drill's
+    # EXIT sends its market DAY leg, which the send-time session rule allows
+    # only while the regular session is open (#2440).
+    def __init__(self, value: int = 1_786_370_400_000) -> None:
         self.value = value
 
     def __call__(self) -> int:

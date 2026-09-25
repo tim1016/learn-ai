@@ -336,7 +336,9 @@ async def redrive_or_escalate_stale_exits(
                 )
                 continue
             _FIRST_DEFERRAL_MS.get(repo, {}).pop(episode["uncertainty_id"], None)
-            await resolve_accepted_exit(repo, accepted=accepted, trade=trade, off_loop=run)
+            await resolve_accepted_exit(
+                repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run
+            )
         except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
             logger.info(
                 "deferred a contended or policy-blocked stuck-EXIT re-drive",

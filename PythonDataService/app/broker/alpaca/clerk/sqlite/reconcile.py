@@ -325,6 +325,7 @@ async def _reconcile_effect(
     trigger: Trigger,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
+    pricing: RecoveryPricing,
 ) -> ReconciliationOutcome:
     if effect.state in ("succeeded", "failed", "rejected"):
         return "RESOLVED_SUCCESS" if effect.state == "succeeded" else "RESOLVED_FAILURE"
@@ -346,6 +347,7 @@ async def _reconcile_effect(
             repo,
             effect_operation_id=effect.effect_operation_id,
             trade=trade,
+            pricing=pricing,
             off_loop=to_thread,
         )
     elif effect.kind == "CANCEL":
@@ -784,6 +786,7 @@ async def _recover_operations(
     trigger: Trigger,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
+    pricing: RecoveryPricing,
 ) -> int:
     resolved_count = 0
     effects = await to_thread(repo.reconcilable_effect_operations)
@@ -795,6 +798,7 @@ async def _recover_operations(
                 trigger=trigger,
                 trade=trade,
                 intake=intake,
+                pricing=pricing,
             )
         except ReconciliationInvariantError as exc:
             invariant_effect_id = effect.effect_operation_id
@@ -877,8 +881,9 @@ async def reconcile_account(
     """Serialize snapshot-to-verdict passes for one live account authority.
 
     ``pricing`` is what the stuck-EXIT watchdog prices its extended-hours
-    re-drive limits from (#2229); the degraded default defers rather than
-    guessing a price.
+    re-drive limits from (#2229), and what an EXIT this pass creates a
+    reduction for is re-priced from when its recorded leg can no longer be
+    sent (#2440); the degraded default defers rather than guessing a price.
 
     ``run_ownership`` is the Clerk facade's book of which in-process runner
     holds each ACTIVE run (#2369). With it, the pass retires every ACTIVE run
@@ -1045,6 +1050,9 @@ async def _reconcile_account_serialized(
         trigger=trigger,
         trade=trade,
         intake=intake,
+        # An EXIT this pass creates a reduction for passes the same send-time
+        # rule, and is re-priced from the same seam, as the runner's (#2440).
+        pricing=pricing,
     )
 
     # The re-drive is sized from attribution, so it may only send what this

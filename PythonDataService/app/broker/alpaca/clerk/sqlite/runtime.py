@@ -47,6 +47,7 @@ from app.broker.alpaca.clerk.program_leg import (
     with_deploy_recovery_pricing,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
+    UNPRICEABLE_RECOVERY,
     ConfirmedRecoveryLimit,
     ConfirmedRecoveryShape,
     QuoteSource,
@@ -357,6 +358,21 @@ class SqliteAlpacaClerkFacade:
             policy_source=lambda: self.program_leg_policy,
             quote_source=self._quote_source,
         )
+
+    @property
+    def exit_send_pricing(self) -> RecoveryPricing:
+        """What an EXIT whose leg can no longer go out as recorded is re-priced from (#2440).
+
+        The seam this authority's reconciliation sweep also hands its
+        watchdog: the live pricing above for a real-broker or shadow authority,
+        and none for a synthetic one, which fills against retained source bars
+        rather than the live market (PR #2230 review). Such an EXIT on a
+        synthetic authority folds for the operator instead of being priced off
+        a market it does not execute in.
+        """
+        if self.authority_kind == "synthetic":
+            return UNPRICEABLE_RECOVERY
+        return self.recovery_pricing
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
@@ -968,7 +984,7 @@ class SqliteAlpacaClerkFacade:
             program_side = OrderSide.BUY if entry.position == "long" else OrderSide.SELL
             leg_side = program_side if purpose is EffectPurpose.ENTER else _REDUCING_SIDE[program_side]
             try:
-                shape = shape_program_leg(
+                program_leg = shape_program_leg(
                     side=leg_side,
                     purpose=purpose,
                     use_rth=use_rth,
@@ -986,7 +1002,7 @@ class SqliteAlpacaClerkFacade:
                 # durable facts instead; building a leg it discards would be a
                 # second, silent leg construction one refactor away from
                 # disagreeing with the one that ships.
-                operation_leg = shape.apply(
+                operation_leg = program_leg.shape.apply(
                     symbol=entry.instrument.underlying,
                     quantity=float(quantity * entry.qty_ratio),
                 )
@@ -1131,7 +1147,8 @@ class SqliteAlpacaClerkFacade:
                         # Durable with the acceptance, not with this call:
                         # a deferred cancel-and-prove leaves the reducing
                         # order to a later sweep that knows no decision.
-                        reducing_shape=shape,
+                        reducing_shape=program_leg.shape,
+                        reducing_valid_until_ms=program_leg.valid_until_ms,
                     )
                 except UnknownEntryOrderError:
                     # The lookup and accept both occur under the Clerk intake
@@ -1177,6 +1194,7 @@ class SqliteAlpacaClerkFacade:
             self._repo,
             accepted=accepted_exit,
             trade=trade,
+            pricing=self.exit_send_pricing,
         )
         order_refs = tuple(
             ref
@@ -1223,6 +1241,9 @@ class SqliteAlpacaClerkFacade:
                 trade=self._trade,
                 trigger="AUTOMATIC",
                 intake=self._intake,
+                # A restart re-drives every EXIT it finds under the same
+                # send-time rule the runner and the sweep apply (#2440).
+                pricing=self.exit_send_pricing,
                 run_ownership=self._run_ownership,
             )
         )

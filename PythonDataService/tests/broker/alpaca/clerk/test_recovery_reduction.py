@@ -28,8 +28,8 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     quote_spread_bps,
     realized_slippage_bps,
     realized_slippage_cost,
-    recovery_leg_verdict,
     recovery_reduction_shape,
+    reducing_leg_verdict,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
@@ -349,7 +349,7 @@ def test_a_sell_limit_above_the_bid_is_not_a_slippage_risk_and_is_accepted() -> 
     [(_at(10), "send"), (_at(7), "wait"), (_at(17), "wait"), (_at(21), "wait")],
 )
 def test_a_market_recovery_leg_goes_out_only_inside_the_regular_session(now_ms: int, verdict: str) -> None:
-    assert recovery_leg_verdict(extended_hours=False, valid_until_ms=None, now_ms=now_ms) == verdict
+    assert reducing_leg_verdict(extended_hours=False, valid_until_ms=None, now_ms=now_ms) == verdict
 
 
 @pytest.mark.parametrize(
@@ -364,7 +364,7 @@ def test_a_market_recovery_leg_goes_out_only_inside_the_regular_session(now_ms: 
 def test_a_confirmed_limit_is_never_sent_past_the_session_it_was_priced_in(
     now_ms: int, valid_until_ms: int | None, verdict: str
 ) -> None:
-    assert recovery_leg_verdict(extended_hours=True, valid_until_ms=valid_until_ms, now_ms=now_ms) == verdict
+    assert reducing_leg_verdict(extended_hours=True, valid_until_ms=valid_until_ms, now_ms=now_ms) == verdict
 
 
 # --- realized slippage ------------------------------------------------------
