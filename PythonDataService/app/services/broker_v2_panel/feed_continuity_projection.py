@@ -17,9 +17,14 @@ from app.marketdata.feed import (
 from app.schemas.broker_v2_panel import (
     FeedContinuityEventView,
     FeedContinuityView,
+    StartupJoinView,
     WarmupJoinView,
 )
-from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedWarmupJoin
+from app.services.source_bar_ledger import (
+    RetainedContinuityEvent,
+    RetainedStartupJoin,
+    RetainedWarmupJoin,
+)
 
 _CONTINUITY_EVENT_COPY: dict[str, tuple[str, str]] = {
     "interruption": (
@@ -220,13 +225,81 @@ WARMUP_REFUSAL_COPY: dict[str, tuple[str, str]] = {
     ),
     WARMUP_HISTORY_UNAVAILABLE: (
         "Refused: warmup history unavailable",
-        "The run's sealed warmup lookback could not be fetched in full from IB Gateway, so it "
-        "was refused rather than started cold. Before starting again, check that the Gateway "
-        "is logged in, its historical-data farm is connected (not paced or down), and the "
-        "symbol qualifies as a contract.",
+        "IB Gateway did not return the warmup history the run needs -- its sealed lookback, or "
+        "the minute its live stream joined partway through -- before the startup deadline, so "
+        "it was refused rather than started cold or across a gap. Before starting again, check "
+        "that the Gateway is logged in, its historical-data farm is connected (not paced or "
+        "down), and the symbol qualifies as a contract.",
     ),
 }
 """Operator copy for each warmup refusal. The duty-outcome card reads the same map."""
+
+
+_STARTUP_JOIN_COPY: dict[str, tuple[str, str]] = {
+    "waiting_for_stream": (
+        "Preparing: waiting for the live stream to join",
+        "The bot has subscribed to IBKR and is waiting for its first print. Warmup starts once "
+        "the minute the stream joins has closed; nothing is decided before then, and no "
+        "deadline runs yet.",
+    ),
+    "filling": (
+        "Preparing: filling the minutes before the live stream from IBKR history",
+        "The live stream has joined. Warmup history up to the minute it takes over is being "
+        "fetched; the run is refused if that is not done before the deadline.",
+    ),
+    "history_joined": (
+        "Preparing: history joined, rebuilding state",
+        "Warmup history now reaches the live stream. The bot is replaying it and will take "
+        "live bars next.",
+    ),
+    "ready": (
+        "Ready: warmup met the live stream",
+        "Warmup and live bars are contiguous. The bot trades the next on-time decision; any "
+        "decision that fell due while it prepared was refused as late, never caught up.",
+    ),
+}
+"""Operator copy for each startup-join state; a refusal reads ``WARMUP_REFUSAL_COPY``."""
+
+
+def build_startup_join(
+    join: RetainedStartupJoin | None, *, running: bool
+) -> StartupJoinView | None:
+    """Project where the current run is in joining warmup to its stream, or ``None``.
+
+    A run that is no longer running and never refused shows nothing: its
+    preparation is history, and the duty outcome says how it ended.
+    """
+    if join is None:
+        return None
+    if join.refused_at_ms is not None:
+        assert join.reason_code is not None  # the store's CHECK pairs them
+        state = "refused"
+        label, explanation = WARMUP_REFUSAL_COPY[join.reason_code]
+    elif not running:
+        return None
+    else:
+        if join.ready_at_ms is not None:
+            state = "ready"
+        elif join.history_joined_at_ms is not None:
+            state = "history_joined"
+        elif join.live_from_ms is not None:
+            state = "filling"
+        else:
+            state = "waiting_for_stream"
+        label, explanation = _STARTUP_JOIN_COPY[state]
+    return StartupJoinView(
+        run_id=join.run_id,
+        state=state,
+        label=label,
+        explanation=explanation,
+        opened_at_ms=join.opened_at_ms,
+        live_from_ms=join.live_from_ms,
+        joined_minute_start_ms=join.joined_minute_start_ms,
+        deadline_ms=join.deadline_ms,
+        missing_start_ms=join.missing_start_ms,
+        missing_end_ms=join.missing_end_ms,
+        reason_code=join.reason_code,
+    )
 
 
 def build_warmup_join(join: RetainedWarmupJoin | None) -> WarmupJoinView | None:

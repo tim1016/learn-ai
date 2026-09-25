@@ -117,6 +117,7 @@ from app.services.market_data_capability_service import get_market_data_capabili
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
+    RetainedStartupJoin,
     RetainedWarmupJoin,
     SourceBarLedger,
     SourceBarLedgerCorruptError,
@@ -209,6 +210,7 @@ class RunSourceEvidence:
 
     events: list[RetainedContinuityEvent]
     warmup_join: RetainedWarmupJoin | None
+    startup_join: RetainedStartupJoin | None
 
 
 def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | None:
@@ -250,6 +252,7 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
             return RunSourceEvidence(
                 events=ledger.events(run_id=binding.run_id),
                 warmup_join=ledger.warmup_join(run_id=binding.run_id),
+                startup_join=ledger.startup_join(run_id=binding.run_id),
             )
         finally:
             ledger.close(checkpoint=False)
@@ -472,6 +475,7 @@ async def _get_panel_with_entries_from_authority(
         feed_continuity_events=None if source_evidence is None else source_evidence.events,
         feed_continuity_run_id=binding.run_id,
         warmup_join=None if source_evidence is None else source_evidence.warmup_join,
+        startup_join=None if source_evidence is None else source_evidence.startup_join,
     )
     # The transaction-rail stored-key fallback (PRD Sec 19, issue #1729 AC #6/#7)
     # needs the same repository `read_sqlite_panel_evidence` resolved internally

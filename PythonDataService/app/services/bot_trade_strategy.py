@@ -71,7 +71,7 @@ from app.services.market_liveness import (
     market_liveness_fact,
 )
 from app.services.retained_tail_join import join_fresh_warmup, warmup_rows_after_join
-from app.services.source_bar_ledger import RetainedSourceBar, RetainedStartupJoin, SourceBarLedger
+from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.services.startup_join import LiveStartBuffer, StartupDeadline, StreamSeam
 from app.utils.timestamps import now_ms_utc
 
@@ -358,19 +358,16 @@ class _RetainedSourceBarFeed:
         run is in and, on a refusal, what it could not fill.
         """
         session = self._require_own_session(use_rth)
+        self._ledger.record_startup_opened(run_id=self._run_id, at_ms=now_ms_utc())
         live = self._open_live(symbol)
         try:
             seam = await live.seam()
-            known_at_ms = now_ms_utc()
-            deadline = StartupDeadline.for_seam(seam, known_at_ms=known_at_ms)
+            deadline = StartupDeadline.for_seam(seam, known_at_ms=now_ms_utc())
             self._ledger.record_startup_seam(
-                RetainedStartupJoin(
-                    run_id=self._run_id,
-                    live_from_ms=seam.live_from_ms,
-                    joined_minute_start_ms=seam.joined_minute_start_ms,
-                    deadline_ms=deadline.deadline_ms,
-                    recorded_at_ms=known_at_ms,
-                )
+                run_id=self._run_id,
+                live_from_ms=seam.live_from_ms,
+                joined_minute_start_ms=seam.joined_minute_start_ms,
+                deadline_ms=deadline.deadline_ms,
             )
             try:
                 warmup = await self._warm_through_seam(

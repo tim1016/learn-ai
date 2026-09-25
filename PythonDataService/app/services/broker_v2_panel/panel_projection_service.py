@@ -61,6 +61,7 @@ from app.services.broker_v2_panel.channel_health import (
 from app.services.broker_v2_panel.feed_continuity_projection import (
     WARMUP_REFUSAL_COPY,
     build_feed_continuity,
+    build_startup_join,
     build_warmup_join,
 )
 from app.services.broker_v2_panel.panel_authority_guard import (
@@ -73,7 +74,11 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedWarmupJoin
+from app.services.source_bar_ledger import (
+    RetainedContinuityEvent,
+    RetainedStartupJoin,
+    RetainedWarmupJoin,
+)
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -788,6 +793,7 @@ def build_panel(
     feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
     feed_continuity_run_id: str | None = None,
     warmup_join: RetainedWarmupJoin | None = None,
+    startup_join: RetainedStartupJoin | None = None,
     symbol_unresolvable: bool = False,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
@@ -926,6 +932,7 @@ def build_panel(
             now_ms=now_ms,
         ),
         warmup_join=build_warmup_join(warmup_join),
+        startup_join=build_startup_join(startup_join, running=status.running),
         mission_verdict=_mission_verdict(
             status,
             clerk,

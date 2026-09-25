@@ -194,24 +194,25 @@ class RetainedWarmupJoin(BaseModel):
 class RetainedStartupJoin(BaseModel):
     """How one run's warmup met its live stream at startup (#2410).
 
-    Recorded once the stream says where it takes over (``live_from_ms``, and
-    ``joined_minute_start_ms`` when it joined the minute before partway
-    through), with the one fixed ``deadline_ms`` the history fill is held to.
-    Its three outcomes are each stamped once, in order: ``history_joined_at_ms``
-    when warmup history through the seam was retained, ``ready_at_ms`` when the
-    rebuilt strategy began taking live bars, or ``refused_at_ms`` with the
-    refusal's ``reason_code`` and, when it could say, the interval history did
-    not return (``missing_start_ms``..``missing_end_ms``). A run with no row has
-    not yet seen its stream join.
+    Opened when the run subscribes (``opened_at_ms``), before it warms up.
+    The seam is added once the stream says where it takes over
+    (``live_from_ms``, and ``joined_minute_start_ms`` when it joined the minute
+    before partway through), together with the one fixed ``deadline_ms`` the
+    history fill is held to. Its outcomes are each stamped once, in order:
+    ``history_joined_at_ms`` when warmup history through the seam was
+    retained, ``ready_at_ms`` when the rebuilt strategy began taking live bars,
+    or ``refused_at_ms`` with the refusal's ``reason_code`` and, when it could
+    say, the interval history did not return (``missing_start_ms``..
+    ``missing_end_ms``). A run with no row predates this record.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: str
-    live_from_ms: _Instant
+    opened_at_ms: _Instant
+    live_from_ms: _Instant | None = None
     joined_minute_start_ms: _Instant | None = None
-    deadline_ms: _Instant
-    recorded_at_ms: _Instant
+    deadline_ms: _Instant | None = None
     history_joined_at_ms: _Instant | None = None
     ready_at_ms: _Instant | None = None
     refused_at_ms: _Instant | None = None
@@ -221,6 +222,14 @@ class RetainedStartupJoin(BaseModel):
 
     @model_validator(mode="after")
     def _outcomes_in_order(self) -> RetainedStartupJoin:
+        seam_known = self.live_from_ms is not None
+        if seam_known != (self.deadline_ms is not None):
+            raise ValueError("a seam and its deadline are recorded together")
+        if not seam_known and any(
+            value is not None
+            for value in (self.joined_minute_start_ms, self.history_joined_at_ms, self.refused_at_ms)
+        ):
+            raise ValueError("nothing is joined or refused before the stream says where it takes over")
         if (self.refused_at_ms is None) != (self.reason_code is None):
             raise ValueError("exactly a refused startup join carries a refusal reason")
         if (self.missing_start_ms is None) != (self.missing_end_ms is None):
@@ -527,24 +536,32 @@ class SourceBarLedger:
             ).fetchone()
         return None if row is None else RetainedWarmupJoin.model_validate(dict(row))
 
-    def record_startup_seam(self, join: RetainedStartupJoin) -> None:
-        """Record where a run's stream took over and its deadline, keep-first (#2410)."""
+    def record_startup_opened(self, *, run_id: str, at_ms: int) -> None:
+        """Record that a run subscribed and is preparing, keep-first (#2410)."""
         with self._lock:
             self._conn.execute(
                 """
-                INSERT INTO source_run_startup_join (
-                    run_id, live_from_ms, joined_minute_start_ms, deadline_ms, recorded_at_ms
-                ) VALUES (?, ?, ?, ?, ?)
+                INSERT INTO source_run_startup_join (run_id, opened_at_ms) VALUES (?, ?)
                 ON CONFLICT(run_id) DO NOTHING
                 """,
-                (
-                    join.run_id,
-                    join.live_from_ms,
-                    join.joined_minute_start_ms,
-                    join.deadline_ms,
-                    join.recorded_at_ms,
-                ),
+                (run_id, at_ms),
             )
+
+    def record_startup_seam(
+        self,
+        *,
+        run_id: str,
+        live_from_ms: int,
+        joined_minute_start_ms: int | None,
+        deadline_ms: int,
+    ) -> None:
+        """Record where the run's stream took over and the deadline its fill is held to."""
+        self._stamp_startup(
+            "live_from_ms = ?, joined_minute_start_ms = ?, deadline_ms = ?",
+            (live_from_ms, joined_minute_start_ms, deadline_ms),
+            run_id=run_id,
+            unless="live_from_ms IS NOT NULL",
+        )
 
     def mark_startup_history_joined(self, *, run_id: str, at_ms: int) -> None:
         """Stamp that warmup history through the seam is retained."""
