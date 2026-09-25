@@ -64,7 +64,8 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, RunResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
+    EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
 )
 from app.broker.contract.models import OrderSide
 from app.engine.live.order_identity import parse_order_ref
@@ -413,11 +414,12 @@ class SqliteEconomicProjectionReader:
                 if any(row["evidence_source"] == "cumulative_recovery" for row in rows):
                     causes.append("cumulative-recovery evidence")
                 if self._conn.execute(
-                    "SELECT 1 FROM uncertainties WHERE reason_code = ? "
+                    f"SELECT 1 FROM uncertainties WHERE reason_code "
+                    f"IN ({EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS}) "
                     "AND resolved_at_ms IS NULL LIMIT 1",
-                    (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
+                    EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
                 ).fetchone() is not None:
-                    causes.append("an unresolved execution-coverage conflict")
+                    causes.append("an unresolved execution-conflict uncertainty")
                 if external_fill_exists:
                     causes.append("a filled external order")
                 raise EconomicProjectionUnavailable(
@@ -1229,9 +1231,10 @@ class SqliteEconomicProjectionReader:
         if any(row["evidence_source"] == "cumulative_recovery" for row in effective_rows):
             return "incomplete"
         row = self._conn.execute(
-            "SELECT 1 FROM uncertainties WHERE strategy_instance_id = ? "
-            "AND reason_code = ? AND resolved_at_ms IS NULL LIMIT 1",
-            (strategy_instance_id, EXECUTION_COVERAGE_CONFLICT_REASON_CODE),
+            f"SELECT 1 FROM uncertainties WHERE strategy_instance_id = ? "
+            f"AND reason_code IN ({EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS}) "
+            "AND resolved_at_ms IS NULL LIMIT 1",
+            (strategy_instance_id, *EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS),
         ).fetchone()
         return "incomplete" if row is not None else "complete"
 
@@ -1243,9 +1246,10 @@ class SqliteEconomicProjectionReader:
         if any(row["evidence_source"] == "cumulative_recovery" for row in effective_rows):
             return "incomplete"
         row = self._conn.execute(
-            "SELECT 1 FROM uncertainties WHERE reason_code = ? "
+            f"SELECT 1 FROM uncertainties WHERE reason_code "
+            f"IN ({EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS}) "
             "AND resolved_at_ms IS NULL LIMIT 1",
-            (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
+            EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
         ).fetchone()
         return "incomplete" if row is not None else "complete"
 

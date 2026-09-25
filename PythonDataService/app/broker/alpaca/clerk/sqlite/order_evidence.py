@@ -46,9 +46,15 @@ from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     failed_enter_fill_is_answered,
+    raise_execution_price_conflict_uncertainty,
     raise_failed_enter_filled_uncertainty,
+    resolve_execution_price_conflict_if_agreed,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+    ExecutionPriceConflictOrder,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
@@ -67,6 +73,16 @@ def submit_absence_grace_ms() -> int:
     return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
 
 
+#: Numerical-rigor tolerance for the #2460 economic price conflict, in
+#: currency units per share. Alpaca publishes price fields at cent precision,
+#: so a same-quantity average-price difference below one cent per share cannot
+#: be distinguished from vendor rounding and raises nothing; a difference at or
+#: above it is a real economic disagreement and is recorded as
+#: ``EXECUTION_PRICE_CONFLICT``. Same $0.01/share basis as the
+#: ``FILL_PRICE_DRIFT`` default in the reconciliation taxonomy
+#: (``.claude/rules/numerical-rigor.md``). See ``docs/references/clerk-invariants.md``.
+TOTAL_PRICE_CONFLICT_ATOL = 0.01
+
 UNFILLED_TERMINAL_STATES = frozenset({"canceled", "expired", "rejected"})
 """Terminal broker states that, with no recorded execution, are proven
 unfilled (ADR 0059 D5.4) — distinct from ``filled``/``replaced``, whose
@@ -80,6 +96,7 @@ falls through to ``EXIT_NOT_FLAT`` on it (R12) and ENTER folds
 
 
 __all__ = [
+    "TOTAL_PRICE_CONFLICT_ATOL",
     "UNFILLED_TERMINAL_STATES",
     "entry_never_accepted_durably",
     "entry_order_symbol",
@@ -280,6 +297,78 @@ def fold_order_evidence(
     # episode quarantined; without this a slice Alpaca never re-sends would
     # block the order's reduction for ever (#2346).
     repo.resolve_order_total_covered_coverage_conflicts(order_ref=order_ref)
+    _fold_execution_price_conflict(repo, effect=effect, order=order, order_ref=order_ref)
+
+
+def _fold_execution_price_conflict(
+    repo: ClerkSqliteRepository,
+    *,
+    effect: EffectOperationResource,
+    order: BrokerOrder,
+    order_ref: str,
+) -> None:
+    """Record, narrow or clear the price conflict between a total and its fills (#2460).
+
+    A cumulative total whose quantity matches the recorded effective fills but
+    whose average price disagrees beyond vendor rounding is contradictory
+    economic evidence: before #2460 the same-quantity total took the
+    acknowledgement path, which keeps only the filled quantity, and the
+    disagreement was silently discarded. Now the broker's reported average,
+    the recorded average and the total's source time are kept as a durable
+    ``EXECUTION_PRICE_CONFLICT`` episode for the owning bot -- the recorded
+    fills, positions and FIFO P&L inputs are never rewritten, and reductions
+    are never fenced.
+
+    Only a quantity-matching total can raise it: while quantities differ no
+    price verdict is possible (the fill-shortfall and position-drift
+    machinery owns that gap), and a partial fill's cumulative average is not
+    comparable with a subset of its fills. Re-folding the same conflicting
+    total is idempotent -- ``raise_uncertainty`` answers ``"unchanged"`` and
+    appends nothing. A total that agrees again within tolerance removes the
+    order from the open episode and ends it when the last order goes -- which
+    is also how an identified execution correction clears the conflict: the
+    correction changes the recorded fills, the next total the sweep folds
+    agrees, and the order drops out.
+
+    Caller must hold the Clerk's intake lock (the raise and the clear are
+    read-merge-writes over the open episode).
+    """
+    if order.filled_avg_price is None or order.filled_quantity < FILL_QTY_EPSILON:
+        return
+    recorded_qty, recorded_cost = repo.effective_fill_totals_for_order(order_ref)
+    if abs(order.filled_quantity - recorded_qty) >= FILL_QTY_EPSILON:
+        return
+    if recorded_qty < FILL_QTY_EPSILON:
+        return
+    recorded_avg_price = recorded_cost / recorded_qty
+    if abs(order.filled_avg_price - recorded_avg_price) >= TOTAL_PRICE_CONFLICT_ATOL:
+        outcome = raise_execution_price_conflict_uncertainty(
+            repo,
+            strategy_instance_id=effect.strategy_instance_id,
+            order=ExecutionPriceConflictOrder(
+                order_ref=order_ref,
+                reported_avg_price=order.filled_avg_price,
+                recorded_avg_price=recorded_avg_price,
+                source_event_at_ms=order.updated_at_ms,
+            ),
+        )
+        if outcome != "unchanged":
+            logger.warning(
+                "Broker order total disagrees on price with its recorded fills",
+                extra={
+                    "action": EXECUTION_PRICE_CONFLICT_REASON_CODE,
+                    "order_ref": order_ref,
+                    "strategy_instance_id": effect.strategy_instance_id,
+                    "reported_avg_price": order.filled_avg_price,
+                    "recorded_avg_price": recorded_avg_price,
+                    "filled_quantity": order.filled_quantity,
+                    "source_event_at_ms": order.updated_at_ms,
+                },
+            )
+        return
+    resolve_execution_price_conflict_if_agreed(
+        repo, strategy_instance_id=effect.strategy_instance_id, order_ref=order_ref
+    )
 
 
 #: The execution-id namespaces the deterministic no-submit worlds mint

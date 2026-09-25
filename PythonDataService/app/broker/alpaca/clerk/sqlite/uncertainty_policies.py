@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.facts import FACTS_SCHEMA_VERSION
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     EXIT_STUCK_REASON_CODE,
     FAILED_ENTER_FILLED_REASON_CODE,
@@ -33,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExecutionCoverageConflictCause,
+    ExecutionPriceConflictCause,
     ExitNotFlatCause,
     ExitStuckCause,
     FailedEnterFilledCause,
@@ -188,6 +190,14 @@ def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _execution_price_conflict_cause_is_valid(value: Any) -> bool:
+    try:
+        ExecutionPriceConflictCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _unexplained_order_cause_is_valid(value: Any) -> bool:
     try:
         UnexplainedOrderCause.from_mapping(value)
@@ -312,6 +322,32 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
         age=CauseCleared(),
         blocks_lane_quiet=False,
+    ),
+    # #2460: a broker order total that repeats the recorded fill quantity but
+    # restates its average price. The recorded fills, positions and FIFO P&L
+    # inputs stay exactly as they are -- the episode keeps the broker's
+    # reported price, quantity and source time as evidence and reports the
+    # bot's economic coverage incomplete, so the panel's needs-attention flag
+    # shows it. It doubts the *cost* of executions whose quantity both sides
+    # agree on, so unlike EXECUTION_COVERAGE_CONFLICT it never forbids
+    # reductions or exits: a position must always be reduceable while its
+    # basis is under dispute. Cleared only by a later total that agrees
+    # within tolerance (an execution correction that explains the difference
+    # shows up as exactly that).
+    EXECUTION_PRICE_CONFLICT_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        cause_is_valid=_execution_price_conflict_cause_is_valid,
+        age=CauseCleared(),
+        # Does not block lane quiet (#2344): it says nothing about any
+        # attributed quantity -- the quantity is the one thing both sides
+        # agree on -- so it cannot keep a flat draining lane from answering.
+        blocks_lane_quiet=False,
+        # Doubts no fill quantity the strategy is owed, so a residue
+        # discharge may proceed beside it.
+        residue_discharge="admits",
     ),
     # The two former ``holds`` causes (ADR 0048 Decision 2). A hold was
     # always an uncertainty whose policy had nowhere to live: account-wide,

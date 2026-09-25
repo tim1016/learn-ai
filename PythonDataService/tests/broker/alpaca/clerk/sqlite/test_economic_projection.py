@@ -33,14 +33,22 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    Capability,
+    ReductionIntent,
+    decide_capability,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    EXECUTION_PRICE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture, _clock_at
+from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade, _position
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
 _SID = "s2-economic"
@@ -608,7 +616,7 @@ def test_account_fill_window_refuses_unresolved_execution_coverage_conflict(tmp_
         reader = SqliteEconomicProjectionReader.from_repository(repo)
         try:
             with pytest.raises(
-                EconomicProjectionUnavailable, match="unresolved execution-coverage conflict"
+                EconomicProjectionUnavailable, match="unresolved execution-conflict uncertainty"
             ):
                 reader.account_fill_window(
                     from_ms=session.open_ms_utc,
@@ -1200,5 +1208,222 @@ def test_decision_evidence_updates_bot_and_catalog_activity_without_a_fill(
         assert snapshot is not None
         assert snapshot.last_activity_at_ms == decision_at_ms
         assert rollup[_SID].last_activity_at_ms == decision_at_ms
+    finally:
+        repo.close()
+
+
+# -- #2460: a same-quantity price restatement is durable economic evidence --
+
+
+def _fold_total(repo, accepted, *, quantity: float, price: float, updated_at_ms: int) -> None:
+    """Fold one REST/reconciliation aggregate for the accepted order."""
+    order = _broker_order_fixture(
+        accepted.order_ref,
+        symbol="GOOGL",
+        status="filled",
+        quantity=10,
+        filled_quantity=quantity,
+        filled_avg_price=price,
+    ).model_copy(update={"updated_at_ms": updated_at_ms})
+    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=order)
+
+
+def _recorded_price_conflict_episode(repo: ClerkSqliteRepository) -> dict | None:
+    return repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXECUTION_PRICE_CONFLICT_REASON_CODE,
+        strategy_instance_id=_SID,
+    )
+
+
+def _active_price_conflict_count(repo: ClerkSqliteRepository) -> int:
+    row = repo._conn.execute(
+        "SELECT COUNT(*) AS n FROM uncertainties WHERE reason_code = ? AND resolved_at_ms IS NULL",
+        (EXECUTION_PRICE_CONFLICT_REASON_CODE,),
+    ).fetchone()
+    return int(row["n"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("quantity", "price", "conflicting"),
+    [(10.0, 100.0, False), (10.0, 90.0, True), (8.0, 100.0, False)],
+    ids=["matching_control", "price_restatement", "quantity_drift_control"],
+)
+async def test_a_same_quantity_price_restatement_records_an_economic_conflict(
+    tmp_path: Path, quantity: float, price: float, conflicting: bool
+) -> None:
+    """#2460 (modeled on the Codex #2428 reproduction): a broker total that
+    repeats the recorded fill quantity but restates its average price used to
+    take the acknowledgement path, which keeps only the quantity -- the
+    contradiction was silently discarded and the bot's economic coverage stayed
+    complete while a clean account reconciliation certified the old economics.
+    Now the restatement records a durable EXECUTION_PRICE_CONFLICT and the
+    snapshot's execution coverage reads incomplete. The quantity-drift control
+    is untouched: quantities that disagree belong to position reconciliation,
+    whose verdict stays ``position_drift``, and no price conflict is raised."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=10.0, price=100.0, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
+        latest_ms = now + 1
+        _fold_total(repo, accepted, quantity=quantity, price=price, updated_at_ms=latest_ms)
+
+        latest = _broker_order_fixture(
+            accepted.order_ref,
+            symbol="GOOGL",
+            status="filled",
+            quantity=10,
+            filled_quantity=quantity,
+            filled_avg_price=price,
+        ).model_copy(update={"updated_at_ms": latest_ms})
+        position = _position("GOOGL", quantity=quantity).model_copy(
+            update={
+                "average_entry_price": price,
+                "cost_basis": price * quantity,
+                "observed_at_ms": latest_ms,
+            }
+        )
+        reconciled = await reconcile_account(
+            repo,
+            read=_FakeRead(orders=[latest], positions=[position]),
+            trade=_FakeTrade(lookup_result=latest),
+        )
+        assert reconciled.verdict == ("position_drift" if quantity != 10 else "clean")
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            try:
+                snapshot = reader.bot_economic_snapshot(
+                    _SID,
+                    session_window=None,
+                    marks={"GOOGL": MarketMark(price=110.0, observed_at_ms=latest_ms)},
+                )
+            except EconomicProjectionUnavailable:
+                assert conflicting
+                return
+        finally:
+            reader.close()
+        assert snapshot is not None
+        # The recorded fills, positions and FIFO P&L inputs are unchanged by
+        # the conflicting total: exposure and open P&L still read from the
+        # exact 10 @ 100 the Clerk holds.
+        assert snapshot.exposure == {"GOOGL": 10.0}
+        assert snapshot.open_pnl == pytest.approx(100.0, abs=1e-9, rel=0)
+        if conflicting:
+            assert snapshot.execution_coverage == "incomplete", (
+                "A fresh same-quantity broker total restating the average price was "
+                f"folded without economic consequence (quantity={quantity}, price={price})"
+            )
+            episode = _recorded_price_conflict_episode(repo)
+            assert episode is not None
+            assert episode["allows_reduction"] == 1
+        else:
+            assert snapshot.execution_coverage == "complete"
+            assert _recorded_price_conflict_episode(repo) is None
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_refolding_the_same_conflicting_total_records_one_conflict(tmp_path: Path) -> None:
+    """#2460: re-reading the same conflicting total is idempotent -- one
+    conflict episode, refreshed never, not one per re-read."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=10.0, price=100.0, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
+        for _ in range(3):
+            _fold_total(repo, accepted, quantity=10.0, price=90.0, updated_at_ms=now + 1)
+
+        assert _active_price_conflict_count(repo) == 1
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_later_agreeing_total_clears_the_conflict(tmp_path: Path) -> None:
+    """#2460: the conflict clears when a later broker total agrees within
+    tolerance again, and the bot's economic coverage returns to complete."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=10.0, price=100.0, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
+        _fold_total(repo, accepted, quantity=10.0, price=90.0, updated_at_ms=now + 1)
+        assert _recorded_price_conflict_episode(repo) is not None
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now + 2)
+
+        episode = _recorded_price_conflict_episode(repo)
+        assert episode is None
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            snapshot = reader.bot_economic_snapshot(
+                _SID,
+                session_window=None,
+                marks={"GOOGL": MarketMark(price=110.0, observed_at_ms=now + 2)},
+            )
+        finally:
+            reader.close()
+        assert snapshot is not None
+        assert snapshot.execution_coverage == "complete"
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_vendor_rounding_sized_difference_raises_no_conflict(tmp_path: Path) -> None:
+    """#2460: Alpaca publishes prices at cent precision, so a same-quantity
+    average-price difference below one cent per share is vendor rounding, not
+    an economic disagreement."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=3.0, price=100.003333, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=3.0, price=100.0, updated_at_ms=now)
+
+        assert _recorded_price_conflict_episode(repo) is None
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_the_price_conflict_never_blocks_a_reduction(tmp_path: Path) -> None:
+    """#2460: unlike ``EXECUTION_COVERAGE_CONFLICT``, the price conflict never
+    forbids reductions or exits -- a position stays reduceable while its cost
+    basis is disputed, through the same capability path that would refuse one."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=10.0, price=100.0, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
+        _fold_total(repo, accepted, quantity=10.0, price=90.0, updated_at_ms=now + 1)
+        assert _recorded_price_conflict_episode(repo) is not None
+
+        decision = decide_capability(
+            repo,
+            capability=Capability.REDUCE,
+            strategy_instance_id=_SID,
+            reduction_intent=ReductionIntent(symbol="GOOGL", side="SELL", quantity=1.0),
+        )
+
+        assert decision.allowed is True
     finally:
         repo.close()

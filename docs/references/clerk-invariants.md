@@ -98,7 +98,46 @@ using `SUM(qty * price)` over this order's already-recorded fills for the
 prior cost basis (no separate column needed — every previously-recorded
 fill row already carries its own qty/price).
 
+### Same-quantity price conflict (issue #2460)
+
+A cumulative broker total whose quantity matches the order's recorded
+effective fills but whose `filled_avg_price` disagrees with their average is
+contradictory economic evidence, not a delivery quirk. The fold compares
+`abs(reported_avg_price - recorded_avg_price)` against
+`TOTAL_PRICE_CONFLICT_ATOL = 0.01` currency/share with `rtol=0`
+(`order_evidence.py`): Alpaca publishes price fields at cent precision, so a
+difference below one cent per share cannot be distinguished from vendor
+rounding and raises nothing, while a difference at or above it records a
+durable `EXECUTION_PRICE_CONFLICT` episode. The same $0.01/share basis as
+the reconciliation taxonomy's `FILL_PRICE_DRIFT` default
+(`.claude/rules/numerical-rigor.md`) is deliberate: both ask "is this price
+difference real or representational?" about broker-reported fills.
+
+The recorded fills, positions and FIFO P&L inputs are never rewritten; the
+episode keeps the broker's reported average, the recorded average and the
+total's source time as evidence, and reports the owning bot's economic
+coverage `incomplete`. Unlike `EXECUTION_COVERAGE_CONFLICT` it never forbids
+reductions or exits — the quantity is the one thing both sides agree on.
+Only a quantity-matching total can raise it (while quantities differ no
+price verdict is possible), re-folding the same conflicting total is
+idempotent, and it clears when a later total agrees within tolerance again
+— which is also how an identified execution correction clears it: the
+correction changes the recorded fills, the next total the sweep folds
+agrees, and the order drops out of the episode.
+
 ### Validation
+
+`PythonDataService/tests/broker/alpaca/clerk/sqlite/test_economic_projection.py`:
+
+- `test_a_same_quantity_price_restatement_records_an_economic_conflict`
+  pins the Codex #2428 reproduction (exact 10 @ 100, agreeing total, then a
+  10 @ 90 restatement): coverage reads `incomplete`, the recorded economics
+  are unchanged, and the matching and quantity-drift controls stay clean.
+- `test_refolding_the_same_conflicting_total_records_one_conflict`,
+  `test_a_later_agreeing_total_clears_the_conflict`,
+  `test_a_vendor_rounding_sized_difference_raises_no_conflict`, and
+  `test_the_price_conflict_never_blocks_a_reduction` pin the remaining
+  invariants.
 
 `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_enter.py`:
 
