@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from app.data_lake.types import polygon_mode_for
-from app.engine.data.availability import check_availability
+from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
 from app.jobs.progress import JobCancelled
@@ -62,7 +62,6 @@ from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.research.sweep.ranking import leader
 from app.research.sweep.snapshot import (
     DataSnapshot,
-    DataSnapshotIncompleteError,
     capture_data_snapshot,
     verify_data_snapshot,
 )
@@ -98,6 +97,15 @@ class GridSearchRefusal(ValueError):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
+    """The gaps, the lake tree the sweep read them from, and the remedy."""
+    mode = polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
+    return GridSearchRefusal(
+        f"{missing} (read from the {mode} lake); backfill {missing.report.symbol} in {mode} mode and launch again",
+        code="DATA_MISSING",
+    )
 
 
 # ── Window translation (one documented rule) ─────────────────────────────
@@ -233,14 +241,7 @@ def preflight(spec: GridSearchSpec, *, backtests_per_combination: int = 1, roots
 
     availability = check_availability(resolved_roots, spec.symbol, run_up.data_start, run_up.evaluation_end, resolution=spec.resolution)
     if not availability.is_complete:
-        shown = ", ".join(day.isoformat() for day in availability.missing_days[:10])
-        more = f" (+{len(availability.missing_days) - 10} more)" if len(availability.missing_days) > 10 else ""
-        mode = polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
-        raise GridSearchRefusal(
-            f"the {mode} lake is missing {len(availability.missing_days)} trading session(s) for {spec.symbol}: {shown}{more}; "
-            f"backfill {spec.symbol} in {mode} mode and launch again",
-            code="DATA_MISSING",
-        )
+        raise data_missing_refusal(MissingSessionsError(availability))
     total = validated.combinations * max(1, backtests_per_combination)
     return Preflight(
         spec=spec,
@@ -328,8 +329,8 @@ def prepare_launch(
                 data_start=pre.data_start,
                 data_end=pre.evaluation_end,
             )
-        except DataSnapshotIncompleteError as exc:
-            raise GridSearchRefusal(str(exc), code="DATA_MISSING") from exc
+        except MissingSessionsError as exc:
+            raise data_missing_refusal(exc) from exc
     else:
         _assert_snapshot_covers(snapshot, pre)
     if identity is None:

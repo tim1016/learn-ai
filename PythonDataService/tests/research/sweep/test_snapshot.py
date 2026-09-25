@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.data.availability import MissingSessionsError
 from app.engine.data.lean_format import write_lean_daily_zip
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.sweep.snapshot import (
     DataSnapshot,
-    DataSnapshotIncompleteError,
     DataSnapshotMismatchError,
     ManifestBoundDailyReader,
     ManifestBoundMinuteReader,
@@ -57,10 +57,11 @@ def test_capture_refuses_a_missing_session_and_names_it(tmp_path: Path) -> None:
     for day in SESSIONS[:-1]:
         seed_store_day(tmp_path, "SPY", day)
 
-    with pytest.raises(DataSnapshotIncompleteError) as excinfo:
+    with pytest.raises(MissingSessionsError) as excinfo:
         capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="minute", data_start=WINDOW[0], data_end=WINDOW[1])
 
-    assert excinfo.value.missing == (SESSIONS[-1],)
+    assert excinfo.value.report.missing_days == [SESSIONS[-1]]
+    assert f"missing {SESSIONS[-1].isoformat()}" in str(excinfo.value)
 
 
 def test_verify_reports_an_artifact_whose_bytes_moved(tmp_path: Path) -> None:
@@ -127,10 +128,10 @@ def test_daily_snapshot_and_bound_reader(tmp_path: Path) -> None:
 def test_daily_capture_refuses_a_missing_session(tmp_path: Path) -> None:
     write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS[1:]])
 
-    with pytest.raises(DataSnapshotIncompleteError) as excinfo:
+    with pytest.raises(MissingSessionsError) as excinfo:
         capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
 
-    assert excinfo.value.missing == (SESSIONS[0],)
+    assert excinfo.value.report.missing_days == [SESSIONS[0]]
 
 
 def test_make_minute_bars_is_deterministic_so_digests_are_reproducible() -> None:

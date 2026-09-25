@@ -7,6 +7,11 @@ past their last session — reported ``success=True`` with zero trades and the
 starting cash untouched: indistinguishable from a strategy that simply never
 fired. Codex review V3 reproduced it at the real route boundary.
 
+A window can also be admitted and still read nothing — it holds no trading
+session at all (a weekend, a holiday), or its zips hold no regular-hours bar.
+The run then evaluated zero bars, and says so the way Strategy Lab does
+instead of reporting the untouched starting cash as a result.
+
 These tests drive the real default data-source factory (no dependency
 override) against a temporary LEAN root, so the refusal is proven where
 production meets it.
@@ -14,19 +19,22 @@ production meets it.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.engine.data.lean_format import LeanMinuteDataReader
+from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
+from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.spec import StrategySpec
 from app.lean_sidecar.trading_calendar import expected_sessions, is_early_close
 from app.main import app
-from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
-from app.routers.spec_strategy import _FIXTURES_DIR, _default_data_source_factory, get_data_source_factory
+from app.routers.spec_strategy import _FIXTURES_DIR, get_data_source_factory
 from tests._helpers.lean_store import seed_store_day
 
 # Thanksgiving fortnight: 2024-11-28 is a closure and 2024-11-29 closes at
@@ -34,6 +42,8 @@ from tests._helpers.lean_store import seed_store_day
 WINDOW = (date(2024, 11, 25), date(2024, 12, 6))
 THANKSGIVING = date(2024, 11, 28)
 BLACK_FRIDAY = date(2024, 11, 29)
+# What Strategy Lab and Spec both say about a run that read nothing (#2445).
+ZERO_BARS = "missing data: backtest evaluated zero bars for the requested window"
 
 
 @pytest.fixture
@@ -53,12 +63,16 @@ def _sma_spec(symbol: str = "SPY") -> dict[str, Any]:
     return payload
 
 
-async def _post_backtest(spec: dict[str, Any], start: date, end: date) -> dict[str, Any]:
+async def _post(spec: dict[str, Any], start: date, end: date) -> httpx.Response:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post(
+        return await client.post(
             "/api/spec-strategy/backtest",
             json={"spec": spec, "start_date": start.isoformat(), "end_date": end.isoformat()},
         )
+
+
+async def _post_backtest(spec: dict[str, Any], start: date, end: date) -> dict[str, Any]:
+    resp = await _post(spec, start, end)
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -125,22 +139,56 @@ async def test_spec_backtest_on_a_fully_covered_window_is_unchanged(lean_root: P
     assert admitted == bare
 
 
-def test_research_run_through_the_default_factory_fails_on_a_window_past_the_data(lean_root: Path) -> None:
-    """Research runs share the Spec factory, so they refuse the same gap as a failed ledger."""
-    _seed(lean_root, "SPY", [day for day in expected_sessions(*WINDOW) if day < date(2024, 12, 2)])
-    request = RunRequest(
-        spec=StrategySpec.model_validate(_sma_spec()),
-        start_ms=run_date_to_ms(WINDOW[0]),
-        end_ms=run_date_to_ms(WINDOW[1]),
-    )
+@pytest.mark.parametrize(
+    "window",
+    [(date(2024, 11, 30), date(2024, 12, 1)), (THANKSGIVING, THANKSGIVING)],
+    ids=["weekend", "holiday"],
+)
+async def test_spec_backtest_on_a_window_with_no_session_fails_instead_of_reporting_the_starting_cash(
+    lean_root: Path, window: tuple[date, date]
+) -> None:
+    """No session is missing from a window that holds none, so admission passes; the run read nothing."""
+    assert expected_sessions(*window) == []
 
-    ledger, result = run_strategy_spec(
-        request,
-        data_source_factory=_default_data_source_factory,
-        data_root_revision="test-revision",
-    )
+    body = await _post_backtest(_sma_spec("ZZZZ"), *window)
 
-    assert ledger.status == "failed"
-    assert ledger.failure_reason is not None
-    assert "2024-12-02..2024-12-06" in ledger.failure_reason
-    assert result.trades == []
+    assert body["success"] is False, body
+    assert body["error"] == ZERO_BARS
+    assert body["final_equity"] == 0.0
+
+
+def _pre_market_bars(symbol: str, day: date) -> list[TradeBar]:
+    """An hour of 07:00 ET bars: a zip that exists but holds no regular-hours minute."""
+    open_et = datetime(day.year, day.month, day.day, 7, 0, tzinfo=ZoneInfo("America/New_York"))
+    price = Decimal(500)
+    return [
+        TradeBar(
+            symbol=symbol,
+            time=open_et + timedelta(minutes=i),
+            end_time=open_et + timedelta(minutes=i + 1),
+            open=price,
+            high=price,
+            low=price,
+            close=price,
+            volume=100,
+        )
+        for i in range(60)
+    ]
+
+
+async def test_spec_backtest_on_zips_with_no_regular_hours_bar_fails(lean_root: Path) -> None:
+    """Every session's zip is on disk, so admission passes; the regular-session reader yields nothing."""
+    for day in expected_sessions(*WINDOW):
+        write_lean_day_zip(lean_root, "SPY", day, _pre_market_bars("SPY", day))
+
+    body = await _post_backtest(_sma_spec(), *WINDOW)
+
+    assert body["success"] is False, body
+    assert body["error"] == ZERO_BARS
+
+
+async def test_spec_backtest_with_an_end_before_its_start_is_a_bad_request(lean_root: Path) -> None:
+    resp = await _post(_sma_spec(), WINDOW[1], WINDOW[0])
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "end_date must not precede start_date (got start=2024-12-06, end=2024-11-25)"

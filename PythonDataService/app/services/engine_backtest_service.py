@@ -28,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine, BacktestResult
+from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_model import FillModel
@@ -939,9 +939,8 @@ def _aggregate_backtest_response(
     )
 
     if not result.equity_curve:
-        error = "missing data: backtest evaluated zero bars for the requested window"
-        on_log(error)
-        return _failed_backtest_response(request, error)
+        on_log(ZERO_BARS_EVALUATED)
+        return _failed_backtest_response(request, ZERO_BARS_EVALUATED)
 
     trades = getattr(strategy, "trade_log", []) or []
     formatted = [_format_trade(i + 1, t) for i, t in enumerate(trades)]

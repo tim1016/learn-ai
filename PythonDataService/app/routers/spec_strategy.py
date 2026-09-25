@@ -16,8 +16,9 @@ The data source is the LEAN minute reader over the legacy
 ``/api/engine/backtest`` reads (#2446 moves Spec onto it). A window those
 folders do not fully cover is refused as ``success=false`` naming the
 missing sessions, never run on whatever part of it happens to be on disk
-(#2445). For hermetic testing the ``get_data_source_factory`` dependency
-is overridable.
+(#2445); a run that evaluated zero bars is refused the way Strategy Lab
+refuses one. For hermetic testing the ``get_data_source_factory``
+dependency is overridable.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.data.lean_format import LeanMinuteDataReader
-from app.engine.engine import BacktestEngine
+from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade
@@ -270,6 +271,11 @@ def run_spec_backtest(
     spec = request.spec
     start_d = _parse_date(request.start_date, "start_date")
     end_d = _parse_date(request.end_date, "end_date")
+    if end_d < start_d:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"end_date must not precede start_date (got start={start_d.isoformat()}, end={end_d.isoformat()})",
+        )
     fill_mode = _parse_fill_mode(request.fill_mode)
     symbol = spec.symbols[0]
 
@@ -335,6 +341,15 @@ def run_spec_backtest(
     except Exception as exc:
         logger.exception("[SPEC] backtest failed for %s", spec.name)
         return _failed_response(request, f"backtest run failed: {exc}")
+    # Admission proves every scheduled session is on disk, not that the run
+    # read a bar: a window holding no session, or zips holding no
+    # regular-hours minute, still scores nothing.
+    if not result.equity_curve:
+        logger.warning(
+            "[SPEC] refused: the run evaluated zero bars",
+            extra={"strategy": spec.name, "symbol": symbol},
+        )
+        return _failed_response(request, ZERO_BARS_EVALUATED)
 
     trades = strategy.trade_log
     winning = sum(1 for t in trades if t.result == "WIN")

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import zipfile
-from collections.abc import Container, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from itertools import groupby
@@ -50,24 +50,6 @@ def _expected_sessions(start: date, end: date) -> list[date]:
     from app.lean_sidecar.trading_calendar import expected_sessions
 
     return expected_sessions(start, end)
-
-
-def _missing_spans(start: date, end: date, missing: Container[date]) -> list[tuple[date, date]]:
-    """Group missing days into contiguous spans of sessions.
-
-    Adjacency is read off the canonical NYSE trading-session calendar —
-    the same one ``check_availability`` counts expected days from — so two
-    missing sessions share a span when no session between them was
-    covered (a Friday and the following Monday are one span), and a
-    holiday inside the window never starts or extends a span: nothing is
-    missing on a day the market never opened.
-    """
-    spans: list[tuple[date, date]] = []
-    for is_missing, days in groupby(_expected_sessions(start, end), key=lambda day: day in missing):
-        if is_missing:
-            run = list(days)
-            spans.append((run[0], run[-1]))
-    return spans
 
 
 def _minute_zip_filename(trading_date: date) -> str:
@@ -131,17 +113,14 @@ class AvailabilityReport:
     expected_days: int
     available_days: int
     missing_days: list[date] = field(default_factory=list)
+    # ``missing_days`` as (first, last) runs of consecutive trading sessions.
+    missing_spans: list[tuple[date, date]] = field(default_factory=list)
     # Per-root breakdown: {root_path: [dates_found_in_that_root]}
     sources: dict[str, list[date]] = field(default_factory=dict)
 
     @property
     def is_complete(self) -> bool:
         return self.available_days >= self.expected_days
-
-    @property
-    def missing_spans(self) -> list[tuple[date, date]]:
-        """``missing_days`` grouped into runs of consecutive trading sessions."""
-        return _missing_spans(self.start, self.end, set(self.missing_days))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,11 +149,14 @@ def _describe_span(span: tuple[date, date]) -> str:
 class MissingSessionsError(ValueError):
     """A finite read window whose scheduled sessions are not all on disk.
 
-    Raised at a data-loading boundary instead of letting the reader skip
-    the absent sessions (#2445): the temporal rule for finite ingestion is
-    to fail fast, never to repair. The message names the symbol, how many
-    of the window's sessions are missing, and the gaps as contiguous
-    session ranges — a year-long hole is one range, not 250 dates.
+    The one "these sessions are missing" refusal. Raised at a data-loading
+    boundary instead of letting the reader skip the absent sessions
+    (#2445) — the Spec data-source factory, the sweep's snapshot capture —
+    and the text a Grid Search preflight refusal is built on: the temporal
+    rule for finite ingestion is to fail fast, never to repair. The message
+    names the symbol, how many of the window's sessions are missing, and
+    the gaps as contiguous session ranges — a year-long hole is one range,
+    not 250 dates.
     """
 
     def __init__(self, report: AvailabilityReport) -> None:
@@ -246,6 +228,15 @@ def check_availability(
         raise ValueError(f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'")
 
     missing = [d for d in expected if d not in found]
+    # Adjacency is read off the expected sessions, so two missing sessions
+    # share a span when no session between them was covered (a Friday and
+    # the following Monday are one span) and a closure never starts or
+    # extends one: nothing is missing on a day the market never opened.
+    missing_spans: list[tuple[date, date]] = []
+    for is_missing, days in groupby(expected, key=lambda day: day not in found):
+        if is_missing:
+            run = list(days)
+            missing_spans.append((run[0], run[-1]))
 
     return AvailabilityReport(
         symbol=symbol.upper(),
@@ -255,5 +246,6 @@ def check_availability(
         expected_days=len(expected),
         available_days=len(found),
         missing_days=missing,
+        missing_spans=missing_spans,
         sources=sources,
     )
