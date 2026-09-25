@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -1296,6 +1297,7 @@ async def test_a_same_quantity_price_restatement_records_an_economic_conflict(
             repo,
             read=_FakeRead(orders=[latest], positions=[position]),
             trade=_FakeTrade(lookup_result=latest),
+            pricing=UNPRICEABLE_RECOVERY,
         )
         assert reconciled.verdict == ("position_drift" if quantity != 10 else "clean")
 
