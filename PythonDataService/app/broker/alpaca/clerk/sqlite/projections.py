@@ -240,7 +240,7 @@ def _projected_uncertainty(
                 recorded, now_ms=now_ms, redrive_policy=redrive_policy
             )
         facts_unreadable = False
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         _log_unreadable_once(row)
         symbol = None
         facts_unreadable = True

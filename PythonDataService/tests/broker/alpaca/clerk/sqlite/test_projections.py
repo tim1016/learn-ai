@@ -525,6 +525,33 @@ def test_a_record_with_mistyped_facts_is_unreadable_and_never_breaks_the_read(
     assert sorted(logged) == sorted([SID, OTHER_SID])
 
 
+def test_a_next_attempt_beyond_the_calendar_is_unreadable_and_never_breaks_the_read(
+    tmp_path: Path,
+) -> None:
+    """#2440 final review (m3): an in-range int64 the calendar cannot project fails only its row.
+
+    ``_checked_record`` admits any ``next_attempt_at_ms`` up to
+    ``MAX_TIMESTAMP_MS``, but re-projecting one past pandas' range (year 3000
+    here) raised ``OverflowError`` outside the guard, blanking the desk, the
+    bot page and the bell. Only a damaged record holds such a value; it is
+    now projected unreadable like any other.
+    """
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    year_3000_ms = 32_503_680_000_000
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=year_3000_ms)
+    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=clock.value + 3_600_000)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
+    try:
+        snapshot = reader.account_snapshot()
+    finally:
+        reader.close()
+        repo.close()
+
+    shown = {item.strategy_instance_id: item.facts_unreadable for item in snapshot.uncertainties}
+    assert shown == {SID: True, OTHER_SID: False}
+
+
 def test_timeline_cursor_is_stable_while_new_transitions_append(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
