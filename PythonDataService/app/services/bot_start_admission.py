@@ -23,6 +23,7 @@ from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
     ExtendedHoursAdmissionFact,
+    ExtendedHoursAdmissionState,
     MarketDataAdmissionFact,
     RunAdmissionDecision,
     RunProcessAdmissionFact,
@@ -355,9 +356,7 @@ def extended_hours_admission_fact(
     tells the operator at the close.
     """
     if use_rth:
-        state: Literal[
-            "NOT_REQUESTED", "READY", "UNSUPPORTED", "ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"
-        ] = (
+        state: ExtendedHoursAdmissionState = (
             "EXIT_ALLOWANCE_UNSET"
             if policy.window is not None and policy.allowances is None
             else "NOT_REQUESTED"

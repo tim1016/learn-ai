@@ -1378,7 +1378,7 @@ describe('BotPanelShellComponent', () => {
         reduction_pricing: {
           kind: 'refused',
           reason_code: 'NO_SESSION_OPEN',
-          explanation: 'No trading session is open now, so no reduction can be sent.',
+          explanation: 'No trading session would be open when an order sent now reaches the broker, so no reduction can be sent.',
           next_step: 'Flatten again once the next session opens.',
           available_at_ms: 1_753_862_400_000,
         },
@@ -1386,7 +1386,7 @@ describe('BotPanelShellComponent', () => {
       await prepareFlatten();
 
       const plan = await screen.findByRole('region', { name: 'Prepared safe-flatten reduction plan' });
-      expect(within(plan).getByText(/No trading session is open now/)).toBeTruthy();
+      expect(within(plan).getByText(/No trading session would be open/)).toBeTruthy();
       expect(within(plan).getByText(
         formatTimestampDisplay(1_753_862_400_000, { mode: 'et' }),
       )).toBeTruthy();

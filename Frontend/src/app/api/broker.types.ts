@@ -19883,13 +19883,18 @@ export interface components {
          * PaperXhAllowancesPayload
          * @description A paper revision's own extended-hours allowances, in basis points.
          *
-         *     How far past the decision bar's close an extended-hours or after-close
-         *     limit is placed: a buy ``xh_entry_bps`` above it, a sell ``xh_exit_bps``
-         *     below it (a cover uses the exit allowance, above). A regular-hours run's
-         *     EXIT on the day's last bar goes out after the close as such a limit, so
-         *     Start of a regular-hours run refuses ``EXTENDED_HOURS_ALLOWANCE_UNSET``
-         *     until both are set, and so does a Resume of a flat run; a run still
-         *     holding a position always resumes (#2440, owner decisions 2026-09-25).
+         *     How far from the price an extended-hours or after-close limit is placed:
+         *     an entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the
+         *     price for a buy and below it for a sell (a short entry sells the entry
+         *     allowance below; a cover buys the exit allowance above). The price is the
+         *     decision bar's close for a leg placed as the program decides, and the live
+         *     bid (sell) or ask (buy) for an exit priced later — the automatic re-drive,
+         *     or the send-time re-price of an exit sent after its session. A
+         *     regular-hours run's EXIT on the day's last bar goes out after the close
+         *     as such a limit, so Start of a regular-hours run refuses
+         *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
+         *     Resume of a flat run; a run still holding a position always resumes
+         *     (#2440, owner decisions 2026-09-25).
          *
          *     Paper only, and only the two: a live revision carries its pair inside
          *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only

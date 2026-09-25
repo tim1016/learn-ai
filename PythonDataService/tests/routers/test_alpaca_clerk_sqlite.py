@@ -1433,7 +1433,7 @@ async def test_a_refused_flatten_names_its_typed_reason(
     async def execute(_facade, *, request, current_context):
         del request, current_context
         raise RecoveryExecutionError(
-            "No trading session is open now.", refusal=no_session_open(1_700_125_200_000)
+            "No trading session would be open", refusal=no_session_open(1_700_125_200_000)
         )
 
     monkeypatch.setattr(alpaca_clerk_sqlite, "execute_recovery_action", execute)

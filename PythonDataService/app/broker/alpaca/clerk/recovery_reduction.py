@@ -164,10 +164,15 @@ RECOVERY_QUOTE_STALE = LegRefusal(
     next_step="Refresh the quote, check the limit price, and confirm again.",
 )
 
+# The session refusals below are judged where the order would reach the broker
+# (:func:`send_arrival_ms`), not at the request instant, so their words name
+# that moment: at 15:59:56 the session is still regular, at 19:59:57 after-hours
+# is still open, at 09:29:56 the regular session has not opened (#2440 review).
 RECOVERY_LIMIT_REQUIRED = LegRefusal(
     reason_code="RECOVERY_LIMIT_REQUIRED",
     explanation=(
-        "Outside the regular session a flatten is a limit order, and no confirmed limit price came with this request."
+        "An order sent now would reach the broker outside the regular session, where a "
+        "flatten is a limit order, and no confirmed limit price came with this request."
     ),
     next_step="Prepare the flatten, confirm a limit price, and send it again.",
 )
@@ -184,34 +189,42 @@ RECOVERY_LIMIT_PRICE_INVALID = LegRefusal(
 RECOVERY_SESSION_CHANGED = LegRefusal(
     reason_code="RECOVERY_SESSION_CHANGED",
     explanation=(
-        "The regular session opened after this limit was confirmed; a regular-session flatten is a market order."
+        "An order sent now would reach the broker in the regular session, where a flatten "
+        "is a market order, not the limit confirmed for the extended session."
     ),
     next_step="Prepare the flatten again.",
 )
 
 
 def no_session_open(opens_at_ms: int | None) -> LegRefusal:
-    """No session the active authority trades is open now."""
+    """No session the active authority trades is open when a leg sent now reaches the broker."""
     return LegRefusal(
         reason_code="NO_SESSION_OPEN",
-        explanation="No trading session is open now, so no reduction can be sent.",
+        explanation=(
+            "No trading session would be open when an order sent now reaches the broker, "
+            "so no reduction can be sent."
+        ),
         next_step="Flatten again once the next session opens.",
         available_at_ms=opens_at_ms,
     )
 
 
 def extended_hours_pricing_unavailable(regular_open_ms: int | None) -> LegRefusal:
-    """The calendar's pre-market or after-hours is open, but this authority declares no window to price in.
+    """A leg sent now reaches pre-market or after-hours, but the policy it is judged under has no window.
 
-    A synthetic authority, or a broker that declares no extended-hours window,
-    trades only the regular session. Outside it the calendar may still say
-    PRE or POST, so "no session is open" would be false (#2440 review).
+    The degraded automatic pricing (:data:`UNPRICEABLE_RECOVERY`, which a
+    ``sim:`` authority's re-drive uses although its broker declares a window)
+    or a broker that declares no extended-hours window trades only the
+    regular session. Outside it the calendar may still say PRE or POST, so
+    "no session is open" would be false; and since the broker may declare a
+    window the operator's own flatten can price in, the copy claims only that
+    the Clerk cannot price a limit automatically (#2440 review).
     """
     return LegRefusal(
         reason_code="EXTENDED_HOURS_PRICING_UNAVAILABLE",
         explanation=(
-            "Extended-hours pricing is unavailable to this Clerk: an extended-hours session "
-            "is open, but this Clerk declares no extended-hours window, so no limit can be priced."
+            "An order sent now would reach the broker in an extended-hours session, and this "
+            "Clerk cannot price an extended-hours limit automatically, so no reduction can be sent."
         ),
         next_step="Flatten again once the regular session opens.",
         available_at_ms=regular_open_ms,
@@ -709,13 +722,14 @@ def reducing_leg_session_end_ms(
     after-hours close of the ET day it was sent (17:00 on an early-close day);
     ``valid_until_ms`` only when that day has no scheduled session. A market
     leg's end is the regular close of the day it was sent (13:00 on an
-    early-close day).
+    early-close day) — read from the day, not the send instant's phase: a
+    market leg sent inside :data:`EXIT_SEND_GUARD_BAND_MS` before the open
+    reaches the broker in the regular session although it left pre-market.
     """
-    if extended_hours:
-        scheduled = scheduled_extended_session_bounds(et_date_at_ms(sent_at_ms))
-        return valid_until_ms if scheduled is None else scheduled.close_ms
-    state = session_state_at_ms(now_ms=sent_at_ms)
-    return state.next_transition_ms if state.phase == "RTH" else None
+    scheduled = scheduled_extended_session_bounds(et_date_at_ms(sent_at_ms))
+    if scheduled is None:
+        return valid_until_ms if extended_hours else None
+    return scheduled.close_ms if extended_hours else scheduled.rth_close_ms
 
 
 def realized_slippage_bps(*, side: OrderSide, reference_price: float, fill_price: float) -> float:

@@ -1101,7 +1101,7 @@ async def test_an_overnight_flatten_is_refused_rather_than_queued(
     repo, _clock = crashed_with_exposure
     facade, trade, current_context = await _stopped_facade_at(repo, _OVERNIGHT_MS)
 
-    with pytest.raises(RecoveryExecutionError, match="No trading session is open"):
+    with pytest.raises(RecoveryExecutionError, match="No trading session would be open"):
         await _execute(
             facade,
             current_context,
@@ -1127,7 +1127,7 @@ async def test_a_flatten_confirmed_within_the_guard_band_of_the_after_hours_clos
     at_ms = 1_700_096_397_000  # 2023-11-15 19:59:57 ET
     facade, trade, current_context = await _stopped_facade_at(repo, at_ms)
 
-    with pytest.raises(RecoveryExecutionError, match="No trading session is open"):
+    with pytest.raises(RecoveryExecutionError, match="No trading session would be open"):
         await _execute(
             facade,
             current_context,

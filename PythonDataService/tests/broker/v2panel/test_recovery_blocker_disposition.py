@@ -169,7 +169,7 @@ def test_after_the_close_on_an_authority_with_no_window_the_button_says_what_the
     # X m7: the blocker list renders no time, so the refusal that names one
     # points at the prepared plan, which shows it.
     assert blocker.detail == f"{verdict.next_step} Prepare safe flatten shows when."
-    assert "No trading session is open" not in blocker.headline
+    assert "No trading session would be open" not in blocker.headline
     assert blocker.disposition == "wait"
     assert blocker.primary_move is None
     assert blocker.condition.evidence == {"available_at_ms": verdict.available_at_ms}

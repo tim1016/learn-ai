@@ -173,8 +173,8 @@ async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_mar
     assert "10 SPY is still held" in episode["explanation"]
     # Why no after-hours limit replaced it rides in the explanation — and it is
     # the truth: after-hours IS open at 16:01; this Clerk cannot price it.
-    assert "Extended-hours pricing is unavailable" in episode["explanation"]
-    assert "No trading session is open now" not in episode["explanation"]
+    assert "cannot price an extended-hours limit automatically" in episode["explanation"]
+    assert "No trading session would be open" not in episode["explanation"]
     # The degraded seam prices nothing outside the regular session, so the
     # watchdog's next try is the first send that lands in Thursday's open —
     # the guard band before it (a time value, not prose).
@@ -631,7 +631,7 @@ async def test_a_limit_judged_within_the_guard_band_of_its_bound_is_not_sent(
     assert trade.submit_calls == []
     episode = _exit_not_flat(repo)
     assert episode is not None
-    assert "No trading session is open now" in episode["explanation"]
+    assert "No trading session would be open" in episode["explanation"]
     assert _next_attempt_at_ms(episode) == _at(3, 59, 55, day=date(2026, 9, 3))
 
 
@@ -778,7 +778,7 @@ async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
         assert trade.submit_calls == [], "a limit was sent after the half-day's after-hours close"
         episode = _exit_not_flat(repo)
         assert episode is not None
-        assert "No trading session is open now" in episode["explanation"]
+        assert "No trading session would be open" in episode["explanation"]
         assert _next_attempt_at_ms(episode) == _at(3, 59, 55, day=date(2026, 11, 30))
     finally:
         repo.close()
@@ -1004,6 +1004,46 @@ async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_a
     assert _open_unknown_outcome(repo) is None
 
 
+async def test_a_market_exit_re_sent_the_next_morning_is_dated_from_the_send_that_reached_the_broker(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#2440 review: the still-working alarm dates a leg from its latest send, not its first.
+
+    A market exit's submit is lost at 15:59 and the broker stays unobservable
+    across the close. The next morning the exact lookup proves the order never
+    arrived, and the Clerk legitimately sends it again inside the regular
+    session. That order's session is Thursday's; dated from Wednesday's lost
+    send, it was "still working after its session ended" at 09:45 and the
+    operator was told to cancel a live regular-session exit at the broker.
+    """
+    thursday = date(2026, 9, 3)
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(repo, entry_ref)
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch())
+
+    _walk_clock_to(repo, _at(16, 10))
+    unobservable = _FakeTrade(lookup_error=BrokerUnavailable("down"))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch())
+
+    _walk_clock_to(repo, _at(9, 35, day=thursday))
+    resent = _FakeTrade(
+        lookup_results=[None],
+        submit_result=_broker_order("placeholder", side="sell", status="accepted"),
+    )
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resent, pricing=_live_touch())
+    assert len(resent.submit_calls) == 1, "the order proven absent was not sent again"
+
+    _walk_clock_to(repo, _at(9, 45, day=thursday))
+    still_working = _FakeTrade(
+        lookup_results=[_broker_order("placeholder", side="sell", status="accepted")]
+    )
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working, pricing=_live_touch())
+
+    assert _exit_not_flat(repo) is None, "a regular-session exit was alarmed against yesterday's close"
+    assert repo.active_exit_for_order(entry_ref) is not None
+
+
 async def test_a_failed_lookup_past_the_session_raises_no_working_order_alarm(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -1177,6 +1217,6 @@ async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
     assert trade.submit_calls == []
     episode = _exit_not_flat(repo)
     assert episode is not None
-    assert "Extended-hours pricing is unavailable" in episode["explanation"]
-    assert "No trading session is open" not in episode["explanation"]
+    assert "cannot price an extended-hours limit automatically" in episode["explanation"]
+    assert "No trading session would be open" not in episode["explanation"]
     assert _next_attempt_at_ms(episode) == _at(9, 29, 55, day=date(2026, 9, 3))
