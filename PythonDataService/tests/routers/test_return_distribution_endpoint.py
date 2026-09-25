@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from app.data_lake.factor_files import SessionRun, factor_coverage_record_bytes
 from app.data_lake.path_policy import LeanFactorFilePath
 from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
@@ -57,6 +58,19 @@ def _bar(d: date, h: int, m: int, open_: float, close: float) -> TradeBar:
     )
 
 
+def _write_factor_file(root: Path, body: str, covered: list[date]) -> Path:
+    """Write the factor CSV and the coverage record the writer would put
+    beside it (#2452): one span over ``covered``'s first..last session."""
+    paths = LeanFactorFilePath(market="usa", symbol=SYMBOL)
+    factor_path = root.joinpath(*paths.relative_path().parts)
+    factor_path.parent.mkdir(parents=True, exist_ok=True)
+    factor_path.write_text(body, encoding="ascii")
+    root.joinpath(*paths.coverage_record_path().parts).write_bytes(
+        factor_coverage_record_bytes(SYMBOL, body.encode("ascii"), [SessionRun(covered[0], covered[-1])])
+    )
+    return factor_path
+
+
 def _seed_lake(root: Path) -> list[date]:
     """40 real sessions of extended-hours bars plus one dividend factor row."""
     sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
@@ -83,15 +97,13 @@ def _seed_lake(root: Path) -> list[date]:
         write_lean_day_zip(root, SYMBOL, d, bars)
         price = close
 
-    factor_rel = LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path()
-    factor_path = root.joinpath(*factor_rel.parts)
-    factor_path.parent.mkdir(parents=True, exist_ok=True)
     # A dividend turning over mid-window (row dated session 5 covers data
-    # through it; later data uses the terminal factor-1 row).
-    factor_path.write_text(
-        f"{sessions[5].strftime('%Y%m%d')},0.99,1,100\n"
-        f"{sessions[-1].strftime('%Y%m%d')},1,1,100\n",
-        encoding="ascii",
+    # through it; later data uses the terminal factor-1 row), covering every
+    # seeded session.
+    _write_factor_file(
+        root,
+        f"{sessions[5].strftime('%Y%m%d')},0.99,1,100\n{sessions[-1].strftime('%Y%m%d')},1,1,100\n",
+        sessions,
     )
     return sessions
 
@@ -111,6 +123,12 @@ def _seed_flat_lake(root: Path) -> list[date]:
                 _bar(d, 15, 59, 100.0, 100.0),
             ],
         )
+    # No corporate actions: the builder's two anchor rows, covering the lake.
+    _write_factor_file(
+        root,
+        f"{sessions[0].strftime('%Y%m%d')},1,1,100\n{sessions[-1].strftime('%Y%m%d')},1,1,100\n",
+        sessions,
+    )
     return sessions
 
 
@@ -365,12 +383,11 @@ async def test_return_distribution_rejects_excessive_bin_count(api: FastAPI) -> 
 async def test_return_distribution_internal_data_error_is_not_a_client_error(
     seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A malformed factor file is lake corruption — an operational failure
-    the service must surface (500-class propagation), not a 400 telling the
-    caller their request is invalid."""
-    factor_rel = LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path()
-    factor_path = seeded_lake.joinpath(*factor_rel.parts)
-    factor_path.write_text("20240701,abc,1,99\n", encoding="ascii")
+    """A malformed factor file its own coverage record vouches for is lake
+    corruption — an operational failure the service must surface (500-class
+    propagation), not a 400 telling the caller their request is invalid."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    _write_factor_file(seeded_lake, "20240701,abc,1,99\n", sessions)
 
     async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
         return _complete_capture_receipt()
@@ -410,22 +427,86 @@ async def test_return_distribution_rejects_unknown_fields(api: FastAPI) -> None:
     assert response.status_code == 422
 
 
+def _covered_window_body(sessions: list[date]) -> dict[str, object]:
+    """A window whose bars *and* lead-in the seeded lake holds, so the only
+    thing the probe can want a capture for is the factor file."""
+    return _request_body(
+        from_ms_utc=int(
+            datetime(sessions[10].year, sessions[10].month, sessions[10].day, tzinfo=UTC).timestamp() * 1000
+        ),
+        to_ms_utc=_utc_day_end_ms(sessions[-1]),
+    )
+
+
 @pytest.mark.asyncio
-async def test_return_distribution_missing_factor_file_warns_unadjusted(
+async def test_return_distribution_missing_factor_file_is_refused_not_labelled(
     seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """No factor file: the probe captures (the capture builds one); when the
+    lake still has none, the study refuses with the reason (#2432) instead of
+    returning unadjusted returns."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
     factor_rel = LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path()
     (seeded_lake.joinpath(*factor_rel.parts)).unlink()
+    calls: list[object] = []
 
-    async def _stub_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+    async def _failed_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        calls.append(kwargs)
+        return return_distribution_service.CaptureReceipt(
+            status="partial", fetched_artifact_count=0, detail="factor_file/provider_api_error"
+        )
+
+    app = _app_with(seeded_lake, monkeypatch, capture=_failed_capture)
+    response = await _post(app, _covered_window_body(sessions))
+    assert response.status_code == 409, response.text
+    assert len(calls) == 1, "the uncovered adjustment alone must trigger the capture"
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "ADJUSTMENT_NOT_COVERED"
+    assert "no factor file" in detail["message"]
+    assert detail["capture_note"] == "partial: factor_file/provider_api_error"
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_factor_file_without_coverage_record_covers_nothing(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A factor file written before coverage was recorded (no record beside
+    it) fails closed: it is never read as covering the window."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    record_rel = LeanFactorFilePath(market="usa", symbol=SYMBOL).coverage_record_path()
+    seeded_lake.joinpath(*record_rel.parts).unlink()
+
+    async def _noop_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
         return _complete_capture_receipt()
 
-    app = _app_with(seeded_lake, monkeypatch, capture=_stub_capture)
-    response = await _post(app, _request_body())
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["meta"]["adjustment"] == "raw"
-    assert any("unadjusted" in w for w in body["meta"]["warnings"])
+    app = _app_with(seeded_lake, monkeypatch, capture=_noop_capture)
+    response = await _post(app, _covered_window_body(sessions))
+    assert response.status_code == 409, response.text
+    assert "no coverage record" in response.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_return_distribution_refuses_sessions_outside_the_covered_spans(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file whose recorded coverage ends before the window does is refused,
+    naming the uncovered sessions — the #2452 mislabel, at the endpoint."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    _write_factor_file(
+        seeded_lake,
+        f"{sessions[5].strftime('%Y%m%d')},0.99,1,100\n{sessions[20].strftime('%Y%m%d')},1,1,100\n",
+        sessions[:21],
+    )
+
+    async def _noop_capture(**kwargs: object) -> return_distribution_service.CaptureReceipt:
+        return _complete_capture_receipt()
+
+    app = _app_with(seeded_lake, monkeypatch, capture=_noop_capture)
+    response = await _post(app, _covered_window_body(sessions))
+    assert response.status_code == 409, response.text
+    message = response.json()["detail"]["message"]
+    assert f"{sessions[0].isoformat()}..{sessions[20].isoformat()}" in message
+    assert sessions[-1].isoformat() in message
 
 
 @pytest.mark.asyncio
@@ -543,6 +624,27 @@ async def test_day_candles_serve_study_price_basis(
         LeanMinuteDataReader([seeded_lake], session="extended").read_day(SYMBOL, sessions[10])
     )
     assert post.json()["bars"][0]["o"] == pytest.approx(float(raw_post[0].open), abs=1e-12)
+
+
+@pytest.mark.asyncio
+async def test_day_candles_refuse_a_day_the_factor_file_does_not_cover(
+    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The candle pane runs the same coverage check as the study: a day
+    outside the recorded coverage is a typed 409, never raw prices labelled
+    adjusted."""
+    sessions = expected_sessions(date(2024, 7, 1), date(2025, 6, 30))[:N_SESSIONS]
+    _write_factor_file(seeded_lake, f"{sessions[9].strftime('%Y%m%d')},1,1,100\n", sessions[:10])
+    app = _app_with(seeded_lake, monkeypatch)
+
+    response = await _post_day_candles(
+        app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(sessions[30])}
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "ADJUSTMENT_NOT_COVERED"
+    assert detail["capture_note"] is None
+    assert sessions[30].isoformat() in detail["message"]
 
 
 @pytest.mark.asyncio

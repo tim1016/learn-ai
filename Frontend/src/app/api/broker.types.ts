@@ -7674,6 +7674,31 @@ export interface components {
             on_exit?: components["schemas"]["CloseLegExit"][];
         };
         /**
+         * AdjustmentNotCoveredDetail
+         * @description The typed 409 body's ``detail``: the split/dividend adjustment does not
+         *     cover the window read, so the request is refused rather than answered
+         *     with returns or prices labelled adjusted that are not (#2432, #2452).
+         */
+        AdjustmentNotCoveredDetail: {
+            /** Capture Note */
+            capture_note?: string | null;
+            /**
+             * Error Code
+             * @default ADJUSTMENT_NOT_COVERED
+             * @constant
+             */
+            error_code?: "ADJUSTMENT_NOT_COVERED";
+            /** Message */
+            message: string;
+        };
+        /**
+         * AdjustmentNotCoveredResponse
+         * @description 409 body for a study or candle read the factor file does not cover.
+         */
+        AdjustmentNotCoveredResponse: {
+            detail: components["schemas"]["AdjustmentNotCoveredDetail"];
+        };
+        /**
          * AggregateBar
          * @description One sanitized OHLCV bar at an ``int64 ms UTC`` timestamp.
          */
@@ -38435,6 +38460,15 @@ export interface operations {
                     "application/json": components["schemas"]["ReturnDistributionNotCapturedResponse"];
                 };
             };
+            /** @description The split and dividend adjustment does not cover the window, even after the on-demand capture rebuilt it; the study is refused rather than labelled adjusted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdjustmentNotCoveredResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -38475,6 +38509,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DayCandlesNotCapturedResponse"];
+                };
+            };
+            /** @description The split and dividend adjustment does not cover that trading date. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdjustmentNotCoveredResponse"];
                 };
             };
             /** @description Validation Error */

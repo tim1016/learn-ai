@@ -18,6 +18,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.return_distribution_models import (
+    AdjustmentNotCoveredResponse,
     CaptureReceiptModel,
     CoverageInfo,
     DayCandleBarModel,
@@ -32,6 +33,7 @@ from app.models.return_distribution_models import (
 )
 from app.research.return_distribution import StudyRequestError
 from app.services.return_distribution_service import (
+    AdjustmentNotCoveredError,
     DayNotCapturedError,
     InsufficientCoverageError,
     SymbolNotCapturedError,
@@ -56,6 +58,12 @@ logger = logging.getLogger(__name__)
             "model": ReturnDistributionNotCapturedResponse,
             "description": "The symbol is not lake-addressable, or the on-demand capture "
             "could not populate the lake for it.",
+        },
+        409: {
+            "model": AdjustmentNotCoveredResponse,
+            "description": "The split and dividend adjustment does not cover the window, even "
+            "after the on-demand capture rebuilt it; the study is refused rather than labelled "
+            "adjusted.",
         },
     },
 )
@@ -94,6 +102,15 @@ async def run_return_distribution(
                 "message": str(e),
                 "requested_sessions": e.requested,
                 "available_sessions": e.available,
+            },
+        ) from e
+    except AdjustmentNotCoveredError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "ADJUSTMENT_NOT_COVERED",
+                "message": str(e),
+                "capture_note": e.capture_note,
             },
         ) from e
     except StudyRequestError as e:
@@ -142,6 +159,10 @@ async def run_return_distribution(
             "description": "The symbol is not lake-addressable, or the lake holds no bars "
             "for that trading date.",
         },
+        409: {
+            "model": AdjustmentNotCoveredResponse,
+            "description": "The split and dividend adjustment does not cover that trading date.",
+        },
     },
 )
 async def run_day_candles(request: DayCandlesRequest) -> DayCandlesResponse:
@@ -171,6 +192,15 @@ async def run_day_candles(request: DayCandlesRequest) -> DayCandlesResponse:
                 "error_code": "DAY_NOT_CAPTURED",
                 "message": str(e),
                 "trading_date": e.trading_date.isoformat(),
+            },
+        ) from e
+    except AdjustmentNotCoveredError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "ADJUSTMENT_NOT_COVERED",
+                "message": str(e),
+                "capture_note": e.capture_note,
             },
         ) from e
     return DayCandlesResponse(

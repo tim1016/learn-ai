@@ -252,6 +252,22 @@ class ReturnDistributionInsufficientCoverageResponse(BaseModel):
     detail: InsufficientCoverageDetail
 
 
+class AdjustmentNotCoveredDetail(BaseModel):
+    """The typed 409 body's ``detail``: the split/dividend adjustment does not
+    cover the window read, so the request is refused rather than answered
+    with returns or prices labelled adjusted that are not (#2432, #2452)."""
+
+    error_code: Literal["ADJUSTMENT_NOT_COVERED"] = "ADJUSTMENT_NOT_COVERED"
+    message: str
+    capture_note: str | None = None
+
+
+class AdjustmentNotCoveredResponse(BaseModel):
+    """409 body for a study or candle read the factor file does not cover."""
+
+    detail: AdjustmentNotCoveredDetail
+
+
 class DayCandlesRequest(BaseModel):
     """One drill-down day: extended-session minute candles for a session that
     a study response already named (``session_open_ms_utc`` is the day's

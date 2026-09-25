@@ -191,8 +191,8 @@ _DAY_OFFSETS_MS = {
 # — daily-trade/minute-bar identity includes TradingDate, corp-action
 # identity (factor_file/map_file) includes Symbol but not TradingDate, and
 # metadata identity is keyed by lean_image_digest alone, so all three had
-# to move to fully avoid a claim race (ensure_data.py's non-minute-bar/
-# non-metadata claim paths have no reclaim-on-failure — see
+# to move to fully avoid a claim race (ensure_data.py's map-file, quote and
+# daily-trade claim paths have no reclaim-on-failure — see
 # app.data_lake.ensure_data's "polling not implemented in Slice 1c").
 # Claim disjointness alone is NOT full isolation, though: metadata
 # staling is keyed by (DataRootId, mode, FilePath) with no digest, so

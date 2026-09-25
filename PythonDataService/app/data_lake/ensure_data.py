@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
+from app.data_lake.atomic import ArtifactLeaseLostError, atomic_write_and_promote, publish_artifact
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -43,7 +43,15 @@ from app.data_lake.derived_daily import (
     read_minute_trade_bars,
 )
 from app.data_lake.derived_quote import build_minute_quote_zip_bytes
-from app.data_lake.factor_files import FactorFileReferenceError, build_factor_file_bytes
+from app.data_lake.factor_files import (
+    FactorFileNotCoveringError,
+    FactorFilePlan,
+    FactorFileReferenceError,
+    build_planned_factor_file_bytes,
+    factor_coverage_record_bytes,
+    plan_factor_file,
+    read_recorded_factor_file,
+)
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.map_files import build_map_file_bytes
 from app.data_lake.metadata_bundle import ensure_lean_metadata_bundle
@@ -56,7 +64,7 @@ from app.data_lake.path_policy import (
     resolve_lake_root,
     resolve_staging_root,
 )
-from app.data_lake.polygon_corp_actions import fetch_dividends, fetch_splits
+from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent, fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
     PolygonBar,
@@ -70,6 +78,7 @@ from app.data_lake.polygon_ticker_events import fetch_ticker_events
 from app.data_lake.sessions import trading_sessions_for
 from app.data_lake.types import (
     ArtifactFailure,
+    ArtifactFailureReason,
     ArtifactIdentity,
     ArtifactRecord,
     DataAvailabilityResult,
@@ -221,21 +230,24 @@ def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
 
 
 def _factor_file_dch(
-    history_start: date, history_end: date, price_adjustment_mode: PriceAdjustmentMode
+    source_trade_records: list[ArtifactRecord], price_adjustment_mode: PriceAdjustmentMode
 ) -> str:
-    """Factor-file contract hash includes the history window.
+    """Factor-file contract hash: the symbol's captured minute-trade set (#2452).
 
-    The factor file content includes anchor rows at history_start and
-    history_end, so two calls with different windows produce different
-    file content. Including the window prevents cache poisoning where a
-    narrower-window file is returned for a wider-window request.
+    A factor file covers the symbol's captured sessions (see
+    ``factor_files.plan_factor_file``), so its content changes exactly when
+    that set — or a source day's bytes, which price the dividends — does.
+    Keying the hash on the request window instead, as this did before
+    #2452, made every differently-windowed request a rebuild, and a
+    narrower one a rebuild that dropped the older corporate actions.
     """
     return _dch(
         provider="polygon",
         provider_params={
             **_DCH_FACTOR_FILE_PARAMS,
-            "history_start": history_start.isoformat(),
-            "history_end": history_end.isoformat(),
+            "source": "minute-trade",
+            "source_artifact_ids": sorted(r.id for r in source_trade_records),
+            "source_file_sha256s": sorted(r.file_sha256 for r in source_trade_records),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -710,35 +722,136 @@ async def _process_minute_trade_artifact(
     )
 
 
+def _factor_file_over_captured_sessions(
+    symbol: str,
+    splits: list[SplitEvent],
+    dividends: list[DividendEvent],
+    source_trade_records: list[ArtifactRecord],
+    *,
+    lake_root: Path,
+    fallback_date: date,
+) -> tuple[bytes, FactorFilePlan]:
+    """Plan, price, and build the factor file over the symbol's captured sessions.
+
+    Pure CPU and file I/O, so callers run it off the event loop (#1943). Only
+    the minute zips of the sessions that price a corporate action (and the
+    two anchor sessions) are read — a handful, not the whole history.
+    """
+    plan = plan_factor_file((r.trading_date for r in source_trade_records if r.trading_date), splits, dividends)
+    wanted = {*plan.reference_sessions, *plan.anchor_sessions}
+    closes = factor_file_reference_closes(
+        [r for r in source_trade_records if r.trading_date in wanted],
+        lake_root=lake_root,
+        fallback_date=fallback_date,
+    )
+    return build_planned_factor_file_bytes(symbol, plan, closes), plan
+
+
+def _factor_file_is_recorded(lake_root: Path, row: ArtifactRecord) -> bool:
+    """Is the catalog's factor file on disk, with a coverage record vouching for its bytes?
+
+    A catalog row that is ``complete`` under the current data contract is
+    still not reusable without its coverage record: a file written before
+    #2452, or one whose record write failed after the publish, covers
+    nothing for the readers, and reusing it would leave them refusing
+    forever. A vouched-for CSV that no longer parses (``ValueError``) is
+    rebuilt for the same reason rather than served as corruption.
+    """
+    try:
+        recorded = read_recorded_factor_file(lake_root, market=row.market or "usa", symbol=row.symbol or "")
+    except (FactorFileNotCoveringError, ValueError):
+        return False
+    return recorded.file_sha256 == row.file_sha256
+
+
 async def _process_factor_file_artifact(
     identity: ArtifactIdentity,
     spec: DataRunSpec,
-    minute_trade_records: list[ArtifactRecord],
     lake_root: Path,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
-    """Claim → fetch splits/dividends → build factor-file bytes → write → complete.
+    """Build the symbol's factor file over every captured session → claim → publish → record coverage.
 
-    ``minute_trade_records`` are the symbol's complete minute-trade
-    artifacts from Pass 1; their RTH closes price the dividend rows
-    (LEAN throws on a zero reference price — see ``factor_files``).
+    #2452: the file is built over the symbol's whole catalogued minute-trade
+    coverage, never over this request's window — a narrower request used to
+    rebuild it with only its own window's corporate actions, and a study
+    spanning an older split then presented unadjusted returns as adjusted.
+    The data contract is that source set (``_factor_file_dch``), the same
+    rebuild-when-the-sources-change model as ``_process_daily_trade_artifact``,
+    and after the CSV is published its coverage record is written beside it
+    (``factor_files.factor_coverage_record_bytes``) — what every adjusted
+    reader checks before trusting the file.
 
-    A factor file's DataContractHash is derived from the request's history
-    window (``_factor_file_dch``), unlike map_file's (window-independent —
-    see ``_map_file_dch``). A wider window therefore produces a different
-    hash for the same symbol, and this rebuilds onto it — same
-    refresh-on-mismatch model as ``_process_daily_trade_artifact`` — instead
-    of silently serving back a factor file anchored to the earlier, narrower
-    window's history bounds.
+    Built *before* claiming, like the daily artifact: a provider or pricing
+    failure then leaves no catalog row behind to strand as ``'failed'``. A
+    row a pre-#2452 writer did strand (or a lease that expired mid-publish)
+    is reclaimed through the same retry budget minute bars use.
 
     Returns (record, None, outcome) on success or (None, failure, "fetched")
     on error — the third element is meaningless on failure.
     """
-    rel_path = LeanFactorFilePath(
-        market=identity.market,  # type: ignore[arg-type]
-        symbol=identity.symbol or "",
-    ).relative_path()
+    symbol = identity.symbol or ""
+    rel_path = LeanFactorFilePath(market=identity.market, symbol=symbol).relative_path()  # type: ignore[arg-type]
     file_path = str(rel_path)
-    dch = _factor_file_dch(spec.start_trading_date, spec.end_trading_date, spec.price_adjustment_mode)
+
+    def _failure(
+        reason: ArtifactFailureReason, detail: str, attempt_count: int = 1
+    ) -> tuple[None, ArtifactFailure, Literal["fetched"]]:
+        return (
+            None,
+            ArtifactFailure(
+                artifact_kind=identity.artifact_kind,
+                symbol=identity.symbol,
+                trading_date=None,
+                data_type=None,
+                reason=reason,
+                detail=detail,
+                attempt_count=attempt_count,
+            ),
+            "fetched",
+        )
+
+    sources = await catalog_client.select_coverage_minute_bars(
+        identity.market,  # type: ignore[arg-type]
+        symbol,
+        "trade",
+        None,
+        None,
+        price_adjustment_mode=identity.price_adjustment_mode,
+    )
+    if not sources:
+        return _failure(
+            "internal_error",
+            f"no complete minute-trade sessions for {symbol}; a factor file covers only captured sessions",
+        )
+    dch = _factor_file_dch(sources, identity.price_adjustment_mode)
+
+    async def _current(row: ArtifactRecord) -> bool:
+        return row.data_contract_hash == dch and await asyncio.to_thread(_factor_file_is_recorded, lake_root, row)
+
+    cached = await catalog_client.select_complete_corp_action_artifact(identity)
+    if cached is not None and await _current(cached):
+        return cached, None, "reused"
+
+    api_key = settings.POLYGON_API_KEY
+    try:
+        splits = await fetch_splits(symbol=symbol, api_key=api_key)
+        dividends = await fetch_dividends(symbol=symbol, api_key=api_key)
+    except Exception as e:
+        return _failure("provider_api_error", str(e))
+    try:
+        payload, plan = await asyncio.to_thread(
+            _factor_file_over_captured_sessions,
+            symbol,
+            splits,
+            dividends,
+            sources,
+            lake_root=lake_root,
+            fallback_date=spec.start_trading_date,
+        )
+    except MinuteBarReadError as e:
+        return _failure("io_error", f"failed to read minute bars for factor-file reference prices: {e}")
+    except FactorFileReferenceError as e:
+        return _failure("internal_error", str(e))
 
     outcome: Literal["fetched", "reused", "refreshed"] = "fetched"
     artifact_id = await catalog_client.claim_corp_action_artifact(
@@ -752,129 +865,41 @@ async def _process_factor_file_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
-            if existing.data_contract_hash == dch:
-                return existing, None, "reused"  # cache hit — same history window
+            if await _current(existing):
+                return existing, None, "reused"  # a sibling finished the same build meanwhile
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=existing.id,
                 worker_id=_WORKER_ID,
                 lease_ttl_ms=_LEASE_TTL_MS,
             )
             if prior is None:
-                # Raced with another worker's own refresh/claim between the two
-                # selects above; the caller's next ensure_data call retries.
-                return (
-                    None,
-                    ArtifactFailure(
-                        artifact_kind=identity.artifact_kind,
-                        symbol=identity.symbol,
-                        trading_date=None,
-                        data_type=None,
-                        reason="lease_timeout",
-                        detail="factor_file rebuild raced with another worker; retry on a later ensure_data call",
-                        attempt_count=1,
-                    ),
-                    "fetched",
+                return _failure(
+                    "lease_timeout", "factor_file rebuild raced with another worker; retry on a later ensure_data call"
                 )
-            artifact_id = existing.id
-            lease_generation = prior.new_lease_generation
-            outcome = "refreshed"
+            artifact_id, lease_generation, outcome = existing.id, prior.new_lease_generation, "refreshed"
         else:
-            return (
-                None,
-                ArtifactFailure(
-                    artifact_kind=identity.artifact_kind,
-                    symbol=identity.symbol,
-                    trading_date=None,
-                    data_type=None,
-                    reason="lease_timeout",
-                    detail="factor_file in-flight elsewhere; polling not implemented in Slice 1c",
-                    attempt_count=1,
-                ),
-                "fetched",
+            # 'failed', or 'fetching' under someone's lease. A failed (or
+            # lease-expired) row is reclaimed exactly as a minute bar's is;
+            # only a live lease is contention.
+            row_state = await catalog_client.select_corp_action_claim_state(identity)
+            if row_state is None:
+                return _failure("lease_timeout", "another worker is building this factor file")
+            reclaimed = await catalog_client.steal_or_retry_minute_bar(
+                artifact_id=row_state.id,
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+                max_retries=_MAX_CLAIM_RETRIES,
             )
+            if reclaimed is None and row_state.status == "failed":
+                return _failure(
+                    "fetch_timeout",
+                    f"exhausted {row_state.attempt_count} attempt(s); last error: {row_state.last_error}",
+                    attempt_count=row_state.attempt_count,
+                )
+            if reclaimed is None:
+                return _failure("lease_timeout", "another worker is building this factor file")
+            artifact_id, lease_generation = row_state.id, reclaimed
 
-    # A rebuild (outcome == "refreshed") that fails anywhere below hasn't
-    # written anything new yet — restore the previously-complete artifact
-    # rather than marking it 'failed' with no retry path (steal_or_retry_
-    # minute_bar doesn't cover corp-action rows). A first-ever fetch
-    # (outcome == "fetched") has no prior state to restore, so fail as before.
-    async def _fail_or_restore(last_error: str, detail: str) -> None:
-        if outcome == "refreshed":
-            await catalog_client.restore_complete_artifact(artifact_id, _WORKER_ID, lease_generation)
-        else:
-            await catalog_client.fail_artifact(artifact_id, last_error, detail, worker_id=_WORKER_ID, lease_generation=lease_generation)
-
-    api_key = settings.POLYGON_API_KEY
-    try:
-        splits = await fetch_splits(symbol=identity.symbol or "", api_key=api_key)
-        dividends = await fetch_dividends(symbol=identity.symbol or "", api_key=api_key)
-    except Exception as e:
-        await _fail_or_restore("provider_api_error", str(e))
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=None,
-                data_type=None,
-                reason="provider_api_error",
-                detail=str(e),
-                attempt_count=1,
-            ),
-            "fetched",
-        )
-
-    # Reference prices for the dividend rows come from the symbol's
-    # captured minute bars (RTH closes only). A factor file with a
-    # zero/missing reference price silently truncates LEAN backtests at
-    # the first in-window dividend.
-    try:
-        daily_closes = await asyncio.to_thread(
-            factor_file_reference_closes,
-            minute_trade_records,
-            lake_root=lake_root,
-            fallback_date=spec.start_trading_date,
-        )
-    except MinuteBarReadError as e:
-        await _fail_or_restore("io_error", str(e))
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=None,
-                data_type=None,
-                reason="io_error",
-                detail=f"failed to read minute bars for factor-file reference prices: {e}",
-                attempt_count=1,
-            ),
-            "fetched",
-        )
-
-    try:
-        payload = build_factor_file_bytes(
-            symbol=identity.symbol or "",
-            splits=splits,
-            dividends=dividends,
-            history_start=spec.start_trading_date,
-            history_end=spec.end_trading_date,
-            daily_closes=daily_closes,
-        )
-    except FactorFileReferenceError as e:
-        await _fail_or_restore("internal_error", str(e))
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=None,
-                data_type=None,
-                reason="internal_error",
-                detail=str(e),
-                attempt_count=1,
-            ),
-            "fetched",
-        )
     staging_root = resolve_staging_root(spec.price_adjustment_mode)
     file_sha, lease_failure = await _publish_under_lease(
         identity=identity,
@@ -886,16 +911,40 @@ async def _process_factor_file_artifact(
         artifact_id=artifact_id,
         lease_generation=lease_generation,
         trading_date=None,
-        row_count=len(splits) + len(dividends),
+        row_count=len(plan.splits) + len(plan.dividends),
         first_bar_start_ms=0,
         last_bar_start_ms=0,
-        # Rebuild path (outcome == "refreshed") completes onto a different
-        # history window's hash than the row's existing DataContractHash —
-        # see the identical comment in _process_daily_trade_artifact.
+        # A refresh completes onto a different source set than the row's
+        # existing DataContractHash — see _process_daily_trade_artifact.
         data_contract_hash=dch,
     )
     if lease_failure is not None:
         return None, lease_failure, "fetched"
+    try:
+        atomic_write_and_promote(
+            factor_coverage_record_bytes(symbol, payload, plan.spans),
+            lake_root,
+            staging_root,
+            LeanFactorFilePath(market=identity.market, symbol=symbol).coverage_record_path(),  # type: ignore[arg-type]
+            spec.request_id,
+            _WORKER_ID,
+            1,
+        )
+    except OSError as e:
+        # The CSV is published but vouched for by nothing: readers refuse it,
+        # and the next ensure_data sees no record and rebuilds (_current).
+        return _failure("io_error", f"factor file published but its coverage record could not be written: {e}")
+    logger.info(
+        "data_lake.ensure_data: factor file for %s covers %d span(s)",
+        symbol,
+        len(plan.spans),
+        extra={
+            "symbol": symbol,
+            "outcome": outcome,
+            "covered_spans": [(s.first_session.isoformat(), s.last_session.isoformat()) for s in plan.spans],
+            "corporate_actions": len(plan.splits) + len(plan.dividends),
+        },
+    )
     return (
         ArtifactRecord(
             id=artifact_id,
@@ -910,7 +959,7 @@ async def _process_factor_file_artifact(
             data_contract_hash=dch,
             file_path=file_path,
             file_sha256=file_sha,
-            row_count=len(splits) + len(dividends),
+            row_count=len(plan.splits) + len(plan.dividends),
             first_bar_start_ms=0,
             last_bar_start_ms=0,
             file_size_bytes=len(payload),
@@ -1501,7 +1550,6 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     # Pass 1: Polygon-sourced artifacts (minute-trade + factor_file + map_file)
     # -----------------------------------------------------------------------
     # minute-trade records keyed by (symbol, trading_date) for Pass 2 use.
-    minute_trade_by_symbol: dict[str, list[ArtifactRecord]] = {}
     minute_trade_by_date: dict[tuple[str, str], ArtifactRecord] = {}
 
     for identity in required:
@@ -1514,7 +1562,6 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                 else:
                     fetched_count += 1
                 sym = identity.symbol or ""
-                minute_trade_by_symbol.setdefault(sym, []).append(record)
                 date_str = identity.trading_date.isoformat() if identity.trading_date else ""
                 minute_trade_by_date[(sym, date_str)] = record
             elif failure is not None:
@@ -1522,40 +1569,11 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 
         elif identity.artifact_kind == "factor_file":
             # expand_required_artifacts emits a symbol's minute days before
-            # its factor_file, so minute_trade_by_symbol is fully populated
-            # here and supplies the dividend rows' reference prices.
-            #
-            # Gate on FULL per-symbol minute coverage. With a gap, the
-            # dividend's prior-session reference price would silently bind
-            # to an older available close (factor_files._trading_day_before
-            # only raises when there is NO prior session at all) and drift
-            # parity. Fail the factor file instead.
-            sym = identity.symbol or ""
-            expected_minute_days = sum(1 for req in required if _is_minute_trade(req) and (req.symbol or "") == sym)
-            available_minute_days = len(minute_trade_by_symbol.get(sym, []))
-            if available_minute_days != expected_minute_days:
-                failures.append(
-                    ArtifactFailure(
-                        artifact_kind=identity.artifact_kind,
-                        symbol=identity.symbol,
-                        trading_date=None,
-                        data_type=None,
-                        reason="internal_error",
-                        detail=(
-                            f"incomplete minute-trade coverage for factor-file build: "
-                            f"{available_minute_days}/{expected_minute_days} sessions for {sym}; "
-                            "reference prices would drift — fix the minute-bar failures and rerun"
-                        ),
-                        attempt_count=1,
-                    )
-                )
-                continue
-            record, failure, outcome = await _process_factor_file_artifact(
-                identity,
-                spec,
-                minute_trade_by_symbol.get(sym, []),
-                lake_root,
-            )
+            # its factor_file, so this call's minute days are already
+            # complete in the catalog the factor build reads its captured
+            # sessions from. A day that failed simply is not a captured
+            # session: it bounds a covered span rather than failing the file.
+            record, failure, outcome = await _process_factor_file_artifact(identity, spec, lake_root)
             if record is not None:
                 artifacts.append(record)
                 if outcome == "reused":
@@ -1616,7 +1634,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             # always reflect everything currently catalogued for this
             # symbol, so its source set is read from the catalog directly
             # rather than from this call's own required-artifacts window
-            # (minute_trade_by_symbol). This is what makes a second,
+            # (the factor file does the same, #2452). This is what makes a second,
             # differently-windowed ensure_data call for the same symbol a
             # legitimate rebuild instead of a data_contract_mismatch — see
             # _process_daily_trade_artifact.

@@ -28,7 +28,7 @@ import respx
 from app.config import settings
 from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
-from app.data_lake.types import ArtifactIdentity, DataRunSpec, trading_date_to_calendar_anchor_ms
+from app.data_lake.types import ArtifactIdentity, ArtifactRecord, DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 
@@ -580,17 +580,43 @@ async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(c
 
 
 # ---------------------------------------------------------------------------
-# P1 #2: Factor-file DCH varies with history window
+# P1 #2: Factor-file DCH follows the captured source set, not the window (#2452)
 # ---------------------------------------------------------------------------
 
 
-def test_factor_file_dch_differs_across_windows():
-    """Two ensure_data calls with different windows must produce different factor-file DCHs."""
+def _minute_source(artifact_id: int, trading_date: date, sha: str) -> ArtifactRecord:
+    return ArtifactRecord(
+        id=artifact_id,
+        artifact_kind="time_series_bars",
+        market="usa",
+        symbol="SPY",
+        trading_date=trading_date,
+        resolution="minute",
+        data_type="trade",
+        provider="polygon",
+        price_adjustment_mode="raw",
+        data_contract_hash="d" * 64,
+        file_path=f"equity/usa/minute/spy/{trading_date:%Y%m%d}_trade.zip",
+        file_sha256=sha,
+        row_count=390,
+        first_bar_start_ms=None,
+        last_bar_start_ms=None,
+    )
+
+
+def test_factor_file_dch_follows_the_captured_source_set():
+    """A grown source set or a re-fetched day's bytes change the factor-file
+    DCH (the file must be rebuilt); the order the catalog returns them in
+    does not."""
     from app.data_lake.ensure_data import _factor_file_dch
 
-    dch_narrow = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 22), "raw")
-    dch_wide = _factor_file_dch(date(2024, 5, 20), date(2024, 5, 24), "raw")
-    assert dch_narrow != dch_wide, "factor-file data_contract_hash must differ when history windows differ"
+    narrow = [_minute_source(1, date(2024, 5, 20), "a" * 64), _minute_source(2, date(2024, 5, 21), "b" * 64)]
+    wide = [*narrow, _minute_source(3, date(2024, 5, 22), "c" * 64)]
+    refetched = [narrow[0], _minute_source(2, date(2024, 5, 21), "e" * 64)]
+
+    assert _factor_file_dch(narrow, "raw") != _factor_file_dch(wide, "raw")
+    assert _factor_file_dch(narrow, "raw") != _factor_file_dch(refetched, "raw")
+    assert _factor_file_dch(narrow, "raw") == _factor_file_dch(list(reversed(narrow)), "raw")
 
 
 # ---------------------------------------------------------------------------
@@ -700,8 +726,8 @@ async def test_daily_artifact_rebuilds_onto_a_wider_window(clean_artifacts, pool
         if f.reason == "data_contract_mismatch" and f.artifact_kind == "time_series_bars"
     ]
     assert not mismatch_failures, f"expected no data_contract_mismatch failure, got: {result_wide.failures}"
-    # 2, not 1: the factor_file's DCH is also window-scoped (_factor_file_dch)
-    # and rebuilds onto the wider history window alongside the daily-trade
+    # 2, not 1: the factor_file's DCH is also keyed by the symbol's captured
+    # source set (_factor_file_dch) and rebuilds onto it alongside the daily-trade
     # artifact — see test_factor_file_rebuilds_onto_a_wider_window for that
     # rebuild in isolation.
     assert result_wide.refreshed_artifact_count == 2, "both the daily and factor-file rebuilds must count as refreshed"
@@ -731,8 +757,9 @@ async def test_daily_artifact_rebuilds_onto_a_wider_window(clean_artifacts, pool
 @pytest.mark.asyncio
 async def test_factor_file_rebuilds_onto_a_wider_window(clean_artifacts, pool, tmp_lake):
     """Same #1870 rebuild-on-mismatch model as the daily-trade artifact,
-    applied to factor_file: a wider window changes _factor_file_dch (see
-    test_factor_file_dch_differs_across_windows), and the existing complete
+    applied to factor_file: a wider window grows the captured source set
+    _factor_file_dch is keyed by (see
+    test_factor_file_dch_follows_the_captured_source_set), and the existing complete
     row must rebuild onto it instead of silently keeping the narrower
     window's split/dividend history bounds (#1873 review fix — this gap
     would have produced incorrect adjusted results after a widened

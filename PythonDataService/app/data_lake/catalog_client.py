@@ -643,8 +643,9 @@ class ArtifactClaimState:
     no way to find its ``Id`` (needed by :func:`steal_or_retry_minute_bar`,
     itself generic over artifact kind) or to tell that case apart from a
     live, actively-leased fetch. This is that lookup's result — shared by
-    :func:`select_minute_bar_claim_state` and :func:`select_metadata_claim_state`
-    since the shape carries no kind-specific field.
+    :func:`select_minute_bar_claim_state`, :func:`select_metadata_claim_state`
+    and :func:`select_corp_action_claim_state` since the shape carries no
+    kind-specific field.
     """
 
     id: int
@@ -723,6 +724,46 @@ async def select_metadata_claim_state(
     """
     async with connection() as conn:
         row = await conn.fetchrow(query, data_contract_hash, root_id)
+    if row is None:
+        return None
+    return ArtifactClaimState(
+        id=row["Id"],
+        status=row["Status"],
+        attempt_count=row["AttemptCount"],
+        last_error=row["LastError"],
+    )
+
+
+async def select_corp_action_claim_state(identity: ArtifactIdentity) -> ArtifactClaimState | None:
+    """Look up the existing factor_file / map_file row's claim state, at any status.
+
+    The corp-action twin of :func:`select_minute_bar_claim_state`: matches
+    ``claim_corp_action_artifact``'s partial unique index plus
+    ``identity.data_root_id``. Without it a settled ``'failed'`` factor-file
+    row read as live contention forever (#2452) — every later capture
+    reported "in-flight elsewhere" and, with the return study refusing an
+    uncovered window, the symbol could never be studied again.
+    """
+    query = """
+        SELECT "Id", "Status", "AttemptCount", "LastError"
+          FROM "DataLakeArtifacts"
+         WHERE "ArtifactKind" = $1
+           AND "Market" = $2
+           AND "Symbol" = $3
+           AND "Provider" = $4
+           AND "PriceAdjustmentMode" = $5
+           AND "DataRootId" = $6
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            query,
+            identity.artifact_kind,
+            identity.market,
+            identity.symbol,
+            identity.provider,
+            identity.price_adjustment_mode,
+            identity.data_root_id,
+        )
     if row is None:
         return None
     return ArtifactClaimState(
@@ -1429,7 +1470,7 @@ async def refresh_complete_artifact(
     day-refresh (a provider correction), for rebuilding a daily-trade
     aggregate whose source minute set has grown or changed (see
     ``ensure_data._process_daily_trade_artifact``), and for rebuilding a
-    factor_file whose history window has widened (see
+    factor_file whose captured-session source set has changed (see
     ``ensure_data._process_factor_file_artifact``). Returns the prior
     file_path + file_sha256 so the caller can preserve them if the new write
     fails validation, plus the fencing generation this reclaim minted
