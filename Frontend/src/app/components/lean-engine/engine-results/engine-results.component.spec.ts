@@ -139,6 +139,19 @@ describe('EngineResultsComponent.leanStats', () => {
     expect(cmp.leanStats()).toBe(lean);
   });
 
+  it('never substitutes the LEAN portfolio Sharpe for a missing marked-curve one (#2447)', () => {
+    const lean = emptyLeanStats();
+    lean.portfolio.sharpe_ratio = 1.4;
+    lean.trade.sharpe_ratio = 2.9;
+    const cmp = makeComponent(baseResult({ lean_statistics: lean }));
+
+    const divergence = cmp.sharpeDivergence();
+    expect(divergence.portfolio).toBeNull();
+    expect(divergence.gap).toBeNull();
+    expect(divergence.band).toBe('na');
+    expect(divergence.verdict).toContain("marked-equity statistics");
+  });
+
   it('renders all native portfolio, trade, and runtime fields plus the parity receipt', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection(), provideRouter([])] });

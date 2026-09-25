@@ -261,10 +261,23 @@ export class EngineResultsComponent {
   // 3.0 as elevated.
   readonly sharpeDivergence = computed(() => {
     const r = this.result();
-    const portfolio = r.statistics['sharpe_ratio'] ?? r.lean_statistics?.portfolio?.sharpe_ratio ?? null;
+    // Portfolio Sharpe is the run's own marked-equity Sharpe (#2424): when the
+    // run lacks one, the comparison says so rather than substituting the
+    // LEAN-port portfolio number -- a different basis that would read as this
+    // run's risk.
+    const portfolio = r.statistics['sharpe_ratio'] ?? null;
     const trade = r.lean_statistics?.trade?.sharpe_ratio ?? null;
     if (typeof portfolio !== 'number' || typeof trade !== 'number') {
-      return { portfolio, trade, gap: null, band: 'na' as const, verdict: 'Trade Sharpe requires lean_statistics from the backtest.' };
+      return {
+        portfolio,
+        trade,
+        gap: null,
+        band: 'na' as const,
+        verdict:
+          typeof portfolio !== 'number'
+            ? 'Portfolio Sharpe requires the run\'s marked-equity statistics.'
+            : 'Trade Sharpe requires lean_statistics from the backtest.',
+      };
     }
     const gap = trade - portfolio;
     let band: 'green' | 'amber' | 'red';

@@ -967,19 +967,22 @@ def _aggregate_backtest_response(
         else None
     )
 
-    # A compatibility pair must grade the same statistical sample. LEAN's
-    # native chart is sparse, so the pinned profile uses the common closed-
-    # trade ledger on both sides while retaining each native curve as evidence.
-    statistics_equity_points = (
-        None if request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1 else equity_points
-    )
+    # Owner decision #2424 (issue #2447): the headline Sharpe, Sortino, max
+    # drawdown and the run verdict grade the marked equity curve in every
+    # mode, exactly as a normal run -- a closed-trade drawdown can never
+    # exceed the marked one for an all-in strategy, so the ledger basis
+    # always flattered. What a compatibility pair still shares with LEAN is
+    # the closed-trade ledger of the engine-parity statistics below
+    # (``lean_statistics``), compared on that stated basis; LEAN has no
+    # comparable marked curve, and the comparison says so instead of
+    # substituting a different basis for the headline numbers.
     try:
         stats = summarize(
             initial_cash=float(result.initial_cash),
             final_equity=float(result.final_equity),
             trades=trades,
             trading_days=trading_days,
-            equity_curve=statistics_equity_points,
+            equity_curve=equity_points,
         )
     except ValueError as exc:
         # ``validate_trade_log`` rejected the closed-trade ledger. The run is

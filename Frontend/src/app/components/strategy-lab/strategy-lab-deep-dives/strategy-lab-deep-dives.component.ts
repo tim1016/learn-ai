@@ -67,8 +67,14 @@ export class StrategyLabDeepDivesComponent {
     if (this.leanStatistics()) {
       sections.push({
         id: "statistics",
-        label: "Native LEAN statistics",
-        summary: { kind: "copy", value: "Complete engine-authored statistics catalog" },
+        label: "Engine parity (closed-trade ledger)",
+        // Owner decision #2424: the headline Sharpe/Sortino/drawdown grade the
+        // marked equity curve in every mode; this section is the closed-trade
+        // basis the two engines actually share, and it says so.
+        summary: {
+          kind: "copy",
+          value: "The closed-trade basis both engines share; headline risk grades the marked equity curve",
+        },
       });
     }
     const analysis = this.leanAnalysis();
