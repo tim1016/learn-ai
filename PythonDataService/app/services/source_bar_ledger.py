@@ -569,7 +569,7 @@ class SourceBarLedger:
             "history_joined_at_ms = ?",
             (at_ms,),
             run_id=run_id,
-            unless="history_joined_at_ms IS NOT NULL OR refused_at_ms IS NOT NULL",
+            unless="history_joined_at_ms IS NOT NULL",
         )
 
     def mark_startup_ready(self, *, run_id: str, at_ms: int) -> None:
@@ -578,7 +578,7 @@ class SourceBarLedger:
             "ready_at_ms = ?",
             (at_ms,),
             run_id=run_id,
-            unless="ready_at_ms IS NOT NULL OR history_joined_at_ms IS NULL OR refused_at_ms IS NOT NULL",
+            unless="ready_at_ms IS NOT NULL",
         )
 
     def mark_startup_refused(
@@ -595,17 +595,18 @@ class SourceBarLedger:
             "refused_at_ms = ?, reason_code = ?, missing_start_ms = ?, missing_end_ms = ?",
             (at_ms, reason_code, missing_start_ms, missing_end_ms),
             run_id=run_id,
-            unless="refused_at_ms IS NOT NULL OR ready_at_ms IS NOT NULL",
+            unless="refused_at_ms IS NOT NULL",
         )
 
     def _stamp_startup(
         self, assignment: str, values: tuple[object, ...], *, run_id: str, unless: str
     ) -> None:
-        """Set one outcome of a run's startup join once; a later stamp is a no-op.
+        """Set one outcome of a run's startup join once.
 
-        Each outcome is a fact the run observed once. A second stamp -- a
-        re-entered run -- never overwrites the first, and the model re-validates
-        the row so an out-of-order stamp fails loudly instead of persisting.
+        Each outcome is a fact the run observed once: stamping it again (a
+        re-entered run) keeps the first. Stamping it out of order -- ready
+        before history joined, a refusal after ready -- is a bug, so the row is
+        re-validated and the stamp raises and rolls back rather than persist.
         """
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")

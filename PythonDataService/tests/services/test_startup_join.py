@@ -10,6 +10,7 @@ history, and the held live bars must follow it once, in order.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator, Iterator, Sequence
 from datetime import date
 from decimal import Decimal
@@ -457,3 +458,55 @@ async def test_the_stream_is_closed_when_the_run_that_opened_it_ends_before_read
         await asyncio.create_task(_run_that_fails_after_warmup())
 
     await asyncio.wait_for(closed.wait(), timeout=1)
+
+
+# ── the record ───────────────────────────────────────────────────────────────
+
+
+def test_each_startup_outcome_is_stamped_once_and_a_reentered_run_keeps_the_first(
+    ledger: SourceBarLedger,
+) -> None:
+    ledger.record_startup_opened(run_id="run-1", at_ms=_J)
+    ledger.record_startup_opened(run_id="run-1", at_ms=_J + 5)
+    ledger.record_startup_seam(run_id="run-1", live_from_ms=_LIVE_FROM, joined_minute_start_ms=_J, deadline_ms=_LIVE_FROM + 180_000)
+    ledger.record_startup_seam(run_id="run-1", live_from_ms=_LIVE_FROM + _MIN, joined_minute_start_ms=None, deadline_ms=1)
+    ledger.mark_startup_history_joined(run_id="run-1", at_ms=_LIVE_FROM + 6_000)
+    ledger.mark_startup_ready(run_id="run-1", at_ms=_LIVE_FROM + 7_000)
+    ledger.mark_startup_ready(run_id="run-1", at_ms=_LIVE_FROM + 9_000)
+
+    record = ledger.startup_join(run_id="run-1")
+
+    assert record is not None
+    assert (record.opened_at_ms, record.live_from_ms, record.deadline_ms) == (_J, _LIVE_FROM, _LIVE_FROM + 180_000)
+    assert (record.ready_at_ms, record.refused_at_ms) == (_LIVE_FROM + 7_000, None)
+
+
+def test_an_out_of_order_startup_stamp_fails_loudly_and_persists_nothing(ledger: SourceBarLedger) -> None:
+    ledger.record_startup_opened(run_id="run-1", at_ms=_J)
+    ledger.record_startup_seam(run_id="run-1", live_from_ms=_LIVE_FROM, joined_minute_start_ms=_J, deadline_ms=_LIVE_FROM + 1)
+
+    with pytest.raises(sqlite3.IntegrityError, match="history_joined_at_ms"):
+        ledger.mark_startup_ready(run_id="run-1", at_ms=_LIVE_FROM + 7_000)
+
+    record = ledger.startup_join(run_id="run-1")
+    assert record is not None and record.ready_at_ms is None
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"live_from_ms": 2},
+        {"history_joined_at_ms": 2},
+        {"live_from_ms": 2, "deadline_ms": 3, "refused_at_ms": 4},
+        {"live_from_ms": 2, "deadline_ms": 3, "ready_at_ms": 4},
+        {"live_from_ms": 2, "deadline_ms": 3, "missing_start_ms": 1, "missing_end_ms": 2},
+        {"live_from_ms": 253_402_300_800_000, "deadline_ms": 3},
+    ],
+)
+def test_contradictory_startup_evidence_is_unrepresentable(fields: dict[str, object]) -> None:
+    from pydantic import ValidationError
+
+    from app.services.source_bar_ledger import RetainedStartupJoin
+
+    with pytest.raises(ValidationError):
+        RetainedStartupJoin.model_validate({"run_id": "r", "opened_at_ms": 1, **fields})
