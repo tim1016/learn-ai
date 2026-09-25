@@ -305,6 +305,36 @@ def test_compute_daily_returns_resets_chain_across_capture_gap() -> None:
     )
 
 
+def test_sessions_read_by_returns_is_the_returned_days_and_their_bases() -> None:
+    # Lead-in D1, D2 (pre-market only), D3; returned from D5. D5 returns
+    # against D3, the lead-in's last session. D1 and D2 feed no returned
+    # day. D8 (pre-market only) is captured but compared by nothing, and D9
+    # has no base: its previous session D8 has no close.
+    D8, D9 = date(2024, 7, 8), date(2024, 7, 9)
+
+    def _full(d: date) -> list[TradeBar]:
+        return [_bar(d, 9, 30, 100.0, 100.5), _bar(d, 12, 30, 100.9, 101.0)]
+
+    bars = {
+        D1: _full(D1),
+        D2: [_bar(D2, 8, 0, 100.8, 101.0)],
+        D3: _full(D3),
+        D5: _full(D5),
+        D8: [_bar(D8, 8, 0, 100.8, 101.0)],
+        D9: _full(D9),
+    }
+    anchors = rd.extract_day_anchors(bars, _windows(*bars))
+    scheduled = [D1, D2, D3, D5, D8, D9]
+
+    read = rd.sessions_read_by_returns(anchors, scheduled_sessions=scheduled, since=D5)
+
+    assert read == [D3, D5, D9]
+    # The same adjacency compute_daily_returns follows: only D5 compares
+    # across days, against D3.
+    returned = [r for r in rd.compute_daily_returns(anchors, scheduled_sessions=scheduled) if r.trading_date >= D5]
+    assert [(r.trading_date, r.close_to_close_pct is not None) for r in returned] == [(D5, True), (D9, False)]
+
+
 # ---------------------------------------------------------------------------
 # compute_histogram
 # ---------------------------------------------------------------------------

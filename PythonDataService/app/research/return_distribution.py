@@ -72,6 +72,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -365,6 +366,49 @@ def _ln_later_over_earlier(later: Decimal, earlier: Decimal) -> float:
     return math.log(float(later) / float(earlier))
 
 
+def _return_bases(anchors: Sequence[DayAnchors], scheduled_sessions: Sequence[date]) -> dict[date, DayAnchors]:
+    """Each session's close-to-close base: the previous scheduled session's
+    anchors, where that session has an RTH close (the adjacency rule of
+    :func:`compute_daily_returns`)."""
+    anchor_by_date = {a.trading_date: a for a in anchors}
+    sessions = sorted(set(scheduled_sessions))
+    bases: dict[date, DayAnchors] = {}
+    for previous, session in pairwise(sessions):
+        base = anchor_by_date.get(previous)
+        if base is not None and base.rth_close is not None:
+            bases[session] = base
+    return bases
+
+
+def sessions_read_by_returns(
+    anchors: Sequence[DayAnchors],
+    *,
+    scheduled_sessions: Sequence[date],
+    since: date,
+) -> list[date]:
+    """The sessions whose prices the returns of the days from ``since`` on read.
+
+    Each such day with RTH anchors, and the session its close-to-close and
+    overnight returns are taken against (:func:`compute_daily_returns`'
+    adjacency). Nothing else: not the rest of a lead-in read only to find
+    that base, and not a captured day without a regular session, which no
+    return compares. These are exactly the prices whose adjustment the
+    returns depend on, and every two scheduled-adjacent sessions in the set
+    are a pair some return compares, so an adjustment check over this set
+    refuses exactly the comparisons it cannot vouch for.
+    """
+    bases = _return_bases(anchors, scheduled_sessions)
+    read: set[date] = set()
+    for a in anchors:
+        if a.trading_date < since or a.rth_open is None or a.rth_close is None:
+            continue
+        read.add(a.trading_date)
+        base = bases.get(a.trading_date)
+        if base is not None:
+            read.add(base.trading_date)
+    return sorted(read)
+
+
 def compute_daily_returns(
     anchors: Sequence[DayAnchors],
     *,
@@ -386,9 +430,7 @@ def compute_daily_returns(
     a multi-session move and label it a daily return, contaminating the
     histogram and every tail statistic downstream.
     """
-    anchor_by_date = {a.trading_date: a for a in anchors}
-    sessions = sorted(set(scheduled_sessions))
-    previous_scheduled = {sessions[i]: (sessions[i - 1] if i > 0 else None) for i in range(len(sessions))}
+    bases = _return_bases(anchors, scheduled_sessions)
 
     out: list[DailyReturns] = []
     for a in anchors:
@@ -414,8 +456,7 @@ def compute_daily_returns(
         else:
             after_hours_log = None
 
-        prev_date = previous_scheduled.get(a.trading_date)
-        prev = anchor_by_date.get(prev_date) if prev_date is not None else None
+        prev = bases.get(a.trading_date)
         if prev is not None and prev.rth_close is not None:
             close_to_close_log = _ln_later_over_earlier(a.rth_close, prev.rth_close)
             overnight_log = _ln_later_over_earlier(a.rth_open, prev.rth_close)

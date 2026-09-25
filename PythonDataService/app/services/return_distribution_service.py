@@ -15,7 +15,9 @@ could not populate the symbol.
 The study is always split-and-dividend adjusted on the latest-known basis
 (owner decision #2432). It reads the factor file only through
 ``factor_files.read_covering_factor_rows`` — the one coverage check — over
-exactly the sessions it adjusts. A window the file does not cover
+exactly the sessions whose adjusted prices its returns read
+(``sessions_read_by_returns``: each returned day and the close it returns
+against, never the rest of the lead-in). A window the file does not cover
 (no file, a file written before coverage was recorded, or sessions outside
 its covered spans) triggers the same on-demand capture a missing session
 does, which rebuilds the file over every captured session; if the window is
@@ -41,6 +43,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -53,11 +56,13 @@ from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions, session_windows_ms_utc
 from app.lean_sidecar.workspace import SymbolValidationError, validate_symbol
 from app.research.return_distribution import (
+    DayAnchors,
     ReturnDistributionResult,
     adjust_anchors,
     build_return_distribution,
     compute_daily_returns,
     extract_day_anchors,
+    sessions_read_by_returns,
 )
 from app.services.chart_bar_source import split_sessions_at_boundary
 from app.services.chart_service import resolve_request_dates
@@ -180,12 +185,32 @@ class StudyOutcome:
 
 
 @dataclass(frozen=True)
-class _CoverageProbe:
-    """Whether the lake already covers the window, and the capture span if not."""
+class _SessionProbe:
+    """The read window's completed sessions, and whether the lake misses any.
 
-    needs_capture: bool
-    capture_start: date | None
-    capture_end: date | None
+    ``capture_span`` is ``None`` when the window holds no completed session,
+    so there is nothing a capture could fetch.
+    """
+
+    capture_span: tuple[date, date] | None
+    sessions_missing: bool
+
+
+@dataclass(frozen=True)
+class _StudyRead:
+    """What the lake holds for the read window, reduced to the day anchors.
+
+    ``adjusted_sessions`` is the set the factor file must cover
+    (``sessions_read_by_returns``): each returned day and the session it
+    returns against. It is derived once per read and used both to decide
+    whether to capture (``adjustment_covered``) and by the study's own
+    check, so the two can never disagree.
+    """
+
+    lake_dates: list[date]
+    anchors: list[DayAnchors]
+    adjusted_sessions: list[date]
+    adjustment_covered: bool
 
 
 _NOT_ATTEMPTED = CaptureReceipt(status="not_attempted", fetched_artifact_count=0)
@@ -206,16 +231,15 @@ def _factor_file_covers(lake_root: Path, symbol: str, sessions: list[date]) -> b
     return True
 
 
-def _probe_lake_coverage(
+def _probe_lake_sessions(
     *,
     symbol: str,
     from_date: date,
     to_date: date,
     lake_root: Path,
     now_ms: int,
-) -> _CoverageProbe:
-    """Does the lake already hold every completed session of the read window,
-    and a factor file that covers the sessions it holds?
+) -> _SessionProbe:
+    """Does the lake already hold every completed session of the read window?
 
     The read window — and therefore the capture span — starts at the
     lead-in, not at ``from_date``: the first in-window session needs the
@@ -224,12 +248,7 @@ def _probe_lake_coverage(
     them is still missing data this study reads. The span is the
     completed-session prefix of that window (the same calendar split the
     chart composer uses, so the two can never disagree about which sessions
-    are immutable history).
-
-    Bars alone are not enough (#2452): a chart or backtest capture writes
-    raw bars without factor files, so a lake can hold every session while
-    its factor file covers only an older window. An uncovered window needs
-    the capture too — it is what rebuilds the factor file.
+    are immutable history). Only the dates are listed; no bar is parsed.
     """
     read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
     completed, _live, _boundary = split_sessions_at_boundary(
@@ -245,18 +264,42 @@ def _probe_lake_coverage(
         session="extended",
     )
     if not completed:
-        return _CoverageProbe(needs_capture=False, capture_start=None, capture_end=None)
+        return _SessionProbe(capture_span=None, sessions_missing=False)
     capture_start, capture_end = completed[0].session_date, completed[-1].session_date
     reader = LeanMinuteDataReader([lake_root], session="extended")
     lake_dates = set(reader.iter_dates(symbol, read_start, to_date))
-    window_sessions = expected_sessions(capture_start, capture_end)
-    needs = any(d not in lake_dates for d in window_sessions) or not _factor_file_covers(
-        lake_root, symbol, sorted(lake_dates)
+    return _SessionProbe(
+        capture_span=(capture_start, capture_end),
+        sessions_missing=any(d not in lake_dates for d in expected_sessions(capture_start, capture_end)),
     )
-    return _CoverageProbe(
-        needs_capture=needs,
-        capture_start=capture_start if needs else None,
-        capture_end=capture_end if needs else None,
+
+
+def _read_study_window(*, symbol: str, from_date: date, to_date: date, lake_root: Path) -> _StudyRead:
+    """Parse the read window's bars once, into day anchors and the adjusted-session set.
+
+    The lead-in is read so the first returned day has a previous close,
+    and for nothing else: ``sessions_read_by_returns`` keeps only that one
+    lead-in session. A factor file whose coverage breaks elsewhere in the
+    lead-in (after a reference session it could not price) is no reason to
+    refuse; one that breaks between a returned day and the close it returns
+    against is.
+    """
+    read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
+    reader = LeanMinuteDataReader([lake_root], session="extended")
+    lake_dates = list(reader.iter_dates(symbol, read_start, to_date))
+    windows = {
+        w.session_date: (w.open_ms_utc, w.close_ms_utc)
+        for w in session_windows_ms_utc(read_start, to_date)
+    }
+    anchors = extract_day_anchors({d: reader.read_day(symbol, d) for d in lake_dates}, windows)
+    adjusted_sessions = sessions_read_by_returns(
+        anchors, scheduled_sessions=expected_sessions(read_start, to_date), since=from_date
+    )
+    return _StudyRead(
+        lake_dates=lake_dates,
+        anchors=anchors,
+        adjusted_sessions=adjusted_sessions,
+        adjustment_covered=_factor_file_covers(lake_root, symbol, adjusted_sessions),
     )
 
 
@@ -300,13 +343,12 @@ def _compute_sync(
     bin_width_pct: float,
     span_pct: float,
     lake_root: Path,
+    read: _StudyRead,
     capture: CaptureReceipt,
 ) -> StudyOutcome:
     read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
-    reader = LeanMinuteDataReader([lake_root], session="extended")
 
-    lake_dates = list(reader.iter_dates(symbol, read_start, to_date))
-    in_range = [d for d in lake_dates if d >= from_date]
+    in_range = [d for d in read.lake_dates if d >= from_date]
     if not in_range:
         capture_note = (
             capture.detail if capture.status not in ("not_attempted",) else "capture was not attempted"
@@ -316,21 +358,17 @@ def _compute_sync(
         )
     expected = expected_sessions(from_date, to_date)
 
-    windows = {
-        w.session_date: (w.open_ms_utc, w.close_ms_utc)
-        for w in session_windows_ms_utc(read_start, to_date)
-    }
     try:
-        factor_rows = read_covering_factor_rows(lake_root, market="usa", symbol=symbol, sessions=lake_dates)
+        factor_rows = read_covering_factor_rows(
+            lake_root, market="usa", symbol=symbol, sessions=read.adjusted_sessions
+        )
     except FactorFileNotCoveringError as e:
         capture_note = capture.status + (f": {capture.detail}" if capture.detail else "")
         raise AdjustmentNotCoveredError(symbol, e.reason, capture_note) from e
-    bars_by_day = {d: reader.read_day(symbol, d) for d in lake_dates}
-    anchors = extract_day_anchors(bars_by_day, windows)
     warnings: list[str] = []
 
     scheduled = expected_sessions(read_start, to_date)
-    all_days = compute_daily_returns(adjust_anchors(anchors, factor_rows), scheduled_sessions=scheduled)
+    all_days = compute_daily_returns(adjust_anchors(read.anchors, factor_rows), scheduled_sessions=scheduled)
     days = [d for d in all_days if d.trading_date >= from_date]
 
     # The statistics floor applies to *usable* observations, after the
@@ -430,20 +468,27 @@ async def compute_return_distribution(
     to_d = date.fromisoformat(to_iso)
 
     probe = await asyncio.to_thread(
-        _probe_lake_coverage,
+        _probe_lake_sessions,
         symbol=validated,
         from_date=from_d,
         to_date=to_d,
         lake_root=root,
         now_ms=now_ms_utc(),
     )
+    read_window = partial(_read_study_window, symbol=validated, from_date=from_d, to_date=to_d, lake_root=root)
+    span = probe.capture_span
     capture = _NOT_ATTEMPTED
-    if probe.needs_capture and probe.capture_start is not None and probe.capture_end is not None:
-        capture = await _capture_missing_sessions(
-            symbol=validated,
-            start=probe.capture_start,
-            end=probe.capture_end,
-        )
+    if span is not None and probe.sessions_missing:
+        capture = await _capture_missing_sessions(symbol=validated, start=span[0], end=span[1])
+    read = await asyncio.to_thread(read_window)
+    # Bars alone are not enough (#2452): a chart or backtest capture writes
+    # raw bars without factor files, so a lake can hold every session while
+    # its factor file covers only an older window. The capture is what
+    # rebuilds the file, so an uncovered read captures too (once: a capture
+    # that already ran has rebuilt it) and is read again.
+    if span is not None and capture is _NOT_ATTEMPTED and not read.adjustment_covered:
+        capture = await _capture_missing_sessions(symbol=validated, start=span[0], end=span[1])
+        read = await asyncio.to_thread(read_window)
 
     return await asyncio.to_thread(
         _compute_sync,
@@ -453,6 +498,7 @@ async def compute_return_distribution(
         bin_width_pct=bin_width_pct,
         span_pct=span_pct,
         lake_root=root,
+        read=read,
         capture=capture,
     )
 

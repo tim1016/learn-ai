@@ -829,14 +829,17 @@ async def _process_factor_file_artifact(
             "fetched",
         )
 
-    sources = await catalog_client.select_coverage_minute_bars(
-        identity.market,  # type: ignore[arg-type]
-        symbol,
-        "trade",
-        None,
-        None,
-        price_adjustment_mode=identity.price_adjustment_mode,
-    )
+    async def _captured_sources() -> list[ArtifactRecord]:
+        return await catalog_client.select_coverage_minute_bars(
+            identity.market,  # type: ignore[arg-type]
+            symbol,
+            "trade",
+            None,
+            None,
+            price_adjustment_mode=identity.price_adjustment_mode,
+        )
+
+    sources = await _captured_sources()
     if not sources:
         return _failure(
             "internal_error",
@@ -844,11 +847,13 @@ async def _process_factor_file_artifact(
         )
     dch = _factor_file_dch(sources, identity.price_adjustment_mode)
 
-    async def _current(row: ArtifactRecord) -> bool:
-        return row.data_contract_hash == dch and await asyncio.to_thread(_factor_file_is_recorded, lake_root, row)
+    async def _current(row: ArtifactRecord, contract: str) -> bool:
+        return row.data_contract_hash == contract and await asyncio.to_thread(
+            _factor_file_is_recorded, lake_root, row
+        )
 
     cached = await catalog_client.select_complete_corp_action_artifact(identity)
-    if cached is not None and await _current(cached):
+    if cached is not None and await _current(cached, dch):
         return cached, None, "reused"
 
     api_key = settings.POLYGON_API_KEY
@@ -882,8 +887,21 @@ async def _process_factor_file_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
-            if await _current(existing):
-                return existing, None, "reused"  # a sibling finished the same build meanwhile
+            # A sibling may have published meanwhile, from a newer source
+            # set than the one this build priced. Judge against the sources
+            # as they are now: a row current for them is reused, and a build
+            # whose snapshot is out of date publishes nothing -- its narrower
+            # file would regress the coverage the sibling just recorded.
+            # lease_timeout sends the capture back through ensure_data, which
+            # rebuilds from the current sources.
+            current_dch = _factor_file_dch(await _captured_sources(), identity.price_adjustment_mode)
+            if await _current(existing, current_dch):
+                return existing, None, "reused"
+            if current_dch != dch:
+                return _failure(
+                    "lease_timeout",
+                    "factor_file sources changed while this build ran; retry rebuilds from the current sources",
+                )
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=existing.id,
                 worker_id=_WORKER_ID,

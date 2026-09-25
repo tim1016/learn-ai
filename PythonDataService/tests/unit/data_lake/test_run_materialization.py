@@ -25,7 +25,7 @@ import respx
 
 from app.data_lake import catalog_client, run_materialization
 from app.data_lake.ensure_data import ensure_data, minute_bar_identity
-from app.data_lake.factor_files import FactorFileNotCoveringError, read_recorded_factor_file
+from app.data_lake.factor_files import FactorFileNotCoveringError, SessionRun, read_recorded_factor_file
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import (
     EngineRunMaterialization,
@@ -405,10 +405,10 @@ async def test_ensure_data_reports_a_terminal_failure_once_retries_are_exhausted
     assert not run_materialization._is_blocked_by_a_sibling_fetch(third, resolution="minute")
 
 
-def _history_spec() -> DataRunSpec:
-    """The research capture's spec (minute bars + the factor file) for one day."""
+def _history_spec(end: date = TRADING_DAY) -> DataRunSpec:
+    """The research capture's spec (minute bars + the factor file) from TRADING_DAY."""
     spec = run_materialization._build_symbol_history_spec(
-        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="test", fetch_timeout_seconds=600
+        symbol="SPY", start=TRADING_DAY, end=end, requester="test", fetch_timeout_seconds=600
     )
     return spec.model_copy(update={"include_map_files": False})
 
@@ -546,6 +546,91 @@ async def test_a_factor_file_row_completes_only_with_its_coverage_record_beside_
     assert result.overall_status == "complete", result.failures
     (factor,) = [a for a in result.artifacts if a.artifact_kind == "factor_file"]
     assert record_at_completion == [factor.file_sha256]
+
+
+# The session an engine capture adds after the sibling's factor file was built.
+_THIRD_DAY = date(2024, 5, 22)
+
+
+def _a_wider_capture_publishes_before_this_claim(monkeypatch, *, then_capture_day: date | None = None) -> None:
+    """Between this build's source read and its claim, a sibling capture of
+    TRADING_DAY..WIDER_WINDOW_END builds and publishes the factor file, so
+    this build's snapshot (TRADING_DAY alone) is out of date when it claims.
+    ``then_capture_day`` then adds a session through an engine capture,
+    which writes bars without rebuilding the file, so the sibling's file is
+    out of date too."""
+    real_claim = catalog_client.claim_corp_action_artifact
+    sibling_ran = False
+
+    async def _claim_after_the_sibling(*, identity: ArtifactIdentity, **kwargs):
+        nonlocal sibling_ran
+        if not sibling_ran:
+            sibling_ran = True
+            sibling = await ensure_data(_history_spec(end=WIDER_WINDOW_END))
+            assert sibling.overall_status == "complete", sibling.failures
+            if then_capture_day is not None:
+                engine = await ensure_data(
+                    _build_engine_run_spec(symbol="SPY", start=then_capture_day, end=then_capture_day)
+                )
+                assert engine.overall_status == "complete", engine.failures
+        return await real_claim(identity=identity, **kwargs)
+
+    monkeypatch.setattr(catalog_client, "claim_corp_action_artifact", _claim_after_the_sibling)
+
+
+def _recorded_spans(tmp_lake: Path) -> tuple[SessionRun, ...]:
+    return read_recorded_factor_file(tmp_lake / lake_subpath("raw"), market="usa", symbol="SPY").spans
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_factor_file_built_from_a_stale_snapshot_reuses_the_newer_file_a_sibling_published(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    """#2452 review (CodeRabbit): this capture builds over TRADING_DAY; a
+    sibling adds the next session and publishes a file over both before
+    this one claims. Refreshing the sibling's row with this narrower file
+    would regress its coverage, and the sibling's study would refuse a
+    session its own capture just completed. The build re-reads the sources,
+    finds the sibling's row current for them, and reuses it."""
+    mock_launcher()
+    _mock_polygon()
+    _mock_no_corporate_actions()
+    _a_wider_capture_publishes_before_this_claim(monkeypatch)
+
+    result = await ensure_data(_history_spec())
+
+    assert result.overall_status == "complete", result.failures
+    (factor,) = [a for a in result.artifacts if a.artifact_kind == "factor_file"]
+    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),)
+    assert fake_catalog.rows[factor.id]["file_sha256"] == factor.file_sha256
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_factor_file_build_older_than_the_current_sources_publishes_nothing_and_is_retried(
+    fake_catalog, tmp_lake, monkeypatch
+):
+    """The same race, but a third session lands after the sibling published:
+    neither the sibling's file nor this build's covers the current sources.
+    This build replaces nothing and reports ``lease_timeout``, which the
+    capture waits out; its retry rebuilds over every captured session."""
+    mock_launcher()
+    _mock_polygon()
+    _mock_no_corporate_actions()
+    _a_wider_capture_publishes_before_this_claim(monkeypatch, then_capture_day=_THIRD_DAY)
+
+    result = await ensure_data(_history_spec())
+
+    (factor_failure,) = [f for f in result.failures if f.artifact_kind == "factor_file"]
+    assert factor_failure.reason == "lease_timeout", factor_failure.detail
+    assert run_materialization._is_blocked_by_a_sibling_fetch(result, resolution="minute")
+    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),), "the sibling's file stands"
+
+    retried = await ensure_data(_history_spec())
+
+    assert retried.overall_status == "complete", retried.failures
+    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, _THIRD_DAY),)
 
 
 @pytest.mark.asyncio
