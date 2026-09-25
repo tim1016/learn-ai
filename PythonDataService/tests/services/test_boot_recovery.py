@@ -52,7 +52,6 @@ from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
 )
-from app.services.bot_runner_errors import RunAdmissionRefusedError
 from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard, _lifecycle_json
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
@@ -148,8 +147,9 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     assert view.running is False
     assert view.phase == "ON_DUTY"  # the stale record, rendered as-is, not repaired
     assert view.duty_outcome is None
-    with pytest.raises(RunAdmissionRefusedError, match="account Clerk is not installed"):
+    with pytest.raises(BootRecoveryIncompleteError) as denied:
         await rebooted.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    assert denied.value.admission_decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
 
 
 async def test_boot_sweep_records_why_a_binding_was_left_unprojected(

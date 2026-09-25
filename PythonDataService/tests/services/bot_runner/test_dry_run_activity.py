@@ -296,8 +296,11 @@ async def test_dry_run_start_reports_its_own_unpriceable_authority_and_binding_f
     )
     assert decision.allowed is False
     assert decision.reason_code == reason
-    assert decision.explanation == refusal.message
-    assert decision.next_step == refusal.next_step
+    assert refusal.message in decision.explanation
+    assert "exit allowance comes from the Alpaca paper settings" in decision.explanation
+    assert "could not be loaded" in decision.explanation
+    assert refusal.next_step in decision.next_step
+    assert "Fix the Alpaca connection" in decision.next_step
 
 
 @pytest.mark.asyncio
@@ -327,9 +330,12 @@ async def test_dry_run_resume_uses_its_own_policy_and_preserves_held_exposure(
     assert decision.allowed is holding
     if not holding:
         assert decision.reason_code == refusal.reason
-        assert decision.next_step == refusal.next_step
+        assert refusal.next_step in decision.next_step
     else:
-        assert "No exit allowance is configured" in decision.explanation
+        assert "exit allowance could not be loaded" in decision.explanation
+        assert "operator recovery" in decision.explanation
+        assert "live quote" in decision.explanation
+        assert "will be tried" not in decision.explanation
         resumed = await registry.resume_existing_with_admission("alpaca", _SID)
         assert resumed.admission.allowed is True
         await registry.stop("alpaca", _SID)

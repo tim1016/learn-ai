@@ -71,6 +71,7 @@ from app.services.sqlite_clerk_compat import (
     custody_account_id_for_route,
 )
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.bot_runner.custody import admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -193,7 +194,7 @@ async def shadow_registry(
         feed_resolver=lambda: _FakeFeed([], mode="hold"),
         boot_recovery_required=False,
         supported_broker_ids=frozenset({"alpaca"}),
-        start_custody_guard=runtime.clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(runtime.clerk),
         now_ms=now_ms_utc,
     )
     set_bot_task_registry(registry)
@@ -420,6 +421,7 @@ async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
 # workflow supplies its disposable migrated database.
 @pytest.mark.slow
 async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(
+    no_golden_validations,
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
 ) -> None:
     """(a) The Task-6 deploy wire and the Task-10 Shadow card, in production shape."""

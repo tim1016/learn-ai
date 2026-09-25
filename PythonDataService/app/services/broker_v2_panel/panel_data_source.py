@@ -25,7 +25,6 @@ from app.broker.alpaca.clerk.account_authority import (
     evidence_account_id_for,
 )
 from app.broker.alpaca.clerk.active_authority import (
-    active_program_leg_policy,
     primary_custody_world,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -348,7 +347,12 @@ async def _get_panel_with_entries_from_authority(
     transaction_ref: str | None = None,
 ) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
     """Build one panel from its binding-selected SQLite authority."""
-    authority_account_id = facade.account_id if facade is not None else resolved
+    if facade is None:
+        raise PanelUnavailableError(
+            "The binding's SQLite Clerk is unavailable.",
+            detail="Restore the selected authority before projecting this bot's execution policy.",
+        )
+    authority_account_id = facade.account_id
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
@@ -470,25 +474,20 @@ async def _get_panel_with_entries_from_authority(
             ),
             use_rth=binding.use_rth,
             bot_running=status.running,
-            extended_window=active_program_leg_policy().window,
+            extended_window=facade.program_leg_policy.window,
         ),
         feed_continuity_events=None if source_evidence is None else source_evidence.events,
         feed_continuity_run_id=binding.run_id,
         warmup_join=None if source_evidence is None else source_evidence.warmup_join,
         startup_join=None if source_evidence is None else source_evidence.startup_join,
     )
-    # The transaction-rail stored-key fallback (PRD Sec 19, issue #1729 AC #6/#7)
-    # needs the same repository `read_sqlite_panel_evidence` resolved internally
-    # for its reads; `facade` above can be `None` here for the primary (non
-    # Dry Run) authority, so re-resolve it the same way rather than skipping
-    # the fallback for the majority of real bots.
-    rail_facade = facade or active_sqlite_facade(broker)
+    # The rail reads the same binding-selected repository and send policy.
     panel = adapt_sqlite_panel(
         panel,
         projection,
         economics=economics,
-        repository=rail_facade.repository if rail_facade is not None else None,
-        flatten_verdict=rail_facade.flatten_send_verdict() if rail_facade is not None else None,
+        repository=facade.repository,
+        flatten_verdict=facade.flatten_send_verdict(),
     )
     return panel, entries, session_fills
 

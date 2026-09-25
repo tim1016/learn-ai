@@ -25,7 +25,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, Settlement
-from tests._helpers.bot_runner.custody import _SID, _registry
+from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.canary_admission import admit_canary_pairing
 
@@ -63,7 +63,7 @@ async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
     registry = _registry(
         tmp_path / "runner",
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     try:
@@ -310,7 +310,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     registry = _registry(
         tmp_path / "runner",
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     try:

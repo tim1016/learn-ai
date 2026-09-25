@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 # ``roster_symbols`` / ``instance_seals`` pattern -- so a test can state the
 # resolved document directly instead of building a Clerk volume, and so the one
 # production resolver below is named in exactly one place.
-type AllowanceResolver = Callable[[], ExtendedHoursAllowances | None]
+type AllowanceResolver = Callable[[], ExtendedHoursAllowances | LegRefusal]
 
 # Why the two resolution steps below import inside their function bodies, and
 # why the context above is a ``TYPE_CHECKING`` name. ``active_binding``, the
@@ -116,7 +116,7 @@ def _sealed_allowances(context: AlpacaRuntimeContext) -> ExtendedHoursAllowances
     return None if armed is None else ExtendedHoursAllowances.from_envelope(armed.envelope)
 
 
-def _settings_allowances() -> ExtendedHoursAllowances | None:
+def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
     """The resolved binding's own settings: a paper revision's allowances.
 
     For a worker bound from a broker profile, these settings carry the applied
@@ -142,7 +142,14 @@ def _settings_allowances() -> ExtendedHoursAllowances | None:
             "Extended-hours allowances are unavailable: this worker has no broker binding",
             extra={"action": "extended_hours_allowances_unbound", "reason": exc.reason},
         )
-        return None
+        return LegRefusal(
+            reason_code=exc.reason,
+            explanation=(
+                "This run's exit allowance comes from the Alpaca paper settings, "
+                f"which could not be loaded. {exc.unbound.message}"
+            ),
+            next_step=f"Fix the Alpaca connection. {exc.unbound.next_step}",
+        )
     except ValidationError as exc:
         # ``str(exc)`` would echo a plaintext credential fragment: Pydantic
         # renders ``input_value`` for a model-level error, and for a
@@ -158,8 +165,15 @@ def _settings_allowances() -> ExtendedHoursAllowances | None:
                 "detail": alpaca_configuration_error_detail(exc),
             },
         )
-        return None
-    return ExtendedHoursAllowances.from_settings(settings)
+        return LegRefusal(
+            reason_code="ALPACA_CONFIGURATION_UNAVAILABLE",
+            explanation=(
+                "This run's exit allowance comes from the Alpaca paper settings, "
+                "which could not be loaded. " + alpaca_configuration_error_detail(exc)
+            ),
+            next_step="Fix the Alpaca connection and its settings, then restart the clerk.",
+        )
+    return ExtendedHoursAllowances.from_settings(settings) or EXTENDED_HOURS_ALLOWANCE_UNSET
 
 
 def _resolved_settings(*, concern: str) -> AlpacaSettings | None:
@@ -281,7 +295,7 @@ def with_deploy_recovery_pricing(
     )
 
 
-def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
+def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | LegRefusal:
     """The allowances an extended-session leg prices from (ADR 0060; plan §0 D3).
 
     One order, used for **both** the ENTER and the EXIT allowance, because the
@@ -299,9 +313,9 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
     ledger and an absent envelope are each "not this source", so no exit
     pricing can fail because of a configuration problem.
 
-    Genuinely no source at all still answers ``None``, and
-    :func:`shape_program_leg` refuses that as ``EXTENDED_HOURS_ALLOWANCE_UNSET``
-    -- for an EXIT as much as an ENTER. "Never blocked *for lack of a seal*"
+    When no source supplies allowances, return a typed ``LegRefusal`` that
+    retains the binding's own reason. Admission and :func:`shape_program_leg`
+    share that value — for an EXIT as much as an ENTER. "Never blocked *for lack of a seal*"
     means falling back to the effective revision, not inventing a number: a
     number nobody chose must never bound real money (ADR 0059 D4).
 
@@ -322,7 +336,7 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | None:
                 ExtendedHoursAllowances.from_envelope(context.live_envelope)
             )
     stamped = _settings_allowances()
-    return None if stamped is None else with_deploy_recovery_pricing(stamped)
+    return stamped if isinstance(stamped, LegRefusal) else with_deploy_recovery_pricing(stamped)
 
 
 @dataclass(frozen=True)
@@ -340,6 +354,15 @@ class ProgramLegPolicy:
 
     window: ExtendedHoursWindow | None
     allowances: ExtendedHoursAllowances | None
+    # Captured at composition, present exactly when the pair is unavailable.
+    allowance_refusal: LegRefusal | None = None
+
+    def __post_init__(self) -> None:
+        if self.allowances is None:
+            if self.allowance_refusal is None:
+                object.__setattr__(self, "allowance_refusal", EXTENDED_HOURS_ALLOWANCE_UNSET)
+        elif self.allowance_refusal is not None:
+            raise ValueError("A priced policy cannot also carry an allowance refusal")
 
     @classmethod
     def regular_only(cls) -> ProgramLegPolicy:
@@ -364,9 +387,11 @@ class ProgramLegPolicy:
         of the Clerk volume would buy nothing and put file I/O on the decision
         path.
         """
+        resolved = allowances()
         return cls(
             window=read.capabilities().extended_hours_window,
-            allowances=allowances(),
+            allowances=resolved if isinstance(resolved, ExtendedHoursAllowances) else None,
+            allowance_refusal=resolved if isinstance(resolved, LegRefusal) else None,
         )
 
 
@@ -603,7 +628,8 @@ def _leg_at_decision_close(
         # bound the leg by no session at all.
         raise ProgramLegRefused(session_closed_at_decision(state.phase))
     if policy.allowances is None:
-        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
+        assert policy.allowance_refusal is not None
+        raise ProgramLegRefused(policy.allowance_refusal)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
     try:
         price = marketable_limit_price(side=side, anchor=decision_bar.close, allowance_bps=allowance)

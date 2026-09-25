@@ -53,7 +53,6 @@ from typing import Literal
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.program_leg import (
-    EXTENDED_HOURS_ALLOWANCE_UNSET,
     LegRefusal,
     LegShape,
     ProgramLegPolicy,
@@ -74,7 +73,7 @@ from app.services.session_authority import (
     scheduled_extended_session_bounds,
     session_state_at_ms,
 )
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 # Where the live bid/ask comes from: ``(symbol, now_ms) -> quote or None``.
 # Injected so the pricing seam is a pure function and a test can state the
@@ -408,7 +407,8 @@ def price_recovery_reduction(
     if state.phase == "RTH":
         return RegularSessionReduction()
     if policy.allowances is None:
-        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
+        assert policy.allowance_refusal is not None
+        raise ProgramLegRefused(policy.allowance_refusal)
     if quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
     return ExtendedLimitProposal(
@@ -456,7 +456,8 @@ def recovery_reduction_shape(
     if confirmed is None:
         raise ProgramLegRefused(RECOVERY_LIMIT_REQUIRED)
     if policy.allowances is None:
-        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
+        assert policy.allowance_refusal is not None
+        raise ProgramLegRefused(policy.allowance_refusal)
     if current_quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
     if (
@@ -679,13 +680,13 @@ def market_leg_sendable(now_ms: int) -> bool:
 
 
 def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
-    """The first instant, not before ``not_before_ms``, the stuck-EXIT watchdog can send a reduction.
+    """The first instant, not before ``not_before_ms``, a recovery send is session-eligible.
 
     Inside the regular session it sends the market leg; in the declared PRE or
     POST window it prices a limit itself, which needs the policy's exit
     allowance (#2229) — without one the next chance is the regular open. The
     live touch that pricing also reads cannot be foreseen, so this is when
-    the watchdog *tries*; a refused try defers to its next pass. Owner
+    a retry is allowed; a missing quote or custody refusal can defer it. Owner
     decision 2026-09-25 (#2440): the ``EXIT_NOT_FLAT`` notice states this
     time — the 04:00 pre-market sell after an after-hours exit that could not
     go out.
@@ -705,6 +706,18 @@ def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
     if state.next_transition_ms is None:
         return not_before_ms
     return state.next_transition_ms - EXIT_SEND_GUARD_BAND_MS
+
+
+def redrive_window_opened_at_ms(*, now_ms: int, policy: ProgramLegPolicy) -> int:
+    """The first send eligibility on the arrival's ET trading day.
+
+    Assumes one contiguous eligible window per ET trading day: RTH alone,
+    or PRE + RTH + POST when allowances are available. Callers establish
+    that ``now_ms`` is eligible first; this is not a next-window search.
+    The send guard shifts both the day anchor and the opening consistently.
+    """
+    day_floor_ms = et_midnight_ms(et_date_at_ms(send_arrival_ms(now_ms))) - EXIT_SEND_GUARD_BAND_MS
+    return next_redrive_at_ms(not_before_ms=day_floor_ms, policy=policy)
 
 
 def reducing_leg_session_end_ms(
@@ -911,6 +924,7 @@ __all__ = [
     "price_recovery_reduction",
     "realized_slippage_bps",
     "recovery_reduction_shape",
+    "redrive_window_opened_at_ms",
     "reducing_leg_session_end_ms",
     "reducing_leg_verdict",
     "reduction_touch",

@@ -21,6 +21,7 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -126,7 +127,7 @@ def _start_guard_sealing(
 
     @asynccontextmanager
     async def guard(sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
-        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id})
+        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id}), ProgramLegPolicy.regular_only()
 
     return guard
 

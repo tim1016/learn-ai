@@ -14,7 +14,7 @@ import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.marketdata.feed import ContinuityPolicy
-from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
+from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry, admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
 
@@ -54,7 +54,7 @@ async def test_trade_run_registration_precedes_order_capable_task_creation(
     registry = _registry(
         tmp_path,
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
@@ -82,7 +82,7 @@ async def test_stop_commits_clerk_stop_before_task_cancellation(
     registry = _registry(
         tmp_path,
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
@@ -112,7 +112,7 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
     registry = _registry(
         tmp_path,
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
@@ -153,7 +153,7 @@ async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
     registry = _registry(
         tmp_path,
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
@@ -190,7 +190,7 @@ async def test_stop_all_commits_each_trade_run_before_task_cancellation(
     registry = _registry(
         tmp_path,
         feed,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
     )
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")

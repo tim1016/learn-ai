@@ -17004,11 +17004,6 @@ export interface components {
             kind?: string;
             /** Next Attempt At Ms */
             next_attempt_at_ms?: number | null;
-            /**
-             * Next Attempt Overdue
-             * @default false
-             */
-            next_attempt_overdue?: boolean;
             /** Reason Code */
             reason_code: string;
             /** Severity */
@@ -18575,11 +18570,6 @@ export interface components {
             next_action: string | null;
             /** Next Attempt At Ms */
             next_attempt_at_ms?: number | null;
-            /**
-             * Next Attempt Overdue
-             * @default false
-             */
-            next_attempt_overdue?: boolean;
             /**
              * State
              * @enum {string}
@@ -20618,11 +20608,6 @@ export interface components {
             headline: string;
             /** Next Attempt At Ms */
             next_attempt_at_ms?: number | null;
-            /**
-             * Next Attempt Overdue
-             * @default false
-             */
-            next_attempt_overdue?: boolean;
             /** Next Step */
             next_step: string;
             /** Observed At Ms */
@@ -20671,11 +20656,6 @@ export interface components {
             may_create_exposure: boolean;
             /** Next Attempt At Ms */
             next_attempt_at_ms?: number | null;
-            /**
-             * Next Attempt Overdue
-             * @default false
-             */
-            next_attempt_overdue?: boolean;
             /** Next Step */
             next_step: string;
             /**

@@ -145,7 +145,7 @@ class _FakeRegistry:
 
         async with default_start_custody_projection(
             self.binding_for_control(broker, sid)
-        ) as snapshot:
+        ) as (snapshot, _policy):
             self.custody_projections.append((sid, snapshot.reconciliation_state))
         raise BotRunnerError("resume admission policy is not modelled in this harness")
 
@@ -376,7 +376,7 @@ async def _post_stop_bot_decisions(
 
 
 @pytest.fixture()
-def stopped_api(api, tmp_path: Path, fleet_size: int, monkeypatch: pytest.MonkeyPatch):
+def stopped_api(api, no_golden_validations, tmp_path: Path, fleet_size: int, monkeypatch: pytest.MonkeyPatch):
     """The worst case: a whole fleet that is not running.
 
     Every panel GET of a stopped bot previously ran a resume-admission
@@ -1416,3 +1416,53 @@ async def test_exhausted_panel_projection_refuses_and_says_so(
         getattr(record, "action", None) == "sqlite_panel_projection_torn_read_exhausted"
         for record in caplog.records
     ), "exhausting the coherence attempts must leave a structured record"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_panel_pulse_uses_selected_clerk_window_without_primary(api, monkeypatch):
+    from contextlib import asynccontextmanager
+    from datetime import datetime
+    from decimal import Decimal
+    from zoneinfo import ZoneInfo
+
+    from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
+    from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+    from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
+    from app.services.bot_start_admission import market_data_admission_fact
+    from app.utils.timestamps import to_ms_utc
+
+    _app, _repo = api
+    runtime = get_active_clerk_runtime()
+    facade = runtime.clerk
+    policy = ProgramLegPolicy(window=ALPACA_EXTENDED_HOURS_WINDOW,
+                              allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")))
+    facade._program_leg_policy = policy
+    registry = get_bot_task_registry()
+    binding = registry.binding_for_control("alpaca", SID)
+    binding.mode, binding.use_rth = "dry_run", False
+    binding.quantity, binding.carryover_policy = 1, "FORBID"
+    monkeypatch.setattr(registry, "binding_for_control", lambda *_: binding)
+
+    @asynccontextmanager
+    async def synthetic_runtime_for_projection(_binding):
+        yield ActiveClerkRuntime(authority_kind="synthetic", clerk=facade)
+
+    monkeypatch.setattr(registry, "synthetic_runtime_for_projection", synthetic_runtime_for_projection, raising=False)
+    now_ms = to_ms_utc(datetime(2026, 9, 2, 8, tzinfo=ZoneInfo("America/New_York")))
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: now_ms)
+    clerk_status = await panel_data_source.clerk_status(symbol="SPY")
+
+    async def projected_clerk_status(**_kwargs):
+        return clerk_status
+
+    monkeypatch.setattr(panel_data_source, "clerk_status", projected_clerk_status)
+    set_active_clerk_runtime(None)
+    admission = market_data_admission_fact(None, now_ms, symbol="SPY", use_rth=False,
+                                          extended_window=policy.window)
+    assert (admission.scheduled_phase, admission.session_authority_source) == ("PRE", "broker_declared_window")
+    async with panel_data_source._panel_authority_for_binding(registry, binding) as selected:
+        panel, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+            "alpaca", ACCT, SID, resolved=ACCT, captured_now_ms=now_ms,
+            registry=registry, binding=binding, facade=selected,
+        )
+    assert panel.market_pulse.session == "PRE_MARKET"

@@ -13,11 +13,6 @@ import math
 
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.clerk.program_leg import (
-    EXTENDED_HOURS_ALLOWANCE_UNSET,
-    EXTENDED_HOURS_UNSUPPORTED,
-    LegRefusal,
-)
 from app.schemas.run_admission import (
     ARMING_NEXT_STEP,
     ARMING_REQUIRED_ADMITTED_NOTE,
@@ -41,15 +36,6 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
 
 logger = logging.getLogger(__name__)
 
-# What an `ExtendedHoursAdmissionFact` state means at the gate. `NOT_REQUESTED`
-# and `READY` admit, so they are simply absent here. A regular-hours run's
-# missing exit allowance is the same refusal (#2440), bar the one Resume
-# `_resumes_holding_without_exit_allowance` admits.
-_EXTENDED_HOURS_REFUSALS: dict[str, LegRefusal] = {
-    "UNSUPPORTED": EXTENDED_HOURS_UNSUPPORTED,
-    "ALLOWANCE_UNSET": EXTENDED_HOURS_ALLOWANCE_UNSET,
-    "EXIT_ALLOWANCE_UNSET": EXTENDED_HOURS_ALLOWANCE_UNSET,
-}
 # Rides the explanation of an admitted Resume that
 # `_resumes_holding_without_exit_allowance` let through, stating what the
 # missing allowance still costs. It is on the API decision only: no screen
@@ -57,8 +43,8 @@ _EXTENDED_HOURS_REFUSALS: dict[str, LegRefusal] = {
 # Resume result use fixed copy), so the mutating Resume's
 # `resume_admitted_without_exit_allowance` warning is where it is seen.
 EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE = (
-    "No exit allowance is configured: an exit reaching the broker after the close is "
-    "held back, and the operator is told when the sell will be tried."
+    "The exit allowance is unavailable. An exit reaching the broker after the close "
+    "is held for recovery; session eligibility alone does not guarantee a retry."
 )
 
 
@@ -409,10 +395,7 @@ def evaluate_run_admission(
     # unset allowances started a run that then rejected every extended decision
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
     # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
-    extended_refusal = (
-        bot.extended_hours.configuration_refusal
-        or _EXTENDED_HOURS_REFUSALS.get(bot.extended_hours.state)
-    )
+    extended_refusal = bot.extended_hours.refusal
     if extended_refusal is not None and not _resumes_holding_without_exit_allowance(bot, clerk):
         return decide(
             allowed=False,
@@ -566,7 +549,14 @@ def _admitted_explanation(bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot) -
     if bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
     if _resumes_holding_without_exit_allowance(bot, clerk):
-        admitted = f"{admitted} {EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE}"
+        if bot.mode == "dry_run":
+            admitted += (
+                " The exit allowance could not be loaded. This holding Dry Run may resume, "
+                "but a late exit folds for operator recovery; its synthetic authority "
+                "does not retry from a live quote."
+            )
+        else:
+            admitted = f"{admitted} {EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE}"
     if _not_armed(bot):
         admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"
     return admitted

@@ -34,3 +34,13 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal(
 def test_extended_hours_admission_fact(use_rth: bool, policy: ProgramLegPolicy, state: str) -> None:
     fact = extended_hours_admission_fact(use_rth=use_rth, policy=policy, observed_at_ms=1_000)
     assert fact == ExtendedHoursAdmissionFact(state=state, observed_at_ms=1_000)
+
+
+@pytest.mark.parametrize("state", ["READY", "NOT_REQUESTED"])
+def test_an_admitted_fact_cannot_carry_a_refusal(state: str) -> None:
+    from pydantic import ValidationError
+
+    from app.broker.alpaca.clerk.program_leg import EXTENDED_HOURS_ALLOWANCE_UNSET
+
+    with pytest.raises(ValidationError, match="cannot carry a refusal"):
+        ExtendedHoursAdmissionFact(state=state, observed_at_ms=1_000, refusal=EXTENDED_HOURS_ALLOWANCE_UNSET)

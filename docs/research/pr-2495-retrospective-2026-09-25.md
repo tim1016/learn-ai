@@ -189,6 +189,50 @@ Standards: 3 findings; strongest concrete concern is the new shared test bypass.
 
 ## Implementation disposition
 
-The authorized follow-up addresses #2484, #2492 and #2493 and closes #2482 with a production-path invariant test and dead-code removal. ADR 0059 now distinguishes queued market orders from invalid extended-hours requests and names the decision/send boundary. ADR 0045 now names the Clerk-owned transient retry, current-quote recovery and eligibility semantics. Start/Resume use the chosen authority; failed binding copy remains specific; holding Resume remains permitted. Fractional configuration fields accept backend-valid precision. Projection readers require explicit recovery pricing and a retry is not shown waiting until a sweep interval plus the send guard has elapsed from the current window's eligibility.
+The authorized follow-up addresses #2484, #2492 and #2493 and closes #2482 with a production-path invariant test and dead-code removal. ADR 0059 now distinguishes queued market orders from invalid extended-hours requests and names the decision/send boundary. ADR 0045 now names the Clerk-owned transient retry, current-quote recovery and eligibility semantics. Start/Resume take custody and policy from one held Clerk, including a substituted authority. A typed allowance refusal is captured at composition and shared by admission and per-decision receipts. Failed-binding Dry Run copy explains its Alpaca paper-settings dependency and names the binding repair. Holding Dry Run Resume remains permitted and states that a late synthetic EXIT folds for operator recovery without a live-quote retry. The panel pulse uses the binding-selected Clerk's window. Fractional configuration fields accept backend-valid precision. Projection readers require explicit recovery pricing; the lane bell uses the facade reader and reports no time if only a repository is available. The retry line says only `Automatic retry: allowed from <time ET>`. The inferred waiting flag and grace timer are removed; canonical window re-anchoring remains. #2501 owns observed retry status and #2502 owns the whole-cent loss cap. ProgramLegPolicy has no serialization path into a hash or sealed artifact (audited model_dump and asdict consumers before adding the refusal).
 
 #2491 (shared runner clocks), #2483 (shadow execution evidence), #2494 (working-EXIT escalation) and #2497 (live closures/halts) remain separate. The focused final-bar tests use the real session rule, but this follow-up does not remove the shared harness's always-open override or claim that broader gap is solved. It changes no broker subscriptions and performs no deployment or trading.
+
+
+## Scoped PR #2500 correction evidence
+
+The F1–F4 regression checks were run against the reviewed head `699ffb51`
+before production changes. They failed for the reported behavior:
+
+- F1: `test_dry_run_panel_pulse_uses_selected_clerk_window_without_primary`
+  showed CLOSED at 08:00 ET while admission said PRE under the selected
+  Clerk's declared window. It now shows PRE_MARKET.
+- F2: `test_admission_and_exit_preserve_the_composed_binding_refusal`
+  returned a later process-global database refusal instead of the policy's
+  original account-pin refusal. It now proves the gate and EXIT receipt
+  retain identical reason, explanation and next step.
+  `test_dry_run_start_reports_its_own_unpriceable_authority_and_binding_failure`
+  failed its paper-settings dependency copy checks for five binding failures;
+  `test_dry_run_resume_uses_its_own_policy_and_preserves_held_exposure[True]`
+  failed the synthetic recovery copy check. Both now pass.
+- F3: the next-attempt component's future/past eligibility checks failed
+  against “eligible from” / “waiting; eligible since”. All four consumers now
+  positively check “allowed from” and reject “waiting”. The calendar tests
+  retain holiday, Black Friday, DST, weekend and allowance-removal coverage;
+  the extracted window-opening helper has eight additional cases.
+- F4: `test_attention_without_facade_retains_notice_but_cannot_invent_retry_time`
+  failed because a repository without a facade invented a regular-session
+  retry time. `test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected`
+  failed because the separate policy lookup hid BOOT_RECOVERY_INCOMPLETE.
+  Both now reach their intended result.
+
+Validation in the isolated `pr-2500-fixes` worktree: required Python suites
+1,053 passed; 49 identified helper-consumer modules 1,166 passed; bounded
+fast gate 8,186 passed, 20 skipped, 1 xfailed in 87.12 seconds; four frontend
+consumer suites 63 passed; full frontend 3,317 passed across 334 files.
+Repository-wide Ruff and frontend ESLint passed. Generated OpenAPI and
+TypeScript changes only remove `next_attempt_overdue` from LaneAttentionItem,
+MissionVerdictView, ProjectedUncertaintyResponse and ProjectionGuidanceResponse.
+The generated files are committed together.
+
+The custody/policy simplification is implemented, so no deferral issue is
+needed under #2484. #2501 records the completed removal of the timer machinery;
+its child #2503 asks the owner whether unpriceable/session-held exits should
+escalate. #2501's actual recovery status and #2502's whole-cent loss cap remain
+out of scope. No escalation policy, subscription, fill model, deployment or
+broker order was changed, and no second thermo review was run.

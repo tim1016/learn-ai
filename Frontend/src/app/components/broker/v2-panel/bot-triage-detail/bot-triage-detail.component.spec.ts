@@ -142,7 +142,7 @@ describe('BotTriageDetailComponent', () => {
     expect(screen.queryByText(/Automatic retry/)).toBeNull();
   });
 
-  it.each([false, true])('says when the Clerk next tries to sell an exit left open (overdue: %s) (#2440)', async (overdue) => {
+  it('shows only retry eligibility for an exit left open (#2440)', async () => {
     // 2026-09-03 04:00 ET: the pre-market open after an exit that could not go out.
     await renderDetail(
       fakeBotPanelView({
@@ -153,14 +153,13 @@ describe('BotTriageDetailComponent', () => {
           next_action: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
           evaluated_at_ms: 1_700_000_001_000,
           next_attempt_at_ms: 1_788_422_400_000,
-          next_attempt_overdue: overdue,
         },
       }),
     );
 
     const attempt = await screen.findByText(/Automatic retry/);
-    // A time already past is said to be overdue, never shown as a promise.
-    expect(attempt.textContent?.includes('waiting; eligible since')).toBe(overdue);
+    expect(attempt.textContent).toContain('Automatic retry: allowed from');
+    expect(attempt.textContent).not.toContain('waiting');
     expect(attempt.textContent).toContain('04:00');
     expect(attempt.textContent).toContain('ET');
   });
@@ -184,7 +183,7 @@ describe('BotTriageDetailComponent', () => {
     );
 
     expect(await screen.findByText(text)).toBeTruthy();
-    expect(screen.queryByText(/waiting; eligible since/)).toBeNull();
+    expect(screen.queryByText(/waiting/)).toBeNull();
   });
 
   it('puts unavailable commands first, with their reason', async () => {

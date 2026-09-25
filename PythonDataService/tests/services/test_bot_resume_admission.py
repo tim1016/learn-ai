@@ -139,7 +139,6 @@ def _minimal_admission(**overrides: object) -> BotResumeAdmission:
         raise AssertionError("activate must not be called")
 
     kwargs: dict[str, object] = {
-        "program_leg_policy": lambda binding: ProgramLegPolicy.regular_only(),
         "now_ms": lambda: 1_000,
         "feed_resolver": lambda: None,
         "process_fact": process_fact,
@@ -179,13 +178,13 @@ async def test_preview_projects_custody_and_never_reconciles() -> None:
     async def reconciling_guard(strategy_instance_id: str):
         del strategy_instance_id
         used.append("reconcile")
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     @asynccontextmanager
     async def projection_guard(strategy_instance_id: str):
         del strategy_instance_id
         used.append("project")
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     admission = _minimal_admission(
         custody_guard=reconciling_guard,
@@ -227,7 +226,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
     @asynccontextmanager
     async def custody_guard(strategy_instance_id: str):
         del strategy_instance_id
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")
@@ -262,7 +261,6 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
         )
 
     admission = BotResumeAdmission(
-        program_leg_policy=lambda binding: ProgramLegPolicy.regular_only(),
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,

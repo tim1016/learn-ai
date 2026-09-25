@@ -679,7 +679,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
     @asynccontextmanager
     async def custody_guard(strategy_instance_id: str):
         del strategy_instance_id
-        yield _clerk(observed_at_ms=1_000)
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")
@@ -717,7 +717,6 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
         )
 
     admission = BotStartAdmission(
-        program_leg_policy=lambda binding: ProgramLegPolicy.regular_only(),
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,

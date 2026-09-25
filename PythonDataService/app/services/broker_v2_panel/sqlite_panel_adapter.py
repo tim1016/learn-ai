@@ -663,7 +663,6 @@ def _mission_verdict(
         next_action=guidance.next_step,
         evaluated_at_ms=projection.generated_at_ms,
         next_attempt_at_ms=guidance.next_attempt_at_ms,
-        next_attempt_overdue=guidance.next_attempt_overdue,
         exit_working=guidance.exit_working,
         facts_unreadable=guidance.facts_unreadable,
     )

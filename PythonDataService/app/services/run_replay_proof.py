@@ -362,9 +362,9 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
         "SIMULATED_SOURCE_BAR_UNPROVEN",
         "EXIT_CUSTODY_UNPROVEN",
     }
-    # bot_trade_strategy._dispose_transient_exit_refusal (#1755/F19) records a
-    # protected `blocked` receipt and defers to the next decision clock for every
-    # code in this closed transient set. Import it rather than restate it so the
+    # The SQLite facade's ENTER rejected() path calls
+    # _append_pre_custody_refusal to record a protected `blocked` receipt for
+    # this closed transient set. Import it rather than restate it so the
     # two sets can never drift apart.
     | TRANSIENT_ADMISSION_REASON_CODES
 )

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.run_admission import (
@@ -26,6 +25,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, LegacyMigratio
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_start_admission import (
     CustodyBoundActivator,
+    CustodyGuard,
     MarketLivenessFactResolver,
     RunAdmissionInvariantError,
     SessionCapabilityResolver,
@@ -56,7 +56,6 @@ from app.services.strategy_validation_admission import (
     resolve_strategy_validation_fact,
 )
 
-CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CheckpointResolver = Callable[[BrokerBotBinding], ResumeCheckpointAdmissionFact | None]
@@ -128,7 +127,6 @@ class BotResumeAdmission:
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
         legacy_migration_repository: LegacyMigrationLineageWriter | None = None,
-        program_leg_policy: Callable[[BrokerBotBinding], ProgramLegPolicy],
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._now_ms = now_ms
@@ -146,7 +144,6 @@ class BotResumeAdmission:
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
         self._session_capability = session_capability
         self._market_liveness = market_liveness
-        self._program_leg_policy = program_leg_policy
         self._arming_fact = arming_fact
         # PRD Sec 11.5 legacy migration (#1728): only ``resume()`` persists
         # clone lineage evidence (``preview()`` stays mutation-free). ``None``
@@ -275,7 +272,7 @@ class BotResumeAdmission:
         custody_guard: CustodyGuard,
     ) -> AsyncIterator[tuple[BrokerBotBinding, RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
-            async with custody_guard(prior) as custody:
+            async with custody_guard(prior) as (custody, policy):
                 proposed = proposed.model_copy(
                     update={
                         "sealed_account_id": prior.sealed_account_id,
@@ -315,7 +312,6 @@ class BotResumeAdmission:
                     mutating=mutating,
                 )
                 proposed = proposed.model_copy(update={"program_build": program_build})
-                policy = self._program_leg_policy(prior)
                 facts = ResumeRunFacts(
                     strategy_instance_id=prior.strategy_instance_id,
                     proposed_run_id=proposed.run_id,

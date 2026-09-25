@@ -27,6 +27,7 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_runner import BotTaskRegistry
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.bot_runner.custody import admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -269,7 +270,7 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
         feed_resolver=lambda: _FakeFeed([], mode="hold"),
         boot_recovery_required=False,
         supported_broker_ids=frozenset({"alpaca"}),
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
         now_ms=now_ms_utc,
     )
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
@@ -414,7 +415,7 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
         feed_resolver=lambda: _FakeFeed([], mode="hold"),
         boot_recovery_required=False,
         supported_broker_ids=frozenset({"alpaca"}),
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
         now_ms=now_ms_utc,
     )
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")

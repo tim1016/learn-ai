@@ -270,12 +270,11 @@ describe('AlpacaSqliteCustodyComponent', () => {
     const attempt = await screen.findByText(/Automatic retry/);
     expect(attempt.textContent).toContain('04:00');
     expect(attempt.textContent).toContain('ET');
-    expect(attempt.textContent).not.toContain('overdue');
   });
 
-  it('says a past next attempt is overdue, never a promise (#2440 review)', async () => {
+  it('shows only eligibility for a past next attempt (#2440 review)', async () => {
     // The watchdog's deferral writes nothing, so the recorded time can pass;
-    // the backend projects that as overdue and this page says so.
+    // Eligibility alone does not tell this page why the retry has not sent.
     await renderCustody({
       getSqliteClerkProjection: vi.fn().mockResolvedValue({
         ...projection([]),
@@ -296,13 +295,13 @@ describe('AlpacaSqliteCustodyComponent', () => {
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
           next_attempt_at_ms: 1_788_422_400_000,
-          next_attempt_overdue: true,
         }],
       }),
     });
 
     const attempt = await screen.findByText(/Automatic retry/);
-    expect(attempt.textContent).toContain('waiting; eligible since');
+    expect(attempt.textContent).toContain('Automatic retry: allowed from');
+    expect(attempt.textContent).not.toContain('waiting');
     expect(attempt.textContent).toContain('04:00');
   });
 
@@ -337,7 +336,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     )).toBeTruthy();
   });
 
-  it('says an exit is working instead of an overdue time while one is in progress (#2440 review)', async () => {
+  it('says an exit is working instead of an eligible time while one is in progress (#2440 review)', async () => {
     await renderCustody({
       getSqliteClerkProjection: vi.fn().mockResolvedValue({
         ...projection([]),
@@ -366,7 +365,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByText(
       'An exit is in progress; no automatic attempt is due while it works.',
     )).toBeTruthy();
-    expect(screen.queryByText(/waiting; eligible since/)).toBeNull();
+    expect(screen.queryByText(/waiting/)).toBeNull();
   });
 
   function unfoldableProjection(): SqliteClerkProjection {

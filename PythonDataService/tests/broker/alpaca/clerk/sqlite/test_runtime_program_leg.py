@@ -12,11 +12,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
-from app.broker.alpaca.clerk.active_authority import (
-    ActiveClerkRuntime,
-    active_program_leg_policy,
-    set_active_clerk_runtime,
-)
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -250,8 +245,8 @@ def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sid
     differs from its seal is refused ``LIVE_ENVELOPE_DISAGREEMENT`` before it
     is priced, and one with no fresh observation is refused
     ``LIVE_ENVELOPE_UNOBSERVED`` — so what is pinned here is the accessor both
-    sides share. Start and Resume admission read it through
-    ``active_program_leg_policy``; ``_execute_effect`` prices from it (which
+    sides share. Start and Resume admission receive it with the held
+    custody snapshot; ``_execute_effect`` prices from it (which
     the extended-exit tests above prove end-to-end). One accessor is what stops
     admission answering this policy's questions off a different object.
     """
@@ -609,24 +604,6 @@ def test_a_facade_built_without_a_policy_is_regular_only(tmp_path: Path) -> None
         assert facade.program_leg_policy == ProgramLegPolicy.regular_only()
         assert facade.program_leg_policy.window is None
     finally:
-        repo.close()
-
-
-def test_the_process_accessor_reads_the_active_authoritys_policy(tmp_path: Path) -> None:
-    assert active_program_leg_policy() == ProgramLegPolicy.regular_only()
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
-    facade = SqliteAlpacaClerkFacade(
-        repo=repo,
-        read=_FakeReadPort(),
-        trade=_FakeTradePort(),
-        account_mode="paper",
-        program_leg_policy=_EXTENDED_POLICY,
-    )
-    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
-    try:
-        assert active_program_leg_policy() is _EXTENDED_POLICY
-    finally:
-        set_active_clerk_runtime(None)
         repo.close()
 
 

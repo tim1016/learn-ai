@@ -6,6 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.broker.alpaca.clerk.program_leg import (
+    EXTENDED_HOURS_ALLOWANCE_UNSET,
+    EXTENDED_HOURS_UNSUPPORTED,
+    LegRefusal,
+)
 from app.marketdata.feed import BarSessionPhase
 from app.schemas.market_liveness import MarketLivenessFact
 
@@ -60,16 +65,6 @@ ExtendedHoursAdmissionState = Literal[
 ]
 
 
-class AdmissionConfigurationRefusal(BaseModel):
-    """The binding failure that prevents the selected Clerk from pricing a leg."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    reason_code: str
-    explanation: str
-    next_step: str
-
-
 class ExtendedHoursAdmissionFact(BaseModel):
     """Whether the active authority can clock and price a run outside regular hours (ADR 0059 D5).
 
@@ -82,8 +77,21 @@ class ExtendedHoursAdmissionFact(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: ExtendedHoursAdmissionState
-    configuration_refusal: AdmissionConfigurationRefusal | None = None
+    refusal: LegRefusal | None = None
     observed_at_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def consistent_refusal(self) -> ExtendedHoursAdmissionFact:
+        if self.state in {"READY", "NOT_REQUESTED"}:
+            if self.refusal is not None:
+                raise ValueError("An admitted extended-hours state cannot carry a refusal")
+        elif self.state == "UNSUPPORTED":
+            if self.refusal not in (None, EXTENDED_HOURS_UNSUPPORTED):
+                raise ValueError("An unsupported window requires its named refusal")
+            object.__setattr__(self, "refusal", EXTENDED_HOURS_UNSUPPORTED)
+        elif self.refusal is None:
+            object.__setattr__(self, "refusal", EXTENDED_HOURS_ALLOWANCE_UNSET)
+        return self
 
 
 class ArmingAdmissionFact(BaseModel):

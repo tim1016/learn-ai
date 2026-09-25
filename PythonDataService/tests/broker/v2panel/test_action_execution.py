@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
@@ -735,6 +736,10 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     sentinel = SimpleNamespace()
     monkeypatch.setattr(panel_data_source, "validate_account", _account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
+    monkeypatch.setattr(panel_data_source, "active_sqlite_facade", lambda _broker: SimpleNamespace(
+        account_id="account-1", repository=None, program_leg_policy=ProgramLegPolicy.regular_only(),
+        flatten_send_verdict=lambda: None,
+    ))
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
     monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
     monkeypatch.setattr(
@@ -861,6 +866,10 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: wall["now"])
     monkeypatch.setattr(panel_data_source, "validate_account", _account)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
+    monkeypatch.setattr(panel_data_source, "active_sqlite_facade", lambda _broker: SimpleNamespace(
+        account_id="account-1", repository=None, program_leg_policy=ProgramLegPolicy.regular_only(),
+        flatten_send_verdict=lambda: None,
+    ))
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
     monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
     monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])

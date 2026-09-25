@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
-from app.broker.alpaca.active_binding import active_alpaca_binding_refusal
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk, ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, RecoveryEvaluationObservation
@@ -22,7 +21,6 @@ from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
-    AdmissionConfigurationRefusal,
     ExtendedHoursAdmissionFact,
     ExtendedHoursAdmissionState,
     MarketDataAdmissionFact,
@@ -75,7 +73,8 @@ RECOVERY_EVALUATION_WINDOW_MS = 120_000
 #: than this proves the sweep is no longer evaluating anything.
 RECOVERY_SWEEP_LIVENESS_BOUND_MS = 60_000
 
-CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
+type AdmissionCustodyCut = tuple[ClerkCustodySnapshot, ProgramLegPolicy]
+CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[AdmissionCustodyCut]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
@@ -348,8 +347,9 @@ def extended_hours_admission_fact(
     until that allowance is configured — never a built-in default — the run's
     state is ``EXIT_ALLOWANCE_UNSET``, which Start refuses and a Resume refuses
     only when the run is flat: a run still holding a position always resumes,
-    since an exit is never blocked by a configuration error (ADR 0060); at the
-    close it is held back and the operator is told when the sell is tried.
+    since an exit is never blocked by a configuration error (ADR 0060); the
+    selected authority determines whether a late exit can retry or needs
+    operator recovery.
     The allowances are one document (``ExtendedHoursAllowances`` has no
     exit-only form), so the refusal is the shared one. An authority that
     declares no extended window at all cannot price that exit whatever it is
@@ -368,16 +368,10 @@ def extended_hours_admission_fact(
         state = "ALLOWANCE_UNSET"
     else:
         state = "READY"
-    binding_refusal = active_alpaca_binding_refusal()
-    configuration_refusal = None
-    if state in {"ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"} and binding_refusal is not None:
-        configuration_refusal = AdmissionConfigurationRefusal(
-            reason_code=binding_refusal.reason,
-            explanation=binding_refusal.message,
-            next_step=binding_refusal.next_step,
-        )
     return ExtendedHoursAdmissionFact(
-        state=state, observed_at_ms=observed_at_ms, configuration_refusal=configuration_refusal
+        state=state,
+        observed_at_ms=observed_at_ms,
+        refusal=policy.allowance_refusal if state in {"ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"} else None,
     )
 
 
@@ -399,22 +393,28 @@ def _admission_clerk(binding: BrokerBotBinding) -> ActiveAlpacaClerk:
     return clerk
 
 
-def default_start_custody_guard(
+@asynccontextmanager
+async def default_start_custody_guard(
     binding: BrokerBotBinding,
-) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+) -> AsyncIterator[AdmissionCustodyCut]:
     """Custody for an action: reconciles, so the proof is act-time fresh."""
-    return _admission_clerk(binding).start_admission_snapshot(binding.strategy_instance_id)
+    clerk = _admission_clerk(binding)
+    async with clerk.start_admission_snapshot(binding.strategy_instance_id) as snapshot:
+        yield snapshot, clerk.program_leg_policy
 
 
-def default_start_custody_projection(
+@asynccontextmanager
+async def default_start_custody_projection(
     binding: BrokerBotBinding,
-) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+) -> AsyncIterator[AdmissionCustodyCut]:
     """Custody for a read: projects the sweep's last verdict (#1776 WP2).
 
     Same resolution and same refusals as the guard; it never reconciles, so
     a read contacts no broker and appends nothing to the ledger.
     """
-    return _admission_clerk(binding).start_admission_projection(binding.strategy_instance_id)
+    clerk = _admission_clerk(binding)
+    async with clerk.start_admission_projection(binding.strategy_instance_id) as snapshot:
+        yield snapshot, clerk.program_leg_policy
 
 
 def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
@@ -492,7 +492,6 @@ class BotStartAdmission:
         activate: CustodyBoundActivator,
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
-        program_leg_policy: Callable[[BrokerBotBinding], ProgramLegPolicy],
         arming_fact: ArmingFactResolver = live_arming_admission_fact,
     ) -> None:
         self._now_ms = now_ms
@@ -504,7 +503,6 @@ class BotStartAdmission:
         self._activate = activate
         self._session_capability = session_capability
         self._market_liveness = market_liveness
-        self._program_leg_policy = program_leg_policy
         self._arming_fact = arming_fact
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
@@ -540,7 +538,7 @@ class BotStartAdmission:
             # evidence_refs. #1702 relaxes what dry_run is *gated on* inside
             # evaluate_run_admission, never what is *fetched* to build the
             # decision.
-            async with self._custody_guard(binding) as custody:
+            async with self._custody_guard(binding) as (custody, policy):
                 binding = seal_binding_to_custody_snapshot(binding, custody)
                 observed_at_ms = self._now_ms()
                 get_market_liveness_store().request_symbol(binding.symbol, now_ms=observed_at_ms)
@@ -579,7 +577,6 @@ class BotStartAdmission:
                     verified_at_ms=observed_at_ms,
                 )
                 binding = binding.model_copy(update={"program_build": program_build})
-                policy = self._program_leg_policy(binding)
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,

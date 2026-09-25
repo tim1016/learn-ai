@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -26,8 +27,10 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     InstanceCustodyProof,
 )
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.services.bot_runner import BotTaskRegistry
+from app.services.bot_start_admission import AdmissionCustodyCut
 from app.utils.timestamps import now_ms_utc
 
 from .market import _tradable_market_liveness
@@ -89,7 +92,16 @@ def _flat_custody_snapshot(
 
 @asynccontextmanager
 async def _flat_start_guard(sid: str):
-    yield _flat_custody_snapshot(sid)
+    yield _flat_custody_snapshot(sid), ProgramLegPolicy.regular_only()
+
+
+def admission_guard_for(clerk: ActiveAlpacaClerk):
+    """A whole-authority substitution for tests installing a particular Clerk."""
+    @asynccontextmanager
+    async def guard(sid: str):
+        async with clerk.start_admission_snapshot(sid) as snapshot:
+            yield snapshot, clerk.program_leg_policy
+    return guard
 
 
 def _registry(
@@ -99,7 +111,7 @@ def _registry(
     policy: RestartIntensityPolicy | None = None,
     now_ms: Callable[[], int] = now_ms_utc,
     start_custody_guard: (
-        Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
+        Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None
     ) = None,
 ) -> BotTaskRegistry:
     return BotTaskRegistry(
@@ -120,7 +132,7 @@ def _lifecycle_json(tmp_path: Path, sid: str = _SID) -> dict:
 
 
 def configure_execution_allowances(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run mechanics fixtures explicitly opt into the after-close exit allowance.
+    """Run mechanics fixtures configure the after-close exit allowance by default.
 
     A refused profile binding still raises before these settings are read.
     Tests of an unconfigured lane can clear the pair themselves.

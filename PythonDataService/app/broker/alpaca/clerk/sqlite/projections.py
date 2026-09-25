@@ -20,10 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
-    EXIT_SEND_GUARD_BAND_MS,
     RecoveryPricing,
     next_redrive_at_ms,
-    send_arrival_ms,
+    redrive_window_opened_at_ms,
 )
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -32,7 +31,6 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     execution_coverage_proof,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
-from app.broker.alpaca.clerk.sqlite.models import DEFAULT_RECONCILIATION_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     OrderProjectionReadError,
     read_current_orders,
@@ -80,7 +78,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
@@ -106,7 +104,7 @@ def project_uncertainties(
     *,
     now_ms: int,
     exits_in_progress: ExitsInProgress,
-    redrive_policy: ProgramLegPolicy,
+    redrive_policy: ProgramLegPolicy | None,
 ) -> tuple[ProjectedUncertainty, ...]:
     """Open episodes, in the order given, each projected with the one read of its facts.
 
@@ -115,8 +113,8 @@ def project_uncertainties(
     A recorded next attempt marks earliest eligibility, not a scheduled
     broker submission. Quotes, custody evidence and the periodic sweep can
     delay it. Closed sessions project forward under the authority's own
-    recovery policy; an open session allows one sweep plus the send guard
-    before reporting that a retry is still waiting. An active EXIT hides the
+    recovery policy. Without a policy authority, eligibility is unknown.
+    An active EXIT hides the
     timestamp and an EXIT_STUCK episode stops automatic attempts entirely.
     """
     rows = tuple(rows)
@@ -189,21 +187,16 @@ def _checked_record(
 
 def _projected_next_attempt(
     recorded: int, *, now_ms: int, redrive_policy: ProgramLegPolicy
-) -> tuple[int, bool]:
-    """Earliest retry eligibility, with one sweep and send guard before a waiting status.
+) -> int:
+    """Earliest retry eligibility, re-anchored after a closed-session deferral.
 
-    A quote or custody refusal may defer a retry through a closed session
-    without rewriting its record. Re-anchor to this trading day's opening
-    once eligible again; never resurrect yesterday's expired timestamp.
+    Quotes or custody can defer an eligible attempt without rewriting its
+    record. Once the next window opens, keep that window's opening time.
     """
     projected = next_redrive_at_ms(not_before_ms=max(recorded, now_ms), policy=redrive_policy)
     if projected > now_ms:
-        return projected, False
-    day_floor_ms = et_midnight_ms(et_date_at_ms(send_arrival_ms(now_ms))) - EXIT_SEND_GUARD_BAND_MS
-    window_start_ms = next_redrive_at_ms(not_before_ms=day_floor_ms, policy=redrive_policy)
-    eligible_at_ms = max(recorded, window_start_ms)
-    grace_ms = DEFAULT_RECONCILIATION_INTERVAL_MS + EXIT_SEND_GUARD_BAND_MS
-    return eligible_at_ms, now_ms > eligible_at_ms + grace_ms
+        return projected
+    return max(recorded, redrive_window_opened_at_ms(now_ms=now_ms, policy=redrive_policy))
 
 
 def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
@@ -216,27 +209,27 @@ def _projected_uncertainty(
     row: Mapping[str, Any],
     *,
     now_ms: int,
-    redrive_policy: ProgramLegPolicy,
+    redrive_policy: ProgramLegPolicy | None,
     redrives_stopped: bool,
     exit_working: bool,
 ) -> ProjectedUncertainty:
     """One open episode, projected from its columns and the facts only they cannot carry.
 
-    The facts carry what the columns do not — when the Clerk next tries
+    The facts carry what the columns do not — earliest retry eligibility
     (#2440), and the symbol the cause names. A row whose facts cannot be read
     — or whose next attempt cannot be projected — is still projected, flagged
     ``facts_unreadable`` with no next attempt, and logged at error level once:
     one bad row fails loudly on its own and never blanks the whole read
     (#2440 review).
     """
-    next_attempt_at_ms, next_attempt_overdue = None, False
+    next_attempt_at_ms = None
     try:
         cause_facts, recorded = _checked_record(
             UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
         )
         symbol = _cause_symbol(cause_facts)
-        if recorded is not None and not (redrives_stopped or exit_working):
-            next_attempt_at_ms, next_attempt_overdue = _projected_next_attempt(
+        if recorded is not None and redrive_policy is not None and not (redrives_stopped or exit_working):
+            next_attempt_at_ms = _projected_next_attempt(
                 recorded, now_ms=now_ms, redrive_policy=redrive_policy
             )
         facts_unreadable = False
@@ -262,7 +255,6 @@ def _projected_uncertainty(
         evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
         symbol=symbol,
         next_attempt_at_ms=next_attempt_at_ms,
-        next_attempt_overdue=next_attempt_overdue,
         exit_working=exit_working,
         facts_unreadable=facts_unreadable,
     )
@@ -401,8 +393,7 @@ class SqliteClerkProjectionReader:
         """A reader over an authority's repository that projects from the authority's own pricing seam.
 
         Every surface that shows an ``EXIT_NOT_FLAT`` notice reads through
-        here, so the next attempt it shows is the one that authority's
-        watchdog will make (#2440 review).
+        here, so eligibility uses that authority's own recovery policy (#2440 review).
         """
         return cls.from_repository(facade.repository, pricing=facade.recovery_pricing)
 

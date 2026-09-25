@@ -28,6 +28,7 @@ from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.market_liveness import compose_market_liveness
 from app.utils.timestamps import now_ms_utc
+from tests._helpers.bot_runner.custody import admission_guard_for
 
 _STRATEGY_INSTANCE_ID = "alpaca-skeleton-1"
 
@@ -199,7 +200,7 @@ def _registry_with_sqlite_clerk(
         feed_resolver=lambda: feed,
         restart_policy=RestartIntensityPolicy(threshold=100),
         boot_recovery_required=False,
-        start_custody_guard=clerk.start_admission_snapshot,
+        start_custody_guard=admission_guard_for(clerk),
         market_liveness=_tradable_market_liveness,
     )
     return repository, clerk, registry

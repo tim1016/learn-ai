@@ -133,7 +133,7 @@ def _admission(
 
     @asynccontextmanager
     async def custody_guard(binding: BrokerBotBinding):
-        yield _clerk(observed_at_ms=binding.created_at_ms, account_mode=account_mode)
+        yield _clerk(observed_at_ms=binding.created_at_ms, account_mode=account_mode), ProgramLegPolicy.regular_only()
 
     def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
         return StrategyValidationAdmissionFact(
@@ -165,7 +165,6 @@ def _admission(
         raise AssertionError("activate must not be called when admission is refused")
 
     return BotResumeAdmission(
-        program_leg_policy=lambda binding: ProgramLegPolicy.regular_only(),
         now_ms=now_ms,
         feed_resolver=lambda: None,
         custody_guard=custody_guard,

@@ -234,16 +234,15 @@ def test_a_refused_binding_never_propagates_out_of_pricing() -> None:
         )
     )
 
-    assert resolve_extended_hours_allowances() is None
+    assert resolve_extended_hours_allowances().reason_code == BROKER_UNCONFIGURED
     assert ProgramLegPolicy.from_read_port(_ExtendedHoursReadPort()).allowances is None
 
 
 def test_a_refused_binding_refuses_an_exit_as_a_typed_leg_refusal() -> None:
     """The Clerk turns this into a rejected receipt; a ``BrokerUnbound`` would kill the task.
 
-    With no seal, no revision and no settings there is genuinely no number, so
-    the pre-existing ``EXTENDED_HOURS_ALLOWANCE_UNSET`` stands — for an EXIT as
-    much as an ENTER. What must never happen is the configuration refusal
+    With no seal, revision or settings there is no number. The binding's
+    named refusal survives composition — for an EXIT as much as an ENTER. What must never happen is the configuration refusal
     escaping as itself: a number nobody chose must not bound real money either
     (ADR 0059 D4).
     """
@@ -261,7 +260,7 @@ def test_a_refused_binding_refuses_an_exit_as_a_typed_leg_refusal() -> None:
             policy=policy,
         )
 
-    assert refused.value.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+    assert refused.value.reason_code == BROKER_UNCONFIGURED
 
 
 def test_an_exit_leg_is_anchored_by_the_sealed_allowance_not_the_revision(tmp_path: Path) -> None:
@@ -336,3 +335,53 @@ def test_from_read_port_takes_the_resolver_as_a_seam() -> None:
 
     assert policy.allowances == stated
     assert policy.window == _WINDOW
+
+
+def test_admission_and_exit_preserve_the_composed_binding_refusal() -> None:
+    from app.services.bot_start_admission import extended_hours_admission_fact
+    from app.services.run_admission import evaluate_run_admission
+    from tests.services.test_run_admission import _NOW, _bot, _clerk
+
+    refusal = UnboundBroker(
+        reason="account_pin_mismatch", message="The pinned account differs.",
+        next_step="Repair the account pin.",
+    )
+    refuse_active_alpaca_binding(refusal)
+    policy = ProgramLegPolicy.from_read_port(_ExtendedHoursReadPort())
+    # Another authority's later process-global refusal must not replace this cut.
+    refuse_active_alpaca_binding(UnboundBroker(
+        reason="profiles_database_unavailable", message="Other authority failed.", next_step="Restore its DB.",
+    ))
+    fact = extended_hours_admission_fact(use_rth=False, policy=policy, observed_at_ms=_NOW)
+    decision = evaluate_run_admission(
+        _bot(mode="dry_run").model_copy(update={"extended_hours": fact}),
+        _clerk(), evaluated_at_ms=_NOW,
+    )
+    assert decision.reason_code == refusal.reason
+    with pytest.raises(ProgramLegRefused) as rejected:
+        shape_program_leg(side=OrderSide.SELL, purpose=EffectPurpose.EXIT,
+                          use_rth=False, decision_bar=_bar(8, 0), policy=policy)
+    assert rejected.value.reason_code == decision.reason_code
+    assert rejected.value.explanation == decision.explanation
+    assert rejected.value.next_step == decision.next_step
+
+
+def test_settings_validation_refusal_never_exposes_credential_inputs(monkeypatch, caplog) -> None:
+    from pydantic import ValidationError
+
+    from app.broker.alpaca import active_binding
+
+    credential = "fixture-credential-must-not-appear"
+    def broken_settings():
+        raise ValidationError.from_exception_data("AlpacaSettings", [{
+            "type": "value_error", "loc": (),
+            "input": {"api_secret_key": credential},
+            "ctx": {"error": ValueError("Missing paper settings")},
+        }])
+    monkeypatch.setattr(active_binding, "resolved_alpaca_settings", broken_settings)
+    with caplog.at_level(logging.INFO):
+        policy = ProgramLegPolicy.from_read_port(_ExtendedHoursReadPort())
+    assert policy.allowances is None
+    assert policy.allowance_refusal.reason_code == "ALPACA_CONFIGURATION_UNAVAILABLE"
+    assert "Missing paper settings" in policy.allowance_refusal.explanation
+    assert credential not in policy.allowance_refusal.explanation + policy.allowance_refusal.next_step + caplog.text

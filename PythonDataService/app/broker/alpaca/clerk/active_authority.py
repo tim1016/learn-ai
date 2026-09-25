@@ -495,18 +495,6 @@ def get_active_clerk_runtime() -> ActiveClerkRuntime | None:
     return _runtime
 
 
-def active_program_leg_policy() -> ProgramLegPolicy:
-    """The primary account's policy for account-level market projections.
-
-    Run admission reads its selected BindingAuthority instead: a Dry Run
-    trades on its own synthetic Clerk, not necessarily the primary account.
-    """
-    runtime = get_active_clerk_runtime()
-    if runtime is None or runtime.clerk is None:
-        return ProgramLegPolicy.regular_only()
-    return runtime.clerk.program_leg_policy
-
-
 def primary_custody_world() -> CustodyWorld | None:
     """The world the primary authority custodies in, or ``None`` while none is installed.
 
@@ -611,7 +599,6 @@ __all__ = [
     "ClerkStartupFailure",
     "activate_shadow_clerk_authority",
     "activate_synthetic_clerk_authority",
-    "active_program_leg_policy",
     "close_synthetic_clerk_runtimes",
     "custody_world_or_paper",
     "get_active_clerk_runtime",
