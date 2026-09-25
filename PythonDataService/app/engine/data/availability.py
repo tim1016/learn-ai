@@ -1,27 +1,24 @@
-"""Data availability and on-demand materialization for the LEAN engine.
+"""Data availability for the LEAN engine's on-disk readers.
 
 The engine reads LEAN-format equity data from one or more roots (see
-``LeanMinuteDataReader``, ``LeanDailyDataReader``). For the SPY / AAPL
-reference fixtures the data is pre-baked in a read-only mount. For
-arbitrary tickers the caller does not have a LEAN zip yet — this module
-bridges that gap by:
+``LeanMinuteDataReader``, ``LeanDailyDataReader``). Those readers skip a
+session that has no data on disk without a word — right for a caller that
+reports coverage beside the bars it returns, wrong for a run, whose numbers
+from a partial series look exactly like numbers from a complete one. This
+module answers the question the readers do not ask:
 
-1. Reporting which trading days are already covered across the configured
-   roots (``check_availability``).
-2. Materializing missing days into a *writable* cache root by calling the
-   existing ``export_polygon_range_to_lean`` bridge (``ensure_range``).
+1. Which scheduled trading sessions the configured roots cover
+   (``check_availability``).
+2. Why a window is refused when they do not cover all of them
+   (``MissingSessionsError``, which names the gaps as session ranges).
 
-Both entry points are resolution-aware. For ``"minute"`` a "day is
-available" iff the per-day zip ``{YYYYMMDD}_trade.zip`` exists under
+Coverage is resolution-aware. For ``"minute"`` a "day is available" iff
+the per-day zip ``{YYYYMMDD}_trade.zip`` exists under
 ``equity/usa/minute/{symbol}/`` in some root. For ``"daily"`` a "day is
 available" iff the single per-symbol history zip
 ``equity/usa/daily/{symbol}.zip`` contains a CSV row stamped with that
 trading date in some root. The per-root ``sources`` breakdown honors the
 same reference-first merge order that the readers use.
-
-Keeping this logic behind a small service keeps the router thin and lets
-the engine tests exercise availability checks without needing a live
-Polygon client.
 """
 
 from __future__ import annotations
@@ -56,14 +53,14 @@ def _expected_sessions(start: date, end: date) -> list[date]:
 
 
 def _missing_spans(start: date, end: date, missing: Container[date]) -> list[tuple[date, date]]:
-    """Group missing days into contiguous fetch spans.
+    """Group missing days into contiguous spans of sessions.
 
     Adjacency is read off the canonical NYSE trading-session calendar —
     the same one ``check_availability`` counts expected days from — so two
     missing sessions share a span when no session between them was
     covered (a Friday and the following Monday are one span), and a
-    holiday inside the window never starts or extends a span: there is
-    nothing to fetch for a day the market never opened.
+    holiday inside the window never starts or extends a span: nothing is
+    missing on a day the market never opened.
     """
     spans: list[tuple[date, date]] = []
     for is_missing, days in groupby(_expected_sessions(start, end), key=lambda day: day in missing):
@@ -141,6 +138,11 @@ class AvailabilityReport:
     def is_complete(self) -> bool:
         return self.available_days >= self.expected_days
 
+    @property
+    def missing_spans(self) -> list[tuple[date, date]]:
+        """``missing_days`` grouped into runs of consecutive trading sessions."""
+        return _missing_spans(self.start, self.end, set(self.missing_days))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
@@ -153,6 +155,38 @@ class AvailabilityReport:
             "missing_days": [d.isoformat() for d in self.missing_days],
             "sources": {root: [d.isoformat() for d in dates] for root, dates in self.sources.items()},
         }
+
+
+# A window with holes scattered through it is still refused whole; past this
+# many ranges the message counts the rest instead of listing them.
+_SHOWN_SPANS = 10
+
+
+def _describe_span(span: tuple[date, date]) -> str:
+    first, last = span
+    return first.isoformat() if first == last else f"{first.isoformat()}..{last.isoformat()}"
+
+
+class MissingSessionsError(ValueError):
+    """A finite read window whose scheduled sessions are not all on disk.
+
+    Raised at a data-loading boundary instead of letting the reader skip
+    the absent sessions (#2445): the temporal rule for finite ingestion is
+    to fail fast, never to repair. The message names the symbol, how many
+    of the window's sessions are missing, and the gaps as contiguous
+    session ranges — a year-long hole is one range, not 250 dates.
+    """
+
+    def __init__(self, report: AvailabilityReport) -> None:
+        self.report = report
+        spans = report.missing_spans
+        shown = ", ".join(_describe_span(span) for span in spans[:_SHOWN_SPANS])
+        more = f" (+{len(spans) - _SHOWN_SPANS} more gaps)" if len(spans) > _SHOWN_SPANS else ""
+        super().__init__(
+            f"missing data: {report.symbol} has no {report.resolution} bars for "
+            f"{len(report.missing_days)} of {report.expected_days} trading sessions in "
+            f"{report.start.isoformat()}..{report.end.isoformat()} — missing {shown}{more}"
+        )
 
 
 def check_availability(

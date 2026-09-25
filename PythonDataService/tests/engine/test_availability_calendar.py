@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from app.engine.data.availability import check_availability
+from app.engine.data.availability import MissingSessionsError, check_availability
 from app.lean_sidecar.trading_calendar import expected_sessions
 from tests._helpers.lean_store import seed_store_day
 
@@ -67,3 +67,40 @@ def test_daily_resolution_uses_the_same_calendar(tmp_path: Path) -> None:
 
     assert report.expected_days == len(expected_sessions(*WINDOW))
     assert report.available_days == 0
+
+
+def test_missing_sessions_either_side_of_a_closure_are_one_span(tmp_path: Path) -> None:
+    """New Year's Day is no session, so the 12-31 and 01-02 holes are one run of sessions."""
+    window = (date(2025, 12, 30), date(2026, 1, 2))
+    assert date(2026, 1, 1) not in expected_sessions(*window)
+    _seed(tmp_path, [date(2025, 12, 30)])
+
+    report = check_availability([tmp_path], "SPY", *window)
+
+    assert report.missing_spans == [(date(2025, 12, 31), date(2026, 1, 2))]
+
+
+def test_a_year_long_gap_is_named_as_one_range(tmp_path: Path) -> None:
+    """The refusal compresses a hole into ranges instead of listing every date (#2445)."""
+    year = (date(2025, 1, 1), date(2025, 12, 31))
+    sessions = expected_sessions(*year)
+
+    error = MissingSessionsError(check_availability([tmp_path], "QQQ", *year))
+
+    assert str(error) == (
+        f"missing data: QQQ has no minute bars for {len(sessions)} of {len(sessions)} trading sessions "
+        f"in 2025-01-01..2025-12-31 — missing {sessions[0].isoformat()}..{sessions[-1].isoformat()}"
+    )
+
+
+def test_gaps_past_the_shown_limit_are_counted_not_listed(tmp_path: Path) -> None:
+    sessions = expected_sessions(*WINDOW)
+    _seed(tmp_path, sessions[1::2])  # every other session held: one gap per missing session
+
+    report = check_availability([tmp_path], "SPY", *WINDOW)
+    message = str(MissingSessionsError(report))
+
+    assert len(report.missing_spans) > 10
+    assert f"(+{len(report.missing_spans) - 10} more gaps)" in message
+    assert report.missing_spans[9][0].isoformat() in message
+    assert report.missing_spans[10][0].isoformat() not in message

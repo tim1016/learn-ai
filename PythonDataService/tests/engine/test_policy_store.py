@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from app.data_lake import path_policy
-from app.engine.data.availability import _missing_spans
 from app.engine.data.policy_store import (
     policy_key,
     resolve_data_roots,
     snapshot_minute_trade_zips,
 )
-from app.lean_sidecar.trading_calendar import expected_sessions
 from app.lean_sidecar.workspace import SymbolValidationError
-
-FETCHED_AT_MS = 1783958400000
 
 
 def test_resolve_data_roots_returns_the_lake_root_alone(monkeypatch, tmp_path: Path):
@@ -184,92 +180,3 @@ def test_snapshot_minute_trade_zips_ignores_symlink_that_escapes_root(tmp_path: 
             adjusted=False,
             session="regular",
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class _FakePolygon:
-    """Deterministic minute-bar source counting how often it is fetched."""
-
-    def __init__(self, *, blackout: set[date] | None = None) -> None:
-        self.calls = 0
-        self.adjusted_seen: list[bool] = []
-        self.ranges: list[tuple[str, str]] = []
-        # Dates the provider has no bars for — a market holiday, say. The
-        # exporter writes no zip for them, so they stay missing forever.
-        self.blackout = blackout or set()
-
-    def fetch_aggregates(self, **kwargs) -> list[dict]:
-        self.calls += 1
-        self.adjusted_seen.append(kwargs["adjusted"])
-        self.ranges.append((kwargs["from_date"], kwargs["to_date"]))
-        start = date.fromisoformat(kwargs["from_date"])
-        end = date.fromisoformat(kwargs["to_date"])
-        bars: list[dict] = []
-        current = start
-        while current <= end:
-            if current.weekday() < 5 and current not in self.blackout:
-                open_ms = int(datetime(current.year, current.month, current.day, 14, 30, tzinfo=UTC).timestamp() * 1000)
-                for i in range(30):
-                    bars.append(
-                        {
-                            "timestamp": open_ms + i * 60_000,
-                            "open": 500.0,
-                            "high": 500.5,
-                            "low": 499.5,
-                            "close": 500.25,
-                            "volume": 1000,
-                        }
-                    )
-            current += timedelta(days=1)
-        return bars
-
-
-
-
-
-
-
-
-def _minute_zip(policy_root: Path, trading_date: date) -> Path:
-    return policy_root / "equity" / "usa" / "minute" / "spy" / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def test_missing_spans_drops_a_holiday_from_the_grouping():
-    """A day check_availability flags "missing" that isn't a real NYSE
-    trading session (a holiday) never starts or extends a span — it is
-    simply skipped, since ``_missing_spans`` now walks the canonical
-    session calendar instead of ``_iter_weekdays``."""
-    holiday = date(2026, 1, 1)  # New Year's Day, not a session
-    window = (date(2025, 12, 30), date(2026, 1, 2))
-    assert holiday not in expected_sessions(*window)
-
-    spans = _missing_spans(*window, {holiday, date(2025, 12, 30)})
-
-    assert spans == [(date(2025, 12, 30), date(2025, 12, 30))]
-
-
