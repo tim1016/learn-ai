@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from "@angular/co
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import type { MetricDocumentationContext } from "../../../services/backtest-runs.types";
-import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
+import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.types";
 import { EvidenceGradeComponent } from "../evidence-grade/evidence-grade.component";
 import { MetricHelpModalComponent } from "../metric-help-modal/metric-help-modal.component";
 

@@ -22753,6 +22753,8 @@ export interface components {
             required_metrics: number;
             /** Signal */
             signal: ("Deploy" | "Paper-trade" | "Iterate" | "Rework" | "Reject") | null;
+            /** Statistics Basis */
+            statistics_basis?: string | null;
             /**
              * Status
              * @enum {string}

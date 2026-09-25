@@ -63,6 +63,13 @@ class RunVerdict(BaseModel):
     verdict_version: int
     status: RunVerdictStatus
     engine: EngineKind
+    # Which equity series the verdict's headline statistics graded (#2447):
+    # "marked_equity_curve" (the Python engine, every mode) or
+    # "closed_trade_ledger" (the LEAN companion's compatibility statistics).
+    # Deliberately NOT part of ``parity_signature`` -- the frozen golden
+    # signature shape (readiness-core-v3) is byte-reproduced by an immutable
+    # fixture -- so the parity comparison reads it from the verdict root.
+    statistics_basis: str | None = None
     generated_at_ms: int
     composite: int | None
     grade: Grade | None
@@ -86,6 +93,7 @@ class RunVerdict(BaseModel):
 
 class RunVerdictInput(BaseModel):
     statistics: dict[str, Any] | None = None
+    statistics_basis: str | None = None
     win_rate: float | None = None
     total_trades: int | None = None
     net_profit: float | None = None

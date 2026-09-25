@@ -656,3 +656,118 @@ async def test_a_group_with_no_python_run_stays_unsettled(conn, unique: str) -> 
 
     assert await settle_parity_for_lean_run(right_run_id=right, parity_group_id=group, failure_detail="boom") is False
     assert await repo.get_parity_verdict(conn, group) is None
+
+
+# ── #2447: the readiness axis refuses to compare across statistical bases ─────
+
+
+def test_cross_basis_readiness_never_freezes_a_manufactured_divergence() -> None:
+    """#2447 (owner decision #2424): the Python row's verdict grades the
+    marked equity curve while the LEAN companion's grades the common
+    closed-trade ledger, so their readiness signatures differ even when the
+    engines agree exactly on the ledger. The readiness axis says the bases
+    differ instead of freezing ``diverged``; the verdict rests on the axes
+    that still compare."""
+    marked = dict(MATCHING_RUN_VERDICT, statistics_basis="marked_equity_curve")
+    ledger = dict(MATCHING_RUN_VERDICT, statistics_basis="closed_trade_ledger")
+    left = _run(1, "engine", run_verdict_json=json.dumps(marked))
+    right = _run(2, "lean-sidecar", run_verdict_json=json.dumps(ledger))
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    parsed = json.loads(verdict.verdict_json)
+
+    assert verdict.status == "agree"
+    assert parsed["readiness_parity"] == {
+        "status": "unavailable",
+        "reason": "readiness_statistics_basis_differs",
+        "compared_field_count": 0,
+        "mismatched_fields": [],
+    }
+    assert parsed["native_metric_parity"]["status"] == "match"
+    assert parsed["divergences"] == []
+
+
+def test_same_basis_readiness_still_compares() -> None:
+    """Both rows on one basis keep the readiness axis decisive: a real
+    signature difference still freezes ``diverged``."""
+    import copy
+
+    left_verdict = dict(MATCHING_RUN_VERDICT, statistics_basis="closed_trade_ledger")
+    right_verdict = copy.deepcopy(left_verdict)
+    right_verdict["grade"] = right_verdict["parity_signature"]["grade"] = "B"
+    left = _run(1, "engine", run_verdict_json=json.dumps(left_verdict))
+    right = _run(2, "lean-sidecar", run_verdict_json=json.dumps(right_verdict))
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+
+    assert verdict.status == "diverged"
+
+
+def test_legacy_verdicts_without_a_basis_still_compare() -> None:
+    """Verdicts minted before the field existed were same-basis by
+    construction; the axis compares them exactly as before."""
+    left = _run(1, "engine")
+    right = _run(2, "lean-sidecar")
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    parsed = json.loads(verdict.verdict_json)
+
+    assert verdict.status == "agree"
+    assert parsed["readiness_parity"]["status"] == "match"
+
+
+def test_a_cross_basis_pair_with_an_unclean_companion_still_diverges() -> None:
+    """#2447 review: a basis difference retires the numerical readiness
+    inputs, not the receipt. An unclean LEAN companion is stamped
+    ``lean_run_not_clean`` into its red flags, and that basis-independent
+    fact still gates -- an explicitly non-clean companion cannot be
+    certified agreeing under a basis note."""
+    import copy
+
+    marked = dict(MATCHING_RUN_VERDICT, statistics_basis="marked_equity_curve")
+    ledger = copy.deepcopy(MATCHING_RUN_VERDICT)
+    ledger["statistics_basis"] = "closed_trade_ledger"
+    ledger["parity_signature"]["red_flags"] = ["lean_run_not_clean"]
+    left = _run(1, "engine", run_verdict_json=json.dumps(marked))
+    right = _run(2, "lean-sidecar", run_verdict_json=json.dumps(ledger))
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    parsed = json.loads(verdict.verdict_json)
+
+    assert verdict.status == "diverged"
+    assert parsed["readiness_parity"] == {
+        "status": "mismatch",
+        "reason": "readiness_basis_independent_fields_differ",
+        "compared_field_count": 2,
+        "mismatched_fields": ["red_flags"],
+    }
+
+
+def test_an_asymmetric_basis_label_is_not_compared_as_same_basis() -> None:
+    """#2447 review: a rolling deploy persists the Python verdict before its
+    companion job launches, so a new marked-curve verdict can pair with an
+    older basis-less ledger verdict whose numerical readiness inputs differ
+    for manufactured reasons. One absent label means the bases are not known
+    to match, which is the same non-comparable outcome as a stated
+    difference."""
+    import copy
+
+    marked = dict(MATCHING_RUN_VERDICT, statistics_basis="marked_equity_curve")
+    legacy = copy.deepcopy(MATCHING_RUN_VERDICT)  # no statistics_basis field
+    legacy["parity_signature"]["required_inputs"] = [
+        {
+            "dimension": "return_quality",
+            "metric": "sharpe",
+            "raw_value": "4.323460152737353",
+            "score": 18,
+            "display": "4.32",
+        }
+    ]
+    left = _run(1, "engine", run_verdict_json=json.dumps(marked))
+    right = _run(2, "lean-sidecar", run_verdict_json=json.dumps(legacy))
+
+    verdict = compute_parity_verdict(parity_group_id="pg-test", left=left, right=right)
+    parsed = json.loads(verdict.verdict_json)
+
+    assert verdict.status == "agree"
+    assert parsed["readiness_parity"]["reason"] == "readiness_statistics_basis_differs"
