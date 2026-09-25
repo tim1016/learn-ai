@@ -206,6 +206,7 @@ _IMPOSSIBLE_CASES = [
     (dict(open_="101.5"), "outside the low"),
     (dict(close="98.5"), "outside the low"),
     (dict(volume=-1), "volume is negative"),
+    (dict(volume=-0.5), "volume is negative"),
 ]
 
 
@@ -219,6 +220,7 @@ _IMPOSSIBLE_CASES = [
         "open_outside_range",
         "close_outside_range",
         "negative_volume",
+        "fractional_negative_volume",
     ],
 )
 def test_impossible_contribution_is_refused_before_folding(case: dict, violation: str) -> None:

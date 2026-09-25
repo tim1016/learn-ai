@@ -37,6 +37,7 @@ Two duplicate policies govern how a repeated source timestamp is treated
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -258,7 +259,13 @@ def _decimal_attr(obj, *names: str) -> Decimal:
 
 
 def _volume_attr(obj) -> int:
-    return int(getattr(obj, "volume", getattr(obj, "barCount", 0)) or 0)
+    # #2444 review: floored, not int-truncated -- int(Decimal("-0.5")) is 0,
+    # which would slip a fractional negative volume past the impossibility
+    # check folded downstream, while floor preserves the sign.
+    raw = getattr(obj, "volume", getattr(obj, "barCount", 0)) or 0
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, Decimal)):
+        raise IBKRBarStreamError(f"IBKR bar volume is not a number: {raw!r}")
+    return math.floor(Decimal(str(raw)))
 
 
 def _bar_time_ms(obj) -> int:
