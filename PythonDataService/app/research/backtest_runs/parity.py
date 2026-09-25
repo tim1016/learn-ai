@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 VERDICT_VERSION = 3
 FILL_PRICE_ATOL = "0.01"
 READINESS_STATISTICS_BASIS_DIFFERS = "readiness_statistics_basis_differs"
+READINESS_BASIS_INDEPENDENT_FIELDS_DIFFER = "readiness_basis_independent_fields_differ"
 
 READINESS_FIELDS: tuple[str, ...] = (
     "verdict_version",
@@ -342,14 +343,29 @@ def compare_readiness(left_json: str | None, right_json: str | None) -> Readines
     # output. The readiness axis says the bases differ instead, and the
     # verdict rests on the axes that still compare (trade reconciliation,
     # native metrics, inputs, parameters). Verdicts minted before the field
-    # existed carry no basis (legacy pairs were same-basis by construction).
+    # existed carry no basis (legacy pairs were same-basis by construction),
+    # so only two absent labels compare as a legacy same-basis pair; one
+    # absent label (a rolling deploy can persist the Python verdict before
+    # its older companion) means the bases are not known to match, which is
+    # the same non-comparable outcome. A basis difference retires the
+    # numerical readiness inputs, not the receipt: the basis-independent
+    # evidence facts (verdict status, red flags -- where an unclean LEAN run
+    # is stamped ``lean_run_not_clean``) still gate, so an explicitly
+    # non-clean companion cannot be certified agreeing under a basis note.
     left_basis = left.get("statistics_basis")
     right_basis = right.get("statistics_basis")
-    if (
+    bases_known_to_match = (
+        not isinstance(left_basis, str)
+        and not isinstance(right_basis, str)
+    ) or (
         isinstance(left_basis, str)
         and isinstance(right_basis, str)
-        and left_basis != right_basis
-    ):
+        and left_basis == right_basis
+    )
+    if not bases_known_to_match:
+        gate = _basis_independent_readiness_mismatch(left_signature, right_signature)
+        if gate is not None:
+            return gate
         return ReadinessParityReceipt.unavailable(READINESS_STATISTICS_BASIS_DIFFERS)
     if left_signature is not None and right_signature is not None and (
         _string(left_signature, "contract_id") != _string(right_signature, "contract_id")
@@ -377,6 +393,38 @@ def compare_readiness(left_json: str | None, right_json: str | None) -> Readines
         reason=None if not mismatches else "readiness_fields_differ",
         compared_field_count=len(READINESS_FIELDS),
         mismatched_fields=mismatches,
+    )
+
+
+def _basis_independent_readiness_mismatch(
+    left_signature: Mapping[str, Any] | None,
+    right_signature: Mapping[str, Any] | None,
+) -> ReadinessParityReceipt | None:
+    """Gate the readiness facts that carry no engine arithmetic (#2447 review).
+
+    A statistics-basis difference retires the numerical readiness inputs, not
+    the whole receipt: ``status`` and ``red_flags`` are stamped by verdict
+    construction and reconciliation cleanliness (an unclean LEAN run lands
+    ``lean_run_not_clean`` in its red flags), so they still gate a cross-basis
+    pair and an explicitly non-clean companion cannot be certified agreeing.
+    Returns the mismatch receipt when they differ, or ``None`` when the pair
+    passes (or a signature is missing, in which case the earlier signature
+    checks already reported why).
+    """
+    if left_signature is None or right_signature is None:
+        return None
+    mismatched = tuple(
+        field
+        for field in ("status", "red_flags")
+        if left_signature.get(field) != right_signature.get(field)
+    )
+    if not mismatched:
+        return None
+    return ReadinessParityReceipt(
+        status="mismatch",
+        reason=READINESS_BASIS_INDEPENDENT_FIELDS_DIFFER,
+        compared_field_count=2,
+        mismatched_fields=mismatched,
     )
 
 

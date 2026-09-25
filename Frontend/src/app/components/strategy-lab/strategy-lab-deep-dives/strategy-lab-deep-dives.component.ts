@@ -67,13 +67,16 @@ export class StrategyLabDeepDivesComponent {
     if (this.leanStatistics()) {
       sections.push({
         id: "statistics",
-        label: "Engine parity (closed-trade ledger)",
-        // Owner decision #2424: the headline Sharpe/Sortino/drawdown grade the
-        // marked equity curve in every mode; this section is the closed-trade
-        // basis the two engines actually share, and it says so.
+        // These are LEAN's own totalPerformance statistics, projected
+        // field-for-field — not the closed-trade ledger a parity verdict
+        // grades, and not a shared basis when no pair is selected. The label
+        // stays neutral; the summary states the basis relations in context.
+        label: "LEAN native statistics",
         summary: {
           kind: "copy",
-          value: "The closed-trade basis both engines share; headline risk grades the marked equity curve",
+          value: parity
+            ? "LEAN's own statistics; the parity verdict grades the shared closed-trade ledger, and headline risk grades the marked equity curve"
+            : "LEAN's own statistics for this run; headline risk grades the marked equity curve",
         },
       });
     }

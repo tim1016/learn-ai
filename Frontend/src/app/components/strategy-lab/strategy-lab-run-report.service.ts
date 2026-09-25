@@ -237,6 +237,8 @@ const UNAVAILABLE_REASON_COPY: Record<string, string> = {
   lean_native_metric_parity_unavailable: "LEAN-native calculation evidence is incomplete, so agreement cannot be claimed.",
   readiness_statistics_basis_differs:
     "The engines grade different statistical bases by design (Python: the marked equity curve; LEAN: the shared closed-trade ledger), so readiness is not compared; the verdict rests on the common ledger.",
+  readiness_basis_independent_fields_differ:
+    "The runs' basis-independent readiness evidence differs (verdict status or red flags — for example a companion that is not reconciliation-clean), so the pair cannot be certified agreeing.",
   production_readiness_parity_unavailable: "One run has no comparable production-readiness envelope.",
   trade_reconciliation_diverged: "One or more trades differ between the engines.",
   compatibility_input_mismatch: "The runs did not consume the same pinned data or compatibility settings.",
@@ -260,6 +262,7 @@ function toParityView(
     // Status-only is the honest fallback for an unreadable legacy payload.
   }
   const reason = parsed.reason ?? null;
+  const readiness = parsed.readiness_parity ?? null;
   return {
     status: verdict.status,
     createdAt: verdict.createdAt,
@@ -267,7 +270,17 @@ function toParityView(
     countsByCategory: Object.entries(parsed.counts_by_category ?? {}).map(([category, count]) => ({ category, count })),
     divergences: parsed.divergences ?? [],
     nativeMetricParity: parsed.native_metric_parity ?? null,
-    readinessParity: parsed.readiness_parity ?? null,
+    // The readiness receipt carries its own reason below the top-level one;
+    // map it through the same copy so an unavailable status is explained in
+    // place rather than reading as a bare "Unavailable".
+    readinessParity: readiness
+      ? {
+          ...readiness,
+          reason: readiness.reason
+            ? (UNAVAILABLE_REASON_COPY[readiness.reason] ?? readiness.reason)
+            : null,
+        }
+      : null,
     inputParity: parsed.input_parity ?? null,
   };
 }

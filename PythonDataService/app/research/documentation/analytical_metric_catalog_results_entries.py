@@ -455,7 +455,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "Maximum drawdown",
         "Largest fall from a running equity peak to a later trough.",
         category="drawdown",
-        input_series="Initial and final equity over the scored window (identically in every mode); the LEAN companion's own headline keeps the closed-trade-ledger basis and is shown as engine parity, never mixed into the Python run's headline numbers.",
+        input_series="Every marked-equity observation over the scored window, identically in every mode -- the fall is measured from each running peak to the later trough it reaches, so a dip and recovery inside the window counts even when the endpoints are close; the LEAN companion's own headline keeps the closed-trade-ledger basis and is shown as engine parity, never mixed into the Python run's headline numbers.",
         units="fraction",
         formatting="percentage, two decimal places",
         canonical_symbol="PythonDataService/app/engine/results/statistics.py::max_drawdown",

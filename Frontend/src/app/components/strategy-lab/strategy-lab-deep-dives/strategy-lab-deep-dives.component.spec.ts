@@ -62,8 +62,8 @@ describe("StrategyLabDeepDivesComponent", () => {
       .find((button) => button.textContent?.includes("Compatibility evidence"));
     expect(compatibility?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(root.querySelector("details")).toBeNull();
-    expect(root.textContent).toContain("Engine parity (closed-trade ledger)");
-    expect(root.textContent).toContain("headline risk grades the marked equity curve");
+    expect(root.textContent).toContain("LEAN native statistics");
+    expect(root.textContent).toContain("the parity verdict grades the shared closed-trade ledger");
     expect(root.textContent).toContain("Sharpe–P&L divergence");
     expect(root.textContent).toContain("20-session Sharpe versus cumulative P&L");
 
