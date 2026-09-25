@@ -28,6 +28,7 @@ from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Literal
 
+from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions
@@ -40,17 +41,6 @@ CALENDAR_IDENTITY = "NYSE"
 # only importer of pandas_market_calendars (temporal-rigor ban list).
 CALENDAR_PACKAGE_VERSION = _package_version("pandas_market_calendars")
 Resolution = Literal["minute", "daily"]
-
-
-class DataSnapshotIncompleteError(ValueError):
-    """The lake is missing sessions the snapshot must cover."""
-
-    def __init__(self, symbol: str, missing: Sequence[date]) -> None:
-        self.symbol = symbol
-        self.missing = tuple(missing)
-        shown = ", ".join(day.isoformat() for day in self.missing[:10])
-        more = f" (+{len(self.missing) - 10} more)" if len(self.missing) > 10 else ""
-        super().__init__(f"{symbol}: {len(self.missing)} expected session(s) missing from the lake: {shown}{more}")
 
 
 class DataSnapshotMismatchError(RuntimeError):
@@ -127,36 +117,39 @@ def capture_data_snapshot(
     data_start: date,
     data_end: date,
 ) -> DataSnapshot:
-    """Fingerprint every artifact the run will read; refuse if any session is absent."""
-    sessions = tuple(expected_sessions(data_start, data_end))
+    """Fingerprint every artifact the run will read; refuse if any session is absent.
+
+    Presence is ``check_availability``'s answer — the question a Grid Search
+    preflight asks of the same roots — and each artifact is hashed from the
+    root that answer resolved its session to.
+
+    A daily snapshot binds one root. The daily reader merges the symbol's
+    history from every root, but all copies share one root-relative path,
+    so a manifest keyed by it can receipt only one of them: the other
+    copies would be read unreceipted, and the bound reader refuses a root
+    that lacks the receipted archive. Sweeps read the lake alone, so this
+    refuses only a caller that passes more roots (#2475 review).
+    """
+    if resolution == "daily" and len(roots) > 1:
+        raise ValueError(
+            f"a daily data snapshot binds one root, got {len(roots)}: the daily reader merges "
+            f"{symbol.upper()}'s history from every root, and one digest cannot receipt more than one archive"
+        )
+    coverage = check_availability(roots, symbol, data_start, data_end, resolution=resolution)
+    if not coverage.is_complete:
+        raise MissingSessionsError(coverage)
     artifacts: dict[str, str] = {}
-    if resolution == "daily":
-        relative = _daily_relative(symbol)
-        path = _first_existing(roots, relative)
-        if path is None:
-            raise DataSnapshotIncompleteError(symbol, sessions)
-        present = set(LeanDailyDataReader(list(roots)).available_dates(symbol))
-        missing = [day for day in sessions if day not in present]
-        if missing:
-            raise DataSnapshotIncompleteError(symbol, missing)
-        artifacts[relative] = _sha256(path)
-    else:
-        missing: list[date] = []
-        for day in sessions:
-            relative = _minute_relative(symbol, day)
-            path = _first_existing(roots, relative)
-            if path is None:
-                missing.append(day)
-                continue
-            artifacts[relative] = _sha256(path)
-        if missing:
-            raise DataSnapshotIncompleteError(symbol, missing)
+    for root, days in coverage.sources.items():
+        for day in days:
+            relative = _daily_relative(symbol) if resolution == "daily" else _minute_relative(symbol, day)
+            if relative not in artifacts:
+                artifacts[relative] = _sha256(Path(root) / relative)
     return DataSnapshot(
         symbol=symbol.upper(),
         resolution=resolution,
         data_start=data_start,
         data_end=data_end,
-        sessions=sessions,
+        sessions=tuple(expected_sessions(data_start, data_end)),
         artifacts=artifacts,
     )
 

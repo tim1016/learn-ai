@@ -61,7 +61,7 @@ Default root: `<package_root>/artifacts/runs/`, overridable via `LEARN_AI_ARTIFA
 
 ## Failed runs are first-class
 
-When the runner can't complete (data source unavailable, spec uses a Phase-2 feature the evaluator refuses, engine crash), it produces a `status='failed'` ledger paired with a zeroed `BacktestRunResult` that carries the failure reason in `warnings`. Result hashes are still computed over the zeroed payload so two failed runs with the same identity columns share a result hash — useful for the "did this fail before with the same inputs?" lookup. The HTTP endpoint persists failures alongside successes and returns 200 (clients introspect `ledger.status`); this is a deliberate departure from `spec_strategy.py`'s 400-on-NotImplementedError because the research pipeline cares about discoverable failure across many runs.
+When the runner can't complete (data source unavailable, a window the LEAN data folders do not fully cover — the reason names the missing session ranges (#2445) — a window that consumed zero input bars, spec uses a Phase-2 feature the evaluator refuses, engine crash), it produces a `status='failed'` ledger paired with a zeroed `BacktestRunResult` that carries the failure reason in `warnings`. Result hashes are still computed over the zeroed payload so two failed runs with the same identity columns share a result hash — useful for the "did this fail before with the same inputs?" lookup. The HTTP endpoint persists failures alongside successes and returns 200 (clients introspect `ledger.status`); this is a deliberate departure from `spec_strategy.py`'s 400-on-NotImplementedError because the research pipeline cares about discoverable failure across many runs.
 
 ## Exposure metric
 

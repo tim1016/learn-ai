@@ -2,25 +2,26 @@
 
 from __future__ import annotations
 
+import zipfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
+from app.engine.data.availability import MissingSessionsError
 from app.engine.data.lean_format import write_lean_daily_zip
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.sweep.snapshot import (
     DataSnapshot,
-    DataSnapshotIncompleteError,
     DataSnapshotMismatchError,
     ManifestBoundDailyReader,
     ManifestBoundMinuteReader,
     capture_data_snapshot,
     verify_data_snapshot,
 )
-from tests._helpers.lean_store import make_minute_bars, seed_store_day
+from tests._helpers.lean_store import make_minute_bars, seed_pre_market_day, seed_store_day
 
 WINDOW = (date(2025, 1, 2), date(2025, 1, 10))
 SESSIONS = expected_sessions(*WINDOW)
@@ -57,10 +58,11 @@ def test_capture_refuses_a_missing_session_and_names_it(tmp_path: Path) -> None:
     for day in SESSIONS[:-1]:
         seed_store_day(tmp_path, "SPY", day)
 
-    with pytest.raises(DataSnapshotIncompleteError) as excinfo:
+    with pytest.raises(MissingSessionsError) as excinfo:
         capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="minute", data_start=WINDOW[0], data_end=WINDOW[1])
 
-    assert excinfo.value.missing == (SESSIONS[-1],)
+    assert excinfo.value.report.missing_days == [SESSIONS[-1]]
+    assert f"missing {SESSIONS[-1].isoformat()}" in str(excinfo.value)
 
 
 def test_verify_reports_an_artifact_whose_bytes_moved(tmp_path: Path) -> None:
@@ -127,10 +129,56 @@ def test_daily_snapshot_and_bound_reader(tmp_path: Path) -> None:
 def test_daily_capture_refuses_a_missing_session(tmp_path: Path) -> None:
     write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS[1:]])
 
-    with pytest.raises(DataSnapshotIncompleteError) as excinfo:
+    with pytest.raises(MissingSessionsError) as excinfo:
         capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
 
-    assert excinfo.value.missing == (SESSIONS[0],)
+    assert excinfo.value.report.missing_days == [SESSIONS[0]]
+
+
+def test_daily_capture_refuses_a_session_whose_row_the_reader_cannot_parse(tmp_path: Path) -> None:
+    """A truncated row still begins with its date, but the reader parses no bar from it (#2445 review).
+
+    Admitting it would bind the sweep to a snapshot whose bound reader then
+    reads one session fewer than the window holds, without a word.
+    """
+    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
+    zip_path = tmp_path / "equity" / "usa" / "daily" / "spy.zip"
+    with zipfile.ZipFile(zip_path) as zf:
+        rows = zf.read("spy.csv").decode("ascii").splitlines()
+    stamp = SESSIONS[3].strftime("%Y%m%d")
+    rows = [",".join(row.split(",")[:4]) if row.startswith(stamp) else row for row in rows]
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("spy.csv", "\n".join(rows) + "\n")
+
+    with pytest.raises(MissingSessionsError) as excinfo:
+        capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
+
+    assert excinfo.value.report.missing_days == [SESSIONS[3]]
+
+
+def test_capture_refuses_a_session_whose_zip_holds_no_regular_hours_bar(tmp_path: Path) -> None:
+    """A zip on disk that the regular-session reader reads no bar from is a missing session (#2475 review)."""
+    _seed_minutes(tmp_path)
+    seed_pre_market_day(tmp_path, "SPY", SESSIONS[2])
+
+    with pytest.raises(MissingSessionsError) as excinfo:
+        capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="minute", data_start=WINDOW[0], data_end=WINDOW[1])
+
+    assert excinfo.value.report.missing_days == [SESSIONS[2]]
+
+
+def test_daily_capture_refuses_more_than_one_root(tmp_path: Path) -> None:
+    """Two roots' histories share one root-relative path, so one digest could bind only one of them (#2475 review).
+
+    Before, the capture hashed the first root's archive alone and the second
+    root's sessions entered the window unreceipted.
+    """
+    first, second = tmp_path / "first", tmp_path / "second"
+    write_lean_daily_zip(first, "SPY", [_daily_bar(day, "500") for day in SESSIONS[:3]])
+    write_lean_daily_zip(second, "SPY", [_daily_bar(day, "501") for day in SESSIONS[3:]])
+
+    with pytest.raises(ValueError, match="a daily data snapshot binds one root, got 2"):
+        capture_data_snapshot(roots=[first, second], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
 
 
 def test_make_minute_bars_is_deterministic_so_digests_are_reproducible() -> None:

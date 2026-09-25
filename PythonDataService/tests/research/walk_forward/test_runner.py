@@ -580,7 +580,7 @@ def test_empty_test_window_fails_fold_closed_and_is_not_aggregated(tmp_path: Pat
     assert len(result.folds) == 1
     assert result.folds[0].status == "failed"
     assert result.folds[0].test_run_id is not None
-    assert "zero input bars" in (result.folds[0].failure_reason or "")
+    assert result.folds[0].failure_reason == "missing data: backtest evaluated zero bars for the requested window"
     assert result.combined_oos_equity_curve == []
     assert result.pct_profitable_folds is None
     assert "no auditable out-of-sample aggregate" in (result.failure_reason or "")

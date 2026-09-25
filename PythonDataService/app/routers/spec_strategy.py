@@ -11,10 +11,14 @@ hand-coded LEAN-pinned algorithms use. This router is the HTTP entry
 point — Frontend / external tooling POSTs a spec + run config and gets
 back the trade log and summary statistics.
 
-Data source is loaded by the same LEAN minute reader as
-``/api/engine/backtest`` so this endpoint operates against the same
-historical bar dataset; for hermetic testing the
-``get_data_source_factory`` dependency is overridable.
+The data source is the LEAN minute reader over the legacy
+``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` folders — not the lake
+``/api/engine/backtest`` reads (#2446 moves Spec onto it). A window those
+folders do not fully cover is refused as ``success=false`` naming the
+missing sessions, never run on whatever part of it happens to be on disk
+(#2445); a run that evaluated zero bars is refused the way Strategy Lab
+refuses one. For hermetic testing the ``get_data_source_factory``
+dependency is overridable.
 """
 
 from __future__ import annotations
@@ -30,8 +34,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
 
+from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.data.lean_format import LeanMinuteDataReader
-from app.engine.engine import BacktestEngine
+from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade
@@ -107,15 +112,17 @@ class FixtureListItem(BaseModel):
 # ---------------------------------------------------------------------------
 # Data source dependency — overridable for tests.
 # ---------------------------------------------------------------------------
-DataSourceFactory = Any  # callable(symbol, start, end) -> LeanMinuteDataReader-like
+def _default_data_source_factory(symbol: str, start: Date, end: Date) -> LeanMinuteDataReader:
+    """Build the LEAN minute reader for ``symbol`` over ``[start, end]``, once the window is admitted.
 
-
-def _default_data_source_factory(symbol: str, start: Date, end: Date):
-    """Build a real LEAN data reader for the given symbol + date range.
-
-    Reads the LEAN_DATA_ROOT / LEAN_DATA_CACHE env vars the same way
-    ``app/services/engine_backtest_service.py`` does. Tests override via
-    ``app.dependency_overrides[get_data_source_factory]``.
+    Reads the legacy ``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` folders. The
+    reader skips a session with no zip, or whose zip holds no regular-hours
+    bar, so the window is checked here first, against the canonical
+    calendar: the reader must read bars for every scheduled session in it
+    (half days included, closures not), or ``MissingSessionsError`` names
+    the gaps and any unreadable file (#2445). The research-run routers
+    share this factory.
+    Tests override via ``app.dependency_overrides[get_data_source_factory]``.
     """
     import os
 
@@ -129,6 +136,9 @@ def _default_data_source_factory(symbol: str, start: Date, end: Date):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="No LEAN data roots configured (set LEAN_DATA_ROOT or LEAN_DATA_CACHE)",
         )
+    coverage = check_availability(roots, symbol, start, end, resolution="minute")
+    if not coverage.is_complete:
+        raise MissingSessionsError(coverage)
     return LeanMinuteDataReader(roots)
 
 
@@ -159,6 +169,23 @@ def _parse_fill_mode(s: str) -> FillMode:
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"unknown fill_mode {s!r} — expected signal_bar_close or next_bar_open",
+    )
+
+
+def _failed_response(request: SpecBacktestRequest, error: str) -> SpecBacktestResponse:
+    """A reported failure: ``success=False`` and no numbers for a run that produced none."""
+    return SpecBacktestResponse(
+        success=False,
+        strategy_name=request.spec.name,
+        initial_cash=request.initial_cash,
+        final_equity=0.0,
+        net_profit=0.0,
+        total_fees=0.0,
+        total_trades=0,
+        winning_trades=0,
+        losing_trades=0,
+        win_rate=0.0,
+        error=error,
     )
 
 
@@ -246,6 +273,11 @@ def run_spec_backtest(
     spec = request.spec
     start_d = _parse_date(request.start_date, "start_date")
     end_d = _parse_date(request.end_date, "end_date")
+    if end_d < start_d:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"end_date must not precede start_date (got start={start_d.isoformat()}, end={end_d.isoformat()})",
+        )
     fill_mode = _parse_fill_mode(request.fill_mode)
     symbol = spec.symbols[0]
 
@@ -253,20 +285,20 @@ def run_spec_backtest(
         data_source = data_source_factory(symbol, start_d, end_d)
     except HTTPException:
         raise
-    except Exception as exc:
-        return SpecBacktestResponse(
-            success=False,
-            strategy_name=spec.name,
-            initial_cash=request.initial_cash,
-            final_equity=0.0,
-            net_profit=0.0,
-            total_fees=0.0,
-            total_trades=0,
-            winning_trades=0,
-            losing_trades=0,
-            win_rate=0.0,
-            error=f"data source unavailable: {exc}",
+    except MissingSessionsError as exc:
+        logger.warning(
+            "[SPEC] refused: the data source does not cover the requested window",
+            extra={
+                "strategy": spec.name,
+                "symbol": exc.report.symbol,
+                "missing_sessions": len(exc.report.missing_days),
+                "unreadable_sessions": len(exc.report.unreadable_days),
+                "expected_sessions": exc.report.expected_days,
+            },
         )
+        return _failed_response(request, str(exc))
+    except Exception as exc:
+        return _failed_response(request, f"data source unavailable: {exc}")
 
     try:
         strategy = SpecAlgorithm(spec)
@@ -300,7 +332,7 @@ def run_spec_backtest(
         # Spec asks the evaluator to do something this phase doesn't
         # support yet — e.g. ``FixedContracts`` sizing surfaces from
         # ``SpecAlgorithm._submit_entry`` only when entry actually fires,
-        # so the constructor guard at line 262 above can't catch it. The
+        # so the constructor guard above can't catch it. The
         # caller wrote a syntactically-valid spec that hit a
         # capability gap, so 4xx is the right shape (matches the
         # constructor-guard branch). 500 / success=false would mask the
@@ -311,19 +343,16 @@ def run_spec_backtest(
         ) from exc
     except Exception as exc:
         logger.exception("[SPEC] backtest failed for %s", spec.name)
-        return SpecBacktestResponse(
-            success=False,
-            strategy_name=spec.name,
-            initial_cash=request.initial_cash,
-            final_equity=0.0,
-            net_profit=0.0,
-            total_fees=0.0,
-            total_trades=0,
-            winning_trades=0,
-            losing_trades=0,
-            win_rate=0.0,
-            error=f"backtest run failed: {exc}",
+        return _failed_response(request, f"backtest run failed: {exc}")
+    # Admission proves every scheduled session is on disk, not that the run
+    # read a bar: a window holding no session, or zips holding no
+    # regular-hours minute, still scores nothing.
+    if not result.equity_curve:
+        logger.warning(
+            "[SPEC] refused: the run evaluated zero bars",
+            extra={"strategy": spec.name, "symbol": symbol},
         )
+        return _failed_response(request, ZERO_BARS_EVALUATED)
 
     trades = strategy.trade_log
     winning = sum(1 for t in trades if t.result == "WIN")

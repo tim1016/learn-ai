@@ -25,6 +25,7 @@ from functools import partial
 from itertools import pairwise
 from pathlib import Path
 
+from app.engine.data.availability import MissingSessionsError
 from app.jobs.progress import JobCancelled
 from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search import service as sweeps
@@ -35,7 +36,7 @@ from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError
 from app.research.sweep.grid import RunSpec
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
-from app.research.sweep.snapshot import DataSnapshot, DataSnapshotIncompleteError, capture_data_snapshot
+from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study.folds import FoldPlan, FoldPlanError, plan_folds
 from app.research.walk_forward_study.models import FoldRecord, NewStudy, StudyRow, StudySpec, StudyStatus
@@ -95,8 +96,8 @@ def prepare_launch(spec: StudySpec, *, job_id: str | None, roots: Sequence[Path]
         snapshot = capture_data_snapshot(
             roots=sweep.roots, symbol=spec.grid.symbol, resolution=spec.grid.resolution, data_start=sweep.data_start, data_end=sweep.evaluation_end
         )
-    except DataSnapshotIncompleteError as exc:
-        raise GridSearchRefusal(str(exc), code="DATA_MISSING") from exc
+    except MissingSessionsError as exc:
+        raise sweeps.data_missing_refusal(exc) from exc
     folds = _fold_records(pre.folds)
     receipt = {
         **sweeps.build_receipt(sweep, snapshot, resolve_code_identity()),

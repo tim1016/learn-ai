@@ -296,14 +296,8 @@ def run_walk_forward(
         if persistence_warning is not None:
             warnings.append(persistence_warning)
 
-        result_failure_reason: str | None = None
         for child_warning in result.warnings:
             warnings.append(f"fold {window.fold_index} test warning: {child_warning}")
-        if ledger.status == "completed" and result.bars_consumed == 0:
-            result_failure_reason = (
-                "test window consumed zero input bars; refusing to treat it as out-of-sample evidence"
-            )
-            warnings.append(f"fold {window.fold_index} {result_failure_reason}")
 
         fold = _fold_to_result(
             window,
@@ -313,7 +307,6 @@ def run_walk_forward(
             training_candidates=training_candidates,
             selected_train_sharpe=selected_train_sharpe,
             persisted=persistence_warning is None,
-            result_failure_reason=result_failure_reason,
         )
         folds.append(fold)
         if fold.status == "completed" and result.equity_curve:
@@ -401,16 +394,14 @@ def _fold_to_result(
     training_candidates: list[TrainingCandidateResult],
     selected_train_sharpe: float | None,
     persisted: bool,
-    result_failure_reason: str | None = None,
 ) -> FoldResult:
     # Mirror the underlying ledger's lifecycle status onto the fold so
     # aggregation can exclude failed folds without re-loading ledgers.
     # Phase A's RunLedger.status is one of {"running", "completed",
     # "failed"}; "running" is a transient state the runner never
-    # surfaces synchronously, so collapse to a 2-value field here.
-    fold_status = (
-        "failed" if ledger.status == "failed" or not persisted or result_failure_reason is not None else "completed"
-    )
+    # surfaces synchronously, so collapse to a 2-value field here. A TEST
+    # window that consumed zero bars arrives as a failed ledger already.
+    fold_status = "failed" if ledger.status == "failed" or not persisted else "completed"
     test_sharpe = result.metrics.sharpe_ratio
     fold_retention = (
         sharpe_retention(test_sharpe, selected_train_sharpe)
@@ -432,7 +423,7 @@ def _fold_to_result(
             if ledger.status == "failed"
             else "test receipt could not be persisted"
             if not persisted
-            else result_failure_reason
+            else None
         ),
         selected_parameters=selected_parameters,
         training_candidates=training_candidates,

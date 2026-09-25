@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.engine.engine import BacktestEngine, BacktestResult, EquitySnapshot
+from app.engine.data.availability import MissingSessionsError
+from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult, EquitySnapshot
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.results.statistics import EquityPoint, summarize
@@ -384,8 +385,22 @@ def run_strategy_spec(
         # Build the data source. Failures here are infrastructure errors,
         # not strategy errors — surface as a failed-status ledger rather
         # than a thrown exception so the caller can persist the failure.
+        # A window the source does not cover is an expected refusal, not a
+        # crash: its message already names the gaps.
         try:
             data_source = data_source_factory(symbol, data_start_date, end_date)
+        except MissingSessionsError as exc:
+            logger.warning(
+                "[RUNS] refused: the data source does not cover the requested window",
+                extra={
+                    "run_id": rid,
+                    "symbol": exc.report.symbol,
+                    "missing_sessions": len(exc.report.missing_days),
+                    "unreadable_sessions": len(exc.report.unreadable_days),
+                    "expected_sessions": exc.report.expected_days,
+                },
+            )
+            return _failed(ledger, str(exc))
         except Exception as exc:
             logger.exception("[RUNS] data source unavailable for %s", symbol)
             return _failed(ledger, f"data source unavailable: {exc}")
@@ -492,10 +507,12 @@ def run_strategy_spec(
         # ``engine_result.bars`` is appended once per minute bar pulled from
         # the data source's ``iter_bars`` loop — the engine-input layer. That
         # is the count we want to surface (not consolidated-bar updates, not
-        # indicator ticks): a "0 bars consumed" signal means the LEAN cache
-        # was empty or the window filtered everything out, which would
-        # otherwise be indistinguishable from "strategy didn't fire".
+        # indicator ticks). Zero means the source was empty or the window
+        # filtered everything out; completing such a run would be
+        # indistinguishable from "strategy didn't fire", so it fails (#2445).
         bars_consumed = len(report_bars)
+        if bars_consumed == 0:
+            return _failed(ledger, ZERO_BARS_EVALUATED)
 
         metrics = _summarize_metrics(
             initial_cash=float(engine_result.initial_cash),
@@ -506,12 +523,6 @@ def run_strategy_spec(
             total_bars=total_bars,
             resolution_minutes=resolution,
         )
-
-        warnings: list[str] = []
-        if bars_consumed == 0:
-            warnings.append(
-                "no input bars consumed for the requested window — check LEAN data root / cache or your symbol+date filters"
-            )
 
         result = BacktestRunResult(
             run_id=rid,
@@ -524,7 +535,6 @@ def run_strategy_spec(
             trades=[_trade_to_run_trade(i, t, resolution) for i, t in enumerate(trades)],
             metrics=metrics,
             log_lines=list(engine_result.log_lines),
-            warnings=warnings,
             bars_consumed=bars_consumed,
         )
 

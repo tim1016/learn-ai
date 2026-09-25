@@ -85,6 +85,13 @@ class BacktestResult:
     insight_summary: dict = field(default_factory=dict)
 
 
+# The one failure every caller reports for a result with an empty
+# ``equity_curve``: the run scored no bar, so its untouched starting cash is
+# not a result — it must never read as a strategy that simply did not trade
+# (#2445).
+ZERO_BARS_EVALUATED = "missing data: backtest evaluated zero bars for the requested window"
+
+
 class BacktestEngine:
     def __init__(
         self,

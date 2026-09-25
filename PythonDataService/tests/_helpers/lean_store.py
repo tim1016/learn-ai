@@ -48,3 +48,23 @@ def make_minute_bars(symbol: str, trading_date: date, *, count: int = 390) -> li
 def seed_store_day(root: Path, symbol: str, trading_date: date, *, count: int = 390) -> Path:
     """Write one deterministic day zip into a store root; returns the zip path."""
     return write_lean_day_zip(root, symbol, trading_date, make_minute_bars(symbol, trading_date, count=count))
+
+
+def seed_pre_market_day(root: Path, symbol: str, trading_date: date) -> Path:
+    """Write a day zip that exists but holds no regular-hours minute: an hour of bars from 07:00 ET."""
+    first_bar = datetime(trading_date.year, trading_date.month, trading_date.day, 7, 0, tzinfo=EASTERN)
+    price = Decimal(500)
+    bars = [
+        TradeBar(
+            symbol=symbol.upper(),
+            time=first_bar + timedelta(minutes=i),
+            end_time=first_bar + timedelta(minutes=i + 1),
+            open=price,
+            high=price,
+            low=price,
+            close=price,
+            volume=100,
+        )
+        for i in range(60)
+    ]
+    return write_lean_day_zip(root, symbol, trading_date, bars)

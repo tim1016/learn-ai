@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import FillMode
 from app.engine.strategy.spec import StrategySpec
@@ -28,11 +30,14 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     build_minute_bars,
     closes_for_spy_ema,
 )
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 from app.research.runs.runner import _VALID_FILL_MODES, _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
+from app.routers.spec_strategy import _default_data_source_factory
 from app.utils.timestamps import to_ms_utc
+from tests._helpers.lean_store import seed_store_day
 
 
 def _build_test_spec(
@@ -403,6 +408,29 @@ def test_failed_data_source_produces_failed_ledger():
     assert result.warnings == [ledger.failure_reason]
 
 
+def test_a_window_the_lean_folders_do_not_cover_fails_the_ledger_naming_the_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Research runs share the Spec factory, so they refuse the same gap as a failed ledger (#2445).
+
+    The refusal is an expected outcome, not a crash: the ledger carries the
+    factory's own message, not a "data source unavailable" wrapper around it.
+    """
+    window = (date(2024, 11, 25), date(2024, 12, 6))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("LEAN_DATA_CACHE", raising=False)
+    for day in expected_sessions(*window):
+        if day < date(2024, 12, 2):
+            seed_store_day(tmp_path, "TEST", day)
+
+    ledger, result = _run(_build_test_spec(), _default_data_source_factory, start=window[0], end=window[1])
+
+    assert ledger.status == "failed"
+    assert ledger.failure_reason == str(MissingSessionsError(check_availability([tmp_path], "TEST", *window)))
+    assert "missing 2024-12-02..2024-12-06" in ledger.failure_reason
+    assert result.trades == []
+
+
 # ---------------------------------------------------------------------------
 # Lineage fields (forward-compat for Phases C/D/E).
 # ---------------------------------------------------------------------------
@@ -452,21 +480,21 @@ def test_result_reports_bars_consumed_on_normal_run(fake_data_factory):
     "strategy didn't fire on the data we saw".
     """
     spec = _build_test_spec()
-    _, result = _run(spec, fake_data_factory)
+    ledger, result = _run(spec, fake_data_factory)
 
     # The synthetic fixture builds 2,000 bars; the runner filters by the
     # spec's date window but the FakeDataReader yields everything inside
     # [2024-01-02, 2024-12-31] (which covers the whole list).
     assert result.bars_consumed > 0
     assert isinstance(result.bars_consumed, int)
-    # No bars-empty warning when bars were actually consumed.
-    assert not any("no input bars consumed" in w for w in result.warnings)
+    assert ledger.status == "completed"
 
 
-def test_result_warns_when_no_bars_consumed():
-    """An empty data reader must produce a ``bars_consumed == 0`` result
-    AND a loud warning — the gap this PR closes is exactly: silent
-    "trades: 0, warnings: []" responses when the LEAN cache is empty.
+def test_a_run_that_consumed_no_bars_fails_its_ledger():
+    """An empty data reader fails the run instead of completing it with
+    zero trades and the starting cash — a result indistinguishable from a
+    strategy that simply did not fire (#2445). The reason is the one Spec
+    and Strategy Lab give for the same run.
     """
     spec = _build_test_spec()
 
@@ -483,12 +511,10 @@ def test_result_warns_when_no_bars_consumed():
         data_root_revision="test-revision-1",
     )
 
+    assert ledger.status == "failed"
+    assert ledger.failure_reason == "missing data: backtest evaluated zero bars for the requested window"
     assert result.bars_consumed == 0
-    assert any("no input bars consumed" in w for w in result.warnings), result.warnings
-    # The run still completes — empty data is a data-availability signal,
-    # not an engine failure.
-    assert ledger.status == "completed"
-    assert len(result.trades) == 0
+    assert result.trades == []
 
 
 def test_warmup_prerolls_fresh_cross_without_permitting_pre_window_entries():
