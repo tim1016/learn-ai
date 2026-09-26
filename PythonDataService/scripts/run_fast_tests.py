@@ -34,6 +34,11 @@ FAST_TEST_PATHS = (
     # their consumers.
     "tests/broker",
     "tests/scripts",
+    # The spec layer's own root, beside the package it tests (#2485): it was
+    # silently uncollected, so its stale tests failed on master unnoticed.
+    # Its conftest primes POLYGON_API_KEY and the Signal Program source
+    # anchor, the same two facts tests/conftest.py primes for the main root.
+    "app/engine/strategy/spec/tests",
 )
 DAILY_ONLY_PATHS = (
     "tests/unit/data_lake",
