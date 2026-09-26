@@ -15,36 +15,36 @@ const RUNNING_WITH_ACKNOWLEDGMENT: JobState = {
   status: "running",
   phase: "parsing_results",
   startedAt: 1_753_800_000_000,
-  logSeq: 2,
+  logSeq: 0,
   eventSeq: 0,
-  recentLogs: [
-    { level: "info", message: "Staging LEAN fixtures…", ts: 1, seq: 1 },
-    {
-      level: "info",
-      message:
-        "Cancel requested — the LEAN run was already launched and will finish; its result is saved as usual.",
-      ts: 2,
-      seq: 2,
-    },
-  ],
+  recentLogs: [],
+  cancelAcknowledged:
+    "Cancel requested — the LEAN run was already launched and will finish; its result is saved as usual.",
 };
 
 describe("JobProgressComponent", () => {
-  it("surfaces the worker's latest log line so a too-late cancel is acknowledged in the drawer (#2463)", async () => {
+  it("renders the durable typed cancellation outcome, separate from any progress log (#2463)", async () => {
     await TestBed.configureTestingModule({
       imports: [JobProgressComponent],
-      providers: [provideZonelessChangeDetection(), provideJobs(RUNNING_WITH_ACKNOWLEDGMENT)],
+      providers: [
+        provideZonelessChangeDetection(),
+        provideJobs({
+          ...RUNNING_WITH_ACKNOWLEDGMENT,
+          // Later progress noise must not overwrite the acknowledgment.
+          message: "Parsing LEAN output",
+        }),
+      ],
     }).compileComponents();
 
     const fixture = TestBed.createComponent(JobProgressComponent);
     fixture.componentRef.setInput("jobId", "job-1");
     fixture.detectChanges();
 
-    const status = fixture.nativeElement.querySelector("div.log[role='status']");
-    expect(status?.textContent).toContain("already launched and will finish");
+    const notice = fixture.nativeElement.querySelector("div.cancel-notice[role='status']");
+    expect(notice?.textContent).toContain("already launched and will finish");
   });
 
-  it("renders no log line when the worker has said nothing", async () => {
+  it("renders no cancellation notice when no cancel was acknowledged", async () => {
     await TestBed.configureTestingModule({
       imports: [JobProgressComponent],
       providers: [
@@ -65,6 +65,6 @@ describe("JobProgressComponent", () => {
     fixture.componentRef.setInput("jobId", "job-1");
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector("div.log[role='status']")).toBeNull();
+    expect(fixture.nativeElement.querySelector("div.cancel-notice[role='status']")).toBeNull();
   });
 });

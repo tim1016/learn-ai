@@ -3,16 +3,10 @@
 The LEAN worker used to check cancellation once at the top of ``work`` while
 ``run_in_thread`` still throttled the flag at its 1,000-call default, so the
 first 999 checks — every check this job ever made — answered "not cancelled"
-without reading Redis: the Cancel button did nothing. The seams below pin the
-whole class:
-
-* a cancel set before the work starts ends the job ``cancelled`` without ever
-  calling the orchestrator;
-* a cancel set while data stages ends it ``cancelled`` before the container
-  launch;
-* a cancel set once the container runs finishes the run, keeps and saves the
-  result as always, and acknowledges the request on the log instead of a
-  silent no-op — never a false ``cancelled``.
+without reading Redis: the Cancel button did nothing. The framework fix and
+the seams' ownership are pinned here at the worker boundary, and the
+orchestrator's own seam behaviour (workspace cleanup, prompt acknowledgment)
+is pinned in ``tests/services/test_lean_sidecar_cancellation.py``.
 """
 
 from __future__ import annotations
@@ -26,6 +20,7 @@ from app.jobs.progress import JobCancelled
 from app.routers import jobs as jobs_router
 from app.routers.jobs import LeanEngineRunJobRequest
 from app.services import lean_sidecar_service
+from app.services.lean_sidecar_service import CANCEL_TOO_LATE_MESSAGE, LeanRunCancelled
 
 REQUEST = {
     "run_id": "unit_cancel",
@@ -70,6 +65,7 @@ class _Emitter:
         self.phases: list[str] = []
         self.logs: list[str] = []
         self.failures: list[tuple[str, str]] = []
+        self.cancel_acknowledgments: list[str] = []
 
     def phase(self, name: str) -> None:
         self.phases.append(name)
@@ -80,8 +76,16 @@ class _Emitter:
     def failed(self, *, code: str, message: str) -> None:
         self.failures.append((code, message))
 
+    def cancel_acknowledged(self, message: str) -> None:
+        self.cancel_acknowledgments.append(message)
 
-def _dispatch(monkeypatch: pytest.MonkeyPatch, fake_run_trusted_sample: Any) -> dict[str, Any]:
+
+def _dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_run_trusted_sample: Any,
+    *,
+    request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run the handler with the thread runner stubbed; return what it asked for."""
     captured: dict[str, Any] = {}
 
@@ -92,7 +96,11 @@ def _dispatch(monkeypatch: pytest.MonkeyPatch, fake_run_trusted_sample: Any) -> 
 
     monkeypatch.setattr(jobs_router, "run_in_thread", fake_run_in_thread)
     monkeypatch.setattr(lean_sidecar_service, "run_trusted_sample", fake_run_trusted_sample)
-    asyncio.run(jobs_router.start_lean_engine_run_job(LeanEngineRunJobRequest(job_id="job-1", request=REQUEST)))
+    asyncio.run(
+        jobs_router.start_lean_engine_run_job(
+            LeanEngineRunJobRequest(job_id="job-1", request=request or REQUEST)
+        )
+    )
     return captured
 
 
@@ -128,55 +136,59 @@ def test_a_cancel_set_before_the_work_starts_never_calls_the_orchestrator(
     assert emitter.phases == []
 
 
-def test_a_cancel_set_during_staging_ends_the_job_before_the_container_launches(
+def test_the_orchestrators_cancellation_translates_to_the_frameworks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seen: dict[str, Any] = {}
-    cancel = _CancelState()
+    """A pre-launch cancel surfaces as ``JobCancelled`` — the runner's sink
+    emits ``job.cancelled`` — and marks a paired group's parity verdict so it
+    is not left eternally pending."""
+    marked: list[tuple[str, str]] = []
 
-    async def fake_run_trusted_sample(request: Any, *, on_phase: Any, on_log: Any) -> Any:
-        seen["called"] = True
-        on_phase("staging_data")
-        on_log("staging…")
-        cancel.requested = True  # the operator presses Cancel while data stages
-        on_phase("launching_sidecar")  # the between-staging-and-launch seam
-        seen["launched"] = True  # must not be reached
-        on_phase("sidecar_running")
-        return _result_dict()
+    async def cancelled_while_staging(request: Any, **hooks: Any) -> Any:
+        raise LeanRunCancelled("run unit_cancel cancelled before the LEAN container launched")
 
-    captured = _dispatch(monkeypatch, fake_run_trusted_sample)
+    paired_request = {**REQUEST, "parity_group_id": "pair-1"}
+    captured = _dispatch(monkeypatch, cancelled_while_staging, request=paired_request)
+
+    import app.services.parity_companion as parity_companion
+
+    monkeypatch.setattr(
+        parity_companion,
+        "mark_parity_failed",
+        lambda group_id, *, status, detail: marked.append((group_id, status, detail)),
+    )
     emitter = _Emitter()
 
     with pytest.raises(JobCancelled):
-        captured["work"](emitter, cancel)
+        captured["work"](emitter, _CancelState())
 
-    assert seen.get("called") is True
-    assert "launched" not in seen
-    assert "sidecar_running" not in emitter.phases
+    assert emitter.failures == []
+    assert marked == [("pair-1", "run_failed", "cancelled before the LEAN container launched")]
 
 
-def test_a_cancel_set_after_the_launch_finishes_the_run_and_acknowledges_it_once(
+def test_a_too_late_cancel_flows_to_the_typed_acknowledgment_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cancel = _CancelState()
+    """The worker hands the orchestrator its flag reader and its typed
+    acknowledgment emitter; a too-late acknowledgment lands on that emitter
+    while the run finishes and is saved as always."""
+    seen_hooks: dict[str, Any] = {}
 
-    async def fake_run_trusted_sample(request: Any, *, on_phase: Any, on_log: Any) -> Any:
-        on_phase("staging_data")
-        on_phase("launching_sidecar")
-        on_phase("sidecar_running")  # the launch is committed from here on
-        cancel.requested = True
-        on_phase("parsing_results")  # too late to stop: acknowledged, not cancelled
-        on_phase("persisting")
+    async def fake_run_trusted_sample(request: Any, **hooks: Any) -> Any:
+        seen_hooks.update(hooks)
+        # The orchestrator dedupes to one acknowledgment (pinned in the
+        # service-level suite); the worker just wires the emitter through.
+        hooks["on_cancel_too_late"](CANCEL_TOO_LATE_MESSAGE)
         return _result_dict()
 
     captured = _dispatch(monkeypatch, fake_run_trusted_sample)
     emitter = _Emitter()
+    cancel = _CancelState()
 
     result = captured["work"](emitter, cancel)
 
     assert result is not None and result["strategy_execution_id"] == 42
-    assert "parsing_results" in emitter.phases and "persisting" in emitter.phases
-    acknowledgments = [message for message in emitter.logs if "already launched" in message]
-    assert len(acknowledgments) == 1
-    assert "Cancel requested" in acknowledgments[0]
+    assert seen_hooks["cancel_requested"] == cancel.should_cancel
+    assert seen_hooks["on_cancel_too_late"] == emitter.cancel_acknowledged
+    assert emitter.cancel_acknowledgments == [CANCEL_TOO_LATE_MESSAGE]
     assert emitter.failures == []

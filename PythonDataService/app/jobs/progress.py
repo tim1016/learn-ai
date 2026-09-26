@@ -321,6 +321,15 @@ class ProgressEmitter:
     def log(self, message: str, *, level: str = "info") -> None:
         self._emit("job.log", {"level": level, "message": message})
 
+    def cancel_acknowledged(self, message: str) -> None:
+        """Acknowledge a cancel request the work can no longer honour (#2463).
+
+        A durable, typed outcome — not a log line that the next progress
+        event overwrites — so the UI that offered Cancel can answer for it
+        while the (unstoppable) work runs to completion.
+        """
+        self._emit("job.cancel_acknowledged", {"message": message})
+
     def completed(self, result: Any) -> None:
         self._r.set(_result_key(self.job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
         self._patch_state(

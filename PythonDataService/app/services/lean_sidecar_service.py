@@ -20,7 +20,9 @@ Phase 2a constraints (per ``docs/architecture/lean-sidecar-lab.md``):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -176,6 +178,30 @@ class RunIdAlreadyUsedError(LeanSidecarServiceError):
 
     Maps to HTTP 409 ``run_id_already_used`` in the router.
     """
+
+
+class LeanRunCancelled(Exception):
+    """A pre-launch cancellation (#2463), raised by :func:`run_trusted_sample`.
+
+    Raised only at seams where no LEAN container exists — before anything
+    starts, before staging, and between staging and the launch call — after
+    the run's workspace has been removed, so the ``run_id`` stays reusable.
+    The job worker translates this into its framework's cancellation.
+    """
+
+
+#: What a run tells the operator when a cancel lands after the launch call:
+#: the container cannot be interrupted, the run finishes, and its result is
+#: kept and saved as always (#2463).
+CANCEL_TOO_LATE_MESSAGE = (
+    "Cancel requested — the LEAN run was already launched and will finish; "
+    "its result is saved as usual."
+)
+
+#: While the (uninterruptible) launch call is in flight, the run polls the
+#: cancel flag this often so a too-late request is acknowledged promptly
+#: instead of surfacing only after the container finishes.
+_CANCEL_ACK_POLL_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,6 +662,8 @@ async def run_trusted_sample(
     *,
     on_phase: Callable[[str], None] | None = None,
     on_log: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    on_cancel_too_late: Callable[[str], None] | None = None,
 ) -> TrustedRunResult:
     """End-to-end trusted-sample run: stage → launch → write manifest.
 
@@ -660,11 +688,51 @@ async def run_trusted_sample(
     cheap and non-blocking. When omitted the function behaves exactly
     as before — the existing ``/api/lean-sidecar/trusted-run`` endpoint
     (used by test infra and reconcile scripts) calls it with no hooks.
+
+    Cancellation (#2463) is owned here, where cleanup can be atomic with
+    the seam it leaves at: ``cancel_requested`` is asked before anything
+    starts, before staging, and between staging and the launch call; at
+    those seams no container exists, so the run stops, the workspace is
+    removed (the ``run_id`` stays reusable), and :class:`LeanRunCancelled`
+    is raised. Once the launch call is made the container cannot be
+    interrupted: the flag is polled while it runs and through final
+    persistence, and a set flag acknowledges via ``on_cancel_too_late``
+    exactly once — the run then completes and its result is saved as
+    always.
     """
     assert_lean_persistence_source_current()
 
     _emit_phase = on_phase or (lambda _name: None)
     _emit_log = on_log or (lambda _msg: None)
+    _cancel_requested = cancel_requested or (lambda: False)
+    _note_cancel_too_late = on_cancel_too_late or (lambda _message: None)
+    _late_cancel_acknowledged = False
+    # The run's root, once this run has created it — a pre-launch cancel
+    # removes it so the run_id stays reusable.
+    run_root: Path | None = None
+
+    def _acknowledge_cancel_too_late() -> None:
+        nonlocal _late_cancel_acknowledged
+        if _late_cancel_acknowledged:
+            return
+        _late_cancel_acknowledged = True
+        _note_cancel_too_late(CANCEL_TOO_LATE_MESSAGE)
+
+    def _raise_if_cancelled() -> None:
+        """Stop the run at a seam where no container exists (#2463)."""
+        if not _cancel_requested():
+            return
+        if run_root is not None and run_root.exists():
+            try:
+                shutil.rmtree(run_root)
+            except OSError:
+                # The cancel still takes effect; a workspace that survived
+                # cleanup makes the retry's duplicate-run_id guard speak,
+                # which is loud rather than wrong.
+                logger.warning("[LEAN] cancel cleanup failed for %s", run_root)
+        raise LeanRunCancelled(
+            f"run {request.run_id} cancelled before the LEAN container launched"
+        )
 
     if PINNED_LEAN_IMAGE_DIGEST is None:
         raise LeanSidecarServiceError(
@@ -680,6 +748,7 @@ async def run_trusted_sample(
     # duplicate-run_id guard below then rejects the operator's retry
     # with the *same* id, which is not a fresh-id problem and reads like
     # one. Failing here leaves the id reusable.
+    _raise_if_cancelled()
     lake_artifacts: LakeArtifacts | None = None
     if request.data_policy.source == "polygon" and request.data_policy.provider_kind != "fixture":
         lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
@@ -701,7 +770,9 @@ async def run_trusted_sample(
             "default ``runId`` field regenerates on every submit)."
         )
     workspace.ensure_layout()
+    run_root = workspace.root
 
+    _raise_if_cancelled()
     _emit_phase("staging_data")
     _emit_log(f"Staging LEAN fixtures for {request.symbol} {request.start_date}..{request.end_date}")
 
@@ -907,6 +978,7 @@ async def run_trusted_sample(
     response: LaunchResponse | None = None
     failure_reason: str | None = None
     launcher_exc: LauncherClientError | None = None
+    _raise_if_cancelled()
     _emit_phase("launching_sidecar")
     _emit_log(f"Submitting launch request to LEAN sidecar (image {PINNED_LEAN_IMAGE_DIGEST[:19]}…)")
     # ``sidecar_running`` is a back-to-back marker — ``post_launch`` is a
@@ -917,8 +989,17 @@ async def run_trusted_sample(
     # running now" elapsed-time UX rather than holding on
     # ``launching_sidecar`` for the entire run.
     _emit_phase("sidecar_running")
+    launch_task = asyncio.ensure_future(post_launch(launch_request))
     try:
-        response = await post_launch(launch_request)
+        # The launch call is one blocking hop that spans the container's
+        # whole life; poll the cancel flag while it runs so a request that
+        # can no longer stop anything is acknowledged promptly (#2463) —
+        # not silently held until the container finishes.
+        while not launch_task.done():
+            await asyncio.wait({launch_task}, timeout=_CANCEL_ACK_POLL_SECONDS)
+            if not launch_task.done() and _cancel_requested():
+                _acknowledge_cancel_too_late()
+        response = launch_task.result()
     except LauncherClientError as e:
         launcher_exc = e
         failure_reason = f"{type(e).__name__}: {e}"
@@ -927,6 +1008,11 @@ async def run_trusted_sample(
             request.run_id,
             failure_reason,
         )
+    except BaseException:
+        # Torn down mid-launch (worker shutdown): never orphan the hop.
+        if not launch_task.done():
+            launch_task.cancel()
+        raise
     finished_ms = now_ms_utc()
 
     # Phase 3a: parse LEAN's output into typed DTOs and persist
@@ -939,6 +1025,8 @@ async def run_trusted_sample(
     normalized: NormalizedResult | None = None
     normalized_path: Path | None = None
     if response is not None and response.exit_code == 0:
+        if _cancel_requested():
+            _acknowledge_cancel_too_late()
         _emit_phase("parsing_results")
         _emit_log("Parsing LEAN output")
         try:
@@ -990,6 +1078,8 @@ async def run_trusted_sample(
     # changes while LEAN is already running, the launched worker and its
     # normalized result still form one coherent completed run; persist that
     # result and require a restart only before the next run starts.
+    if _cancel_requested():
+        _acknowledge_cancel_too_late()
     _emit_phase("persisting")
     _emit_log("Persisting run to history")
     strategy_execution_id = await _persist_completed_run(

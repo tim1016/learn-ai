@@ -676,6 +676,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
     )
     from app.routers.lean_sidecar import TrustedRunRequestModel
     from app.services.lean_sidecar_service import (
+        LeanRunCancelled,
         LeanSidecarServiceError,
         RunIdAlreadyUsedError,
         TrustedRunRequest,
@@ -723,26 +724,13 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:
-        # Cancel is honoured wherever the run can still stop (#2463): before
-        # anything starts here, and at the two pre-launch phase seams below.
-        # Once the container is running it cannot be interrupted; a request
-        # that lands then is acknowledged on the log instead of being a
-        # silent no-op, and the finished result is kept and saved as always.
-        late_cancel_acknowledged = False
-
-        def _phase(name: str) -> None:
-            nonlocal late_cancel_acknowledged
-            if name in ("staging_data", "launching_sidecar"):
-                # The last points at which no LEAN container exists: before
-                # the staging work, and between staging and the launch call.
-                cancel.raise_if_cancelled()
-            elif not late_cancel_acknowledged and cancel.should_cancel():
-                late_cancel_acknowledged = True
-                emit.log(
-                    "Cancel requested — the LEAN run was already launched and will finish; "
-                    "its result is saved as usual."
-                )
-            emit.phase(name)
+        # Cancellation is owned by the orchestrator (#2463 review): it stops
+        # the run at the pre-launch seams (cleaning the workspace so the
+        # run_id stays reusable) and acknowledges a too-late request as a
+        # durable typed job event while the container runs and through final
+        # persistence. The worker supplies the flag reader and the
+        # acknowledgment emitter, and translates the service's cancellation
+        # into the framework's.
 
         def _mark_parity(status_label: str, detail: str) -> None:
             """Surface a companion failure on the group's ParityVerdict.
@@ -759,8 +747,10 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
         async def _do() -> dict:
             result = await run_trusted_sample(
                 trusted_request,
-                on_phase=_phase,
+                on_phase=emit.phase,
                 on_log=emit.log,
+                cancel_requested=cancel.should_cancel,
+                on_cancel_too_late=emit.cancel_acknowledged,
             )
             return jsonable_encoder(result, by_alias=False)
 
@@ -802,11 +792,16 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             emit.failed(code="lean_sidecar_service_error", message=str(e))
             _mark_parity("run_failed", f"lean_sidecar_service_error: {e}")
             return None
+        except LeanRunCancelled as e:
+            # The orchestrator stopped the run before any container existed
+            # and cleaned its workspace (#2463): an operator outcome, not a
+            # machinery failure — but the LEAN half of a paired run will
+            # never land, so the group must not stay eternally pending. The
+            # runner's sink turns this into ``job.cancelled``.
+            _mark_parity("run_failed", "cancelled before the LEAN container launched")
+            raise JobCancelled(str(e)) from e
         except JobCancelled:
-            # A pre-launch cancellation (#2463) is an operator outcome, not a
-            # machinery failure, but the LEAN half of a paired run will never
-            # land: the group must not stay eternally pending. The runner's
-            # sink turns this into ``job.cancelled``.
+            # The worker's own pre-flight check (above) — same outcome.
             _mark_parity("run_failed", "cancelled before the LEAN container launched")
             raise
         except Exception as e:
