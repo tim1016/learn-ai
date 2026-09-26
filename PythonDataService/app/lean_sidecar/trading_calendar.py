@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -78,15 +79,44 @@ def session_windows_ms_utc(start: date | str, end: date | str) -> list[SessionWi
     return windows
 
 
+def _quarter_start(d: date) -> date:
+    return date(d.year, (d.month - 1) // 3 * 3 + 1, 1)
+
+
+def _next_quarter_start(quarter_start: date) -> date:
+    year, month = quarter_start.year, quarter_start.month + 3
+    if month > 12:
+        year, month = year + 1, month - 12
+    return date(year, month, 1)
+
+
+@lru_cache(maxsize=64)
+def _quarter_session_windows(quarter_start: date) -> dict[date, SessionWindow]:
+    """One quarter's sessions, computed once and shared by every per-day lookup.
+
+    A per-day ``_schedule(d, d)`` costs ~7 ms, so a first availability check
+    or minute read over 500 sessions spent ~4 s — ~87% of its wall time —
+    re-deriving the calendar one day at a time (#2498). 500 sessions walk at
+    most ~9 quarters, and the LRU covers 64 of them (16 years of working
+    set). Values are the same ``pandas_market_calendars`` would return for
+    the single day: a session's scheduled times do not depend on the range
+    it was scheduled within.
+    """
+    end = _next_quarter_start(quarter_start) - timedelta(days=1)
+    return {window.session_date: window for window in session_windows_ms_utc(quarter_start, end)}
+
+
 def session_window_for_date(d: date) -> SessionWindow:
     """Return the scheduled NYSE session window for ``d``.
 
-    Raises ``LookupError`` when ``d`` is not a session.
+    Raises ``LookupError`` when ``d`` is not a session. Served from the
+    cached schedule of the calendar quarter containing ``d`` (#2498) — one
+    calendar, no second source, no hardcoded times.
     """
-    windows = session_windows_ms_utc(d, d)
-    if not windows:
-        raise LookupError(f"{d.isoformat()} is not a NYSE session")
-    return windows[0]
+    try:
+        return _quarter_session_windows(_quarter_start(d))[d]
+    except KeyError as exc:
+        raise LookupError(f"{d.isoformat()} is not a NYSE session") from exc
 
 
 def is_trading_day(d: date) -> bool:

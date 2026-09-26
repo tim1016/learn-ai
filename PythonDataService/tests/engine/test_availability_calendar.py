@@ -268,6 +268,42 @@ def test_a_rewritten_minute_zip_is_judged_afresh(tmp_path: Path) -> None:
     assert check_availability([tmp_path], "SPY", *MINUTE_WINDOW).missing_days == [PROBED]
 
 
+def test_a_first_check_over_500_sessions_schedules_once_per_quarter_not_per_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2498: the reader's per-day session-window lookup comes from the
+    calendar's cached quarter schedules. The first check over 500 sessions
+    used to cost one ``_CALENDAR.schedule`` per day — ~4 s of a ~5 s check,
+    ~87% of it — and the same lookup ran again on every minute read in runs
+    and charts. Measured with the cache: 3.7 s → 0.09 s cold per-day lookups,
+    a 500-session first check ~0.5 s, repeat parses a dict hit. The count is
+    asserted, not the wall clock, so CI timing noise cannot flip it."""
+    import pandas as pd
+
+    import app.lean_sidecar.trading_calendar as trading_calendar
+
+    sessions = expected_sessions(date(2024, 1, 2), date(2025, 12, 31))
+    assert len(sessions) > 490  # the ~500-session span the issue profiled
+    _seed(tmp_path, sessions)
+
+    real = trading_calendar._schedule
+    calls: list[tuple[date, date]] = []
+
+    def counting(start: date | str, end: date | str) -> pd.DataFrame:
+        calls.append((start, end))
+        return real(start, end)
+
+    monkeypatch.setattr(trading_calendar, "_schedule", counting)
+    trading_calendar._quarter_session_windows.cache_clear()
+
+    report = check_availability([tmp_path], "SPY", sessions[0], sessions[-1])
+
+    assert report.is_complete  # same verdicts; only the schedule count changed
+    # One schedule for the span's expected sessions plus one per calendar
+    # quarter the 500 sessions walk (~8) — never one per session (501).
+    assert len(calls) <= 12
+
+
 def test_an_extended_session_check_admits_pre_market_bars(tmp_path: Path) -> None:
     """The session filter is the reader's: pre-market bars are bars to an extended-session read."""
     _seed(tmp_path, expected_sessions(*MINUTE_WINDOW))
