@@ -23,6 +23,19 @@
 
 ## `data_snapshot_id` design
 
+**Lake-backed runs since #2446.** The production Spec reader materializes
+through Strategy Lab's lake gate. After admission, the runner sets the
+revision component to `lake:<data_availability_hash>` before it evaluates
+the strategy. This supersedes the provisional environment/git/file-mtime
+revision for that source, including any explicit revision override. The
+hash covers the admitted lake state, including supporting artifacts, not
+only consumed bar bytes; concurrent receipt/read replacement is tracked
+in #2455. Injected sources still use their caller-supplied revision or the
+fallback resolver, which now inspects the same adjusted lake root. Existing
+persisted ledgers retain their original identity and schema.
+
+The options below record the original v1 design.
+
 The snapshot id identifies "the bars the engine saw" cheaply. Three options were considered:
 
 | Option | Cost | Fidelity | Verdict |

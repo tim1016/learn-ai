@@ -21,6 +21,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.config import settings
+from app.data_lake import run_materialization
+from app.data_lake.path_policy import lake_subpath
+from app.data_lake.run_materialization import EngineRunMaterialization, LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import FillMode
@@ -35,7 +39,7 @@ from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 from app.research.runs.runner import _VALID_FILL_MODES, _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
-from app.routers.spec_strategy import _default_data_source_factory
+from app.services.spec_run_data import materialize_spec_data_source
 from app.utils.timestamps import to_ms_utc
 from tests._helpers.lean_store import seed_store_day
 
@@ -408,7 +412,7 @@ def test_failed_data_source_produces_failed_ledger():
     assert result.warnings == [ledger.failure_reason]
 
 
-def test_a_window_the_lean_folders_do_not_cover_fails_the_ledger_naming_the_gap(
+def test_a_window_the_lake_does_not_cover_fails_the_ledger_naming_the_gap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Research runs share the Spec factory, so they refuse the same gap as a failed ledger (#2445).
@@ -417,17 +421,55 @@ def test_a_window_the_lean_folders_do_not_cover_fails_the_ledger_naming_the_gap(
     factory's own message, not a "data source unavailable" wrapper around it.
     """
     window = (date(2024, 11, 25), date(2024, 12, 6))
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path))
+    root = tmp_path / lake_subpath("polygon_split_adjusted")
+    monkeypatch.delenv("LEAN_DATA_ROOT", raising=False)
     monkeypatch.delenv("LEAN_DATA_CACHE", raising=False)
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: (
+        EngineRunMaterialization("a" * 64, 0, 4, None)
+    ))
     for day in expected_sessions(*window):
         if day < date(2024, 12, 2):
-            seed_store_day(tmp_path, "TEST", day)
+            seed_store_day(root, "TEST", day)
 
-    ledger, result = _run(_build_test_spec(), _default_data_source_factory, start=window[0], end=window[1])
+    ledger, result = _run(_build_test_spec(), materialize_spec_data_source, start=window[0], end=window[1])
 
     assert ledger.status == "failed"
-    assert ledger.failure_reason == str(MissingSessionsError(check_availability([tmp_path], "TEST", *window)))
+    assert ledger.failure_reason == str(MissingSessionsError(check_availability([root], "TEST", *window)))
     assert "missing 2024-12-02..2024-12-06" in ledger.failure_reason
+    assert result.trades == []
+
+
+def test_lake_backed_research_run_records_admitted_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = (date(2024, 11, 25), date(2024, 12, 6))
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(tmp_path))
+    root = tmp_path / lake_subpath("polygon_split_adjusted")
+    for day in expected_sessions(*window):
+        seed_store_day(root, "TEST", day)
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", lambda **kwargs: (
+        EngineRunMaterialization("b" * 64, 0, 9, None)
+    ))
+
+    ledger, result = _run(_build_test_spec(), materialize_spec_data_source, start=window[0], end=window[1])
+
+    assert ledger.status == "completed", ledger.failure_reason
+    assert result.bars_consumed > 0
+    assert ledger.data_snapshot_id.endswith("|lake:" + "b" * 64)
+
+
+def test_lake_refusal_is_a_research_failure_with_the_coverage_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(**kwargs: object) -> EngineRunMaterialization:
+        raise LakeMaterializationError("incomplete minute coverage for TEST: provider_no_data")
+
+    monkeypatch.setattr(run_materialization, "materialize_engine_run", refuse)
+    ledger, result = _run(_build_test_spec(), materialize_spec_data_source)
+
+    assert ledger.status == "failed"
+    assert ledger.failure_reason == "Lake refused this run: incomplete minute coverage for TEST: provider_no_data"
     assert result.trades == []
 
 

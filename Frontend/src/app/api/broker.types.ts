@@ -24283,6 +24283,11 @@ export interface components {
             final_equity: number;
             /** Initial Cash */
             initial_cash: number;
+            /**
+             * Lake Data Availability Hash
+             * @description Fingerprint of the lake state admitted for this run, including supporting artifacts.
+             */
+            lake_data_availability_hash?: string | null;
             /** Log Lines */
             log_lines?: string[];
             /** Losing Trades */

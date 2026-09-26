@@ -33,6 +33,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.data_lake.path_policy import resolve_lake_root
 from app.research.runs.window import WindowSummary
 from app.utils.timestamps import now_ms_utc
 
@@ -88,16 +89,9 @@ def _capture_git_commit() -> str:
 
 
 def _data_root_paths() -> list[Path]:
-    """Resolve ``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` env vars to existing dirs."""
-    roots: list[Path] = []
-    for env_var in ("LEAN_DATA_ROOT", "LEAN_DATA_CACHE"):
-        val = os.environ.get(env_var)
-        if not val:
-            continue
-        root = Path(val)
-        if root.is_dir():
-            roots.append(root)
-    return roots
+    """Use the same default adjustment root as Spec and Strategy Lab."""
+    root = resolve_lake_root("polygon_split_adjusted")
+    return [root] if root.is_dir() else []
 
 
 def compute_window_files_fingerprint(
