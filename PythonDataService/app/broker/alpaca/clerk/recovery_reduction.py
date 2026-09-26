@@ -21,9 +21,9 @@ Formula (the suggested limit, and the band a confirmed limit must stay inside):
     suggested buy:  ceil_tick(  ask × (1 + exit_bps / 10⁴) )
     band sell:      limit ≥ floor_tick( bid × (1 − k · exit_bps / 10⁴) )
     band buy:       limit ≤ ceil_tick(  ask × (1 + k · exit_bps / 10⁴) )
-    where k is the deploy-time band multiple — ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE,
-    default RECOVERY_BAND_ALLOWANCE_MULTIPLE — and bid/ask are the Clerk's
-    live quote at send.
+    where k is the owning bot's sealed band multiple, and bid/ask are the
+    Clerk's live quote at send. An operator may explicitly acknowledge a price
+    beyond that band; the acknowledgement is durably recorded with the EXIT.
 Formula (realized slippage of a fill, positive = worse than the reference):
     sell: (reference_bid − fill_price) / reference_bid × 10⁴ bps
     buy:  (fill_price − reference_ask) / reference_ask × 10⁴ bps
@@ -232,7 +232,7 @@ RECOVERY_LIMIT_OUTSIDE_BAND = LegRefusal(
     explanation=(
         "The limit is further through the book than the accepted band — the "
         "sealed exit allowance times the deploy-time band multiple "
-        "(ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE) — from the live bid (sell) or ask "
+        "(the bot’s sealed band multiple) — from the live bid (sell) or ask "
         "(cover)."
     ),
     next_step="Check the price against the live quote and confirm again.",
@@ -245,7 +245,7 @@ RECOVERY_SPREAD_TOO_WIDE = LegRefusal(
         "price would reach through a broken book."
     ),
     next_step=(
-        "Widen ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS after reviewing the logged "
+        "Review the spread and use the operator-confirmed safe-flatten ticket after reviewing the logged "
         "spreads, or send the operator's priced flatten — its ticket shows the "
         "wide spread and can override it."
     ),
@@ -317,6 +317,7 @@ class ExtendedLimitProposal:
     # band past 100 % of the touch floors to zero or below, which is not a
     # price; any positive limit is then inside the band (PR #2230 review).
     band_limit_price: Decimal | None
+    band_cap_bps: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -343,6 +344,7 @@ class ConfirmedRecoveryLimit:
 
     limit_price: Decimal
     quote_observed_at_ms: int
+    band_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -364,6 +366,7 @@ class ConfirmedRecoveryShape:
     # real quantity later; a different one is not what the operator reviewed.
     quantity: float
     priced_by: PricingProvenance = "operator"
+    band_override: bool = False
 
 
 def regular_session_open(now_ms: int) -> bool:
@@ -416,6 +419,7 @@ def price_recovery_reduction(
         suggested_limit_price=_through_the_book(
             side, quote, policy.allowances.exit_bps
         ),
+        band_cap_bps=policy.allowances.exit_bps * policy.allowances.exit_band_multiple,
         band_limit_price=_band_limit_price(
             side, quote, policy.allowances.exit_bps * policy.allowances.exit_band_multiple
         ),
@@ -487,13 +491,14 @@ def recovery_reduction_shape(
     past_band = band is not None and (
         confirmed.limit_price < band if side is OrderSide.SELL else confirmed.limit_price > band
     )
-    if past_band:
+    if past_band and not confirmed.band_override:
         raise ProgramLegRefused(RECOVERY_LIMIT_OUTSIDE_BAND)
     return ConfirmedRecoveryShape(
         shape=shape,
         valid_until_ms=state.next_transition_ms,
         reference_quote=current_quote,
         quantity=abs(quantity),
+        band_override=past_band and confirmed.band_override,
     )
 
 
@@ -549,11 +554,14 @@ class RecoveryPricing:
     policy_source: Callable[[], ProgramLegPolicy]
     quote_source: QuoteSource
     liveness_source: LivenessSource | None = None
+    instance_policy_source: Callable[[str], ProgramLegPolicy] | None = None
 
-    def read(self, symbol: str, now_ms: int) -> PricingSnapshot:
+    def read(self, symbol: str, now_ms: int, *, strategy_instance_id: str | None = None) -> PricingSnapshot:
         """Resolve the policy and read the live touch for ``symbol`` — on the event loop."""
         return PricingSnapshot(
-            policy=self.policy_source(), quote=self.quote_source(symbol, now_ms),
+            policy=(self.instance_policy_source(strategy_instance_id)
+                    if self.instance_policy_source is not None and strategy_instance_id is not None
+                    else self.policy_source()), quote=self.quote_source(symbol, now_ms),
             market_liveness=self.read_liveness(symbol, now_ms),
         )
 

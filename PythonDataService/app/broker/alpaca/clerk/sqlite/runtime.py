@@ -23,6 +23,13 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
+from app.broker.alpaca.clerk.exit_terms import (
+    ExitTerms,
+    backfilled_terms,
+    policy_with_exit_terms,
+    read_exit_terms,
+    seal_exit_terms,
+)
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
@@ -312,6 +319,8 @@ class SqliteAlpacaClerkFacade:
         # #2369: which in-process runner holds each ACTIVE run this facade
         # admitted. Read and written only under ``self._intake``.
         self._run_ownership = RunOwnership()
+        for instance in self._repo.strategy_instances():
+            self._ensure_exit_terms(instance["strategy_instance_id"])
 
     @property
     def account_id(self) -> str:
@@ -372,6 +381,7 @@ class SqliteAlpacaClerkFacade:
             policy_source=lambda: self.program_leg_policy,
             quote_source=self._quote_source,
             liveness_source=market_liveness_fact,
+            instance_policy_source=self.exit_policy_for_instance,
         )
 
     @property
@@ -421,6 +431,36 @@ class SqliteAlpacaClerkFacade:
                 )
             ),
         )
+
+    def _ensure_exit_terms(self, sid: str, terms: ExitTerms | None = None) -> ExitTerms:
+        existing = read_exit_terms(self._repo, sid)
+        if existing is not None:
+            if terms is not None and terms != existing:
+                raise StrategyRegistrationConflictError("The bot's exit terms cannot change on Resume.")
+            return existing
+        if terms is None:
+            policy = self._program_leg_policy
+            if self.account_mode == "live":
+                from app.broker.alpaca.active_binding import get_active_alpaca_binding
+                from app.broker.alpaca.clerk.program_leg import _sealed_allowances
+
+                context = get_active_alpaca_binding()
+                if context is not None and context.account_pin == self.account_id:
+                    sealed = _sealed_allowances(context, sid)
+                    fallback = sealed or (
+                        ExtendedHoursAllowances.from_envelope(context.live_envelope)
+                        if context.live_envelope is not None else None
+                    )
+                    policy = replace(policy, allowances=fallback, allowance_refusal=None)
+            terms = backfilled_terms(policy)
+        return seal_exit_terms(self._repo, sid, terms)
+
+    def exit_policy_for_instance(self, sid: str, terms: ExitTerms | None = None) -> ProgramLegPolicy:
+        """All exit prices resolve the registration seal; no account fallback."""
+        sealed = read_exit_terms(self._repo, sid) or terms
+        # A legacy/internal preview has not registered yet. Registration captures
+        # these defaults once; every registered instance already has a terms seal.
+        return self.program_leg_policy if sealed is None else policy_with_exit_terms(self.program_leg_policy, sealed)
 
     @property
     def binds_decision_bar(self) -> bool:
@@ -634,6 +674,7 @@ class SqliteAlpacaClerkFacade:
                     strategy_key=binding.strategy_key,
                     display_name=display_name,
                     config_json=config_json,
+                    exit_terms=None if binding.exit_terms is None else binding.exit_terms.model_dump(),
                 )
             elif existing["symbol"].upper() != binding.symbol.upper() or existing["config_hash"] != config_hash:
                 raise StrategyRegistrationConflictError(
@@ -654,6 +695,7 @@ class SqliteAlpacaClerkFacade:
                         "its SQLite authority configuration"
                     )
 
+            self._ensure_exit_terms(binding.strategy_instance_id, binding.exit_terms)
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
@@ -745,7 +787,7 @@ class SqliteAlpacaClerkFacade:
             return price_recovery_reduction(
                 side=OrderSide(leg.side),
                 now_ms=now_ms,
-                policy=self.program_leg_policy,
+                policy=self.exit_policy_for_instance(leg.strategy_instance_id),
                 quote=self._quote_source(leg.symbol, now_ms),
             )
         except ProgramLegRefused as exc:
@@ -808,7 +850,7 @@ class SqliteAlpacaClerkFacade:
                 symbol=leg.symbol,
                 quantity=leg.quantity,
                 now_ms=now_ms,
-                policy=self.program_leg_policy,
+                policy=self.exit_policy_for_instance(leg.strategy_instance_id),
                 confirmed=confirmed_limit,
                 # Read at send, never taken from the client: the band and the
                 # quote's freshness are judged against what the Clerk sees now.
@@ -992,7 +1034,8 @@ class SqliteAlpacaClerkFacade:
                     purpose=purpose,
                     use_rth=use_rth,
                     decision_bar=retained_source_bar,
-                    policy=self.program_leg_policy,
+                    policy=(self.exit_policy_for_instance(strategy_instance_id)
+                            if purpose is EffectPurpose.EXIT else self.program_leg_policy),
                 )
             except ProgramLegRefused as exc:
                 return rejected(

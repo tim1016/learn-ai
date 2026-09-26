@@ -282,12 +282,15 @@ async def test_deploy_view_is_closed_paper_only_contract(
     assert {check["gate_id"] for check in body["readiness_checks"]} == {
         "strategy.validation_accepted",
         "broker.account_posture",
+        "deploy.window",
+        "deploy.exit_terms",
         "clerk.custody_freeze",
         "clerk.exposure_hold",
         "clerk.intent_custody",
         "clerk.channel_health",
     }
-    assert all(check["ready"] for check in body["readiness_checks"])
+    assert all(check["ready"] for check in body["readiness_checks"] if check["gate_id"] != "deploy.exit_terms")
+    assert body["default_exit_terms"] is None
     assert body["execution_modes"] == [
         {
             "mode": "dry_run",
@@ -308,7 +311,7 @@ async def test_deploy_view_is_closed_paper_only_contract(
             "mode": "live",
             "label": "Live",
             "availability": "planned",
-            "explanation": "Live Alpaca execution is planned but is not connected to an admission or execution path.",
+            "explanation": "Live is unavailable on a paper account. Select a live account to deploy real-money bots.",
         },
     ]
     assert [row["preset"] for row in body["sizing_options"]] == [
@@ -737,6 +740,9 @@ async def test_deploy_requires_both_fresh_clerk_channels(
 @pytest.mark.parametrize(
     "body",
     [
+        {key: value for key, value in _BODY.items() if key != "exit_terms"},
+        {**_BODY, "exit_terms": None},
+        {**_BODY, "exit_terms": {"exit_allowance_bps": 20, "band_multiple": 0, "spread_cap_bps": 50}},
         {**_BODY, "mode": "log_only"},
         {**_BODY, "strategy_key": "unknown"},
         {
@@ -927,7 +933,7 @@ async def test_account_trading_block_authors_ineligible_deploy_view(
     assert response.status_code == 200
     view = response.json()
     assert view["eligibility"]["reason_code"] == "ALPACA_ACCOUNT_NOT_TRADABLE"
-    assert view["allowed_actions"] == []
+    assert view["allowed_actions"] == ["deploy"]  # Dry Run is exempt
     assert registry.deploy_calls == []
 
 

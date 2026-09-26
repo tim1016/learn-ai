@@ -77,7 +77,10 @@ export class AlpacaDeskAccountDataService {
       bindingGeneration: lane.effective_binding_generation ?? null,
       routingEpoch: lane.routing_epoch ?? null,
     });
-  });
+  }, { equal: (left, right) => left === right || (left !== null && right !== null
+    && left.broker === right.broker && left.clerkId === right.clerkId
+    && left.accountId === right.accountId && left.bindingGeneration === right.bindingGeneration
+    && left.routingEpoch === right.routingEpoch) });
 
   /** Route identity only — clerk + account. Passed as `openLaneFence`'s
    * `source`: it is the one thing this desk's command fence should

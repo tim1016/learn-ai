@@ -508,7 +508,7 @@ async def _resolve_claimed(
             lambda: _prepare_reduction(repo, effect_operation_id, state, None, pricing)
         )
         if isinstance(prepared, _TouchNeeded):
-            touch = pricing.read(state.symbol, repo.clock())
+            touch = pricing.read(state.symbol, repo.clock(), strategy_instance_id=state.effect.strategy_instance_id)
             prepared = await run(
                 lambda: _prepare_reduction(repo, effect_operation_id, state, touch, pricing)
             )

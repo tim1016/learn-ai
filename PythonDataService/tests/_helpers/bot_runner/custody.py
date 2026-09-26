@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_start_admission import AdmissionCustodyCut
 from app.utils.timestamps import now_ms_utc
@@ -41,7 +43,10 @@ if TYPE_CHECKING:
     from .doubles import _FakeFeed
 
 _SID = "alpaca-skeleton-1"
-_T0 = 1_700_000_000_000
+# A canonical regular-session instant, so admission tests use real calendar rules.
+
+
+_T0 = session_open_ms_utc(date(2023, 11, 15)) + 30 * 60_000
 
 
 def _custody_proof(

@@ -159,6 +159,7 @@ class LiveArmingRecord:
     record_sha256: str
     predecessor: RehearsalPredecessor | None = None
     originating_plan_id: str | None = None
+    exit_terms: dict[str, Any] | None = None
 
     @classmethod
     def create(
@@ -174,10 +175,11 @@ class LiveArmingRecord:
         max_sessions: int,
         predecessor: RehearsalPredecessor | None = None,
         originating_plan_id: str | None = None,
+        exit_terms: dict[str, Any] | None = None,
     ) -> LiveArmingRecord:
         unsigned: dict[str, Any] = {
             "kind": "armed",
-            "schema_version": 2 if predecessor is not None else 1,
+            "schema_version": 3 if exit_terms is not None else (2 if predecessor is not None else 1),
             "live_account_id": live_account_id,
             "strategy_instance_id": strategy_instance_id,
             "seal_hash": seal_hash,
@@ -190,6 +192,10 @@ class LiveArmingRecord:
         }
         if predecessor is not None:
             unsigned["predecessor"] = asdict(predecessor)
+            unsigned["originating_plan_id"] = originating_plan_id
+        if exit_terms is not None:
+            unsigned["exit_terms"] = exit_terms
+            unsigned["predecessor"] = None if predecessor is None else asdict(predecessor)
             unsigned["originating_plan_id"] = originating_plan_id
         record = cls(
             **{
@@ -217,6 +223,8 @@ class LiveArmingRecord:
             del unsigned["record_sha256"]
             # Version 1 rows predate predecessor evidence. They remain valid
             # exactly as sealed instead of being rewritten during a read.
+            if record.schema_version < 3:
+                del unsigned["exit_terms"]
             if record.schema_version == 1:
                 del unsigned["predecessor"]
                 del unsigned["originating_plan_id"]
@@ -324,7 +332,7 @@ def _require_hashes(*values: str) -> None:
 
 def _validate_armed(record: LiveArmingRecord) -> None:
     _require_real(record.live_account_id)
-    _require_kind(record.kind, "armed", record.schema_version, allowed_versions=(1, 2))
+    _require_kind(record.kind, "armed", record.schema_version, allowed_versions=(1, 2, 3))
     if (
         not record.strategy_instance_id
         or not _is_int(record.max_sessions)
@@ -378,7 +386,15 @@ def _validate_armed(record: LiveArmingRecord) -> None:
         _require_hashes(record.predecessor.seal_hash, record.predecessor.receipt_sha256)
     if record.schema_version == 1 and record.originating_plan_id is not None:
         raise LiveArmingInvalid("version 1 live arming records cannot name an originating plan")
-    if record.schema_version == 2:
+    if record.schema_version == 3:
+        from app.schemas.exit_terms import ExitTerms
+
+        if record.exit_terms is None:
+            raise LiveArmingInvalid("version 3 requires sealed exit terms")
+        ExitTerms.model_validate(record.exit_terms)
+    elif record.exit_terms is not None:
+        raise LiveArmingInvalid("historical arming schemas cannot carry exit terms")
+    if record.schema_version in (2, 3):
         if record.originating_plan_id is None:
             raise LiveArmingInvalid("version 2 live arming records must name an originating plan")
         _require_hashes(record.originating_plan_id)

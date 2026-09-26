@@ -69,6 +69,7 @@ from app.broker_configuration.seams import (
     UnconfiguredCredentialSlotDirectory,
 )
 from app.broker_configuration.store import ProfilesStore, new_identifier
+from app.schemas.exit_terms import ExitTermsInput
 from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -90,6 +91,7 @@ def revision_content_sha256(
     endpoint_mode: EndpointMode,
     live_envelope: ValidatedLiveEnvelope | None,
     paper_xh_allowances: ValidatedPaperAllowances | None = None,
+    default_exit_terms: ExitTermsInput | None = None,
     schema_version: int = REVISION_SCHEMA_VERSION,
 ) -> str:
     """The canonical hash over a revision's configured, non-secret content.
@@ -118,6 +120,8 @@ def revision_content_sha256(
     }
     if paper_xh_allowances is not None:
         payload["paper_xh_allowances"] = paper_xh_allowances.to_mapping()
+    if default_exit_terms is not None:
+        payload["default_exit_terms"] = default_exit_terms.model_dump()
     return canonical_sha256(payload)
 
 
@@ -290,6 +294,7 @@ class BrokerConfigurationService:
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
         paper_xh_allowances: ValidatedPaperAllowances | None = None,
+        default_exit_terms: ExitTermsInput | None = None,
     ) -> ProfileWithRevision:
         """Create a profile and its revision 1 in one transaction."""
         self._require_known_credential_slot(credential_slot)
@@ -299,6 +304,7 @@ class BrokerConfigurationService:
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
             paper_xh_allowances=paper_xh_allowances,
+            default_exit_terms=default_exit_terms,
             action="profile_created",
             previous_ref=None,
         )
@@ -361,6 +367,7 @@ class BrokerConfigurationService:
             endpoint_mode=latest.endpoint_mode,
             live_envelope=latest.live_envelope,
             paper_xh_allowances=latest.paper_xh_allowances,
+            default_exit_terms=latest.default_exit_terms,
             action="profile_cloned",
             previous_ref=selection.reference(source.profile_id, latest.revision),
         )
@@ -384,6 +391,7 @@ class BrokerConfigurationService:
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
         paper_xh_allowances: ValidatedPaperAllowances | None = None,
+        default_exit_terms: ExitTermsInput | None = None,
     ) -> ProfileRevision:
         """Append the next immutable revision, refusing a stale edit.
 
@@ -397,12 +405,18 @@ class BrokerConfigurationService:
         N+1 — one would win on the primary key and the loser would surface a
         constraint error instead of the contract's ``revision_conflict``.
         """
+        if live_envelope is not None:
+            live_envelope.validate_for_write()
+            if default_exit_terms is not None and default_exit_terms.exit_allowance_bps != live_envelope.xh_exit_bps:
+                from app.broker_configuration.errors import InvalidLiveEnvelope
+                raise InvalidLiveEnvelope("Default exit allowance must match the live envelope exit allowance.")
         self._require_known_credential_slot(credential_slot)
         content_sha256 = revision_content_sha256(
             credential_slot=credential_slot,
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
             paper_xh_allowances=paper_xh_allowances,
+            default_exit_terms=default_exit_terms,
         )
         owner = self.owner()
         now = self._clock()
@@ -434,6 +448,7 @@ class BrokerConfigurationService:
                 endpoint_mode=endpoint_mode,
                 live_envelope=live_envelope,
                 paper_xh_allowances=paper_xh_allowances,
+                default_exit_terms=default_exit_terms,
                 author_owner_id=owner.owner_id,
                 created_at_ms=now,
             )
@@ -896,6 +911,7 @@ class BrokerConfigurationService:
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
         paper_xh_allowances: ValidatedPaperAllowances | None,
+        default_exit_terms: ExitTermsInput | None,
         action: str,
         previous_ref: str | None,
     ) -> ProfileWithRevision:
@@ -922,6 +938,7 @@ class BrokerConfigurationService:
             endpoint_mode=endpoint_mode,
             live_envelope=live_envelope,
             paper_xh_allowances=paper_xh_allowances,
+            default_exit_terms=default_exit_terms,
             author_owner_id=owner.owner_id,
             created_at_ms=now,
         )
@@ -949,6 +966,7 @@ class BrokerConfigurationService:
         endpoint_mode: EndpointMode,
         live_envelope: ValidatedLiveEnvelope | None,
         paper_xh_allowances: ValidatedPaperAllowances | None,
+        default_exit_terms: ExitTermsInput | None,
         author_owner_id: str,
         created_at_ms: int,
     ) -> ProfileRevision:
@@ -958,6 +976,11 @@ class BrokerConfigurationService:
             live_envelope=live_envelope,
             paper_xh_allowances=paper_xh_allowances,
         )
+        if live_envelope is not None:
+            live_envelope.validate_for_write()
+            if default_exit_terms is not None and default_exit_terms.exit_allowance_bps != live_envelope.xh_exit_bps:
+                from app.broker_configuration.errors import InvalidLiveEnvelope
+                raise InvalidLiveEnvelope("Default exit allowance must match the live envelope exit allowance.")
         return ProfileRevision(
             profile_id=profile_id,
             revision=revision,
@@ -968,11 +991,13 @@ class BrokerConfigurationService:
             account_pinned_at_ms=None,
             live_envelope=live_envelope,
             paper_xh_allowances=paper_xh_allowances,
+            default_exit_terms=default_exit_terms,
             content_sha256=revision_content_sha256(
                 credential_slot=credential_slot,
                 endpoint_mode=endpoint_mode,
                 live_envelope=live_envelope,
                 paper_xh_allowances=paper_xh_allowances,
+                default_exit_terms=default_exit_terms,
             ),
             complete=_is_complete(
                 credential_slot=credential_slot,

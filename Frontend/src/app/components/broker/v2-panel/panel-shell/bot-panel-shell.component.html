@@ -38,6 +38,10 @@
     (retryRequested)="currentRun.reload()"
   />
 
+  @if (armingAvailable()) {
+    <app-live-arming [target]="target()" [sid]="sid()" (changed)="refreshArming()" />
+  }
+
   @if (actionReceipt(); as receipt) {
     <div class="panel-feedback">
       <app-panel-action-receipt
@@ -58,6 +62,7 @@
           [pending]="actionPending()"
           (send)="sendExtendedFlatten($event)"
           (priceCheck)="priceExtendedFlatten($event)"
+          (overridePriceCheck)="priceExtendedFlatten($event, true)"
           (refresh)="refreshFlattenQuote()"
         />
         @if (preparedFlatten()?.quoteError; as quoteError) {

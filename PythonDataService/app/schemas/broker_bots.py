@@ -15,9 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def _validated_strategy_instance_id(value: str) -> str:
@@ -134,6 +136,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     # defined, catalog-visible key is now accepted at the wire boundary —
     # see `_validated_catalog_strategy_key` for exactly what "defined" means.
     strategy_key: str = Field(min_length=1, max_length=128)
+    exit_terms: ExitTermsInput
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"
@@ -356,6 +359,9 @@ class AlpacaPaperDeployView(BaseModel):
     execution_modes: tuple[AlpacaPaperExecutionMode, ...]
     strategies: tuple[AlpacaPaperDeployStrategy, ...]
     sizing_options: tuple[AlpacaPaperSizingOption, ...]
+    default_exit_terms: ExitTermsInput | None = None
+    exit_steps_summary: str = "Set exit terms to review this bot’s exit steps."
+    next_deploy_open_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     action_plan_explanation: str
     carryover_available: bool
     carryover_label: str

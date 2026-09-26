@@ -1203,6 +1203,9 @@
             "title": "Execution Mode",
             "type": "string"
           },
+          "exit_terms": {
+            "$ref": "#/components/schemas/ExitTermsInput"
+          },
           "parameters": {
             "title": "Parameters",
             "type": "object"
@@ -1232,6 +1235,7 @@
         "required": [
           "strategy_instance_id",
           "strategy_key",
+          "exit_terms",
           "symbol"
         ],
         "title": "AlpacaPaperDeployRequest",
@@ -1392,6 +1396,16 @@
             "title": "Carryover Label",
             "type": "string"
           },
+          "default_exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTermsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "dry_run_eligibility": {
             "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
           },
@@ -1409,6 +1423,24 @@
             },
             "title": "Execution Modes",
             "type": "array"
+          },
+          "exit_steps_summary": {
+            "default": "Set exit terms to review this bot\u2019s exit steps.",
+            "title": "Exit Steps Summary",
+            "type": "string"
+          },
+          "next_deploy_open_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Deploy Open Ms"
           },
           "readiness_checks": {
             "items": {
@@ -1714,6 +1746,166 @@
           "severity"
         ],
         "title": "ArbitrageDetail",
+        "type": "object"
+      },
+      "ArmingApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_token": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "plan_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "confirmation_token"
+        ],
+        "title": "ArmingApplyRequest",
+        "type": "object"
+      },
+      "ArmingPlanView": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "confirmation_token": {
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "envelope": {
+            "$ref": "#/components/schemas/LiveEnvelopePayload"
+          },
+          "exit_terms": {
+            "$ref": "#/components/schemas/ExitTerms"
+          },
+          "expires_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "shadow_receipt_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shadow Receipt Sha256"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "confirmation_token",
+          "account_id",
+          "strategy_instance_id",
+          "created_at_ms",
+          "expires_at_ms",
+          "envelope",
+          "exit_terms",
+          "changes",
+          "shadow_receipt_sha256"
+        ],
+        "title": "ArmingPlanView",
+        "type": "object"
+      },
+      "ArmingStatusView": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "armed_instance_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Armed Instance Count"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "sessions_remaining": {
+            "title": "Sessions Remaining",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "unarmed",
+              "armed",
+              "disarmed",
+              "lapsed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "strategy_instance_id",
+          "state",
+          "reason_code",
+          "sessions_remaining",
+          "armed_instance_count",
+          "observed_at_ms"
+        ],
+        "title": "ArmingStatusView",
         "type": "object"
       },
       "ArtifactDetail": {
@@ -15719,6 +15911,84 @@
         "title": "ExitEligibilityContract",
         "type": "object"
       },
+      "ExitTerms": {
+        "additionalProperties": false,
+        "description": "A historical registration may be explicitly sealed with an unset allowance.",
+        "properties": {
+          "band_multiple": {
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Band Multiple",
+            "type": "number"
+          },
+          "exit_allowance_bps": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 10000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Allowance Bps"
+          },
+          "provenance": {
+            "enum": [
+              "deployed",
+              "backfilled"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "spread_cap_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Spread Cap Bps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "exit_allowance_bps",
+          "band_multiple",
+          "spread_cap_bps",
+          "provenance"
+        ],
+        "title": "ExitTerms",
+        "type": "object"
+      },
+      "ExitTermsInput": {
+        "additionalProperties": false,
+        "description": "Explicit operator values for a new deployment or profile default.",
+        "properties": {
+          "band_multiple": {
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Band Multiple",
+            "type": "number"
+          },
+          "exit_allowance_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Exit Allowance Bps",
+            "type": "number"
+          },
+          "spread_cap_bps": {
+            "exclusiveMaximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Spread Cap Bps",
+            "type": "number"
+          }
+        },
+        "required": [
+          "exit_allowance_bps",
+          "band_multiple",
+          "spread_cap_bps"
+        ],
+        "title": "ExitTermsInput",
+        "type": "object"
+      },
       "ExposureNoticeView": {
         "description": "What an abnormal run end left behind at the broker (#2410).\n\nAn ended run manages nothing, so the refusal says so whenever something\ncould still move money: ``position_unmanaged`` for a nonzero position the\nClerk attributes to this bot, ``position_unverified`` when the Clerk cannot\ncurrently vouch for that position, and ``entry_order_working`` for an entry\norder still working that can open one. Nothing is cancelled or flattened on\nthe operator's behalf.",
         "properties": {
@@ -15807,6 +16077,11 @@
         "additionalProperties": false,
         "description": "The limit an operator confirmed for an extended-hours safe flatten (#2007).\n\n``quote_observed_at_ms`` names the IBKR bid/ask the operator confirmed\nagainst; the Clerk refuses a confirmation whose quote is more than ten\nseconds old when it arrives. Alpaca's precision rule is checked against\nthe leg the Clerk would submit, not restated here.",
         "properties": {
+          "band_override": {
+            "default": false,
+            "title": "Band Override",
+            "type": "boolean"
+          },
           "limit_price": {
             "exclusiveMinimum": 0.0,
             "title": "Limit Price",
@@ -29131,6 +29406,16 @@
             "title": "Credential Slot",
             "type": "string"
           },
+          "default_exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTermsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "display_name": {
             "maxLength": 120,
             "minLength": 1,
@@ -30142,12 +30427,28 @@
       "ProposedLimitEvaluationResponse": {
         "description": "What the price the operator proposed does against the Clerk's quote (#2007).\n\nEvery number an operator reads before confirming is computed by the Clerk\nand rendered as-is; the browser never derives one (AGENTS.md \u00a7 \"Python\nowns all math\").",
         "properties": {
+          "band_cap_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band Cap Bps"
+          },
           "limit_price": {
             "title": "Limit Price",
             "type": "number"
           },
           "outside_band": {
             "title": "Outside Band",
+            "type": "boolean"
+          },
+          "override_acknowledged": {
+            "default": false,
+            "title": "Override Acknowledged",
             "type": "boolean"
           },
           "resting": {
@@ -31738,6 +32039,11 @@
             "title": "Action Id",
             "type": "string"
           },
+          "band_override": {
+            "default": false,
+            "title": "Band Override",
+            "type": "boolean"
+          },
           "concurrency_token": {
             "maxLength": 128,
             "minLength": 1,
@@ -33032,6 +33338,16 @@
             "title": "Credential Slot",
             "type": "string"
           },
+          "default_exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTermsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "endpoint_mode": {
             "enum": [
               "paper",
@@ -33139,6 +33455,16 @@
           "credential_slot": {
             "title": "Credential Slot",
             "type": "string"
+          },
+          "default_exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTermsInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "endpoint_mode": {
             "enum": [
@@ -42063,6 +42389,7 @@
           "EXIT_NOT_FLAT",
           "EXIT_RECOVERY_EVALUATED",
           "EXIT_REDUCING_ORDER_CREATED",
+          "EXIT_TERMS_SEALED",
           "EXTERNAL_ORDER_ACKNOWLEDGED",
           "EXTERNAL_ORDER_OBSERVED",
           "MANUAL_ORDER_ACCEPTED",
@@ -48735,6 +49062,304 @@
         ]
       }
     },
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming": {
+      "get": {
+        "operationId": "arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArmingStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arming Status",
+        "tags": [
+          "alpaca-live-arming"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/apply": {
+      "post": {
+        "operationId": "arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArmingApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArmingStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arming Apply",
+        "tags": [
+          "alpaca-live-arming"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/disarm": {
+      "post": {
+        "operationId": "arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArmingStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arming Disarm",
+        "tags": [
+          "alpaca-live-arming"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/plan": {
+      "post": {
+        "operationId": "arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArmingPlanView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arming Plan",
+        "tags": [
+          "alpaca-live-arming"
+        ]
+      }
+    },
     "/api/brokers/alpaca/accounts/{account_id}/live-graduation": {
       "get": {
         "operationId": "read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get",
@@ -51329,6 +51954,60 @@
               ],
               "description": "Scope the channel-health verdict to one symbol. Omitted, the view reports account-level channel presence and connectivity only.",
               "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exit_allowance_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMaximum": 10000.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exit Allowance Bps"
+            }
+          },
+          {
+            "in": "query",
+            "name": "band_multiple",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Band Multiple"
+            }
+          },
+          {
+            "in": "query",
+            "name": "spread_cap_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMaximum": 10000.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spread Cap Bps"
             }
           },
           {
@@ -55119,6 +55798,393 @@
           }
         },
         "summary": "Fleet Bot Panel Quiesce Action",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/arming (custody_read).",
+        "operationId": "fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Live Arming Status",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/apply": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/apply (custody_command).",
+        "operationId": "fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Live Arming Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/disarm": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/disarm (custody_command).",
+        "operationId": "fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Live Arming Disarm",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/plan": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/plan (custody_command).",
+        "operationId": "fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Live Arming Plan",
         "tags": [
           "broker-clerks"
         ]

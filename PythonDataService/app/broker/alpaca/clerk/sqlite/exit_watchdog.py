@@ -325,7 +325,7 @@ async def redrive_or_escalate_stale_exits(
             # this choice and the price are judged at the send instant, as
             # the send-time rule judges the leg, so a re-drive the rule would
             # refuse is refused here, before an attempt is burned.
-            touch = pricing.read(cause.symbol, now_ms)
+            touch = pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
             try:
                 priced = touch.price(
                     side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,

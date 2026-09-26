@@ -366,7 +366,16 @@ def evaluate_run_admission(
     # unchanged, byte-for-byte, to the exact checks that existed before this
     # mode ever existed.
     if bot.mode != "dry_run":
-        if bot.market_liveness.state != "TRADABLE":
+        window_refusal = bot.extended_hours.start_window_refusal
+        if window_refusal is not None:
+            return decide(allowed=False, reason_code=window_refusal.reason_code,
+                          explanation=window_refusal.explanation, next_step=window_refusal.next_step)
+        premarket_ready = (
+            bot.extended_hours.premarket_start and bot.market_liveness.state == "CLOSED"
+            and (bot.market_liveness.symbol_status is None
+                 or bot.market_liveness.symbol_status.state in {"TRADABLE", "NOT_REPORTED"})
+        )
+        if bot.market_liveness.state != "TRADABLE" and not premarket_ready:
             reason_codes = {
                 "HALTED": "MARKET_LIVENESS_HALTED",
                 "CLOSED": "MARKET_LIVENESS_CLOSED",

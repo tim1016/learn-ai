@@ -89,6 +89,7 @@ def test_pre_market_sell_suggests_the_bid_less_the_sealed_exit_allowance() -> No
         exit_allowance_bps=Decimal("20"),
         suggested_limit_price=Decimal("99.80"),
         band_limit_price=Decimal("99.60"),
+        band_cap_bps=Decimal("40"),
     )
 
 

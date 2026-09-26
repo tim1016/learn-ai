@@ -383,7 +383,7 @@ export class BrokersService {
   checkSqliteSafeFlatten(
     clerkId: string,
     accountId: string,
-    action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'>,
+    action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'> & { proposed_limit_price?: number; band_override?: boolean },
     strategyInstanceId: string | null = null,
   ): Promise<SqliteRecoveryActionCheck> {
     // A diagnostic over durable state: read-idempotent, no envelope.
@@ -401,6 +401,8 @@ export class BrokersService {
         {
           action_id: action.action_id,
           concurrency_token: action.concurrency_token,
+          ...(action.proposed_limit_price === undefined ? {} : { proposed_limit_price: action.proposed_limit_price }),
+          ...(action.band_override === undefined ? {} : { band_override: action.band_override }),
         },
       ),
     );

@@ -32,8 +32,9 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal(
     ],
 )
 def test_extended_hours_admission_fact(use_rth: bool, policy: ProgramLegPolicy, state: str) -> None:
-    fact = extended_hours_admission_fact(use_rth=use_rth, policy=policy, observed_at_ms=1_000)
-    assert fact == ExtendedHoursAdmissionFact(state=state, observed_at_ms=1_000)
+    fact = extended_hours_admission_fact(use_rth=use_rth, policy=policy, observed_at_ms=1_788_361_200_000)
+    assert fact.state == state
+    assert fact.observed_at_ms == 1_788_361_200_000
 
 
 @pytest.mark.parametrize("state", ["READY", "NOT_REQUESTED"])
@@ -44,3 +45,28 @@ def test_an_admitted_fact_cannot_carry_a_refusal(state: str) -> None:
 
     with pytest.raises(ValidationError, match="cannot carry a refusal"):
         ExtendedHoursAdmissionFact(state=state, observed_at_ms=1_000, refusal=EXTENDED_HOURS_ALLOWANCE_UNSET)
+
+
+@pytest.mark.parametrize('point,allowed', [('pre', True), ('rth', True), ('close', False), ('night', False), ('holiday', False)])
+@pytest.mark.parametrize('mode', ['trade', 'dry_run'])
+def test_calendar_window_is_shared_by_readiness_and_start(point, allowed, mode):
+    from datetime import date
+
+    from app.services.broker_v2_panel import paper_deploy_service
+    from app.services.run_admission import evaluate_run_admission
+    from app.services.session_authority import scheduled_extended_session_bounds
+    from tests.services.test_run_admission import _bot, _clerk
+
+    bounds = scheduled_extended_session_bounds(date(2026, 11, 27))  # early close
+    holiday = scheduled_extended_session_bounds(date(2026, 11, 25))
+    now = {'pre': bounds.open_ms, 'rth': bounds.rth_open_ms, 'close': bounds.rth_close_ms,
+           'night': bounds.open_ms - 1, 'holiday': holiday.open_ms + 86_400_000}[point]
+    fact = extended_hours_admission_fact(use_rth=True, policy=ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES), observed_at_ms=now)
+    bot = _bot(observed_at_ms=now, mode=mode, liveness_state='CLOSED' if point == 'pre' else 'TRADABLE').model_copy(update={'extended_hours': fact})
+    decision = evaluate_run_admission(bot, _clerk(observed_at_ms=now), evaluated_at_ms=now)
+    assert decision.allowed is (allowed or mode == 'dry_run'), decision.explanation
+    assert paper_deploy_service.deploy_window(now).ready is allowed
+    if not allowed and mode == 'trade':
+        assert decision.reason_code == 'DEPLOY_WINDOW_CLOSED'
+        assert 'ET' in decision.next_step
+        assert fact.start_window_refusal.available_at_ms > now

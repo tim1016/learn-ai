@@ -276,7 +276,8 @@ async def test_deploy_view_shows_blocked_strategy_but_stays_eligible_when_anothe
     assert rows_by_key["deployment_validation"]["blocked_explanation"]
     assert rows_by_key["ema_crossover_signal"]["evidence_status"] == "accepted"
     assert rows_by_key["ema_crossover_signal"]["selectable"] is True
-    assert body["eligibility"]["eligible"] is True
+    assert body["eligibility"]["eligible"] is False
+    assert body["eligibility"]["reason_code"] == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 @pytest.mark.asyncio

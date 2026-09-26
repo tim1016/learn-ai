@@ -435,3 +435,9 @@ async def test_resume_with_an_unreadable_receipt_is_denied_before_clerk_registra
     finally:
         set_alpaca_clerk(None)
         repository.close()
+
+
+@pytest.fixture(autouse=True)
+def _open_start_window(monkeypatch):
+    from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
+    patch_fresh_live_market_liveness(monkeypatch)

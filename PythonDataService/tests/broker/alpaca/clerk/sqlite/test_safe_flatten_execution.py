@@ -1307,3 +1307,16 @@ async def test_a_clerk_priced_quantity_change_folds_without_asking_the_operator(
     assert episode is not None
     assert episode["headline"] == "The flatten's quantity changed after the Clerk priced it"
     assert "No action needed" in episode["next_step"]
+
+
+async def test_outside_band_requires_explicit_override_and_records_it(crashed_with_exposure):
+    repo, _clock = crashed_with_exposure
+    facade, trade, current_context = await _stopped_facade_at(repo, _PRE_MARKET_MS)
+    result = await _execute(facade, current_context, confirmed_limit=ConfirmedRecoveryLimit(
+        limit_price=Decimal('99.59'), quote_observed_at_ms=_PRE_MARKET_MS, band_override=True,
+    ))
+    assert result.applied is True
+    assert trade.submitted_legs[0].limit_price == pytest.approx(99.59, abs=1e-9)
+    row = repo.last_strategy_transition(strategy_instance_id=SID, transition_kind='EXIT_ACCEPTED')
+    import json
+    assert json.loads(row['facts_json'])['band_override'] is True

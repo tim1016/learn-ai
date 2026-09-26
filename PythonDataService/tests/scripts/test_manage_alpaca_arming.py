@@ -17,7 +17,7 @@ from app.broker.alpaca.clerk.live_arming import (
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
-from app.broker.alpaca.clerk.sqlite.activation import ACTIVATION_FILENAME, ActivationStore
+from app.broker.alpaca.clerk.sqlite.activation import ACTIVATION_FILENAME
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from scripts.manage_alpaca_arming import _SUBMISSION_ADMITTED_NOTE, main
@@ -120,12 +120,12 @@ def _arm(roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str], *, now_ms
     return _last_object(capsys)
 
 
-def _graduate_live_account(artifacts_root: Path) -> None:
+def _graduate_live_account(artifacts_root: Path, account_id: str = LIVE_ACCT) -> None:
     from tests.broker.alpaca.clerk.sqlite.test_cutover_live import (
         test_a_never_legacy_account_graduates_end_to_end,
     )
 
-    test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
+    test_a_never_legacy_account_graduates_end_to_end(artifacts_root, account_id, "live")
 
 
 def test_status_on_an_account_with_no_records_answers_unarmed(
@@ -201,36 +201,32 @@ def test_status_lists_an_armed_graduated_account_without_a_shadow_fence(
     assert report["instances"][0]["strategy_instance_id"] == ARMING_SID
 
 
-def test_status_refuses_to_choose_between_two_directly_activated_live_accounts(
+def test_status_lists_two_directly_activated_live_accounts(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifacts_root, _live_state_root = roots
-    store = ActivationStore(artifacts_root / "accounts" / "alpaca")
-    store.append(live_activation(account_id=LIVE_ACCT))
-    store.append(live_activation(account_id="9LIVE0002"))
+    _graduate_live_account(artifacts_root)
+    _graduate_live_account(artifacts_root, "9LIVE0002")
 
-    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 
-    refusal = _last_object(capsys)
-    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
-    assert "more than one account" in refusal["detail"]
+    report = _last_object(capsys)
+    assert {row["live_account_id"] for row in report["accounts"]} == {LIVE_ACCT, "9LIVE0002"}
+    assert all(row["instances"] == [] for row in report["accounts"])
 
 
-def test_status_refuses_different_accounts_across_shadow_and_live_activations(
+def test_status_lists_different_accounts_across_shadow_and_live_activations(
     roots: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifacts_root, _live_state_root = roots
     activate_shadow_fence(artifacts_root, live_account_id=LIVE_ACCT)
-    ActivationStore(artifacts_root / "accounts" / "alpaca").append(
-        live_activation(account_id="9LIVE0002")
-    )
+    _graduate_live_account(artifacts_root, "9LIVE0002")
 
-    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 2
+    assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 
-    refusal = _last_object(capsys)
-    assert refusal["error"] == LIVE_ARMING_INSTANCE_UNSEALED
-    assert LIVE_ACCT in refusal["detail"]
-    assert "9LIVE0002" in refusal["detail"]
+    report = _last_object(capsys)
+    assert {row["live_account_id"] for row in report["accounts"]} == {LIVE_ACCT, "9LIVE0002"}
+    assert all(row["instances"] == [] for row in report["accounts"])
 
 
 def test_list_status_refuses_an_invalid_live_activation_ledger_as_one_json_object(
@@ -860,3 +856,30 @@ def test_a_real_activation_record_reports_submission_admitted(
     assert report["note"] == _SUBMISSION_ADMITTED_NOTE
     assert "a live activation record exists for this account" in report["note"]
     assert "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true" in report["note"]
+
+
+@pytest.mark.parametrize("root_style", ["relative", "home"])
+def test_status_resolves_explicit_roots_and_lists_unarmed_instances_per_account(
+    roots: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], root_style: str,
+) -> None:
+    from app.broker.alpaca.clerk.account_authority import shadow_account_id_for_live_account
+
+    artifacts_root, live_state_root = roots
+    for account_id, sid in [(LIVE_ACCT, "unarmed-one"), ("9LIVE0002", "unarmed-two")]:
+        activate_shadow_fence(artifacts_root, live_account_id=account_id)
+        record_sealed_binding(live_state_root, strategy_instance_id=sid,
+            sealed_account_id=shadow_account_id_for_live_account(account_id))
+    monkeypatch.chdir(tmp_path)
+    if root_style == "home":
+        # expanduser uses the platform home lookup; override only its test seam.
+        import os.path
+        expanduser = os.path.expanduser
+        monkeypatch.setattr(os.path, "expanduser", lambda path: str(tmp_path) + path[1:] if path == "~" or path.startswith("~/") else expanduser(path))
+    prefix = "~/" if root_style == "home" else ""
+    assert main(["--artifacts-root", prefix + "clerk", "--live-state-root", prefix + "runner",
+        "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
+    report = _last_object(capsys)
+    assert {row["live_account_id"]: [item["strategy_instance_id"] for item in row["instances"]]
+        for row in report["accounts"]} == {LIVE_ACCT: ["unarmed-one"], "9LIVE0002": ["unarmed-two"]}
+    assert all(item["state"] == "unarmed" for row in report["accounts"] for item in row["instances"])

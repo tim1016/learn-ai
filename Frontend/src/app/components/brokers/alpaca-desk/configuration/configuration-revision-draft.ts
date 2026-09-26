@@ -34,6 +34,8 @@ export interface RevisionDraft {
   arming_max_sessions: number | null;
   xh_entry_bps: number | null;
   xh_exit_bps: number | null;
+  exit_band_multiple: number | null;
+  exit_spread_cap_bps: number | null;
 }
 
 /** The six envelope keys, in the order the form renders them. */
@@ -68,6 +70,8 @@ export function emptyDraft(credentialSlot: string): RevisionDraft {
     arming_max_sessions: null,
     xh_entry_bps: null,
     xh_exit_bps: null,
+    exit_band_multiple: null,
+    exit_spread_cap_bps: null,
   };
 }
 
@@ -87,7 +91,9 @@ export function draftFromRevision(revision: BrokerProfileRevision): RevisionDraf
     shadow_sessions: envelope?.shadow_sessions ?? null,
     arming_max_sessions: envelope?.arming_max_sessions ?? null,
     xh_entry_bps: offsets?.xh_entry_bps ?? null,
-    xh_exit_bps: offsets?.xh_exit_bps ?? null,
+    xh_exit_bps: revision.default_exit_terms?.exit_allowance_bps ?? offsets?.xh_exit_bps ?? null,
+    exit_band_multiple: revision.default_exit_terms?.band_multiple ?? null,
+    exit_spread_cap_bps: revision.default_exit_terms?.spread_cap_bps ?? null,
   };
 }
 
@@ -179,6 +185,8 @@ export function draftProblems(
   draft: RevisionDraft,
   slots: readonly BrokerCredentialSlot[] = [],
 ): readonly string[] {
+  const exitProblem = exitDefaultsProblem(draft);
+  if (exitProblem !== null) return [exitProblem];
   const slotProblem = slotProblemFor(draft.credential_slot, slots);
   if (slotProblem !== null) return [slotProblem];
   if (draft.endpoint_mode !== 'live') {
@@ -186,7 +194,7 @@ export function draftProblems(
   }
   return [
     betweenExclusive(draft.loss_fraction, ENVELOPE_LABELS.loss_fraction, 0, 1),
-    aboveZero(draft.loss_usd, ENVELOPE_LABELS.loss_usd),
+    wholeCentLossCap(draft.loss_usd),
     wholeAtLeastOne(draft.shadow_sessions, ENVELOPE_LABELS.shadow_sessions),
     wholeAtLeastOne(draft.arming_max_sessions, ENVELOPE_LABELS.arming_max_sessions),
     offsetBelow(draft.xh_entry_bps, ENVELOPE_LABELS.xh_entry_bps, 10_000),
@@ -202,6 +210,7 @@ export function draftProblems(
 export function toRevisionContent(draft: RevisionDraft): RevisionContent {
   if (draft.endpoint_mode !== 'live') {
     return {
+      ...exitDefaults(draft),
       credential_slot: draft.credential_slot,
       endpoint_mode: draft.endpoint_mode,
       live_envelope: null,
@@ -227,7 +236,10 @@ export function toRevisionContent(draft: RevisionDraft): RevisionContent {
     const missing = ENVELOPE_KEYS.filter((key) => draft[key] === null);
     throw new Error(`A live revision needs every envelope value; missing: ${missing.join(', ')}.`);
   }
+  const lossProblem = wholeCentLossCap(loss_usd);
+  if (lossProblem !== null) throw new Error(lossProblem);
   return {
+    ...exitDefaults(draft),
     credential_slot: draft.credential_slot,
     endpoint_mode: 'live',
     live_envelope: {
@@ -249,4 +261,30 @@ function paperOffsets(draft: RevisionDraft): RevisionContent['paper_xh_allowance
     throw new Error('A paper revision sets both extended-hours offsets or neither.');
   }
   return { xh_entry_bps, xh_exit_bps };
+}
+
+function wholeCentLossCap(value: number | null): string | null {
+  const positive = aboveZero(value, ENVELOPE_LABELS.loss_usd);
+  if (positive !== null || value === null) return positive;
+  const cents = value * 100;
+  const tolerance = 4 * Number.EPSILON * 2 ** Math.floor(Math.log2(Math.abs(cents)));
+  return Math.abs(cents - Math.round(cents)) <= tolerance
+    ? null : 'Daily loss cap (USD) must be in whole cents.';
+}
+
+function exitDefaultsProblem(draft: RevisionDraft): string | null {
+  if (draft.exit_band_multiple === null && draft.exit_spread_cap_bps === null) return null;
+  if (draft.xh_exit_bps === null || draft.exit_band_multiple === null || draft.exit_spread_cap_bps === null)
+    return 'Default exit terms need an exit allowance, band multiple and spread cap.';
+  if (!Number.isFinite(draft.exit_band_multiple) || draft.exit_band_multiple < 1 || draft.exit_band_multiple > 10)
+    return 'Exit band multiple must be between 1 and 10.';
+  return offsetBelow(draft.exit_spread_cap_bps, 'Exit spread cap (bps)', 10_000);
+}
+
+function exitDefaults(draft: RevisionDraft): Partial<RevisionContent> {
+  const problem = exitDefaultsProblem(draft);
+  if (problem !== null) throw new Error(problem);
+  if (draft.xh_exit_bps === null || draft.exit_band_multiple === null || draft.exit_spread_cap_bps === null) return {};
+  return { default_exit_terms: { exit_allowance_bps: draft.xh_exit_bps,
+    band_multiple: draft.exit_band_multiple, spread_cap_bps: draft.exit_spread_cap_bps } };
 }

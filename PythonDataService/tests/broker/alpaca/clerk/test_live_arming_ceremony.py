@@ -271,7 +271,7 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
         clock=_Clock(ARMED_AT_MS),
     )
 
-    assert plan.schema_version == 2
+    assert plan.schema_version == 3
     assert plan.predecessor is not None
     assert plan.predecessor.strategy_instance_id == "rehearsal"
     assert plan.predecessor.seal_hash == rehearsal.bot_configuration_hash
@@ -285,7 +285,7 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
         clock=_Clock(ARMED_AT_MS),
     )
 
-    assert armed.schema_version == 2
+    assert armed.schema_version == 3
     assert armed.predecessor == plan.predecessor
     assert armed.originating_plan_id == plan.plan_id
 
@@ -534,7 +534,7 @@ def test_plan_writes_nothing_and_its_two_ids_are_its_own_content_hash(roots: tup
     )
 
     assert _snapshot(artifacts_root) == before
-    assert plan.schema_version == 1
+    assert plan.schema_version == 3
     assert plan.plan_id == plan.confirmation_token and len(plan.plan_id) == 64
     assert (plan.created_at_ms, plan.expires_at_ms) == (ARMED_AT_MS, ARMED_AT_MS + TTL_MS)
     assert plan.live_account_id == LIVE_ACCT

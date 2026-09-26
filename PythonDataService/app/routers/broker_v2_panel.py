@@ -63,6 +63,7 @@ from app.schemas.canary_admission import (
     CanaryActivationRequest,
     CanaryAdmissionEvent,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
     cohort_archive,
@@ -286,9 +287,18 @@ async def get_alpaca_paper_deploy_view(
             "reports account-level channel presence and connectivity only."
         ),
     ),
+    exit_allowance_bps: float | None = Query(None, ge=0, lt=10_000),
+    band_multiple: float | None = Query(None, ge=1, le=10),
+    spread_cap_bps: float | None = Query(None, ge=0, lt=10_000),
 ) -> AlpacaPaperDeployView:
+    terms = None
+    if any(value is not None for value in (exit_allowance_bps, band_multiple, spread_cap_bps)):
+        if any(value is None for value in (exit_allowance_bps, band_multiple, spread_cap_bps)):
+            raise HTTPException(status_code=422, detail="Supply all three exit terms.")
+        terms = ExitTermsInput(exit_allowance_bps=exit_allowance_bps, band_multiple=band_multiple,
+                               spread_cap_bps=spread_cap_bps)
     try:
-        return await panel_deploy.get_alpaca_paper_deploy_view(broker, account_id, symbol)
+        return await panel_deploy.get_alpaca_paper_deploy_view(broker, account_id, symbol, terms)
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 

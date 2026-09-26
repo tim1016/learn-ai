@@ -33,6 +33,7 @@ from app.broker_configuration.records import (
     LocalOwner,
     ProfileRevision,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.utils.timestamps import now_ms_utc
 
 DATABASE_DIRECTORY = "broker_configuration"
@@ -68,6 +69,7 @@ _REVISION_COLUMN_NAMES: tuple[str, ...] = (
     "account_pinned_at_ms",
     *(column for _, column in _ENVELOPE_COLUMNS),
     *(column for _, column in _PAPER_ALLOWANCE_COLUMNS),
+    "default_exit_terms_json",
     "content_sha256",
     "complete",
     "author_owner_id",
@@ -430,6 +432,8 @@ class ProfilesStore:
             "endpoint_mode": revision.endpoint_mode,
             "account_pin": revision.account_pin,
             "account_pinned_at_ms": revision.account_pinned_at_ms,
+            "default_exit_terms_json": (None if revision.default_exit_terms is None
+                                        else revision.default_exit_terms.model_dump_json()),
             "content_sha256": revision.content_sha256,
             "complete": int(revision.complete),
             "author_owner_id": revision.author_owner_id,
@@ -657,6 +661,8 @@ def _revision_from_row(row: sqlite3.Row) -> ProfileRevision:
         account_pinned_at_ms=(
             None if row["account_pinned_at_ms"] is None else int(row["account_pinned_at_ms"])
         ),
+        default_exit_terms=(None if row["default_exit_terms_json"] is None
+                            else ExitTermsInput.model_validate_json(row["default_exit_terms_json"])),
         live_envelope=envelope,
         paper_xh_allowances=allowances,
         content_sha256=row["content_sha256"],

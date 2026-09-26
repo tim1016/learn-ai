@@ -34,6 +34,7 @@ from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.services.bot_carryover import configuration_hash
@@ -130,6 +131,7 @@ class BrokerBotBinding(BaseModel):
     # A Start obtains this exact account from its custody snapshot before it
     # can persist or register the run. Legacy records remain readable with no
     # seal, but cannot be resumed into a newly selected account.
+    exit_terms: ExitTerms | None = None
     sealed_account_id: str | None = None
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     created_at_ms: int
@@ -152,6 +154,7 @@ class StrategyInstanceRecord(BaseModel):
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
     strategy_params: dict[str, Any] | None = None
+    exit_terms: ExitTerms | None = None
     sealed_account_id: str | None = None
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at_ms: int
@@ -171,6 +174,7 @@ class StrategyInstanceRecord(BaseModel):
             action_plan=binding.action_plan,
             strategy_params=binding.strategy_params,
             sealed_account_id=binding.sealed_account_id,
+            exit_terms=binding.exit_terms,
             configuration_hash=configuration_hash(binding),
             created_at_ms=binding.created_at_ms,
         )
@@ -836,6 +840,7 @@ class BotBindingRepository:
             strategy_param_origins=parameter_origins,
             sealed_program=sealed_program,
             sealed_account_id=instance.sealed_account_id,
+            exit_terms=instance.exit_terms,
             run_id=run.run_id,
             created_at_ms=run.started_at_ms,
         )

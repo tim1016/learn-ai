@@ -69,6 +69,8 @@ def _verified_payload(record: LedgerRecord) -> dict[str, Any]:
         # would serialize bytes the row's digest never sealed.
         del canonical["predecessor"]
         del canonical["originating_plan_id"]
+    if isinstance(verified, LiveArmingRecord) and verified.schema_version < 3:
+        del canonical["exit_terms"]
     return canonical
 
 

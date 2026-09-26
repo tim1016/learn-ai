@@ -373,6 +373,7 @@ class _BenchRegistry:
             use_rth=True,
             strategy_key="deployment_validation",
             sealed_program=None,
+            exit_terms=None,
             mode="trade",
         )
 

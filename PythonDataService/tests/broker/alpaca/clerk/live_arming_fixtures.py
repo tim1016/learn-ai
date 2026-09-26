@@ -173,6 +173,8 @@ def record_sealed_binding(
         sealed_account_id=sealed_account_id,
         quantity=quantity,
     )
+    from app.schemas.exit_terms import ExitTermsInput
+
     live_state_binding_repository(live_state_root).record_launch(
         BrokerBotBinding(
             strategy_instance_id=strategy_instance_id,
@@ -182,6 +184,7 @@ def record_sealed_binding(
             quantity=quantity,
             action_plan=alpaca_v1_action_plan("SPY"),
             sealed_program=seal,
+            exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal(),
             sealed_account_id=sealed_account_id,
             run_id=f"{strategy_instance_id}-run-1",
             created_at_ms=1_757_000_000_000,

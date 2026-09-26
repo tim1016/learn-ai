@@ -37,7 +37,7 @@ describe('ConfigurationRevisionFormComponent', () => {
     const values = [
       ['Extended-hours entry offset (bps)', '7.25'],
       [/^Extended-hours exit offset \(bps\)/, '8.125'],
-      ...(endpoint === 'live' ? [['Daily loss fraction', '0.00025'], ['Daily loss cap (USD)', '12.345']] : []),
+      ...(endpoint === 'live' ? [['Daily loss fraction', '0.00025'], ['Daily loss cap (USD)', '12.34']] : []),
     ] as const;
     for (const [name, value] of values) {
       const field = screen.getByRole('spinbutton', { name });
@@ -70,11 +70,11 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(screen.getByText(/this page cannot make it/)).toBeTruthy();
   });
 
-  it('shows a paper endpoint only the two extended-hours offsets, and says what they do', async () => {
+  it('shows paper entry settings and exit defaults, and explains their ownership', async () => {
     await render(HostComponent);
 
     const offsets = screen.getByRole('group', { name: 'Extended-hours offsets' });
-    expect(screen.getAllByRole('spinbutton')).toHaveLength(2);
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(4);
     expect(
       within(offsets).getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }),
     ).toBeTruthy();
@@ -82,14 +82,11 @@ describe('ConfigurationRevisionFormComponent', () => {
       within(offsets).getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
     ).toBeTruthy();
     expect(screen.queryByRole('spinbutton', { name: 'Daily loss fraction' })).toBeNull();
-    const note = within(offsets).getByText(/an exit the\s+exit\s+offset/);
-    expect(note.textContent).toMatch(/a short entry goes the\s+entry offset below it/);
-    expect(note.textContent).toMatch(/a short cover the exit offset above it/);
-    expect(note.textContent).toMatch(/decision bar's close for an order placed as the bot decides/);
-    expect(note.textContent).toMatch(/the live bid \(sell\)\s+or ask \(buy\) for an exit priced later/);
-    expect(note.textContent).toMatch(/will not Start until both are\s+set/);
-    expect(note.textContent).toMatch(/will not Resume while it holds no position/);
-    expect(note.textContent).toMatch(/a run still holding a position\s+always resumes/);
+    const note = within(offsets).getByText(/The entry offset sets/);
+    expect(note.textContent).toMatch(/each bot keeps the exit terms chosen when it was deployed/);
+    expect(note.textContent).toMatch(/a sell below the bid or a cover above the ask/);
+    expect(note.textContent).toMatch(/Start requires the bot's exit terms/);
+    expect(note.textContent).toMatch(/must be flattened before Resume/);
     expect(screen.queryByText(/It does not arm live trading/)).toBeNull();
   });
 
@@ -109,13 +106,13 @@ describe('ConfigurationRevisionFormComponent', () => {
     expect(rendered.fixture.componentInstance.draft().xh_entry_bps).toBe(12.5);
   });
 
-  it('reveals the six envelope fields for a live endpoint, and states that Live never arms', async () => {
+  it('reveals the live envelope and exit defaults, and explains where to arm', async () => {
     const rendered = await render(HostComponent);
     await userEvent.selectOptions(screen.getByLabelText('Endpoint'), 'live');
     await rendered.fixture.whenStable();
 
     expect(screen.getByRole('group', { name: 'Live risk envelope' })).toBeTruthy();
-    expect(screen.getAllByRole('spinbutton')).toHaveLength(6);
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(8);
     expect(screen.getByRole('spinbutton', { name: 'Daily loss fraction' })).toBeTruthy();
     expect(screen.getByRole('spinbutton', { name: 'Sessions one arming covers' })).toBeTruthy();
     expect(screen.getByText(/It does not arm live trading/)).toBeTruthy();

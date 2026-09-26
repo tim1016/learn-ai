@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import pytest
 
-import app.broker.alpaca.clerk.recovery_reduction as recovery_reduction
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_runner as bot_runner
 import app.services.bot_trade_strategy as bot_trade_strategy
@@ -85,17 +84,21 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
-    # #2440: the Clerk sends an EXIT's market leg only while the regular
-    # session is open, judged on its own clock when the leg is sent. These
-    # suites replay historical bars against a wall-clock Clerk as if the
-    # market were live and open -- the market clock above says OPEN -- so the
-    # send-time session judgement says so too; on the host's clock a replayed
-    # round trip would otherwise pass only between 09:30 and 16:00 ET. The
-    # rule itself is pinned by the Clerk's own suites on pinned clocks.
-    monkeypatch.setattr(recovery_reduction, "regular_session_open", lambda _now_ms: True)
+    from datetime import date
+    from types import ModuleType, SimpleNamespace
+
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+    from app.utils import timestamps
+
+    # One controllable source backs imported/default clock callables too.
+    start = session_open_ms_utc(date(2026, 9, 25)) + 60_000
+    if isinstance(timestamps.time, ModuleType):
+        monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: start / 1000))
 
 
-def patch_wall_clock_to_the_fed_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+def patch_wall_clock_to_the_fed_bar(
+    monkeypatch: pytest.MonkeyPatch, *, start_ms: int | None = None,
+) -> None:
     """Pin the staleness gate's wall clock to the close of the bar just fed (#2303/#2345).
 
     Runner suites replay fixed, historical bar timestamps as if they were live;
@@ -104,20 +107,30 @@ def patch_wall_clock_to_the_fed_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     that fired the bucket -- so the real gate (``feed_continuity_policy.late_decision``)
     still runs on every decision and sees exactly what a promptly delivered live
     bar would show it. Before any bar is fed it falls through to the real clock.
+    For a session-boundary replay, pass ``start_ms`` before constructing the
+    runner or Clerk. All imported/default ``now_ms_utc`` callables, including
+    the execution lease, then share that initial instant and advance together.
+    The caller chooses a lease TTL covering its replayed span. Other mechanics
+    tests may keep their explicitly pinned admission clock.
     A test that needs a late decision pins ``feed_continuity_policy.now_ms_utc``
     itself after this fixture ran.
     """
     fed_bar_end_ms: list[int] = []
     real_drain_bar = bot_trade_strategy._drain_bar
-    real_now_ms_utc = feed_continuity_policy.now_ms_utc
+    from app.utils import timestamps
+
+    initial_ms = timestamps.now_ms_utc() if start_ms is None else start_ms
+    def replay_now() -> int:
+        return fed_bar_end_ms[0] if fed_bar_end_ms else initial_ms
+
+    if start_ms is not None:
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: replay_now() / 1000))
 
     def _drain_and_tick(strategy: object, context: object, bar: TradeBar) -> None:
         fed_bar_end_ms[:] = [bar.end_ms]
         real_drain_bar(strategy, context, bar)  # type: ignore[arg-type]
 
     monkeypatch.setattr(bot_trade_strategy, "_drain_bar", _drain_and_tick)
-    monkeypatch.setattr(
-        feed_continuity_policy,
-        "now_ms_utc",
-        lambda: fed_bar_end_ms[0] if fed_bar_end_ms else real_now_ms_utc(),
-    )
+    monkeypatch.setattr(feed_continuity_policy, "now_ms_utc", replay_now)

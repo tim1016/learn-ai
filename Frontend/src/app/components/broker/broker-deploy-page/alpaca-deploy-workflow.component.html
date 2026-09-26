@@ -10,6 +10,9 @@
     }
     @if (receipt(); as deployReceipt) {
       <app-deploy-launch-receipt [receipt]="deployReceipt" />
+      @if (deployReceipt.execution_mode === 'live') {
+        <app-live-arming [target]="deployTarget(deployReceipt.account_id)" [sid]="deployReceipt.bot.strategy_instance_id" />
+      }
     } @else {
       <form class="deploy-form" novalidate (submit)="$event.preventDefault(); submit()">
         <div class="deploy-split">
@@ -71,6 +74,14 @@
               (carryoverAllowedChange)="setCarryover($event)"
             />
 
+            <fieldset class="deploy-exit-terms">
+              <legend>Exit terms · fixed for this bot</legend>
+              <label>Exit allowance (bps)<input type="number" step="any" [formField]="ticketForm.exitAllowanceBps" (blur)="refreshExitTerms()" /></label>
+              <label>Band multiple<input type="number" step="any" [formField]="ticketForm.bandMultiple" (blur)="refreshExitTerms()" /></label>
+              <label>Spread cap (bps)<input type="number" step="any" [formField]="ticketForm.spreadCapBps" (blur)="refreshExitTerms()" /></label>
+              <p>{{ view.exit_steps_summary }}</p>
+            </fieldset>
+
             <app-deploy-parameters-section
               [paramsSchema]="paramsSchema()"
               [values]="ticket().parameters"
@@ -105,6 +116,12 @@
             >
               {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}
             </button>
+            @if (submitError(); as refusal) {
+              <p role="alert">{{ refusal.message }} {{ refusal.explanation }} {{ refusal.nextAction }}</p>
+            }
+            @if (admissionDecision(); as decision) {
+              @if (!decision.allowed) { <p role="alert">{{ decision.explanation }} {{ decision.next_step }}</p> }
+            }
             <small id="deploy-submit-guidance" aria-live="polite">{{ submissionReadiness().guidance }}</small>
             <!-- Server-observed, never a client clock (temporal-rigor.md). -->
             <small class="deploy-footer__observed" data-testid="deploy-footer-observed">

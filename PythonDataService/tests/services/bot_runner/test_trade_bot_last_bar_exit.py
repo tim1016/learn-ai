@@ -9,11 +9,7 @@ after the session has ended. A market DAY leg sent then is one Alpaca queues
 for the next open; the Clerk must send the extended-hours DAY limit instead,
 priced off the decision bar's close and the exit allowance.
 
-The package harness (``tests/_helpers/bot_runner/market.py``) forces
-``recovery_reduction.regular_session_open`` to ``True`` so replayed round
-trips pass whatever the host's clock says. That force would let a queued
-market leg through here, so this test restores the canonical calendar's
-judgement and pins the Clerk's clock to the fed bar instead.
+The shared replay clock drives session rules at the fed bar, including the final close.
 """
 
 from __future__ import annotations
@@ -24,12 +20,10 @@ from pathlib import Path
 
 import pytest
 
-import app.broker.alpaca.clerk.recovery_reduction as recovery_reduction
 import app.services.bot_trade_strategy as bot_trade_strategy
 import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.recovery_reduction import regular_session_open
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -42,18 +36,13 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
+from tests._helpers.bot_runner.market import patch_wall_clock_to_the_fed_bar
 
 from ._support import _green_bar, _trade_bar
 
 _ACCOUNT_ID = "PA-TEST"
-# 2024-01-02: a regular NYSE session, closing at 16:00 ET by the canonical calendar.
-_CLOSE_MS = session_close_ms_utc(date(2024, 1, 2))
-# Two greens complete the program's entry streak at 15:44 ET. The feed then
-# skips to the day's last minute: deployment_validation liquidates a held
-# position on the first bar at or past its flatten barrier (close - 15 min),
-# so the bar that closes at the regular close is where this EXIT is decided.
-_FIRST_GREEN_END_MS = _CLOSE_MS - 17 * 60_000
-_ENTER_END_MS = _CLOSE_MS - 16 * 60_000
+# Two greens enter before the program's close-minus-15-minute barrier.
+# Skipping to the final minute then makes the last bar decide EXIT.
 _LAST_BAR_CLOSE = "400.00"
 # A live EXIT reaches the Clerk seconds after its bar closes, never at the close.
 _SEND_DELAY_MS = 2_000
@@ -139,13 +128,16 @@ def _regular_hours_binding() -> BrokerBotBinding:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stale_snapshot", [False, True])
+@pytest.mark.parametrize("day", [date(2024, 1, 2), date(2024, 11, 29)])
 async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_hours_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_snapshot: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_snapshot: bool, day: date
 ) -> None:
     """The last bar's EXIT is the extended-hours DAY limit, never a market order queued for the open."""
-    # Undo the harness's always-open session (module docstring): the send-time
-    # rule judges the Clerk's clock by the canonical calendar, as in production.
-    monkeypatch.setattr(recovery_reduction, "regular_session_open", regular_session_open)
+    close_ms = session_close_ms_utc(day)
+    first_green_end_ms = close_ms - 17 * 60_000
+    enter_end_ms = close_ms - 16 * 60_000
+    # Seed before acquiring the lease: no future-dated lease can mask expiry.
+    patch_wall_clock_to_the_fed_bar(monkeypatch, start_ms=first_green_end_ms)
     repo = ClerkSqliteRepository.initialize(
         account_id=_ACCOUNT_ID,
         artifacts_root=tmp_path / "clerk",
@@ -177,9 +169,9 @@ async def test_a_regular_hours_exit_decided_on_the_last_bar_leaves_as_an_after_h
     await facade.register_strategy_run(binding)
     feed = _FakeFeed(
         [
-            _green_bar(_FIRST_GREEN_END_MS),
-            _green_bar(_ENTER_END_MS),
-            _trade_bar(_CLOSE_MS, open_price="401.00", close_price=_LAST_BAR_CLOSE),
+            _green_bar(first_green_end_ms),
+            _green_bar(enter_end_ms),
+            _trade_bar(close_ms, open_price="401.00", close_price=_LAST_BAR_CLOSE),
         ],
         mode="finite",
     )

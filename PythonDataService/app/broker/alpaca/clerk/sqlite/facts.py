@@ -255,6 +255,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "reducing_valid_until_ms": None,
     "reducing_confirmed_quantity": None,
     "reducing_priced_by": None,
+    "band_override": False,
     "reference_bid": None,
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
@@ -325,6 +326,7 @@ class ExitAcceptedFacts:
     # quantity-guard and expiry copy must not tell a trader to confirm a price
     # nobody confirmed — a Clerk-priced leg re-prices on the next pass.
     reducing_priced_by: str | None = None
+    band_override: bool = False
     # The live IBKR quote the Clerk priced an operator's confirmed limit
     # against — the reference its realized slippage is measured from (#2007).
     reference_bid: float | None = None
@@ -339,6 +341,7 @@ class ExitAcceptedFacts:
         reference_quote: TopOfBookQuote | None = None,
         confirmed_quantity: float | None = None,
         priced_by: str | None = None,
+        band_override: bool = False,
     ) -> ExitAcceptedFacts:
         """Record the reducing shape, unless it is the default.
 
@@ -361,6 +364,7 @@ class ExitAcceptedFacts:
         return replace(
             self,
             reducing_side=shape.side.value,
+            band_override=band_override,
             order_type=shape.order_type.value,
             time_in_force=shape.time_in_force.value,
             limit_price=shape.limit_price,

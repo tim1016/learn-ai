@@ -154,6 +154,10 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
     import json
 
     facts = json.loads(payload["facts_json"])
+    if facts.get("exit_terms") is not None:
+        from app.schemas.exit_terms import ExitTerms
+        ExitTerms.model_validate(facts["exit_terms"])
+
     conn.execute(
         "INSERT INTO strategy_instances "
         "(strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms) "
@@ -1572,6 +1576,13 @@ def _fold_exit_recovery_evaluated(_conn: sqlite3.Connection, payload: dict[str, 
     ExitRecoveryEvaluatedFacts.from_facts_json(payload["facts_json"])
 
 
+def _fold_exit_terms_sealed(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.schemas.exit_terms import ExitTerms
+
+    ExitTerms.model_validate_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_SEALED", _fold_exit_terms_sealed)
 DEFAULT_FOLD_REGISTRY.register("EXIT_RECOVERY_EVALUATED", _fold_exit_recovery_evaluated)
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)

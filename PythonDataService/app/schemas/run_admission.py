@@ -77,6 +77,8 @@ class ExtendedHoursAdmissionFact(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: ExtendedHoursAdmissionState
+    start_window_refusal: LegRefusal | None = None
+    premarket_start: bool = False
     refusal: LegRefusal | None = None
     observed_at_ms: int = Field(ge=0)
 

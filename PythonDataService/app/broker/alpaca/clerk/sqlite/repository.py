@@ -1228,6 +1228,7 @@ class ClerkSqliteRepository(
         strategy_key: str = "repository_direct_registration",
         display_name: str = "Repository direct registration",
         config_json: str | None = None,
+        exit_terms: dict[str, object] | None = None,
     ) -> CommittedTransition:
         """Insert-once bot registration — needs no command/effect lifecycle.
 
@@ -1262,6 +1263,7 @@ class ClerkSqliteRepository(
                     "strategy_key": strategy_key,
                     "display_name": display_name,
                     "config_json": config_json,
+                    **({"exit_terms": exit_terms} if exit_terms is not None else {}),
                 }
             ),
         )

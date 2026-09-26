@@ -217,6 +217,11 @@ class _CustodyClerk:
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
+    def exit_policy_for_instance(self, sid, terms=None):
+        from app.broker.alpaca.clerk.exit_terms import policy_with_exit_terms
+        return self.program_leg_policy if terms is None else policy_with_exit_terms(self.program_leg_policy, terms)
+
+
     def __init__(self, proof: InstanceCustodyProof) -> None:
         self.proof = proof
         # The custody account this authority holds, exposed where the real

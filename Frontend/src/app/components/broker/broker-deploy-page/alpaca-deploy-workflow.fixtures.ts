@@ -73,6 +73,7 @@ export const DRY_RUN_EXECUTION_MODE: DeployBotView['execution_modes'][number] = 
 };
 
 export const DEPLOY_VIEW: DeployBotView = {
+  default_exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
   broker: 'alpaca',
   account_id: 'PA9',
   account_mode: 'paper',

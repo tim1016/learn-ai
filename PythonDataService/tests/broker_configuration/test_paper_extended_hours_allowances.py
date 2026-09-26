@@ -4,7 +4,7 @@ A regular-hours run's EXIT on the day's last bar reaches the broker after the
 close as an after-hours limit priced off the decision bar's close less the exit
 allowance, so a regular-hours run's Start refuses
 ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until the account has one, and so does its
-Resume when the run is flat (a run holding a position always resumes). Live seals the
+Resume when the run is flat. Holding Resume requires Flatten first. Live seals the
 pair in its envelope at arming; a paper revision had nowhere to hold it, which
 would have stranded every regular-hours paper and ``sim:`` lane. These pin the
 four things that change fixes:
@@ -203,7 +203,7 @@ def test_a_v2_database_upgrades_and_every_stored_revision_keeps_its_sha(
 
     service = _service(clerk_dir, clock)
     try:
-        assert _stored_schema_version(clerk_dir) == schema.SCHEMA_VERSION == 3
+        assert _stored_schema_version(clerk_dir) == schema.SCHEMA_VERSION == 4
         profiles = {profile.display_name: profile for profile in service.list_profiles()}
         assert set(profiles) == set(_V2_CONTENT_SHAS)
         for name, written_sha in _V2_CONTENT_SHAS.items():
@@ -703,3 +703,30 @@ async def test_without_the_pair_the_gate_refuses_and_names_the_profile_field(
     assert "broker configuration page" in next_step
     assert "paper revision has its own two fields" in next_step
     assert "extended-hours offsets" in next_step
+
+
+def test_a_stored_sub_cent_revision_survives_upgrade_without_rounding(
+    clerk_dir: Path, clock: FrozenClock,
+) -> None:
+    """Historical v2 bytes remain readable; only new writes require whole cents."""
+    written_sha = "e2b51749b98940d615838daba2fac53d8ef88f5a1e52f42ce227c33d46e3f9bc"
+    fixture = _V2_FIXTURE.read_text(encoding="utf-8").replace(
+        "'alpaca_live_primary','live',NULL,NULL,0.05,5000.0,",
+        "'alpaca_live_primary','live',NULL,NULL,0.05,12.345,",
+    ).replace(_V2_CONTENT_SHAS["Live — primary"], written_sha)
+    path = profiles_database_path(clerk_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(fixture)
+    service = _service(clerk_dir, clock)
+    try:
+        profile = next(row for row in service.list_profiles() if row.display_name == "Live — primary")
+        stored = service.read_revision(profile.profile_id, 1)
+        assert stored.live_envelope.loss_usd == 12.345
+        assert stored.content_sha256 == written_sha
+        assert revision_content_sha256(
+            credential_slot=stored.credential_slot, endpoint_mode=stored.endpoint_mode,
+            live_envelope=stored.live_envelope,
+        ) == written_sha
+    finally:
+        service.close()

@@ -327,10 +327,10 @@ async def test_dry_run_resume_requires_flatten_before_restoring_held_exposure(
     monkeypatch.setattr(active_binding, "_binding", None)
     monkeypatch.setattr(active_binding, "_refusal", refusal)
     decision = await registry.preview_resume_admission("alpaca", _SID)
-    assert decision.allowed is False
     if not holding:
-        assert decision.reason_code == refusal.reason
-        assert refusal.next_step in decision.next_step
+        # Sealed per-bot exit terms survive a later profile refusal.
+        assert decision.allowed is True
     else:
+        assert decision.allowed is False
         assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
         assert "Flatten" in decision.next_step

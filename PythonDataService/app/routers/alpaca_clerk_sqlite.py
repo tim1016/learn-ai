@@ -521,6 +521,7 @@ async def _check_recovery_action(
         reduction_pricing=safe_flatten_pricing_response(
             facade.price_safe_flatten(plan),
             proposed_limit_price=body.proposed_limit_price,
+            band_override=body.band_override,
             quantity=plan.legs[0].quantity if len(plan.legs) == 1 else 0.0,
         ),
     )

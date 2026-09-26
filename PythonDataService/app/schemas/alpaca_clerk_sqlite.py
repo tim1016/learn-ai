@@ -525,6 +525,7 @@ class RecoveryActionCheckRequest(BaseModel):
     action_id: RecoveryActionId
     concurrency_token: str = Field(min_length=1, max_length=128)
     proposed_limit_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    band_override: bool = False
 
 
 class RegularSessionFlattenPricing(BaseModel):
@@ -551,6 +552,8 @@ class ProposedLimitEvaluationResponse(BaseModel):
     # Every share filling at the limit, measured against the touch, in dollars.
     worst_case_cost: float
     outside_band: bool
+    band_cap_bps: float | None = None
+    override_acknowledged: bool = False
     thin_book: bool
     resting: bool
 
@@ -617,6 +620,7 @@ def safe_flatten_pricing_response(
     pricing: RecoveryReductionPricing | LegRefusal,
     *,
     proposed_limit_price: float | None = None,
+    band_override: bool = False,
     quantity: float = 0.0,
 ) -> SafeFlattenPricingResponse:
     """The wire shape of the facade's ``price_safe_flatten`` answer.
@@ -672,6 +676,8 @@ def safe_flatten_pricing_response(
                     through_book_bps=proposal.through_book_bps,
                     worst_case_cost=proposal.worst_case_cost,
                     outside_band=proposal.outside_band,
+                    band_cap_bps=None if pricing.band_cap_bps is None else float(pricing.band_cap_bps),
+                    override_acknowledged=band_override,
                     thin_book=proposal.thin_book,
                     resting=proposal.resting,
                 )
@@ -702,11 +708,13 @@ class ExtendedLimitConfirmationRequest(BaseModel):
 
     limit_price: float = Field(gt=0, allow_inf_nan=False)
     quote_observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    band_override: bool = False
 
     def to_confirmed(self) -> ConfirmedRecoveryLimit:
         return ConfirmedRecoveryLimit(
             limit_price=Decimal(str(self.limit_price)),
             quote_observed_at_ms=self.quote_observed_at_ms,
+            band_override=self.band_override,
         )
 
 

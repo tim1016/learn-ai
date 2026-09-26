@@ -24,6 +24,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployView,
     BotStatusView,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
@@ -98,6 +99,7 @@ def _shadow_view(monkeypatch: pytest.MonkeyPatch) -> AlpacaPaperDeployView:
         _entries(),
         symbol="SPY",
         custody_world="shadow",
+        default_exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50),
     )
 
 
@@ -121,6 +123,7 @@ def _paper_view(monkeypatch: pytest.MonkeyPatch) -> AlpacaPaperDeployView:
         _entries(),
         symbol="SPY",
         custody_world="real_paper",
+        default_exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50),
     )
 
 
@@ -292,6 +295,7 @@ def test_paper_receipt_copy_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> Non
         _entries(),
         symbol="SPY",
         custody_world="real_paper",
+        default_exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50),
     )
 
     receipt = _receipt(view, "paper")

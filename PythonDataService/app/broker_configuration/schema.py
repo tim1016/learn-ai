@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -76,6 +76,7 @@ FOR EACH ROW WHEN
     OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
     OR OLD.paper_xh_entry_bps IS NOT NEW.paper_xh_entry_bps
     OR OLD.paper_xh_exit_bps IS NOT NEW.paper_xh_exit_bps
+    OR OLD.default_exit_terms_json IS NOT NEW.default_exit_terms_json
     OR OLD.content_sha256 IS NOT NEW.content_sha256
     OR OLD.complete IS NOT NEW.complete
     OR OLD.author_owner_id IS NOT NEW.author_owner_id
@@ -157,6 +158,7 @@ CREATE TABLE profile_revisions (
     -- A paper revision's own two allowances; see ``_PAPER_XH_EXIT_COLUMN``.
     {_PAPER_XH_ENTRY_COLUMN},
     {_PAPER_XH_EXIT_COLUMN},
+    default_exit_terms_json TEXT,
     PRIMARY KEY (profile_id, revision),
     -- A live revision carries the whole envelope or none of it; a paper
     -- revision may carry none. Six-way all-or-nothing, in the schema.
@@ -295,6 +297,12 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         # hashes — exactly as it did.
         f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_ENTRY_COLUMN}",
         f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_EXIT_COLUMN}",
+        "DROP TRIGGER trg_profile_revisions_content_immutable",
+        _REVISION_CONTENT_IMMUTABLE_TRIGGER.replace(
+            "    OR OLD.default_exit_terms_json IS NOT NEW.default_exit_terms_json\n", ""),
+    ),
+    3: (
+        "ALTER TABLE profile_revisions ADD COLUMN default_exit_terms_json TEXT",
         "DROP TRIGGER trg_profile_revisions_content_immutable",
         _REVISION_CONTENT_IMMUTABLE_TRIGGER,
     ),

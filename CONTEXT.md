@@ -2183,3 +2183,11 @@ How an operator moves around one broker account's pages. The account, not the pa
 - **Market-data readiness** — current evidence that the symbol's live data is usable for a trading decision. It is distinct from connection health and the venue's reported halt status.
 - **Reported halt status** — the data provider's explicit halted, not-halted, or unavailable report for one instrument; an absent initial report remains absent.
 - **Decision-data freshness** — whether the price evidence used for a decision is within that decision's allowed age. Observing it again does not make it younger.
+
+
+- **Exit terms** — the immutable per-instance exit allowance (bps), band multiple,
+  spread cap (bps) and `deployed`/`backfilled` provenance. Separate from signal
+  identity; all EXIT pricing reads this registration seal. Profile defaults
+  prefill future deployments and never modify an existing bot. An acknowledged
+  manual band override is an audited exception for one EXIT, not a terms edit.
+  [Decision](docs/architecture/adrs/0045-exposure-lifecycle-closure.md#immutable-exit-terms-deployment-and-arming-2026-09-25-prd-2504).

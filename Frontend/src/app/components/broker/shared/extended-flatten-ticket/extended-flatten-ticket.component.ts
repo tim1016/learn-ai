@@ -100,6 +100,7 @@ export class ExtendedFlattenTicketComponent {
   readonly refresh = output();
   /** Ask the Clerk what this price would do against the quote it holds. */
   readonly priceCheck = output<number>();
+  readonly overridePriceCheck = output<number>();
 
   private readonly injector = inject(Injector);
   private readonly reviewButton = viewChild<ElementRef<HTMLButtonElement>>('reviewButton');
@@ -107,6 +108,7 @@ export class ExtendedFlattenTicketComponent {
   private readonly editedLimit = signal<string | null>(null);
   /** The price the Clerk was asked to evaluate, until its answer arrives. */
   private readonly awaitingPrice = signal<number | null>(null);
+  private requestedFrom: SqliteExtendedLimitPricing | null = null;
   protected readonly reviewed = signal<ReviewedLimit | null>(null);
   private readonly displayClock = toSignal(timer(0, 1_000), { initialValue: 0 });
 
@@ -118,10 +120,10 @@ export class ExtendedFlattenTicketComponent {
     effect(() => {
       const evaluation = this.pricing().proposal;
       const wanted = this.awaitingPrice();
-      if (wanted === null || !evaluation || evaluation.limit_price !== wanted) return;
+      if (wanted === null || this.pricing() === this.requestedFrom || !evaluation || evaluation.limit_price !== wanted) return;
       untracked(() => {
         this.awaitingPrice.set(null);
-        if (evaluation.outside_band) return;
+        if (evaluation.outside_band && !evaluation.override_acknowledged) return;
         const pricing = this.pricing();
         this.reviewed.set({
           limitText: formatLimitPrice(wanted),
@@ -207,8 +209,17 @@ export class ExtendedFlattenTicketComponent {
   protected review(): void {
     const limitPrice = this.limitPrice();
     if (limitPrice === null || !this.canReview()) return;
+    this.requestedFrom = this.pricing();
     this.awaitingPrice.set(limitPrice);
     this.priceCheck.emit(limitPrice);
+  }
+
+  protected acknowledgeBandOverride(): void {
+    const price = this.limitPrice();
+    if (price === null || !this.canReview()) return;
+    this.requestedFrom = this.pricing();
+    this.awaitingPrice.set(price);
+    this.overridePriceCheck.emit(price);
   }
 
   protected cancel(): void {
@@ -224,6 +235,7 @@ export class ExtendedFlattenTicketComponent {
     this.send.emit({
       limit_price: reviewed.limitPrice,
       quote_observed_at_ms: reviewed.quoteObservedAtMs,
+      ...(reviewed.evaluation.outside_band && reviewed.evaluation.override_acknowledged === true ? { band_override: true } : {}),
     });
   }
 }

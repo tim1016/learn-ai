@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
@@ -44,11 +44,20 @@ export class AlpacaDeployTabComponent {
   private readonly clerkId = computed(() => this.routeParams().get('clerkId') ?? '');
   private readonly lane = computed(() => this.fleetDirectory.lane('alpaca', this.clerkId()) ?? null);
 
+  private readonly confirmedAccount = signal<string | null>(null);
+
+  constructor() {
+    effect(() => {
+      if (this.accountData.account.hasValue()) this.confirmedAccount.set(this.accountData.accountId());
+    });
+  }
+
   protected readonly blockedReason = computed(() => {
     const lane = this.lane();
     if (lane === null) return DEPLOY_WITHOUT_LANE;
     if (!lane.capabilities.includes('deploy')) return DEPLOY_WITHOUT_CAPABILITY;
-    return this.accountData.account.hasValue() ? null : DEPLOY_WITHOUT_ACCOUNT;
+    return this.accountData.account.hasValue() || this.confirmedAccount() === this.accountData.accountId()
+      ? null : DEPLOY_WITHOUT_ACCOUNT;
   });
 
   protected readonly target = this.accountData.target;

@@ -232,7 +232,7 @@ class SyntheticBindingAuthority(BindingAuthority):
             clerk.start_admission_projection if project else clerk.start_admission_snapshot
         )
         async with admission(self.binding.strategy_instance_id) as snapshot:
-            yield snapshot, clerk.program_leg_policy
+            yield snapshot, clerk.exit_policy_for_instance(self.binding.strategy_instance_id, self.binding.exit_terms)
 
     async def _runtime(self) -> ActiveClerkRuntime:
         existing = get_clerk_runtime(self.account_id)

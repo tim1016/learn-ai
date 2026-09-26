@@ -80,6 +80,55 @@ closed sessions, missing or unusable pricing, halts, and outages do not
 consume that count. The independent eight-minute refusal budget counts only
 observed regular-session failures and the escalation names the actual cause.
 
+### Immutable exit terms, deployment and arming (2026-09-25, PRD #2504)
+
+An **exit obligation** begins with the program's proposal. A proposal is not
+an order: the Clerk accepts a **created order**, the broker establishes a
+**working order**, and a **recovery attempt** addresses any remaining
+attributed position. **Permitted repricing** is limited to the initial send,
+a fresh recovery attempt, and the regular-open replacement above. The
+**price authority** for each is the bot's immutable exit terms, applied by
+Python to a retained decision close or a fresh IBKR bid/ask; Alpaca executes.
+
+Every new deployment explicitly chooses an exit allowance, band multiple and
+spread cap. These `ExitTerms` are recorded atomically with registration,
+separate from signal configuration and its hash. Resume cannot change them.
+Every exit pricing path, including the operator's ticket and synthetic
+execution, resolves that instance's seal. Profile edits affect future deploys.
+Existing registrations receive a one-time `backfilled` seal: their own latest
+armed envelope, otherwise the effective revision, plus the old band/spread
+settings (or 2 / 50). An unavailable allowance is recorded as unset; extended
+exits hold while the regular-open market reduction remains possible.
+
+Profiles schema v4 adds optional defaults for both Paper and Live. Absent
+defaults are omitted from content hashes, preserving existing history. The
+live envelope's exit allowance supplies the new-deploy default; entry pricing
+is unchanged. The former band/spread environment knobs are upgrade inputs
+only, never a registered bot's runtime price authority.
+
+**Superseded 2026-09-25:** the 2026-09-19 hard band refusal now permits an
+operator override. The check displays Python's distance through the bid/ask
+and the bot's cap. An explicit acknowledgement obtains a fresh check, followed
+by a separate Send confirmation. Execution rechecks the quote, terms and
+acknowledgement, and records `band_override` with the accepted EXIT.
+
+Regular-hours Start and Resume share the deploy view's canonical calendar
+window: pre-market open through regular close, including early closes.
+After-hours, overnight, holidays and weekends refuse with the next pre-market
+open. Dry Run is exempt. The backend authors dated exit steps; the UI retains
+its ticket through account refreshes and displays refusals at the button.
+USD loss caps use one whole-cent rule on new writes, with four-ULP float noise
+tolerance; historical revisions continue to load with unchanged hashes.
+
+Live arming is available on the deploy receipt and bot page. HTTP plan/apply
+wrap the CLI ceremony, reobserve drift, require the typed content token and
+append the envelope plus instance exit terms. Plans last 120 seconds (maximum
+300). Every dialog opening reads a fresh plan. Disarm revokes directly from
+the selected account's verified ledger even when configuration or binding
+reads fail. Status and the lane header use the same custody-world filter.
+CLI status lists instances by account and normalizes explicit roots like
+defaults. Neither deployment nor a plan alone authorizes live entry orders.
+
 ### Abnormal run endings and shadow evidence (PRD #2504)
 
 Every abnormal terminal run outcome, including feed loss, missed decision bars,

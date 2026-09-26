@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
     from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
     from app.schemas.action_plan import ActionPlan
+    from app.schemas.exit_terms import ExitTerms
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -71,6 +72,8 @@ class ActiveAlpacaClerk(Protocol):
         attribute, which would look the same and mean something else.
         """
         ...
+
+    def exit_policy_for_instance(self, sid: str, terms: ExitTerms | None = None) -> ProgramLegPolicy: ...
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:

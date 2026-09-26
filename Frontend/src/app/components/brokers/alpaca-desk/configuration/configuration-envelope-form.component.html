@@ -3,25 +3,20 @@
   @if (isLive()) {
     <legend>Live risk envelope</legend>
     <p class="envelope__note">
-      These six values are saved with the revision. They govern nothing on their own:
-      a running instance is bound by the envelope sealed into its arming record, and
-      arming — or loosening an armed limit — happens only in the host CLI ceremony the
-      owner runs. This page cannot arm anything.
+      These six values are saved with the revision. A running instance is bound by
+      the envelope sealed into its arming record. Arm or disarm from the bot page
+      or the live deploy success card. This page cannot arm anything.
     </p>
   } @else {
     <legend>Extended-hours offsets</legend>
     <p class="envelope__note">
-      How far from the price an extended-hours or after-close limit order is placed, in
-      basis points (1 bps = 0.01%): an entry uses the entry offset and an exit the exit
-      offset, above the price for a buy and below it for a sell — so a short entry goes the
-      entry offset below it and a short cover the exit offset above it. The price is the
-      decision bar's close for an order placed as the bot decides, and the live bid (sell)
-      or ask (buy) for an exit priced later: the automatic retry, or an exit sent after the
-      session it was decided in. A regular-hours bot's exit on the day's last bar goes out
-      after the close as such a limit, so a regular-hours run will not Start until both are
-      set, and will not Resume while it holds no position; a run still holding a position
-      always resumes. Set both or leave both empty; they take effect when this revision is
-      applied and the worker restarts.
+      The entry offset sets how far from the price an extended-hours entry is placed:
+      above it for a buy, below it for a short entry. Exit defaults pre-fill future deploys;
+      each bot keeps the exit terms chosen when it was deployed. Its exit allowance prices
+      a sell below the bid or a cover above the ask when an exit is retried; a last-bar exit
+      uses the decision bar's close. Start requires the bot's exit terms. A bot still holding
+      a position must be flattened before Resume. Set both offsets or leave both empty;
+      entry changes take effect when this revision is applied and the worker restarts.
     </p>
   }
 
@@ -33,7 +28,7 @@
       </label>
       <label class="envelope__field">
         <span>{{ labels.loss_usd }}</span>
-        <input type="number" step="any" [formField]="fields.loss_usd" />
+        <input type="number" step="0.01" [formField]="fields.loss_usd" />
       </label>
       <label class="envelope__field">
         <span>{{ labels.shadow_sessions }}</span>
@@ -52,5 +47,14 @@
       <span>{{ labels.xh_exit_bps }}</span>
       <input type="number" step="any" [formField]="fields.xh_exit_bps" />
     </label>
+    <label class="envelope__field">
+      <span>Default exit band multiple (optional)</span>
+      <input type="number" step="any" [formField]="fields.exit_band_multiple" />
+    </label>
+    <label class="envelope__field">
+      <span>Default exit spread cap (bps, optional)</span>
+      <input type="number" step="any" [formField]="fields.exit_spread_cap_bps" />
+    </label>
   </div>
+  <p>Defaults pre-fill future deploys. Each deployed bot keeps its own exit terms.</p>
 </fieldset>

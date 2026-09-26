@@ -11,6 +11,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
     AlpacaPaperSizingSelection,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.services.broker_v2_panel.panel_deploy import _require_alpaca_deploy_request
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.broker_v2_panel.paper_deploy_service import (
@@ -37,7 +38,8 @@ from tests.broker.v2panel.test_panel_deploy_shadow import (
 def _live_view(monkeypatch: pytest.MonkeyPatch) -> AlpacaPaperDeployView:
     admit_canary_pairing(monkeypatch, _STRATEGY_KEY, LIVE_ACCT)
     return build_alpaca_paper_deploy_view(
-        _live_account(), _clerk_status(LIVE_ACCT), _entries(), symbol="SPY", custody_world="real_live"
+        _live_account(), _clerk_status(LIVE_ACCT), _entries(), symbol="SPY", custody_world="real_live",
+        default_exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50)
     )
 
 
@@ -64,6 +66,7 @@ def test_a_live_request_passes_the_mode_offer_check(monkeypatch: pytest.MonkeyPa
     view = _live_view(monkeypatch)
     strategy = next(s for s in view.strategies if s.selectable)
     request = AlpacaPaperDeployRequest(
+        exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50),
         strategy_instance_id="ema-live-1",
         strategy_key=strategy.strategy_key,
         symbol="SPY",

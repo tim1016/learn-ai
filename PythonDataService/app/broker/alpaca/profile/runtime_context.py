@@ -55,6 +55,7 @@ from app.broker.alpaca.profile.credentials import (
     resolve_credentials,
 )
 from app.broker.alpaca.profile.errors import RevisionIncomplete
+from app.schemas.exit_terms import ExitTermsInput
 
 EndpointMode = Literal["paper", "live"]
 
@@ -205,6 +206,8 @@ class AlpacaRuntimeContext:
         """The slot label this binding resolved through — never its variables."""
         return self.credentials.slot
 
+    default_exit_terms: ExitTermsInput | None = None
+
     def __repr__(self) -> str:
         """Identify the binding without reproducing ``AlpacaSettings``.
 
@@ -227,6 +230,7 @@ def resolve_runtime_context(
     credential_slot: str,
     live_envelope: Mapping[str, object] | None = None,
     paper_xh_allowances: Mapping[str, object] | None = None,
+    default_exit_terms: ExitTermsInput | None = None,
     account_pin: str | None = None,
     profile_id: str | None = None,
     revision: int | None = None,
@@ -301,6 +305,7 @@ def resolve_runtime_context(
         raise RevisionIncomplete(alpaca_configuration_error_detail(exc)) from None
 
     return AlpacaRuntimeContext(
+        default_exit_terms=default_exit_terms,
         settings=settings,
         credentials=credentials,
         live_envelope=(

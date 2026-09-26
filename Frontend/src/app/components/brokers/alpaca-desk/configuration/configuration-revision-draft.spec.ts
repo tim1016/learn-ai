@@ -187,3 +187,14 @@ describe('configuration revision draft', () => {
     expect(preferredSlot([])).toBe('');
   });
 });
+
+
+describe('whole-cent daily loss cap', () => {
+  it.each([12.34, 12.340000000000002])('accepts ordinary cents and float noise: %s', loss_usd => {
+    expect(draftProblems({ ...liveDraft(), loss_usd }, SLOTS)).toEqual([]);
+  });
+  it('names a fractional cent before submitting', () => {
+    expect(draftProblems({ ...liveDraft(), loss_usd: 12.345 }, SLOTS).join(' ')).toMatch(/whole cents/);
+    expect(() => toRevisionContent({ ...liveDraft(), loss_usd: 12.345 })).toThrow();
+  });
+});

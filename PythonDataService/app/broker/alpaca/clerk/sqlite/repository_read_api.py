@@ -9,8 +9,11 @@ coordinator as writers before using the shared connection.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
@@ -30,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.schemas.exit_terms import ExitTerms
 
 
 @dataclass(frozen=True, slots=True)
@@ -731,3 +735,25 @@ class ClerkSqliteRepositoryReadApi:
             return envelope_reservations.reserved_cash_usd(
                 self._conn, seen_before_ms=seen_before_ms
             )
+
+
+def registered_exit_terms_at(db_path: Path, strategy_instance_id: str) -> ExitTerms | None:
+    """Read the registration seal for a ceremony without acquiring a writer lease."""
+    from app.schemas.exit_terms import ExitTerms
+
+    if not db_path.is_file():
+        return None
+    conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        row = conn.execute(
+            "SELECT facts_json FROM custody_transitions WHERE strategy_instance_id = ? "
+            "AND transition_kind IN ('EXIT_TERMS_SEALED', 'STRATEGY_INSTANCE_REGISTERED') ORDER BY sequence DESC LIMIT 1",
+            (strategy_instance_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        facts = json.loads(row[0])
+        payload = facts if "provenance" in facts else facts.get("exit_terms")
+        return None if payload is None else ExitTerms.model_validate(payload)
+    finally:
+        conn.close()

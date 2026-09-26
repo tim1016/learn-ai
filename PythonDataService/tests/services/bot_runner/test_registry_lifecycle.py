@@ -293,7 +293,8 @@ async def test_start_does_not_call_expected_rth_silence_a_stalled_feed(
         symbol="SPY",
     )
 
-    assert preview.allowed is True
+    assert preview.allowed is False
+    assert preview.reason_code == "DEPLOY_WINDOW_CLOSED"
 
 
 @pytest.mark.asyncio

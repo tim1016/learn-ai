@@ -19,6 +19,7 @@ from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
+from app.schemas.exit_terms import ExitTerms
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
     ExtendedHoursAdmissionFact,
@@ -32,6 +33,7 @@ from app.schemas.run_admission import (
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
+from app.services.deploy_window import deploy_window
 from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_liveness import get_market_liveness_store, market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
@@ -102,6 +104,7 @@ class StartRequest:
     # an empty dict) so the hash-backward-compatibility rule in
     # bot_binding_repository.py's ``BrokerBotBinding`` holds all the way
     # through construction.
+    exit_terms: ExitTerms | None = None
     strategy_params: dict[str, Any] | None = None
     # Widened to the canonical 3-member ParameterOrigin (not just
     # registered_default/deploy_override): `make_start_request` below already
@@ -179,6 +182,7 @@ def make_start_request(
     carryover_policy: Literal["FORBID", "ALLOW"],
     evidence_override: AlpacaPaperEvidenceOverride | None,
     action_plan: ActionPlan,
+    exit_terms: ExitTerms | None = None,
     strategy_params: dict[str, Any] | None = None,
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
 ) -> StartRequest:
@@ -195,6 +199,7 @@ def make_start_request(
         evidence_override=evidence_override,
         action_plan=action_plan,
         strategy_params=strategy_params,
+        exit_terms=exit_terms,
         strategy_param_origins=strategy_param_origins,
     )
 
@@ -345,11 +350,9 @@ def extended_hours_admission_fact(
     last bar reaches the broker after the close and goes out as an after-hours
     limit priced from the exit allowance (#2440). Owner decisions 2026-09-25:
     until that allowance is configured — never a built-in default — the run's
-    state is ``EXIT_ALLOWANCE_UNSET``, which Start refuses and a Resume refuses
-    only when the run is flat: a run still holding a position always resumes,
-    since an exit is never blocked by a configuration error (ADR 0060); the
-    selected authority determines whether a late exit can retry or needs
-    operator recovery.
+    state is ``EXIT_ALLOWANCE_UNSET``, which Start refuses. A flat Resume reads
+    the bot's stored terms. Holding Resume separately requires Flatten first
+    (ADR 0045 exit lifecycle amendment); it cannot inherit fresh exit terms.
     The allowances are one document (``ExtendedHoursAllowances`` has no
     exit-only form), so the refusal is the shared one. An authority that
     declares no extended window at all cannot price that exit whatever it is
@@ -368,7 +371,10 @@ def extended_hours_admission_fact(
         state = "ALLOWANCE_UNSET"
     else:
         state = "READY"
+    window = deploy_window(observed_at_ms) if use_rth else None
     return ExtendedHoursAdmissionFact(
+        start_window_refusal=None if window is None else window.refusal,
+        premarket_start=window is not None and window.premarket,
         state=state,
         observed_at_ms=observed_at_ms,
         refusal=policy.allowance_refusal if state in {"ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"} else None,
@@ -400,7 +406,7 @@ async def default_start_custody_guard(
     """Custody for an action: reconciles, so the proof is act-time fresh."""
     clerk = _admission_clerk(binding)
     async with clerk.start_admission_snapshot(binding.strategy_instance_id) as snapshot:
-        yield snapshot, clerk.program_leg_policy
+        yield snapshot, clerk.exit_policy_for_instance(binding.strategy_instance_id, binding.exit_terms)
 
 
 @asynccontextmanager
@@ -414,7 +420,7 @@ async def default_start_custody_projection(
     """
     clerk = _admission_clerk(binding)
     async with clerk.start_admission_projection(binding.strategy_instance_id) as snapshot:
-        yield snapshot, clerk.program_leg_policy
+        yield snapshot, clerk.exit_policy_for_instance(binding.strategy_instance_id, binding.exit_terms)
 
 
 def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
@@ -431,6 +437,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         evidence_override=request.evidence_override,
         action_plan=request.action_plan,
         strategy_params=request.strategy_params,
+        exit_terms=request.exit_terms,
         strategy_param_origins=request.strategy_param_origins,
         sealed_account_id=(
             synthetic_account_id_for_strategy(request.strategy_instance_id)

@@ -13,6 +13,7 @@ import logging
 
 import asyncpg
 
+from app.broker.alpaca.active_binding import get_active_alpaca_binding
 from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
@@ -28,6 +29,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_v2_panel.panel_errors import (
@@ -121,6 +123,7 @@ async def get_alpaca_paper_deploy_view(
     broker: str,
     account_id: str,
     symbol: str | None = None,
+    exit_terms: ExitTermsInput | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed paper-deployment form and its current launch verdict.
 
@@ -169,10 +172,12 @@ async def get_alpaca_paper_deploy_view(
             detail="Deploy remains closed until current validation evidence is readable and hash-valid.",
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
+    context = get_active_alpaca_binding()
     return build_alpaca_paper_deploy_view(
         account,
         clerk,
         validation_entries,
+        default_exit_terms=exit_terms or (None if context is None else context.default_exit_terms),
         symbol=symbol,
         custody_world=custody_world,
         golden_validation_scopes=await _current_golden_validation_scopes(symbol),
@@ -185,7 +190,7 @@ async def deploy_alpaca_paper_bot(
     request: AlpacaPaperDeployRequest,
 ) -> AlpacaPaperDeployReceipt:
     """Execute the production paper deployment command through the runner seam."""
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:  # guarded by the view; retained for type narrowing
@@ -205,6 +210,7 @@ async def deploy_alpaca_paper_bot(
             carryover_policy=request.carryover_policy,
             evidence_override=request.evidence_override,
             strategy_params=resolved_params.effective,
+            exit_terms=request.exit_terms.seal(),
             strategy_param_origins=resolved_params.origins,
         )
     except BotRunnerError as exc:
@@ -233,7 +239,7 @@ async def preview_alpaca_paper_start_admission(
     request: AlpacaPaperDeployRequest,
 ) -> RunAdmissionDecision:
     """Project the same request-specific Start decision used by execution."""
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
     resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:
@@ -253,6 +259,7 @@ async def preview_alpaca_paper_start_admission(
             carryover_policy=request.carryover_policy,
             evidence_override=request.evidence_override,
             strategy_params=resolved_params.effective,
+            exit_terms=request.exit_terms.seal(),
             strategy_param_origins=resolved_params.origins,
         )
     except BotRunnerError as exc:

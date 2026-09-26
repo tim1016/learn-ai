@@ -255,7 +255,7 @@ class LiveEnvelopeSync:
         Raises ``BrokerError``: a failed read is not a verdict at all, so it
         never touches the gate and the last observation ages out on its own.
         """
-        self._refresh_arming()
+        self.refresh_arming()
         # Stamped before the reads are issued, never when they return. The
         # stamp is the observation's claim about which fills its cash already
         # includes (``AccountObservation``), and a broker answer is only known
@@ -350,7 +350,7 @@ class LiveEnvelopeSync:
         """
         return self._arming is not None and self._arming.inputs_unreadable
 
-    def _refresh_arming(self) -> None:
+    def refresh_arming(self) -> None:
         """Run the arming half of this observation, and seal the envelope from what it read.
 
         Called from :meth:`observe`, ahead of the broker read, so every caller
@@ -364,7 +364,7 @@ class LiveEnvelopeSync:
     def _assign_sealed(self, sealed: LiveEnvelopeValues | None) -> None:
         """Assign the sealed envelope, logging each transition once (slice 6 R10).
 
-        Called only from :meth:`_refresh_arming`, past its no-ledger return,
+        Called only from :meth:`refresh_arming`, past its no-ledger return,
         so ``self._arming`` is never ``None`` here.
         """
         if sealed == self.envelope.sealed:

@@ -60,6 +60,7 @@ from app.broker_configuration.records import (
     ObservedAccount,
     ProfileRevision,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 # The three request-body names that would claim an identity the server owns.
@@ -372,6 +373,7 @@ class RevisionResponse(_Response):
     account_pin: str | None
     account_pinned_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     live_envelope: LiveEnvelopePayload | None
+    default_exit_terms: ExitTermsInput | None = None
     paper_xh_allowances: PaperXhAllowancesPayload | None
     content_sha256: str
     complete: bool
@@ -390,6 +392,7 @@ class RevisionResponse(_Response):
             account_pinned_at_ms=revision.account_pinned_at_ms,
             live_envelope=LiveEnvelopePayload.from_record(revision.live_envelope),
             paper_xh_allowances=PaperXhAllowancesPayload.from_record(revision.paper_xh_allowances),
+            default_exit_terms=revision.default_exit_terms,
             content_sha256=revision.content_sha256,
             complete=revision.complete,
             author_owner_id=revision.author_owner_id,
@@ -417,6 +420,7 @@ class RevisionContentRequest(_ClosedRequest):
     credential_slot: str = _SLOT
     endpoint_mode: Literal["paper", "live"]
     live_envelope: LiveEnvelopePayload | None = None
+    default_exit_terms: ExitTermsInput | None = None
     paper_xh_allowances: PaperXhAllowancesPayload | None = None
 
 

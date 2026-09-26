@@ -148,7 +148,7 @@ def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     assert leg.limit_price == float(price)
 
 
-def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> None:
+def test_allowance_converters_keep_defaults_legacy_knobs_only_apply_at_upgrade(monkeypatch) -> None:
     """#2229: the converters carry only the sealed pair — every deploy-time
     knob is stamped by ``program_leg.with_deploy_recovery_pricing`` alone, so
     a deploy value applies on every resolution path or none (PR #2230 review,
@@ -186,18 +186,10 @@ def test_allowance_converters_keep_deploy_defaults_the_stamp_applies_them() -> N
         assert allowances.exit_band_multiple == Decimal(2)
         assert allowances.exit_spread_cap_bps == Decimal("50")
 
-    # One settings read stamps both knobs: the seam is patched, not the knobs.
-    original = program_leg._resolved_settings
-    try:
-        program_leg._resolved_settings = lambda *, concern: AlpacaSettings(
-            api_key_id="k",
-            api_secret_key="s",
-            live_xh_exit_band_multiple="4.0",
-            live_xh_exit_spread_cap_bps="200.0",
-        )
-        stamped = program_leg.with_deploy_recovery_pricing(envelope)
-    finally:
-        program_leg._resolved_settings = original
+    monkeypatch.setenv("ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE", "4")
+    monkeypatch.setenv("ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS", "200")
+    stamped = program_leg.legacy_recovery_pricing(envelope)
+    assert program_leg.with_deploy_recovery_pricing(envelope) == envelope
     assert (stamped.entry_bps, stamped.exit_bps) == (envelope.entry_bps, envelope.exit_bps)
     assert stamped.exit_band_multiple == Decimal("4")
     assert stamped.exit_spread_cap_bps == Decimal("200")
@@ -222,11 +214,5 @@ def test_invalid_deploy_knob_values_degrade_loudly_to_the_declared_defaults() ->
     authority) — it answers the declared default, loudly, at the read."""
     from app.broker.alpaca.clerk import program_leg
 
-    settings = AlpacaSettings(
-        api_key_id="k",
-        api_secret_key="s",
-        live_xh_exit_band_multiple="50",  # out of [1, 10]
-        live_xh_exit_spread_cap_bps="not-a-number",
-    )
-    assert program_leg._exit_band_multiple_from(settings) == Decimal(2)
-    assert program_leg._exit_spread_cap_from(settings) == Decimal("50")
+    assert program_leg._exit_band_multiple_from("50") == Decimal(2)
+    assert program_leg._exit_spread_cap_from("not-a-number") == Decimal("50")

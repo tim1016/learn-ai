@@ -165,3 +165,11 @@ These are choices D1–D5 did not make. All five are resolved by the owner; the 
 3. ~~**Paper developer clean-slate reset scope.**~~ **Resolved by the owner, 2026-09-11.** Reset removes the target Paper account's operational state, bots and associated saved configuration while preserving unrelated Live profiles. Decision 8 defines the account-scoped cleanup, retained audit evidence and safe retry behavior. Live and Shadow authority remain ineligible under ADR 0059 Decision 10.
 4. ~~**Nicknames across installations.**~~ **Resolved by the owner, 2026-09-10.** Nicknames remain installation-local. A Paper twin has its own names, and two installations may label the same observed broker account ID differently. No shared nickname service or synchronization is introduced; exact account IDs remain the identity in evidence.
 5. ~~**Whether a metadata-only edit needs an Apply.**~~ **Resolved by the owner, 2026-09-10.** Saved renames and nickname changes appear immediately in the UI without Apply. The worker refreshes its display labels at its next restart, and historical records are not rewritten. These edits change neither execution identity nor arming; execution-setting changes still follow Decision 4's Apply and sealing rules.
+
+
+**Per-instance terms and browser arming (2026-09-25):** The accepted
+[ADR 0045 amendment](0045-exposure-lifecycle-closure.md#immutable-exit-terms-deployment-and-arming-2026-09-25-prd-2504)
+supersedes account-level EXIT pricing with immutable registration terms,
+introduces profile v4 defaults and the acknowledged manual band override,
+and exposes the existing arming ceremony through the Live UI. Entry allowance
+semantics and the IBKR-data/Alpaca-orders boundary remain unchanged.

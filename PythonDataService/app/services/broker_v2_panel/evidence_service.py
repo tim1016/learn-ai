@@ -42,6 +42,7 @@ PAGE_SIZE_DEFAULT = 20
 PAGE_SIZE_MAX = 50
 
 _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
+    "EXIT_TERMS_SEALED": ("Exit terms sealed", "The bot’s exit pricing terms were recorded permanently."),
     "EXIT_RECOVERY_EVALUATED": (
         "Exit recovery checked",
         "The Clerk recorded this exit's recovery status and accumulated failure time.",

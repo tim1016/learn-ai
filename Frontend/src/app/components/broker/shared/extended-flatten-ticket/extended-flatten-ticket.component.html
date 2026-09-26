@@ -84,7 +84,7 @@
     @if (limitPrice() === null) {
       Enter a positive price like 512.30.
     } @else if (reading?.outside_band === true && quote.band_limit_price !== null) {
-      Past the Clerk's band — the furthest it accepts is {{ quote.band_limit_price | currency: 'USD' : 'symbol' : '1.2-4' }}.
+      This limit is {{ reading.through_book_bps | number: '1.1-1' }} bps through the {{ bookSideLabel() }}, beyond this bot’s {{ reading.band_cap_bps | number: '1.1-1' }} bps cap.
     } @else if (reading) {
       {{ reading.through_book_bps | number: '1.1-1' }} bps {{ isSell() ? 'below' : 'above' }} the {{ bookSideLabel() }};
       worst case against it {{ reading.worst_case_cost | currency: 'USD' }} on {{ quantity() }} shares.
@@ -97,6 +97,10 @@
       Review to see what this price would do against the live quote.
     }
   </p>
+
+  @if (reading?.outside_band && !reviewed()) {
+    <button pButton type="button" severity="danger" [disabled]="!canReview()" (click)="acknowledgeBandOverride()">I acknowledge the price exceeds this bot’s band · review override</button>
+  }
 
   @if (reviewed(); as order) {
     <div class="grid gap-2 rounded-[var(--radius)] border border-[var(--border)] p-3" role="group" aria-label="Confirm the limit order">

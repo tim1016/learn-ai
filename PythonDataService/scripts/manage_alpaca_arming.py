@@ -74,6 +74,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     disarm,
     live_account_activation_is_verified,
     live_account_id_for_status,
+    normalize_ceremony_root,
     plan_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
@@ -92,9 +93,10 @@ from app.broker_configuration.cli_binding import (
     arming_configuration_handover,
     effective_broker,
 )
+from app.broker_configuration.cli_binding import (
+    require_arming_the_effective_revision as _require_arming_the_effective_revision,
+)
 from app.broker_configuration.errors import BrokerConfigurationError
-from app.broker_configuration.records import InstallationSelection
-from app.broker_configuration.selection import reference as revision_reference
 from app.utils.timestamps import Clock, now_ms_utc
 from scripts._operator_cli import timestamp_ms
 
@@ -301,37 +303,6 @@ def _resolved_broker(supplied: AlpacaSettings | None) -> EffectiveBroker:
         ) from exc
 
 
-def _require_arming_the_effective_revision(selection: InstallationSelection | None) -> None:
-    """Arm the effective revision only, never a merely staged one (D3, D5).
-
-    A staged revision governs nothing until the operator presses Apply and the
-    worker binds it. Sealing one anyway would put the arming record in
-    ``LIVE_ENVELOPE_DISAGREEMENT`` against the envelope the running worker is
-    actually enforcing -- and would look armed until it did. The refusal names
-    both revisions, because the operator's next question is always which of the
-    two they were looking at.
-
-    ``status`` and ``disarm`` are deliberately not gated: reading the state and
-    revoking a permission are exactly what an operator needs while a change is
-    pending, and neither seals anything.
-    """
-    if selection is None:
-        return
-    # Both halves, the same guard ``binding_decision.decide`` applies: a row
-    # naming no exact revision is not a staged revision to disagree with.
-    if selection.staged_profile_id is None or selection.staged_revision is None:
-        return
-    staged = (selection.staged_profile_id, selection.staged_revision)
-    effective = (selection.effective_profile_id, selection.effective_revision)
-    if staged == effective:
-        return
-    raise LiveArmingRefused(
-        LIVE_ARMING_REVISION_STAGED,
-        f"broker configuration {revision_reference(*staged)} is staged but "
-        f"{revision_reference(*effective)} is effective; this ceremony arms the effective "
-        "revision only. Apply the staged revision and restart the service, or stage the "
-        "effective one again, then plan.",
-    )
 
 
 def _envelope_change(plan: LiveArmingPlan, *, artifacts_root: Path) -> dict[str, Any]:
@@ -458,7 +429,22 @@ def _status(
     args: argparse.Namespace, *, artifacts_root: Path, live_state_root: Path, settings: AlpacaSettings
 ) -> int:
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
-    live_account_id = live_account_id_for_status(
+    if args.strategy_instance_id is None:
+        from app.broker.alpaca.clerk.live_arming_ceremony import arming_accounts
+
+        accounts = arming_accounts(artifacts_root=artifacts_root, live_state_root=live_state_root)
+        if len(accounts) != 1:
+            reports = []
+            for account_id, sids in sorted(accounts.items()):
+                arming = account_arming(live_account_id=account_id, artifacts_root=artifacts_root,
+                    live_state_root=live_state_root, configured_envelope=configured_envelope(settings),
+                    now_ms=now_ms, strategy_instance_ids=sorted(sids))
+                reports.append({"live_account_id": account_id, "armed_instance_count": arming.armed_instance_count,
+                    "instances": [_instance_payload(status, strategy_instance_id=sid)
+                                  for sid, status in sorted(arming.statuses.items())]})
+            _write({"now_ms": now_ms, "accounts": reports}, artifacts_root=artifacts_root)
+            return 0
+    live_account_id = next(iter(accounts)) if args.strategy_instance_id is None and accounts else live_account_id_for_status(
         strategy_instance_id=args.strategy_instance_id,
         artifacts_root=artifacts_root,
         live_state_root=live_state_root,
@@ -470,7 +456,8 @@ def _status(
         configured_envelope=configured_envelope(settings),
         now_ms=now_ms,
         strategy_instance_ids=(
-            None if args.strategy_instance_id is None else [args.strategy_instance_id]
+            (sorted(next(iter(accounts.values()))) if accounts else None)
+            if args.strategy_instance_id is None else [args.strategy_instance_id]
         ),
     )
     _write(
@@ -560,7 +547,7 @@ def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = Non
         if args.operation == "disarm":
             return _disarm(
                 args,
-                artifacts_root=args.artifacts_root or _resolved_broker(settings).settings.clerk_dir,
+                artifacts_root=normalize_ceremony_root(args.artifacts_root or _resolved_broker(settings).settings.clerk_dir),
             )
         handover = (
             arming_configuration_handover()
@@ -569,8 +556,8 @@ def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = Non
         )
         with handover:
             resolved = _resolved_broker(settings)
-            artifacts_root = args.artifacts_root or resolved.settings.clerk_dir
-            live_state_root = args.live_state_root or live_artifacts_root()
+            artifacts_root = normalize_ceremony_root(args.artifacts_root or resolved.settings.clerk_dir)
+            live_state_root = normalize_ceremony_root(args.live_state_root or live_artifacts_root())
             if args.operation == "status":
                 return _status(
                     args,

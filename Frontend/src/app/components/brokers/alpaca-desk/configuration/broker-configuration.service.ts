@@ -26,6 +26,7 @@ import type {
  * revision's extended-hours offsets live in its envelope.
  */
 export interface RevisionContent {
+  readonly default_exit_terms?: BrokerProfileRevision['default_exit_terms'];
   readonly credential_slot: string;
   readonly endpoint_mode: BrokerEndpointMode;
   readonly live_envelope: BrokerLiveEnvelope | null;

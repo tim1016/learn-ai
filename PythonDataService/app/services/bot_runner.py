@@ -75,6 +75,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import (
     ResumeCheckpointAdmissionFact,
     RunAdmissionDecision,
@@ -622,6 +623,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
+        exit_terms: ExitTerms | None = None,
         strategy_params: dict[str, Any] | None = None,
         # Widened to the canonical 3-member ParameterOrigin: this is threaded
         # straight through to `make_start_request` (bot_start_admission.py),
@@ -652,6 +654,7 @@ class BotTaskRegistry:
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
             strategy_params=strategy_params,
+            exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
         )
         # Graduation re-observes the complete stopped roster and appends the
@@ -681,6 +684,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
+        exit_terms: ExitTerms | None = None,
         strategy_params: dict[str, Any] | None = None,
         # See the widening note on the matching parameter in
         # `deploy_with_admission` above.
@@ -704,6 +708,7 @@ class BotTaskRegistry:
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
             strategy_params=strategy_params,
+            exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
         )
         async with self._operation_lock(strategy_instance_id):
