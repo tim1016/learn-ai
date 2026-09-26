@@ -8686,6 +8686,10 @@ export interface components {
             start: string;
             /** Symbol */
             symbol: string;
+            /** Unreadable Days */
+            unreadable_days: number[];
+            /** Unreadable Files */
+            unreadable_files: components["schemas"]["UnreadableFileResponse"][];
         };
         /**
          * BackfillDefaults
@@ -26437,6 +26441,16 @@ export interface components {
             price?: number | null;
             /** Volume */
             volume?: number | null;
+        };
+        /**
+         * UnreadableFileResponse
+         * @description A data file that is on disk but its reader cannot decode (#2489, #2499).
+         */
+        UnreadableFileResponse: {
+            /** Path */
+            path: string;
+            /** Reason */
+            reason: string;
         };
         /** ValidationError */
         ValidationError: {

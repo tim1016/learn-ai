@@ -2506,6 +2506,20 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "unreadable_days": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Unreadable Days",
+            "type": "array"
+          },
+          "unreadable_files": {
+            "items": {
+              "$ref": "#/components/schemas/UnreadableFileResponse"
+            },
+            "title": "Unreadable Files",
+            "type": "array"
           }
         },
         "required": [
@@ -2515,7 +2529,9 @@
           "resolution",
           "expected_days",
           "available_days",
-          "is_complete"
+          "is_complete",
+          "unreadable_days",
+          "unreadable_files"
         ],
         "title": "AvailabilityResponse",
         "type": "object"
@@ -43340,6 +43356,25 @@
           }
         },
         "title": "UnifiedSnapshotSession",
+        "type": "object"
+      },
+      "UnreadableFileResponse": {
+        "description": "A data file that is on disk but its reader cannot decode (#2489, #2499).",
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "title": "UnreadableFileResponse",
         "type": "object"
       },
       "ValidationError": {
