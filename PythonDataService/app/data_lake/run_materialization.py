@@ -313,6 +313,8 @@ def _withholds_bars_the_run_reads(failure: ArtifactFailure, *, resolution: Engin
     Metadata failures mean the lake fell back to its hardcoded calendar —
     bad, and logged — but they withhold no bars, at either resolution.
     """
+    if failure.reason == "corp_action_revision_mismatch":
+        return True
     if failure.artifact_kind == "factor_file":
         return True
     if failure.artifact_kind != "time_series_bars":

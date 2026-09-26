@@ -665,6 +665,40 @@ async def run_trusted_sample(
     cancel_requested: Callable[[], bool] | None = None,
     on_cancel_too_late: Callable[[str], None] | None = None,
 ) -> TrustedRunResult:
+    """Pin adjusted lake inputs for the whole external-engine read window."""
+    from app.data_lake.adjustment_versions import AdjustmentVersionError, capture_lock
+
+    def check_cancelled() -> None:
+        if cancel_requested is not None and cancel_requested():
+            raise LeanRunCancelled(f"run {request.run_id} cancelled before the LEAN container launched")
+
+    if (request.data_policy.source == "polygon" and request.data_policy.adjusted
+            and request.data_policy.provider_kind != "fixture"):
+        root = data_plane_lake_root(polygon_mode_for(True))
+        try:
+            async with capture_lock(
+                root, [request.symbol], DEFAULT_RUN_LIMITS.wall_clock_timeout_s, check_cancelled=check_cancelled,
+            ):
+                return await _run_trusted_sample(
+                    request, on_phase=on_phase, on_log=on_log,
+                    cancel_requested=cancel_requested, on_cancel_too_late=on_cancel_too_late,
+                )
+        except AdjustmentVersionError as exc:
+            raise LeanSidecarServiceError(str(exc)) from exc
+    return await _run_trusted_sample(
+        request, on_phase=on_phase, on_log=on_log,
+        cancel_requested=cancel_requested, on_cancel_too_late=on_cancel_too_late,
+    )
+
+
+async def _run_trusted_sample(
+    request: TrustedRunRequest,
+    *,
+    on_phase: Callable[[str], None] | None = None,
+    on_log: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    on_cancel_too_late: Callable[[str], None] | None = None,
+) -> TrustedRunResult:
     """End-to-end trusted-sample run: stage → launch → write manifest.
 
     Pre-conditions:
@@ -1193,6 +1227,7 @@ def _build_manifest(
     # rerun. (Staging mode creates these directories empty, so the
     # staged run keeps hashing nothing, exactly as before.)
     staged_data = StagedDataManifest(
+        corporate_action_versions=dict(lake_artifacts.corporate_action_versions) if lake_artifacts is not None else {},
         # Phase 5c: include the quote zips alongside trade + daily
         # in the manifest's staged-data hash list. Reproducibility
         # requires every byte LEAN saw to be hashed.

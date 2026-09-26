@@ -2249,6 +2249,17 @@
             "title": "Artifact Kind",
             "type": "string"
           },
+          "corporate_action_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corporate Action Version"
+          },
           "data_contract_hash": {
             "title": "Data Contract Hash",
             "type": "string"
@@ -12030,6 +12041,13 @@
             "title": "Completed At Ms",
             "type": "integer"
           },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
+          },
           "data_availability_hash": {
             "title": "Data Availability Hash",
             "type": "string"
@@ -14464,6 +14482,13 @@
             },
             "title": "Chart Bars",
             "type": "array"
+          },
+          "corporate_action_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Corporate Action Versions",
+            "type": "object"
           },
           "data_policy": {
             "anyOf": [

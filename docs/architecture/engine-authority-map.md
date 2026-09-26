@@ -12,6 +12,13 @@ If two docs disagree, `math-sources-of-truth.md` wins for math and this doc wins
 
 ## The map
 
+Adjusted lake admission (#2454) is owned by
+`PythonDataService/app/data_lake/adjustment_versions.py` and `ensure_data`.
+Python readers pin the recorded basis; LEAN holds the symbol's capture lock
+while reading the mounted lake. Both persist the corporate-action version.
+See [the verification note](../references/lake-adjustment-dimension.md#5-corporate-action-versions-2454-2026-09-26).
+No calculation ownership changes.
+
 | Job | Owning engine (canonical) | Path / entry point | Role | Status |
 |---|---|---|---|---|
 | Broker clerk fleet control plane (ADR 0062) | **Python fleet coordinator — identity, assignment fencing, routing correlation only; never execution** | `PythonDataService/app/broker/fleet/` (registry store, provider adapter protocol, control service) with host ceremonies in `scripts/manage_broker_fleet.py` | Owns opaque clerk/volume/worker identities, broker-qualified `(broker, canonical external account)` assignments that never expire into takeover, routing epochs, routing receipts, and the broker-neutral read-only directory. Its SQLite registry (own control volume, WAL + migration lock per repository pattern) stores no lane configuration, custody, order, fill, position, activation or arming data, and the directory computes no balances, positions, P&L, exposure or risk. The production provider-adapter registry is code-owned and currently declares no providers — the Alpaca adapter and the coordinator/agent role split land as the PRD's Phase 2; test-only fake adapters inject without entering it. Generic fleet modules import no Alpaca risk, custody, execution, arming or recovery implementation (asserted by `tests/broker/fleet/test_import_isolation.py`). | **canonical fleet spine (Phase 1)** — custody authority remains ADR 0035/0037's SQLite Clerk per clerk volume; configuration authority remains ADR 0060's profiles DB per clerk volume. Validated by `PythonDataService/tests/broker/fleet/`. |

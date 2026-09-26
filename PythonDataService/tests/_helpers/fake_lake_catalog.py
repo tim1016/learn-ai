@@ -240,7 +240,8 @@ class FakeCatalog:
         return self._take_lease(row, worker_id, lease_ttl_ms)
 
     async def select_coverage_minute_bars(
-        self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode
+        self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode,
+        include_previously_published=False,
     ) -> list[ArtifactRecord]:
         # Mode is a required filter in the real query (#1832): two modes can
         # coexist for one (market, symbol, date, data_type), and a fake that
@@ -264,7 +265,7 @@ class FakeCatalog:
             and row["symbol"] == symbol
             and row["data_type"] == data_type
             and row["price_adjustment_mode"] == price_adjustment_mode
-            and row["status"] == "complete"
+            and (row["status"] == "complete" or (include_previously_published and row.get("file_sha256")))
             and _in_window(row["trading_date"])
         ]
 
@@ -365,6 +366,7 @@ class FakeCatalog:
         file_sha256,
         lease_generation,
         data_contract_hash=None,
+        corporate_action_version=None,
     ) -> bool:
         row = self.rows[artifact_id]
         # Status AND generation (issue #1888) -- mirrors the real guard's
@@ -380,6 +382,7 @@ class FakeCatalog:
             last_bar_start_ms=last_bar_start_ms,
             file_sha256=file_sha256,
             data_contract_hash=data_contract_hash if data_contract_hash is not None else row["data_contract_hash"],
+            corporate_action_version=corporate_action_version or row.get("corporate_action_version"),
             last_error=None,
             lease_owner=None,
             lease_expires_at_ms=None,
@@ -399,6 +402,7 @@ class FakeCatalog:
         file_size_bytes,
         file_sha256,
         data_contract_hash=None,
+        corporate_action_version=None,
     ) -> None:
         """Authorize, promote, then record -- in that order, and only in that
         order. The real implementation makes the three inseparable by holding
@@ -427,6 +431,7 @@ class FakeCatalog:
             file_sha256=file_sha256,
             lease_generation=lease_generation,
             data_contract_hash=data_contract_hash,
+            corporate_action_version=corporate_action_version,
         )
         assert completed, "the fake authorized a publication it then refused to complete"
 

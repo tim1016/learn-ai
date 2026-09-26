@@ -1,20 +1,7 @@
-"""Polygon -> LEAN data lake -- ensure_data orchestration.
+"""Polygon → LEAN lake capture: catalog-fenced publication and derivation.
 
-Slice 1a: fixture-backed canned responses; no real Polygon, no catalog INSERT,
-no atomic writes. Sufficient to exercise the HTTP boundary, the Pydantic
-contract, and the session-expansion logic end-to-end.
-
-Slice 1b: dispatch by artifact kind. Minute-trade artifacts now flow through
-the real Polygon → atomic-write → catalog-claim cycle. Other artifact kinds
-(factor / map / daily / quote / metadata) keep the Slice 1a fake_polygon stub
-until Slice 1c.
-
-Slice 1c: all artifact kinds have real implementations. Phase 0 metadata
-bootstrap (LEAN image extraction), Pass 1 (Polygon-sourced: minute-trade,
-factor_file, map_file), Pass 2 (derived: minute-quote, daily-trade). Real
-data_contract_hash replaces the 'x' * 64 placeholder. fake_polygon is
-retired as a defensive boundary.
-
+Adjusted captures pin a latest-known corporate-action snapshot, rebuild stale
+minute days, and derive quote/daily caches only from that basis (#2454).
 Spec: docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 4
 """
 
@@ -33,9 +20,19 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.atomic import ArtifactLeaseLostError, publish_artifact
+from app.data_lake.adjustment_versions import (
+    AdjustmentVersionError,
+    CorporateActionSnapshot,
+    adjustment_companion,
+    capture_lock,
+    current_snapshot_path,
+    verify_adjustment_receipt,
+)
+from app.data_lake.atomic import ArtifactLeaseLostError, atomic_write_and_promote, publish_artifact
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -170,6 +167,7 @@ async def _publish_under_lease(
     last_bar_start_ms: int,
     data_contract_hash: str | None = None,
     companions: Sequence[tuple[PurePosixPath, bytes]] = (),
+    adjustment_version: str | None = None,
 ) -> tuple[str, None] | tuple[None, ArtifactFailure]:
     """Publish one claimed artifact -- bytes onto the lake and receipt into
     the catalog, as one operation (issue #1888).
@@ -192,6 +190,8 @@ async def _publish_under_lease(
     refusal the caller must not call ``fail_artifact``: the row belongs to
     another generation now, and failing it would clobber the winner.
     """
+    if adjustment_version is not None:
+        companions = (*companions, adjustment_companion(rel_path, payload, adjustment_version))
     try:
         file_sha = await publish_artifact(
             content=payload,
@@ -208,6 +208,7 @@ async def _publish_under_lease(
             last_bar_start_ms=last_bar_start_ms,
             data_contract_hash=data_contract_hash,
             companions=companions,
+            corporate_action_version=adjustment_version,
         )
     except ArtifactLeaseLostError as e:
         return None, ArtifactFailure(
@@ -222,12 +223,13 @@ async def _publish_under_lease(
     return file_sha, None
 
 
-def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
+def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode, adjustment_version: str | None = None) -> str:
     return _dch(
         provider="polygon",
         provider_params={
             **_DCH_MINUTE_TRADE_PARAMS,
             "adjusted": _polygon_adjusted_flag(price_adjustment_mode),
+            **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -236,7 +238,8 @@ def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
 
 
 def _factor_file_dch(
-    source_trade_records: list[ArtifactRecord], price_adjustment_mode: PriceAdjustmentMode
+    source_trade_records: list[ArtifactRecord], price_adjustment_mode: PriceAdjustmentMode,
+    adjustment_version: str | None = None,
 ) -> str:
     """Factor-file contract hash: the symbol's captured minute-trade set (#2452).
 
@@ -254,6 +257,7 @@ def _factor_file_dch(
             "source": "minute-trade",
             "source_artifact_ids": sorted(r.id for r in source_trade_records),
             "source_file_sha256s": sorted(r.file_sha256 for r in source_trade_records),
+            **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -272,7 +276,8 @@ def _map_file_dch(price_adjustment_mode: PriceAdjustmentMode) -> str:
 
 
 def _quote_dch(
-    source_artifact_id: int, source_file_sha256: str, price_adjustment_mode: PriceAdjustmentMode
+    source_artifact_id: int, source_file_sha256: str, price_adjustment_mode: PriceAdjustmentMode,
+    adjustment_version: str | None = None,
 ) -> str:
     return _dch(
         provider="learn_ai_derived",
@@ -280,6 +285,7 @@ def _quote_dch(
             "source": "minute-trade",
             "source_artifact_id": source_artifact_id,
             "source_file_sha256": source_file_sha256,
+            **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -291,6 +297,7 @@ def _daily_dch(
     source_artifact_ids: list[int],
     source_file_sha256s: list[str],
     price_adjustment_mode: PriceAdjustmentMode,
+    adjustment_version: str | None = None,
 ) -> str:
     return _dch(
         provider="learn_ai_derived",
@@ -298,6 +305,7 @@ def _daily_dch(
             "source": "minute-trade",
             "source_artifact_ids": sorted(source_artifact_ids),
             "source_file_sha256s": sorted(source_file_sha256s),
+            **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -426,6 +434,7 @@ def _compute_data_availability_hash(artifacts: list[ArtifactRecord]) -> str:
                 a.data_type,
                 a.file_path,
                 a.file_sha256,
+                *((a.data_contract_hash,) if a.price_adjustment_mode == "polygon_split_adjusted" else ()),
                 a.row_count,
                 a.first_bar_start_ms,
                 a.last_bar_start_ms,
@@ -434,6 +443,20 @@ def _compute_data_availability_hash(artifacts: list[ArtifactRecord]) -> str:
     fingerprints.sort(key=lambda t: tuple("" if v is None else str(v) for v in t))
     blob = json.dumps(fingerprints, default=str, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
+
+
+def _cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, version: str | None) -> bool:
+    if row.data_contract_hash != dch:
+        return False
+    if version is None:
+        return True
+    if row.corporate_action_version != version:
+        return False
+    path = lake_root / row.file_path
+    try:
+        return path.is_file() and verify_adjustment_receipt(path, row.file_sha256, row.symbol or "") == version
+    except (OSError, AdjustmentVersionError):
+        return False  # Missing/invalid evidence is rebuilt, never blessed in place.
 
 
 def _is_minute_trade(identity: ArtifactIdentity) -> bool:
@@ -475,6 +498,7 @@ def _polygon_bar_to_minute_trade_bar(pb: PolygonBar) -> MinuteTradeBar:
 async def _process_minute_trade_artifact(
     identity: ArtifactIdentity,
     spec: DataRunSpec,
+    adjustment_version: str | None = None,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, bool]:
     """Claim → fetch → write → complete one minute-trade artifact.
 
@@ -488,7 +512,7 @@ async def _process_minute_trade_artifact(
         data_type="trade",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _minute_trade_dch(spec.price_adjustment_mode)
+    dch = _minute_trade_dch(spec.price_adjustment_mode, adjustment_version)
 
     artifact_id = await catalog_client.claim_minute_bar(
         identity=identity,
@@ -516,7 +540,20 @@ async def _process_minute_trade_artifact(
             price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
-            return existing[0], None, True  # cache hit
+            cached = existing[0]
+            if _cache_matches(cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version):
+                return cached, None, True
+            prior = await catalog_client.refresh_complete_artifact(
+                artifact_id=cached.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,
+                expected_data_contract_hash=cached.data_contract_hash,
+            )
+            if prior is None:
+                return None, ArtifactFailure(
+                    artifact_kind=identity.artifact_kind, symbol=identity.symbol,
+                    trading_date=identity.trading_date, data_type=identity.data_type,
+                    reason="lease_timeout", detail="adjusted day changed during rebuild; retry",
+                ), False
+            artifact_id, lease_generation = cached.id, prior.new_lease_generation
 
         # Not complete either — the row exists but is 'failed', 'stale', or
         # 'fetching'. A 'failed' (or lease-expired 'fetching') row is not
@@ -526,28 +563,29 @@ async def _process_minute_trade_artifact(
         # instead, through the one reclaim protocol every artifact kind uses,
         # so this call either gets a fresh attempt at the bytes, a terminal
         # fetch_timeout, or lease_timeout while another worker holds the row.
-        reclaim = await catalog_client.reclaim_after_lost_claim(
-            lambda: catalog_client.select_minute_bar_claim_state(identity),
-            worker_id=_WORKER_ID,
-            lease_ttl_ms=_LEASE_TTL_MS,
-            max_retries=_MAX_CLAIM_RETRIES,
-        )
-        if isinstance(reclaim, catalog_client.ReclaimRefused):
-            return (
-                None,
-                ArtifactFailure(
-                    artifact_kind=identity.artifact_kind,
-                    symbol=identity.symbol,
-                    trading_date=identity.trading_date,
-                    data_type=identity.data_type,
-                    reason=reclaim.reason,
-                    detail=reclaim.detail,
-                    attempt_count=reclaim.attempt_count,
-                ),
-                False,
+        if not existing:
+            reclaim = await catalog_client.reclaim_after_lost_claim(
+                lambda: catalog_client.select_minute_bar_claim_state(identity),
+                worker_id=_WORKER_ID,
+                lease_ttl_ms=_LEASE_TTL_MS,
+                max_retries=_MAX_CLAIM_RETRIES,
             )
-        # Falls through to the fetch below, exactly as a fresh claim would.
-        artifact_id, lease_generation = reclaim.artifact_id, reclaim.lease_generation
+            if isinstance(reclaim, catalog_client.ReclaimRefused):
+                return (
+                    None,
+                    ArtifactFailure(
+                        artifact_kind=identity.artifact_kind,
+                        symbol=identity.symbol,
+                        trading_date=identity.trading_date,
+                        data_type=identity.data_type,
+                        reason=reclaim.reason,
+                        detail=reclaim.detail,
+                        attempt_count=reclaim.attempt_count,
+                    ),
+                    False,
+                )
+            # Falls through to the fetch below, exactly as a fresh claim would.
+            artifact_id, lease_generation = reclaim.artifact_id, reclaim.lease_generation
 
     # Fetch from Polygon.
     api_key = settings.POLYGON_API_KEY
@@ -674,6 +712,8 @@ async def _process_minute_trade_artifact(
         row_count=len(polygon_bars),
         first_bar_start_ms=first_bar_ms,
         last_bar_start_ms=last_bar_ms,
+        data_contract_hash=dch,
+        adjustment_version=adjustment_version,
     )
     if lease_failure is not None:
         return None, lease_failure, False
@@ -690,6 +730,7 @@ async def _process_minute_trade_artifact(
             provider=identity.provider,
             price_adjustment_mode=identity.price_adjustment_mode,
             data_contract_hash=dch,
+            corporate_action_version=adjustment_version,
             file_path=file_path,
             file_sha256=file_sha,
             row_count=len(polygon_bars),
@@ -810,6 +851,7 @@ async def _process_factor_file_artifact(
     identity: ArtifactIdentity,
     spec: DataRunSpec,
     lake_root: Path,
+    snapshot: CorporateActionSnapshot | None = None,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
     """Build the symbol's factor file over every captured session → claim → publish it with its coverage.
 
@@ -832,6 +874,7 @@ async def _process_factor_file_artifact(
     on error — the third element is meaningless on failure.
     """
     symbol = identity.symbol or ""
+    version = snapshot.version if snapshot is not None else None
     rel_path = LeanFactorFilePath(market=identity.market, symbol=symbol).relative_path()  # type: ignore[arg-type]
     file_path = str(rel_path)
 
@@ -868,7 +911,7 @@ async def _process_factor_file_artifact(
             "internal_error",
             f"no complete minute-trade sessions for {symbol}; a factor file covers only captured sessions",
         )
-    dch = _factor_file_dch(sources, identity.price_adjustment_mode)
+    dch = _factor_file_dch(sources, identity.price_adjustment_mode, version)
 
     async def _current(row: ArtifactRecord, contract: str) -> bool:
         return row.data_contract_hash == contract and await asyncio.to_thread(
@@ -881,8 +924,8 @@ async def _process_factor_file_artifact(
 
     api_key = settings.POLYGON_API_KEY
     try:
-        splits = await fetch_splits(symbol=symbol, api_key=api_key)
-        dividends = await fetch_dividends(symbol=symbol, api_key=api_key)
+        splits = list(snapshot.splits) if snapshot else await fetch_splits(symbol=symbol, api_key=api_key)
+        dividends = list(snapshot.dividends) if snapshot else await fetch_dividends(symbol=symbol, api_key=api_key)
     except Exception as e:
         return _failure("provider_api_error", str(e))
     try:
@@ -917,7 +960,7 @@ async def _process_factor_file_artifact(
             # file would regress the coverage the sibling just recorded.
             # lease_timeout sends the capture back through ensure_data, which
             # rebuilds from the current sources.
-            current_dch = _factor_file_dch(await _captured_sources(), identity.price_adjustment_mode)
+            current_dch = _factor_file_dch(await _captured_sources(), identity.price_adjustment_mode, version)
             if await _current(existing, current_dch):
                 return existing, None, "reused"
             if current_dch != dch:
@@ -970,6 +1013,7 @@ async def _process_factor_file_artifact(
         # A refresh completes onto a different source set than the row's
         # existing DataContractHash — see _process_daily_trade_artifact.
         data_contract_hash=dch,
+        adjustment_version=version,
         # The coverage record is promoted under the same lease, in the same
         # fenced step as the CSV it vouches for, so the row never reads
         # 'complete' without its record and a writer that lost its lease
@@ -1006,6 +1050,7 @@ async def _process_factor_file_artifact(
             provider=identity.provider,
             price_adjustment_mode=identity.price_adjustment_mode,
             data_contract_hash=dch,
+            corporate_action_version=version,
             file_path=file_path,
             file_sha256=file_sha,
             row_count=len(plan.splits) + len(plan.dividends),
@@ -1138,6 +1183,7 @@ async def _process_minute_quote_artifact(
     source_trade_record: ArtifactRecord,
     spec: DataRunSpec,
     lake_root: Path,
+    adjustment_version: str | None = None,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, bool]:
     """Derive minute-quote bytes from same-day complete minute-trade artifact.
 
@@ -1150,7 +1196,7 @@ async def _process_minute_quote_artifact(
         data_type="quote",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _quote_dch(source_trade_record.id, source_trade_record.file_sha256, spec.price_adjustment_mode)
+    dch = _quote_dch(source_trade_record.id, source_trade_record.file_sha256, spec.price_adjustment_mode, adjustment_version)
 
     artifact_id = await catalog_client.claim_minute_bar(
         identity=identity,
@@ -1173,20 +1219,29 @@ async def _process_minute_quote_artifact(
             price_adjustment_mode=identity.price_adjustment_mode,
         )
         if existing:
-            return existing[0], None, True  # cache hit
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=identity.trading_date,
-                data_type=identity.data_type,
-                reason="lease_timeout",
-                detail="minute-quote in-flight elsewhere; polling not implemented in Slice 1c",
-                attempt_count=1,
-            ),
-            False,
-        )
+            cached = existing[0]
+            if _cache_matches(cached, dch, lake_root, adjustment_version):
+                return cached, None, True
+            prior = await catalog_client.refresh_complete_artifact(
+                artifact_id=cached.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,
+                expected_data_contract_hash=cached.data_contract_hash,
+            )
+            if prior is not None:
+                artifact_id, lease_generation = cached.id, prior.new_lease_generation
+        if artifact_id is None:
+            return (
+                None,
+                ArtifactFailure(
+                    artifact_kind=identity.artifact_kind,
+                    symbol=identity.symbol,
+                    trading_date=identity.trading_date,
+                    data_type=identity.data_type,
+                    reason="lease_timeout",
+                    detail="minute-quote in-flight elsewhere; polling not implemented in Slice 1c",
+                    attempt_count=1,
+                ),
+                False,
+            )
 
     # Read source trade bars from disk.
     try:
@@ -1229,6 +1284,8 @@ async def _process_minute_quote_artifact(
         row_count=row_count,
         first_bar_start_ms=first_ms,
         last_bar_start_ms=last_ms,
+        data_contract_hash=dch,
+        adjustment_version=adjustment_version,
     )
     if lease_failure is not None:
         return None, lease_failure, False
@@ -1244,6 +1301,7 @@ async def _process_minute_quote_artifact(
             provider=identity.provider,
             price_adjustment_mode=identity.price_adjustment_mode,
             data_contract_hash=dch,
+            corporate_action_version=adjustment_version,
             file_path=file_path,
             file_sha256=file_sha,
             row_count=row_count,
@@ -1262,6 +1320,7 @@ async def _process_daily_trade_artifact(
     source_trade_records: list[ArtifactRecord],
     spec: DataRunSpec,
     lake_root: Path,
+    adjustment_version: str | None = None,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
     """Derive daily-trade bytes from all complete minute-trade artifacts for the symbol.
 
@@ -1284,14 +1343,14 @@ async def _process_daily_trade_artifact(
     file_path = str(rel_path)
     source_ids = [r.id for r in source_trade_records]
     source_shas = [r.file_sha256 for r in source_trade_records]
-    dch = _daily_dch(source_ids, source_shas, spec.price_adjustment_mode)
+    dch = _daily_dch(source_ids, source_shas, spec.price_adjustment_mode, adjustment_version)
 
     # Cache hit first, before any parsing. This is the common path — every
     # repeated ensure_data over a symbol whose daily artifact is already
     # current — and the build below costs seconds against a multi-year
     # history, so answering "reused" must not pay for it.
     cached = await catalog_client.select_complete_aggregated_bar_artifact(identity)
-    if cached is not None and cached.data_contract_hash == dch:
+    if cached is not None and _cache_matches(cached, dch, lake_root, adjustment_version):
         return cached, None, "reused"
 
     # Then build, and only then claim. The payload is a pure function of
@@ -1341,7 +1400,7 @@ async def _process_daily_trade_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_aggregated_bar_artifact(identity)
         if existing is not None:
-            if existing.data_contract_hash == dch:
+            if _cache_matches(existing, dch, lake_root, adjustment_version):
                 return existing, None, "reused"  # cache hit — same source set
             # The symbol's catalogued minute coverage has grown (or a source
             # minute artifact's bytes changed under a day-refresh) since this
@@ -1407,6 +1466,7 @@ async def _process_daily_trade_artifact(
         # already (claim_aggregated_bar_artifact above), so this is a no-op
         # there, but passing it unconditionally keeps both paths honest.
         data_contract_hash=dch,
+        adjustment_version=adjustment_version,
     )
     if lease_failure is not None:
         return None, lease_failure, "fetched"
@@ -1422,6 +1482,7 @@ async def _process_daily_trade_artifact(
             provider=identity.provider,
             price_adjustment_mode=identity.price_adjustment_mode,
             data_contract_hash=dch,
+            corporate_action_version=adjustment_version,
             file_path=file_path,
             file_sha256=file_sha,
             row_count=row_count,
@@ -1455,7 +1516,63 @@ def _metadata_bootstrap_detail(kind_label: str, detail: str | None) -> str:
     return f"{kind_label} metadata bootstrap failed; see launcher logs"
 
 
+async def _fetch_action_snapshot(symbol: str) -> CorporateActionSnapshot:
+    try:
+        return CorporateActionSnapshot(
+            tuple(await fetch_splits(symbol=symbol, api_key=settings.POLYGON_API_KEY)),
+            tuple(await fetch_dividends(symbol=symbol, api_key=settings.POLYGON_API_KEY)),
+            datetime.now(_ET).date(),
+        )
+    except httpx.HTTPError as exc:
+        # HTTP error text can contain the request URL's apiKey parameter.
+        raise AdjustmentVersionError(f"{symbol}: corporate-action fetch failed ({type(exc).__name__})") from exc
+
+
+def _publish_action_snapshot(spec: DataRunSpec, symbol: str, snapshot: CorporateActionSnapshot) -> None:
+    lake_root, staging_root = _writable_lake_roots(spec)
+    payload = snapshot.payload()
+    current_path = current_snapshot_path(symbol)
+    history_path = current_path.parent / symbol.lower() / f"{snapshot.version}.json"
+    if not (lake_root / history_path).exists():
+        atomic_write_and_promote(payload, lake_root, staging_root, history_path, spec.request_id, _WORKER_ID, 1)
+    if (lake_root / current_path).exists() and (lake_root / current_path).read_bytes() == payload:
+        return
+    atomic_write_and_promote(payload, lake_root, staging_root, current_path, spec.request_id, _WORKER_ID, 1)
+
+
 async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
+    if spec.price_adjustment_mode == "raw":
+        return await _ensure_data(spec, {})
+    lake_root, _ = _writable_lake_roots(spec)
+    try:
+        async with capture_lock(lake_root, spec.symbols, spec.fetch_timeout_seconds):
+            snapshots = {}
+            for symbol in spec.symbols:
+                snapshot = await _fetch_action_snapshot(symbol)
+                _publish_action_snapshot(spec, symbol, snapshot)
+                snapshots[symbol] = snapshot
+            result = await _ensure_data(spec, snapshots)
+            # Polygon has no revision-pinned aggregate endpoint. A concurrent
+            # corporate action invalidates this entire attempted capture.
+            for symbol, snapshot in snapshots.items():
+                latest = await _fetch_action_snapshot(symbol)
+                if latest.version != snapshot.version:
+                    _publish_action_snapshot(spec, symbol, latest)
+                    raise AdjustmentVersionError(f"{symbol}: corporate actions changed during capture; retry rebuilds the window")
+            return result
+    except (ValueError, OSError) as exc:
+        return DataAvailabilityResult(
+            request_id=spec.request_id, overall_status="failed", lean_data_root_path=str(lake_root),
+            data_availability_hash=_compute_data_availability_hash([]),
+            failures=[ArtifactFailure(
+                artifact_kind="time_series_bars", symbol=symbol, trading_date=None, data_type="trade",
+                reason="corp_action_revision_mismatch",
+                detail=f"Cannot establish one corporate-action version: {exc}",
+            ) for symbol in spec.symbols], completed_at_ms=int(time.time() * 1000), duration_ms=0,
+        )
+
+
+async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSnapshot]) -> DataAvailabilityResult:
     """Full Slice 1c pipeline: Phase 0 metadata bootstrap + Pass 1 + Pass 2.
 
     Phase 0: Extract LEAN metadata (market-hours + symbol-properties) from the
@@ -1594,6 +1711,14 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
     # Expand required artifacts (now with real calendar if available)
     # -----------------------------------------------------------------------
     required, non_sessions = expand_required_artifacts(spec)
+    for symbol, snapshot in snapshots.items():
+        captured = await catalog_client.select_coverage_minute_bars(
+            spec.market, symbol, "trade", None, None, price_adjustment_mode=spec.price_adjustment_mode,
+            include_previously_published=True,
+        )
+        extra = [minute_bar_identity(spec, symbol=symbol, trading_date=row.trading_date, data_type="trade") for row in captured
+                 if not _cache_matches(row, _minute_trade_dch(spec.price_adjustment_mode, snapshot.version), lake_root, snapshot.version)]
+        required = [identity for identity in extra if identity not in required] + required
 
     # -----------------------------------------------------------------------
     # Pass 1: Polygon-sourced artifacts (minute-trade + factor_file + map_file)
@@ -1603,7 +1728,9 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 
     for identity in required:
         if _is_minute_trade(identity):
-            record, failure, is_reused = await _process_minute_trade_artifact(identity, spec)
+            record, failure, is_reused = await _process_minute_trade_artifact(
+                identity, spec, snapshots[identity.symbol].version if identity.symbol in snapshots else None,
+            )
             if record is not None:
                 artifacts.append(record)
                 if is_reused:
@@ -1622,7 +1749,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             # complete in the catalog the factor build reads its captured
             # sessions from. A day that failed simply is not a captured
             # session: it bounds a covered span rather than failing the file.
-            record, failure, outcome = await _process_factor_file_artifact(identity, spec, lake_root)
+            record, failure, outcome = await _process_factor_file_artifact(identity, spec, lake_root, snapshots.get(identity.symbol))
             if record is not None:
                 artifacts.append(record)
                 if outcome == "reused":
@@ -1667,7 +1794,9 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                     )
                 )
                 continue
-            record, failure, is_reused = await _process_minute_quote_artifact(identity, source, spec, lake_root)
+            record, failure, is_reused = await _process_minute_quote_artifact(
+                identity, source, spec, lake_root, snapshots[sym].version if sym in snapshots else None,
+            )
             if record is not None:
                 artifacts.append(record)
                 if is_reused:
@@ -1679,6 +1808,13 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
 
         elif _is_daily_trade(identity):
             sym = identity.symbol or ""
+            if sym in snapshots and any(f.symbol == sym and f.artifact_kind == "time_series_bars" for f in failures):
+                failures.append(ArtifactFailure(
+                    artifact_kind=identity.artifact_kind, symbol=sym, trading_date=None, data_type="trade",
+                    reason="corp_action_revision_mismatch",
+                    detail=f"{sym}: cannot rebuild all adjusted days on one corporate-action version",
+                ))
+                continue
             # Symbol-wide, not window-scoped: the daily artifact's job is to
             # always reflect everything currently catalogued for this
             # symbol, so its source set is read from the catalog directly
@@ -1708,7 +1844,13 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
                     )
                 )
                 continue
-            record, failure, outcome = await _process_daily_trade_artifact(identity, source_records, spec, lake_root)
+            version = snapshots[sym].version if sym in snapshots else None
+            if version is not None:
+                for source in source_records:
+                    path = lake_root / source.file_path
+                    if verify_adjustment_receipt(path, source.file_sha256, sym) != version:
+                        raise AdjustmentVersionError(f"{sym}: mixed versions in the daily inputs; rebuild required")
+            record, failure, outcome = await _process_daily_trade_artifact(identity, source_records, spec, lake_root, version)
             if record is not None:
                 artifacts.append(record)
                 if outcome == "reused":
@@ -1729,6 +1871,7 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         lean_data_root_path=str(lake_root),
         data_availability_hash=_compute_data_availability_hash(artifacts),
         artifacts=artifacts,
+        corporate_action_versions={symbol: snapshot.version for symbol, snapshot in snapshots.items()},
         failures=failures,
         skipped_non_sessions=non_sessions,
         fetched_artifact_count=fetched_count,

@@ -411,6 +411,7 @@ class EngineEvaluationWindowResponse(BaseModel):
 
 
 class EngineBacktestResponse(BaseModel):
+    corporate_action_versions: dict[str, str] = Field(default_factory=dict)
     success: bool
     strategy_name: str
     fill_mode: str

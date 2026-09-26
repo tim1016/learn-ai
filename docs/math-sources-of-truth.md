@@ -57,6 +57,12 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > materializer to choose between. The no-new-concept finding is what survives
 > unchanged: resolution picks which bytes the reader opens, never a formula
 > over them.
+>
+> **#2454:** adjusted cache admission additionally pins a corporate-action
+> content version through `app/data_lake/adjustment_versions.py`. Minute,
+> daily, quote, Python-run, and LEAN-run receipts share that version. This
+> changes cache validity and input provenance, with no new formula or port;
+> see `docs/references/lake-adjustment-dimension.md` §5.
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|

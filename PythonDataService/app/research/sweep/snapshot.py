@@ -28,6 +28,7 @@ from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Literal
 
+from app.data_lake.adjustment_versions import AdjustmentVersionGuard, adjusted_root_for, companion_path
 from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
@@ -56,6 +57,7 @@ class DataSnapshot:
     sessions: tuple[date, ...]
     # Root-relative artifact path -> sha256 of its bytes at capture.
     artifacts: dict[str, str] = field(default_factory=dict)
+    corporate_action_versions: dict[str, str] = field(default_factory=dict)
     calendar_identity: str = CALENDAR_IDENTITY
     calendar_version: str = CALENDAR_PACKAGE_VERSION
 
@@ -71,6 +73,7 @@ class DataSnapshot:
             "data_end_ms": et_midnight_ms(self.data_end),
             "sessions_ms": [et_midnight_ms(day) for day in self.sessions],
             "artifacts": dict(sorted(self.artifacts.items())),
+            **({"corporate_action_versions": self.corporate_action_versions} if self.corporate_action_versions else {}),
             "calendar_identity": self.calendar_identity,
             "calendar_version": self.calendar_version,
         }
@@ -84,6 +87,7 @@ class DataSnapshot:
             data_end=et_date_at_ms(int(payload["data_end_ms"])),
             sessions=tuple(et_date_at_ms(int(ms)) for ms in payload["sessions_ms"]),
             artifacts=dict(payload["artifacts"]),
+            corporate_action_versions=dict(payload.get("corporate_action_versions", {})),
             calendar_identity=str(payload["calendar_identity"]),
             calendar_version=str(payload["calendar_version"]),
         )
@@ -139,11 +143,18 @@ def capture_data_snapshot(
     if not coverage.is_complete:
         raise MissingSessionsError(coverage)
     artifacts: dict[str, str] = {}
+    guard = AdjustmentVersionGuard()
     for root, days in coverage.sources.items():
         for day in days:
             relative = _daily_relative(symbol) if resolution == "daily" else _minute_relative(symbol, day)
             if relative not in artifacts:
-                artifacts[relative] = _sha256(Path(root) / relative)
+                path = Path(root) / relative
+                payload = path.read_bytes()
+                if adjusted_root_for(path) is not None:
+                    companion = companion_path(path).read_bytes()
+                    guard.verify(path, payload, symbol, companion_payload=companion)
+                    artifacts[str(companion_path(Path(relative)))] = hashlib.sha256(companion).hexdigest()
+                artifacts[relative] = hashlib.sha256(payload).hexdigest()
     return DataSnapshot(
         symbol=symbol.upper(),
         resolution=resolution,
@@ -151,6 +162,7 @@ def capture_data_snapshot(
         data_end=data_end,
         sessions=tuple(expected_sessions(data_start, data_end)),
         artifacts=artifacts,
+        corporate_action_versions=dict(guard.versions),
     )
 
 
@@ -181,6 +193,20 @@ def _refuse_if_receipted(manifest: Mapping[str, str], relative: str) -> None:
         raise DataSnapshotMismatchError(f"{relative} was receipted at launch but is missing now")
 
 
+def _verify_adjustment_receipt(
+    guard: AdjustmentVersionGuard, manifest: Mapping[str, str], relative: str,
+    path: Path, payload: bytes, symbol: str,
+) -> None:
+    if adjusted_root_for(path) is None:
+        return
+    try:
+        companion = companion_path(path).read_bytes()
+    except OSError as exc:
+        raise DataSnapshotMismatchError(f"{relative}: corporate-action version receipt is missing") from exc
+    _verify_bytes(manifest, str(companion_path(Path(relative))), companion)
+    guard.verify(path, payload, symbol, companion_payload=companion)
+
+
 class ManifestBoundMinuteReader(LeanMinuteDataReader):
     """A minute reader that parses only bytes matching the receipted manifest."""
 
@@ -201,6 +227,7 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
             return []
         payload = zip_path.read_bytes()
         _verify_bytes(self._manifest, relative, payload)
+        _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
         return self.parse_day_zip(payload, symbol, trading_date)
 
 
@@ -218,4 +245,5 @@ class ManifestBoundDailyReader(LeanDailyDataReader):
             return []
         payload = zip_path.read_bytes()
         _verify_bytes(self._manifest, relative, payload)
+        _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
         return self.parse_history_zip(payload, symbol)

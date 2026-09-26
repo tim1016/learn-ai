@@ -694,6 +694,7 @@ def _execute_engine_backtest_core(
         on_phase=on_phase,
         on_log=on_log,
     )
+    response.corporate_action_versions = dict(reader.adjustment_guard.versions)
     if not response.success:
         # A reported failure is never written to history. Before this workflow
         # was split, the aggregation half's ``return`` left the function
@@ -1116,7 +1117,8 @@ def _persist_and_dispatch_companion(
         compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,
-        execution_config=_persisted_execution_config(request, evaluation_start=date.fromisoformat(resolved_configuration.start_date)),
+        execution_config=_persisted_execution_config(request, evaluation_start=date.fromisoformat(resolved_configuration.start_date))
+        | ({"corporate_action_versions": response.corporate_action_versions} if response.corporate_action_versions else {}),
     )
 
     on_log(f"Saved study {response.study_id}")

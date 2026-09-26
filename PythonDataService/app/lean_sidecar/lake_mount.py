@@ -105,7 +105,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -314,6 +314,7 @@ class LakeArtifacts:
     # Optional (#1859) — None when the lake has no interest-rate subtree
     # for this run yet. See resolve_optional_lake_interest_rate.
     interest_rate_path: Path | None
+    corporate_action_versions: dict[str, str] = field(default_factory=dict)
 
 
 def resolve_lake_artifacts(
@@ -407,7 +408,18 @@ def resolve_lake_artifacts(
             "the trade artifacts already present (no provider call)."
         )
 
-    daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
+    from app.data_lake.adjustment_versions import AdjustmentVersionError, AdjustmentVersionGuard, adjusted_root_for
+
+    guard = AdjustmentVersionGuard()
+    try:
+        for path in (*trade_zip_paths, *quote_zip_paths):
+            if adjusted_root_for(path) is not None:
+                guard.verify(path, path.read_bytes(), safe_symbol)
+        daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
+        if adjusted_root_for(daily_zip_path) is not None:
+            guard.verify(daily_zip_path, daily_zip_path.read_bytes(), safe_symbol)
+    except AdjustmentVersionError as exc:
+        raise LakeMountError(f"lake_adjustment_version_mismatch: {exc}") from exc
     market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
     log_lake_mode_input_divergences(lake_root)
     interest_rate_path = resolve_optional_lake_interest_rate(lake_root)
@@ -422,6 +434,7 @@ def resolve_lake_artifacts(
     )
     return LakeArtifacts(
         lake_root=lake_root,
+        corporate_action_versions=dict(guard.versions),
         trading_dates=tuple(required_sessions),
         trade_zip_paths=tuple(trade_zip_paths),
         quote_zip_paths=tuple(quote_zip_paths),

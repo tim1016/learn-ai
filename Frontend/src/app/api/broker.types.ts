@@ -8597,6 +8597,8 @@ export interface components {
         ArtifactRecord: {
             /** Artifact Kind */
             artifact_kind: string;
+            /** Corporate Action Version */
+            corporate_action_version?: string | null;
             /** Data Contract Hash */
             data_contract_hash: string;
             /**
@@ -12527,6 +12529,10 @@ export interface components {
             artifacts?: components["schemas"]["ArtifactRecord"][];
             /** Completed At Ms */
             completed_at_ms: number;
+            /** Corporate Action Versions */
+            corporate_action_versions?: {
+                [key: string]: string;
+            };
             /** Data Availability Hash */
             data_availability_hash: string;
             /**
@@ -13933,6 +13939,10 @@ export interface components {
             bars_consumed?: number;
             /** Chart Bars */
             chart_bars?: Record<string, never>[];
+            /** Corporate Action Versions */
+            corporate_action_versions?: {
+                [key: string]: string;
+            };
             data_policy?: components["schemas"]["_EngineDataPolicyModel"] | null;
             /** Equity Curve */
             equity_curve?: Record<string, never>[];

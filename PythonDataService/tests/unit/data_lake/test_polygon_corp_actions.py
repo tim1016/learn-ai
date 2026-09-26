@@ -101,3 +101,13 @@ async def test_fetch_splits_empty_results_returns_empty():
     )
     events = await fetch_splits(symbol="UNKNOWN", api_key="test-key")
     assert events == []
+
+
+@respx.mock
+@pytest.mark.parametrize("payload", [{"status": "ERROR", "error": "unavailable"}, {}, {"status": "OK", "results": {}}])
+async def test_an_unconfirmed_action_response_is_not_an_empty_revision(payload: dict) -> None:
+    respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*")).mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    with pytest.raises(ValueError, match="version is unknown"):
+        await fetch_splits(symbol="SPY", api_key="test-key")

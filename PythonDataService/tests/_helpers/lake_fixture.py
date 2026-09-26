@@ -31,7 +31,7 @@ from app.data_lake.path_policy import (
 )
 from app.engine.data.trade_bar import TradeBar
 from app.utils.timestamps import datetime_at_ms
-from tests._helpers.lean_store import make_minute_bars
+from tests._helpers.lean_store import make_minute_bars, record_fixture_adjustment
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -112,6 +112,9 @@ def seed_lake_minute_day(
             quote_relative,
             build_minute_quote_zip_bytes(symbol, yyyymmdd, lake_bars),
         )
+    record_fixture_adjustment(trade_path, symbol)
+    if quote_path is not None:
+        record_fixture_adjustment(quote_path, symbol)
     return trade_path, quote_path
 
 
@@ -127,11 +130,13 @@ def seed_lake_daily(
     for trading_date in trading_dates:
         lake_bars.extend(to_lake_bars(make_minute_bars(symbol, trading_date, count=count)))
     relative = Path(*LeanDailyBarPath(market="usa", symbol=symbol).relative_path().parts)
-    return _write(
+    path = _write(
         lake_root,
         relative,
         build_daily_zip_bytes(symbol=symbol, aggregates=aggregate_minute_to_daily(lake_bars)),
     )
+    record_fixture_adjustment(path, symbol)
+    return path
 
 
 def seed_lake_metadata(lake_root: Path) -> tuple[Path, Path]:

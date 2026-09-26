@@ -39,6 +39,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Literal
 
+from app.data_lake.adjustment_versions import adjusted_root_for, companion_path, current_version
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 
 logger = logging.getLogger(__name__)
@@ -140,9 +141,17 @@ def _read_minute_zip(path: Path, symbol: str, trading_date: date, session: Sessi
     unchanged file again costs one ``stat`` (500 sessions: about 13 ms, as
     the existence check did) and a rewritten one is parsed afresh.
     """
-    stat = path.stat()
-    version = (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-    return _parse_minute_zip(str(path), version, symbol.upper(), trading_date, session)
+    try:
+        stat = path.stat()
+        version = (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        root = adjusted_root_for(path)
+        adjustment_key: tuple[str, int, int] | None = None
+        if root is not None:
+            companion = companion_path(path).stat()
+            adjustment_key = (current_version(root, symbol), companion.st_mtime_ns, companion.st_ctime_ns)
+        return _parse_minute_zip(str(path), version, symbol.upper(), trading_date, session, adjustment_key)
+    except _DECODE_ERRORS as exc:
+        return _MinuteVerdict(has_bars=False, unreadable=_unreadable(path, exc))
 
 
 @lru_cache(maxsize=32_768)
@@ -152,11 +161,14 @@ def _parse_minute_zip(
     symbol: str,
     trading_date: date,
     session: Session,
+    adjustment_key: tuple[str, int, int] | None = None,
 ) -> _MinuteVerdict:
     """The uncached body of :func:`_read_minute_zip`; ``version`` only keys the cache."""
     try:
         reader = LeanMinuteDataReader(Path(path).parent, session=session)
-        bars = reader.parse_day_zip(Path(path).read_bytes(), symbol, trading_date)
+        payload = Path(path).read_bytes()
+        reader.adjustment_guard.verify(Path(path), payload, symbol)
+        bars = reader.parse_day_zip(payload, symbol, trading_date)
     except _DECODE_ERRORS as exc:
         return _MinuteVerdict(has_bars=False, unreadable=_unreadable(path, exc))
     return _MinuteVerdict(has_bars=bool(bars))
