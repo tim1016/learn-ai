@@ -119,8 +119,13 @@ class StartupDeadline:
         A retryable refusal (history not there yet) is asked again every
         ``_RETRY_MS``; any other refusal propagates at once. An attempt still in
         flight at the deadline is cancelled rather than allowed to extend it.
-        The refusal that ends the budget is the last attempt's, so the run's
-        record names what was still missing. ``abort`` raises when the join is
+        A refusal re-raised after its retry sleep is only ever that same
+        attempt's, and only when the sleep woke past the deadline — no further
+        attempt can start inside the budget, so it is the run's refusal and it
+        names what was still missing (#2486). Once a later attempt *has*
+        started, its outcome is the honest one even when it never answers: an
+        earlier attempt's interval is stale evidence, so the timeout refusal,
+        which names no interval, stands. ``abort`` raises when the join is
         moot -- the live stream it would meet has died -- and is asked before
         every attempt and after every failure, so that failure is the run's
         outcome, not a history refusal waited out to the deadline.
@@ -154,6 +159,13 @@ class StartupDeadline:
                     },
                 )
                 await asyncio.sleep(_RETRY_MS / 1000)
+                if now_ms_utc() >= self.deadline_ms:
+                    # The retry sleep woke past the deadline: no further
+                    # attempt can start inside the budget, so this refusal --
+                    # the last attempt that answered, naming what was still
+                    # missing -- is the run's, in place of a synthetic timeout
+                    # that would name nothing (#2486).
+                    raise
 
 
 async def _sleep_until(instant_ms: int) -> None:

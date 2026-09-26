@@ -30,6 +30,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeedError,
     SubstitutionRefusal,
+    WarmupMinutesMissing,
 )
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.decision_session import RunDecisionSession
@@ -322,6 +323,43 @@ async def test_a_joined_minute_history_never_returns_is_refused_with_the_missing
     )
     # A refused run retained none of its held live bars.
     assert all(row.provenance != "realtime" for row in ledger.bars(provider="ibkr", symbol="SPY"))
+
+
+@pytest.mark.asyncio
+async def test_a_budget_that_ends_between_attempts_keeps_the_last_answers_interval(
+    ledger: SourceBarLedger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2486: a retry sleep that wakes past the deadline made ``wait_for``
+    time out before its attempt could run, and the synthetic timeout refusal
+    named no interval -- so the run's record lost the missing interval the
+    last answering attempt had just reported (the 1-in-20 flake in the test
+    above). The clock is injected here: every sleep advances it past what the
+    budget counted, deterministically, and the recorded refusal must still be
+    the last answer's."""
+    monkeypatch.setattr("app.config.settings.STARTUP_JOIN_BUDGET_MS", 1_000)
+    clock = {"now": 1_000_000}
+    monkeypatch.setattr(startup_join, "now_ms_utc", lambda: clock["now"])
+
+    async def _sleep_that_overshoots(_seconds: float) -> None:
+        clock["now"] += 200  # the event loop wakes 20x past a 10 ms retry delay
+
+    monkeypatch.setattr(startup_join.asyncio, "sleep", _sleep_that_overshoots)
+
+    feed = _JoiningFeed(live=[_bar(_LIVE_FROM)], history=[_history(_J - 30 * _MIN, _J - _MIN)])
+    run_feed = _run_feed(feed, ledger)
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await run_feed.recent_closed_bars("SPY", use_rth=True)
+
+    assert isinstance(refused.value, WarmupMinutesMissing)
+    assert refused.value.missing_start_ms == _J
+    record = ledger.startup_join(run_id="run-1")
+    assert record is not None
+    assert (record.reason_code, record.missing_start_ms, record.missing_end_ms) == (
+        WARMUP_HISTORY_UNAVAILABLE,
+        _J,
+        _LIVE_FROM,
+    )
 
 
 @pytest.mark.asyncio
@@ -650,3 +688,48 @@ async def test_closing_the_stream_does_not_swallow_the_callers_own_cancellation(
 
     with pytest.raises(asyncio.CancelledError):
         await closing
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_refusal_is_not_terminal_evidence_when_a_later_attempt_hangs(
+    ledger: SourceBarLedger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2486 review: only the between-attempts overshoot re-raises the last
+    answering refusal. Once a later attempt *has* started, its outcome is the
+    run's even when it never answers — the earlier attempt's interval is
+    stale evidence by then, so the timeout refusal, naming no interval, is
+    the honest record."""
+    monkeypatch.setattr("app.config.settings.STARTUP_JOIN_BUDGET_MS", 1_000)
+    clock = {"now": 1_000_000}
+    monkeypatch.setattr(startup_join, "now_ms_utc", lambda: clock["now"])
+
+    async def _sleep_just_inside_the_budget(seconds: float) -> None:
+        clock["now"] += 990  # wake at 1_000_990: a second attempt may start
+
+    monkeypatch.setattr(startup_join.asyncio, "sleep", _sleep_just_inside_the_budget)
+
+    async def _no_settle(instant_ms: int) -> None:
+        return None  # the settle wait is not the budget's retry sleep
+
+    monkeypatch.setattr(startup_join, "_sleep_until", _no_settle)
+
+    feed = _JoiningFeed(live=[_bar(_LIVE_FROM)], history=[_history(_J - 30 * _MIN, _J - _MIN)])
+    original_recent = feed.recent_closed_bars
+
+    async def _hangs_on_the_second_ask(symbol: str, **kwargs: object) -> list[MarketDataBar]:
+        if feed.fetches >= 1:
+            await asyncio.Event().wait()  # in flight past the deadline
+        return await original_recent(symbol, **kwargs)  # type: ignore[arg-type]
+
+    feed.recent_closed_bars = _hangs_on_the_second_ask  # type: ignore[method-assign]
+    run_feed = _run_feed(feed, ledger)
+
+    with pytest.raises(MarketDataFeedError) as refused:
+        await run_feed.recent_closed_bars("SPY", use_rth=True)
+
+    assert not isinstance(refused.value, WarmupMinutesMissing)
+    assert refused.value.reason == WARMUP_HISTORY_UNAVAILABLE
+    assert "still being fetched" in str(refused.value)
+    record = ledger.startup_join(run_id="run-1")
+    assert record is not None
+    assert record.missing_start_ms is None and record.missing_end_ms is None
