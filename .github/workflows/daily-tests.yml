@@ -101,7 +101,7 @@ jobs:
       - name: Run the complete non-data-lake suite
         run: |
           mkdir -p TestResults
-          python -m pytest tests app/engine/tests \
+          python -m pytest tests app/engine/tests app/engine/strategy/spec/tests \
             --ignore=tests/unit/data_lake \
             --ignore=tests/integration/data_lake \
             -q --tb=short \

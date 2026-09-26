@@ -7,7 +7,7 @@ reader so tests don't need access to the LEAN data archive.
 
 Coverage:
   * GET  /api/spec-strategy/schema returns a draft-2020-12 JSON Schema
-  * GET  /api/spec-strategy/fixtures lists the three canonical fixtures
+  * GET  /api/spec-strategy/fixtures lists the canonical fixtures on disk
   * GET  /api/spec-strategy/fixtures/sma_crossover round-trips through
     StrategySpec validation
   * POST /api/spec-strategy/backtest runs SMA spec on synthetic data and
@@ -81,6 +81,8 @@ async def test_fixtures_list_endpoint() -> None:
     names = {item["name"] for item in items}
     assert names == {
         "spy_ema_crossover",
+        "spy_ema_normalized_gap",
+        "ema_crossover_2_bps",
         "sma_crossover",
         "rsi_mean_reversion",
         "deployment_validation",

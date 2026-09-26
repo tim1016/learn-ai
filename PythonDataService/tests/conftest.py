@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-# Patch env before importing app
-os.environ.setdefault("POLYGON_API_KEY", "test-key-for-testing")
+# POLYGON_API_KEY and the Signal Program source anchor are primed by the
+# service-root conftest before any collection import (#2485) — including for
+# the spec layer's own test root beside its package. Only the router-test
+# opt-outs live here.
 # Router tests exercise control endpoints without modeling the local
 # data-plane shared-secret hop; opt out explicitly here while dedicated
 # security tests monkeypatch this off to prove production fail-closed behavior.
@@ -16,15 +18,6 @@ os.environ.setdefault("POLYGON_API_KEY", "test-key-for-testing")
 # otherwise isolated ASGI tests fail with 403 responses.
 os.environ["DATA_PLANE_CONTROL_SECRET"] = ""
 os.environ["DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"] = "true"
-
-# #2450: prime the Signal Program source anchor before test collection
-# imports the registry's program modules, mirroring the bootstrap at the top
-# of ``app.main``. Without this, the anchor's refuse-on-cached-modules guard
-# would fire for every mid-session anchor call, because collection has
-# already imported the declared sources by then.
-from app.services.program_source_anchor import record_imported_program_sources
-
-record_imported_program_sources()
 
 
 @pytest.fixture(autouse=True)

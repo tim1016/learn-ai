@@ -8,6 +8,7 @@ where the correct answer is obvious from the rule definition.
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -20,6 +21,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     build_minute_bars,
     run_strategy,
 )
+from app.utils.timestamps import to_ms_utc
 
 
 def _run(spec: StrategySpec, closes: list[float]):
@@ -318,7 +320,7 @@ def test_eval_context_predictions_default_empty() -> None:
     ctx = EvalContext(
         indicators={},
         current_bar_count=0,
-        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_ms=to_ms_utc(datetime(2024, 1, 2, tzinfo=UTC)),
         bar_close_price=Decimal("100"),
     )
     assert ctx.predictions == {}
@@ -331,7 +333,7 @@ def test_eval_context_predictions_can_be_supplied() -> None:
     ctx = EvalContext(
         indicators={},
         current_bar_count=0,
-        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_ms=to_ms_utc(datetime(2024, 1, 2, tzinfo=UTC)),
         bar_close_price=Decimal("100"),
         predictions={"my_pred": Decimal("0.5")},
     )
@@ -347,7 +349,7 @@ def _ctx_with_predictions(preds: dict[str, Decimal]) -> EvalContext:
     return EvalContext(
         indicators={},
         current_bar_count=1,
-        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_ms=to_ms_utc(datetime(2024, 1, 2, tzinfo=UTC)),
         bar_close_price=Decimal("100"),
         predictions=preds,
     )
