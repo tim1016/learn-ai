@@ -87,6 +87,22 @@ import {
 
 type PanelLens = DeskLens;
 
+/** One command's ownership of this page (#2471).
+ *
+ * Every command this shell sends — an ordinary action, a safe flatten's
+ * prepare and send, an exact-execution recovery — captures the lane,
+ * account and bot it was sent to at click time and answers through this one
+ * rule: the outcome's receipt renders only while this page still shows that
+ * bot, and a notification that lands after the page has moved on names the
+ * bot it came from instead of speaking as whichever bot is on screen. */
+interface ActionOwnership {
+  /** The page still shows the lane, account and bot this command targeted. */
+  stillOwns(): boolean;
+  /** Render an outcome under its own bot; when the page has moved on, skip
+   * the receipt and name the originating bot in the notification. */
+  deliverOutcome(receipt: ActionReceiptView): void;
+}
+
 interface HistoricalExecutionRecoveryDraft {
   readonly action: PanelAction;
   readonly plan: HistoricalExecutionRecoveryPlan;
@@ -266,7 +282,6 @@ export class BotPanelShellComponent {
   protected readonly liveResolution = signal<ChartLiveResolution>('5s');
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
-  protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
   /** Changes for route reuse and for a rebinding of the same visible lane. */
   /** The lane and bot this page is showing, as a value.
    *
@@ -283,6 +298,13 @@ export class BotPanelShellComponent {
       target.bindingGeneration,
       target.accountId,
     )}::${this.sid()}`;
+  });
+  /** The last action outcome, owned by the lane, account and bot it was sent
+   * to (#2471): moving the page to another bot, account or lane clears it,
+   * exactly as the flatten and recovery drafts below already were. */
+  protected readonly actionReceipt = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): ActionReceiptView | null => null,
   });
   protected readonly preparedFlatten = linkedSignal({
     source: this.routeIdentity,
@@ -516,6 +538,26 @@ export class BotPanelShellComponent {
 
   // ── Template handlers ─────────────────────────────────────────────────────
 
+  /** Capture an action's ownership of this page at click time (#2471). */
+  private beginActionOwnership(): ActionOwnership {
+    const identity = this.routeIdentity();
+    const botName = this.panel()?.strategy_label ?? this.sid();
+    return {
+      stillOwns: () => this.routeIdentity() === identity,
+      deliverOutcome: (receipt) => {
+        if (this.routeIdentity() !== identity) {
+          // The page has moved to another bot: the receipt stays off the new
+          // bot's panel, and the notification says which bot it came from.
+          const toast = actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation);
+          this.messageService.add({ ...toast, detail: `${botName}: ${toast.detail}` });
+          return;
+        }
+        this.actionReceipt.set(receipt);
+        this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      },
+    };
+  }
+
   protected onHistoryTimeframeChange(timeframe: ChartHistoryTimeframe): void {
     this.selectedHistoryTimeframe.set(timeframe);
   }
@@ -564,6 +606,7 @@ export class BotPanelShellComponent {
     }
     this.actionPending.set(true);
     this.actionReceipt.set(null);
+    const ownership = this.beginActionOwnership();
     try {
       // runBotAction is resilient: a Stop-409 (transient token flip) is retried
       // once with a fresh token instead of dead-ending the operator (defect #10).
@@ -574,14 +617,12 @@ export class BotPanelShellComponent {
         reason,
       );
       const receipt = this.successReceipt(result);
-      this.actionReceipt.set(receipt);
-      this.messageService.add(actionOutcomeToast('success', receipt.message));
+      ownership.deliverOutcome(receipt);
       await this.liveStore.refresh();
     } catch (error) {
       const rejection = this.describeRejection(error, action);
       const receipt = this.errorReceipt(error, action, rejection);
-      this.actionReceipt.set(receipt);
-      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      ownership.deliverOutcome(receipt);
       // A stale-generation refusal means the fence the operator was shown is
       // provably wrong; refresh so the next action is minted against a lane
       // they have actually seen (#2068).
@@ -611,7 +652,7 @@ export class BotPanelShellComponent {
     sid: string,
   ): Promise<void> {
     this.selectLens('operator');
-    const requestIdentity = this.routeIdentity();
+    const ownership = this.beginActionOwnership();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     this.preparedFlatten.set(null);
@@ -622,7 +663,7 @@ export class BotPanelShellComponent {
         { action_id: 'prepare_safe_flatten', concurrency_token: action.concurrency_token },
         sid,
       );
-      if (requestIdentity !== this.routeIdentity()) return;
+      if (!ownership.stillOwns()) return;
       const plan = check.capability.reduction_plan;
       this.preparedFlatten.set(
         plan === null
@@ -642,12 +683,7 @@ export class BotPanelShellComponent {
         detail: check.capability.next_step,
       });
     } catch (error) {
-      if (requestIdentity !== this.routeIdentity()) return;
-      const receipt = this.errorReceipt(error, action);
-      this.actionReceipt.set(receipt);
-      this.messageService.add(
-        actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation),
-      );
+      ownership.deliverOutcome(this.errorReceipt(error, action));
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);
@@ -757,14 +793,14 @@ export class BotPanelShellComponent {
     if (prepared === null || prepared.pricing?.kind !== 'extended_limit' || this.actionPending()) {
       return;
     }
-    const requestIdentity = this.routeIdentity();
+    const ownership = this.beginActionOwnership();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
       await this.liveStore.refresh();
-      if (requestIdentity !== this.routeIdentity()) return;
+      if (!ownership.stillOwns()) return;
       const execute = await this.currentExecuteSafeFlatten(prepared.target, prepared.sid);
-      if (requestIdentity !== this.routeIdentity()) return;
+      if (!ownership.stillOwns()) return;
       if (execute === undefined) {
         throw new Error('This bot no longer presents a safe flatten; refresh and prepare again.');
       }
@@ -774,7 +810,6 @@ export class BotPanelShellComponent {
         execute.concurrency_token,
         confirmation,
       );
-      if (requestIdentity !== this.routeIdentity()) return;
       this.preparedFlatten.set(null);
       const price = formatLimitPrice(confirmation.limit_price);
       // "Sent" is a claim about the broker, so it is only made on the broker's
@@ -784,7 +819,7 @@ export class BotPanelShellComponent {
       // exposure is on its way out when nothing has left (Codex review
       // 2026-09-19).
       const reachedBroker = result.orders.some((order) => order.broker_order_id !== null);
-      const receipt: ActionReceiptView = {
+      ownership.deliverOutcome({
         actionId: 'execute_safe_flatten',
         outcome: 'success',
         receiptId: result.receipt_id,
@@ -797,23 +832,18 @@ export class BotPanelShellComponent {
             : `Flatten accepted at $${price}, but no order has reached the broker yet. `
               + 'The Clerk keeps trying; nothing is flat until the order exists and fills.',
         remediation: null,
-      };
-      this.actionReceipt.set(receipt);
-      this.messageService.add(actionOutcomeToast('success', receipt.message));
+      });
       await this.liveStore.refresh();
     } catch (error) {
-      if (requestIdentity !== this.routeIdentity()) return;
       const rejection = deriveActionRejection(error, 'Action "Execute safe flatten" failed.');
-      const receipt: ActionReceiptView = {
+      ownership.deliverOutcome({
         actionId: 'execute_safe_flatten',
         outcome: rejection.outcome,
         receiptId: null,
         recordedAtMs: Date.now(),
         message: rejection.message,
         remediation: rejection.why,
-      };
-      this.actionReceipt.set(receipt);
-      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      });
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);
@@ -852,7 +882,7 @@ export class BotPanelShellComponent {
   protected async confirmHistoricalExecutionRecovery(): Promise<void> {
     const draft = this.historicalRecoveryDraft();
     if (draft === null || this.actionPending()) return;
-    const requestIdentity = this.routeIdentity();
+    const ownership = this.beginActionOwnership();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
@@ -861,28 +891,22 @@ export class BotPanelShellComponent {
         draft.sid,
         draft.plan,
       );
-      if (requestIdentity !== this.routeIdentity()) return;
       this.historicalRecoveryDraft.set(null);
       const message = receipt.applied
         ? `${draft.action.label} completed. The Clerk recorded exact evidence without changing economic totals.`
         : `${draft.action.label} had already completed; the durable result was replayed.`;
-      const actionReceipt: ActionReceiptView = {
+      ownership.deliverOutcome({
         actionId: draft.action.action_id,
         outcome: 'success',
         receiptId: receipt.receipt_id,
         recordedAtMs: receipt.recorded_at_ms,
         message,
         remediation: null,
-      };
-      this.actionReceipt.set(actionReceipt);
-      this.messageService.add(actionOutcomeToast('success', actionReceipt.message));
+      });
       await this.liveStore.refresh();
     } catch (error) {
-      if (requestIdentity !== this.routeIdentity()) return;
       this.historicalRecoveryDraft.set(null);
-      const receipt = this.errorReceipt(error, draft.action);
-      this.actionReceipt.set(receipt);
-      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      ownership.deliverOutcome(this.errorReceipt(error, draft.action));
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);
@@ -894,7 +918,7 @@ export class BotPanelShellComponent {
     target: ResourceTarget,
     sid: string,
   ): Promise<void> {
-    const requestIdentity = this.routeIdentity();
+    const ownership = this.beginActionOwnership();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     this.historicalRecoveryDraft.set(null);
@@ -904,13 +928,10 @@ export class BotPanelShellComponent {
         sid,
         action.concurrency_token,
       );
-      if (requestIdentity !== this.routeIdentity()) return;
+      if (!ownership.stillOwns()) return;
       this.historicalRecoveryDraft.set({ action, plan, target, sid });
     } catch (error) {
-      if (requestIdentity !== this.routeIdentity()) return;
-      const receipt = this.errorReceipt(error, action);
-      this.actionReceipt.set(receipt);
-      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      ownership.deliverOutcome(this.errorReceipt(error, action));
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);

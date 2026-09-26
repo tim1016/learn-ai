@@ -1115,6 +1115,92 @@ describe('BotPanelShellComponent', () => {
     })).toBeNull();
   });
 
+  describe('action outcome ownership (#2471)', () => {
+    /** Re-bind the always-rendered page instance to another identity, the way
+     * the attention bell and browser history do, and let a pending Stop land. */
+    async function rebindAndResolveStop(
+      fixture: ComponentFixture<BotPanelShellComponent>,
+      pending: { promise: Promise<PanelActionResult>; resolve(value: PanelActionResult): void },
+      input: { sid?: string; accountId?: string; clerkId?: string },
+    ): Promise<void> {
+      const [[key, value]] = Object.entries(input);
+      fixture.componentRef.setInput(key, value);
+      await fixture.whenStable();
+      fixture.detectChanges();
+      pending.resolve(fakeActionResult());
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it('clears a finished outcome when the page rebinds to another bot', async () => {
+      const { fixture } = await renderShell({
+        runBotAction: vi.fn().mockResolvedValue(fakeActionResult()),
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(screen.getByText('Bot stop requested.')).toBeTruthy();
+      expect(screen.getByText('receipt-001')).toBeTruthy();
+
+      fixture.componentRef.setInput('sid', 'sid-002');
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(screen.queryByText('receipt-001')).toBeNull();
+    });
+
+    it('keeps a late Stop off the new bot, sends exactly one command to the old bot, and names it', async () => {
+      const pending = deferred<PanelActionResult>();
+      const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
+      const { fixture } = await renderShell({ runBotAction });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      await rebindAndResolveStop(fixture, pending, { sid: 'sid-002' });
+
+      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(screen.queryByText('receipt-001')).toBeNull();
+      expect(runBotAction).toHaveBeenCalledTimes(1);
+      expect(runBotAction.mock.calls[0]?.[1]).toBe('sid-001');
+      const toast = messageService.add.mock.calls.at(-1)?.[0] as { detail: string };
+      expect(toast.detail).toContain('Ema Crossover');
+      expect(toast.detail).toContain('Bot stop requested.');
+    });
+
+    it('keeps a late Stop off the panel when the account changes', async () => {
+      const pending = deferred<PanelActionResult>();
+      const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
+      const { fixture } = await renderShell({ runBotAction });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      await rebindAndResolveStop(fixture, pending, { accountId: 'DUM284969' });
+
+      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(runBotAction).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a late Stop off the panel when the lane changes', async () => {
+      const pending = deferred<PanelActionResult>();
+      const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
+      const { fixture } = await renderShell({ runBotAction });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      await rebindAndResolveStop(fixture, pending, { clerkId: 'clrk_other' });
+
+      expect(screen.queryByText('Bot stop requested.')).toBeNull();
+      expect(runBotAction).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('an extended-hours safe flatten (#2007)', () => {
     /** Let a multi-step flow finish: a send refreshes the panel, posts, then refreshes again. */
     async function settle(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
