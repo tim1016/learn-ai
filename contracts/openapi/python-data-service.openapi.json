@@ -2508,15 +2508,13 @@
             "type": "string"
           },
           "unreadable_days": {
-            "default": [],
             "items": {
-              "type": "string"
+              "type": "integer"
             },
             "title": "Unreadable Days",
             "type": "array"
           },
           "unreadable_files": {
-            "default": [],
             "items": {
               "$ref": "#/components/schemas/UnreadableFileResponse"
             },
@@ -2531,7 +2529,9 @@
           "resolution",
           "expected_days",
           "available_days",
-          "is_complete"
+          "is_complete",
+          "unreadable_days",
+          "unreadable_files"
         ],
         "title": "AvailabilityResponse",
         "type": "object"

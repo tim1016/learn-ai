@@ -29,6 +29,7 @@ from app.engine.strategy.registry import (
     public_params_schema,
 )
 from app.research.sweep.eligibility import sweep_eligibility
+from app.schemas.engine_availability import AvailabilityResponse
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.strategy_lean_source import StrategyLeanSourceResponse
@@ -207,32 +208,6 @@ def generate_pine_script(name: str, params: dict[str, Any]) -> PlainTextResponse
 # ---------------------------------------------------------------------------
 # Data availability endpoint
 # ---------------------------------------------------------------------------
-class UnreadableFileResponse(BaseModel):
-    """A data file that is on disk but its reader cannot decode (#2489, #2499)."""
-
-    path: str
-    reason: str
-
-
-class AvailabilityResponse(BaseModel):
-    symbol: str
-    start: str
-    end: str
-    resolution: str
-    expected_days: int
-    available_days: int
-    is_complete: bool
-    missing_days: list[str] = []
-    # Sessions whose file is present but undecodable — the window is refused
-    # and a backfill does not repair it, so the caller must see both the
-    # sessions and the files at fault, not just ``is_complete=false``.
-    unreadable_days: list[str] = []
-    unreadable_files: list[UnreadableFileResponse] = []
-    # Per-root breakdown (reference mount vs cache) so the UI can tell
-    # the user where the data is coming from.
-    sources: dict[str, list[str]] = Field(default_factory=dict)
-
-
 @router.get("/data/availability", response_model=AvailabilityResponse)
 def get_data_availability(
     symbol: str = Query(..., min_length=1, max_length=20),
@@ -271,8 +246,7 @@ def get_data_availability(
         end=end_date,
         resolution=resolution,
     )
-    data = report.to_dict()
-    return AvailabilityResponse(**data)
+    return AvailabilityResponse.from_report(report)
 
 
 # ---------------------------------------------------------------------------

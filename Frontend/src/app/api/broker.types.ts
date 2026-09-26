@@ -8686,16 +8686,10 @@ export interface components {
             start: string;
             /** Symbol */
             symbol: string;
-            /**
-             * Unreadable Days
-             * @default []
-             */
-            unreadable_days?: string[];
-            /**
-             * Unreadable Files
-             * @default []
-             */
-            unreadable_files?: components["schemas"]["UnreadableFileResponse"][];
+            /** Unreadable Days */
+            unreadable_days: number[];
+            /** Unreadable Files */
+            unreadable_files: components["schemas"]["UnreadableFileResponse"][];
         };
         /**
          * BackfillDefaults

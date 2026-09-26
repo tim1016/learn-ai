@@ -15,8 +15,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import app.routers.engine as engine_router
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.main import app
+from app.schemas.engine_availability import AvailabilityResponse
 from tests._helpers.lean_store import seed_store_day
 
 WINDOW = (date(2024, 12, 2), date(2024, 12, 6))
@@ -52,7 +53,9 @@ async def test_an_unreadable_minute_zip_is_reported_with_its_path(minute_root: P
 
     assert body["is_complete"] is False
     assert body["missing_days"] == []
-    assert body["unreadable_days"] == [PROBED.isoformat()]
+    # The unreadable session anchors at its scheduled open, int64 ms UTC —
+    # never an ISO date string on the wire.
+    assert body["unreadable_days"] == [session_open_ms_utc(PROBED)]
     assert len(body["unreadable_files"]) == 1
     assert body["unreadable_files"][0]["path"] == str(damaged)
     assert body["unreadable_files"][0]["reason"].startswith("BadZipFile")
@@ -79,7 +82,23 @@ async def test_an_unreadable_daily_history_is_reported_with_its_path(
     assert body["is_complete"] is False
     # The daily reader aborts on an undecodable history, so every scheduled
     # session is unreadable and none is merely "missing".
-    assert body["unreadable_days"] == [day.isoformat() for day in expected_sessions(*WINDOW)]
+    assert body["unreadable_days"] == [session_open_ms_utc(d) for d in expected_sessions(*WINDOW)]
     assert body["missing_days"] == []
     assert [file["path"] for file in body["unreadable_files"]] == [str(daily_zip)]
     assert body["unreadable_files"][0]["reason"].startswith("BadZipFile")
+
+
+def test_the_wire_contract_marks_the_unreadable_fields_required() -> None:
+    """The endpoint always answers both fields; OpenAPI must not make them
+    optional (#2499 review)."""
+    properties = AvailabilityResponse.model_json_schema()["properties"]
+
+    assert properties["unreadable_days"] == {
+        "items": {"type": "integer"},
+        "title": "Unreadable Days",
+        "type": "array",
+    }
+    assert "default" not in properties["unreadable_files"]
+    schema = AvailabilityResponse.model_json_schema()
+    item = schema["$defs"]["UnreadableFileResponse"]
+    assert item["required"] == ["path", "reason"]

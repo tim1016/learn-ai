@@ -37,7 +37,7 @@ from datetime import date
 from functools import lru_cache
 from itertools import groupby
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 
@@ -201,23 +201,6 @@ class AvailabilityReport:
     @property
     def is_complete(self) -> bool:
         return self.available_days >= self.expected_days and not self.unreadable_files
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "symbol": self.symbol,
-            "start": self.start.isoformat(),
-            "end": self.end.isoformat(),
-            "resolution": self.resolution,
-            "expected_days": self.expected_days,
-            "available_days": self.available_days,
-            "is_complete": self.is_complete,
-            "missing_days": [d.isoformat() for d in self.missing_days],
-            "unreadable_days": [d.isoformat() for d in self.unreadable_days],
-            "unreadable_files": [
-                {"path": file.path, "reason": file.reason} for file in self.unreadable_files
-            ],
-            "sources": {root: [d.isoformat() for d in dates] for root, dates in self.sources.items()},
-        }
 
 
 # A window with holes scattered through it is still refused whole; past this
