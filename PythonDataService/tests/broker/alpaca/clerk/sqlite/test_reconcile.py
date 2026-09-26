@@ -2811,8 +2811,9 @@ async def test_exit_failure_budget_pauses_across_weekend_and_early_close(
     assert trade.submit_calls == []
 
 
+@pytest.mark.parametrize("advance_during_repository_read", [False, True])
 async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
-    clocked_repo,
+    clocked_repo, monkeypatch, advance_during_repository_read: bool,
 ) -> None:
     """#2229, owner decision 2026-09-19 (evening): in an extended session the
     stuck-EXIT re-drive is a limit the Clerk prices itself — one sealed exit
@@ -2829,13 +2830,20 @@ async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
     )
     assert episode is not None
     clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
-    quote = TopOfBookQuote(
-        symbol="SPY",
-        bid=100.00,
-        ask=100.05,
-        source="ibkr.market_data.status",
-        observed_at_ms=repo.clock(),
-    )
+    if advance_during_repository_read:
+        original = repo.entry_orders_for_strategy
+
+        def read_entries(sid: str):
+            clock.advance(1)
+            return original(sid)
+
+        monkeypatch.setattr(repo, "entry_orders_for_strategy", read_entries)
+
+    def quote_at_read_time(symbol: str, now_ms: int) -> TopOfBookQuote:
+        assert now_ms == repo.clock(), "quote eligibility must use the current clock after repository hops"
+        return TopOfBookQuote(
+            symbol=symbol, bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=repo.clock(),
+        )
     trade = _FakeTrade()
 
     await reconcile_account(
@@ -2849,7 +2857,7 @@ async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
                     entry_bps=Decimal("10"), exit_bps=Decimal("20")
                 ),
             ),
-            quote_source=lambda symbol, now_ms: quote if symbol == "SPY" else None,
+            quote_source=quote_at_read_time,
         ),
     )
 
@@ -3895,10 +3903,54 @@ async def test_failed_snapshot_does_not_advance_recovery_check_or_failure_budget
     after = latest_exit_recovery(repo, strategy_instance_id=WATCHDOG_SID, uncertainty_id=episode["uncertainty_id"])
     assert after.last_checked_at_ms == before.last_checked_at_ms
     assert after.failure_elapsed_ms == before.failure_elapsed_ms
-    reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
+    reader = SqliteClerkProjectionReader.from_repository(repo)
     try:
         statuses = [item.recovery_status for item in reader.bot_snapshot(WATCHDOG_SID).uncertainties if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
         assert statuses[0].kind == "broker_unreachable"
         assert statuses[0].last_checked_at_ms == before.last_checked_at_ms
     finally:
         reader.close()
+
+
+async def test_unchanged_recovery_hold_updates_check_without_growing_custody_log(clocked_repo) -> None:
+    from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    # Before the age gate: each complete pass evaluates the same wait.
+    for _ in range(6):
+        await reconcile_account(
+            repo, read=_FakeRead(positions=[_position("SPY", quantity=10)]),
+            trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY,
+        )
+        clock.advance(15_000)
+    observations = [row for row in repo.custody_transitions() if row["transition_kind"] == "EXIT_RECOVERY_EVALUATED"]
+    assert len(observations) == 1
+    reader = SqliteClerkProjectionReader.from_repository(repo,  clock=clock)
+    try:
+        status = next(item.recovery_status for item in reader.bot_snapshot(WATCHDOG_SID).uncertainties if item.reason_code == EXIT_NOT_FLAT_REASON_CODE)
+        assert status.last_checked_at_ms == clock() - 15_000
+        assert status.kind == "allowed_from"
+    finally:
+        reader.close()
+
+
+@pytest.mark.parametrize("interval_ms", [15_000, 45_000])
+async def test_slow_successful_sweeps_spend_observed_failure_time(clocked_repo, interval_ms: int) -> None:
+    from app.broker.alpaca.clerk.sqlite.exit_recovery import latest_exit_recovery
+
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    episode = _aged_exit_not_flat(repo, clock)
+
+    class SlowRead(_FakeRead):
+        async def list_positions(self):
+            _walk_clock_to(repo, clock() + 20_000)
+            return []
+
+    for _ in range(3):
+        await reconcile_account(repo, read=SlowRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY, recovery_interval_ms=interval_ms)
+        _walk_clock_to(repo, clock() + interval_ms)
+    result = latest_exit_recovery(repo, strategy_instance_id=WATCHDOG_SID, uncertainty_id=episode["uncertainty_id"])
+    assert result.failure_elapsed_ms > 0

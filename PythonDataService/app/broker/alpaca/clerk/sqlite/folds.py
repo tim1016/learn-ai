@@ -48,6 +48,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitRecoveryEvaluatedFacts,
     ManualOrderCancelResultFacts,
+    OrderCancelRequestedFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
@@ -1584,7 +1585,11 @@ def _fold_exit_terms_sealed(_conn: sqlite3.Connection, payload: dict[str, Any]) 
 
 DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_SEALED", _fold_exit_terms_sealed)
 DEFAULT_FOLD_REGISTRY.register("EXIT_RECOVERY_EVALUATED", _fold_exit_recovery_evaluated)
-DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
+def _fold_order_cancel_requested(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    OrderCancelRequestedFacts.from_facts_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", _fold_order_cancel_requested)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
 

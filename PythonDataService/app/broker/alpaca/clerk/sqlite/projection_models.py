@@ -126,17 +126,7 @@ class ProjectedUncertainty:
     # The symbol the episode's cause names, when it names one (an
     # EXIT_NOT_FLAT does); the lane's attention bell shows it.
     symbol: str | None = None
-    # Earliest session eligibility for automatic recovery (int64 ms UTC).
-    # No time while an exit works or automatic recovery has stopped.
-    # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = None
-    # An exit for this strategy is in progress, so no automatic attempt is due
-    # while it works: the watchdog skips a strategy whose EXIT is active
-    # (#2440 review).
-    exit_working: bool = False
-    # The episode's recorded facts could not be read, so what only they carry
-    # (``next_attempt_at_ms``) is unknown, not absent (#2440 review).
-    facts_unreadable: bool = False
+    # The one observed recovery status shared across operator surfaces.
     recovery_status: RecoveryStatus | None = None
 
 
@@ -256,9 +246,6 @@ class ProjectionGuidance:
     # The primary episode's next automatic attempt, projected as
     # ``ProjectedUncertainty`` projects it (#2440): the bot page shows it
     # beside ``next_step``.
-    next_attempt_at_ms: int | None = None
-    exit_working: bool = False
-    facts_unreadable: bool = False
     recovery_status: RecoveryStatus | None = None
 
 

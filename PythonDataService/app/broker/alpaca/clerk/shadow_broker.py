@@ -70,7 +70,6 @@ from app.broker.alpaca.clerk.synthetic_broker import (
     synthesized_positions,
 )
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
-from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -105,7 +104,7 @@ _RESTING = "new"
 _TERMINAL = frozenset({"filled", "canceled", "expired", "rejected"})
 
 
-class ShadowFillBindingError(BrokerOrderRejected, RuntimeError):
+class ShadowFillBindingError(RuntimeError):
     """A shadow order cannot be synthesized: no bound decision bar, or no declared window."""
 
 

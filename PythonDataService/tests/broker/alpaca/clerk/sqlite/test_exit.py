@@ -834,7 +834,7 @@ async def test_lost_cancel_response_blocks_the_closing_order(repo: ClerkSqliteRe
         entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
-    trade = _FakeTrade(cancel_error=BrokerUnavailable("timeout"))
+    trade = _FakeTrade(cancel_error=BrokerUnavailable("timeout"), lookup_error=BrokerUnavailable("exact lookup unavailable"))
     result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert trade.submit_calls == []  # no reducing order submitted

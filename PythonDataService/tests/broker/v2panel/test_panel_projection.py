@@ -24,7 +24,6 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     ReconciliationSummary,
 )
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -40,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedUncertainty,
     ProjectionGuidance,
     RecoveryCapability,
+    RecoveryStatus,
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -862,7 +862,7 @@ def test_transaction_rail_resolves_old_transaction_outside_bounded_window(
     repo = _real_repo(tmp_path)
     try:
         old_ref, newest_ref = _two_real_operations(repo)
-        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
         try:
             # A window of 1 only carries the newest operation (EXIT); the
             # ENTER `old_ref` genuinely exists in storage but falls outside it.
@@ -894,7 +894,7 @@ def test_transaction_rail_reports_explicit_absence_for_a_ref_that_does_not_exist
     repo = _real_repo(tmp_path)
     try:
         _old_ref, newest_ref = _two_real_operations(repo)
-        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
         try:
             projection = reader.bot_snapshot(SID)
         finally:
@@ -937,7 +937,7 @@ def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
             leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         )
 
-        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
         try:
             projection = reader.bot_snapshot(SID)
         finally:
@@ -1459,11 +1459,11 @@ def test_the_mission_verdict_carries_retry_eligibility(offset_ms: int) -> None:
         headline="An exit could not be sent after its session ended; the position is still open",
         explanation="10 SPY is still held.",
         operator_impact="New exposure is paused for this strategy.",
-        next_step="Let the automatic re-drive reduce it at the next attempt shown with this notice.",
+        next_step="Let the Clerk retry after a fresh recovery check.",
         observed_at_ms=_NOW - 1_000,
         evidence_age_ms=1_000,
         evidence_refs=("order:exit",),
-        next_attempt_at_ms=next_attempt_at_ms,
+        recovery_status=RecoveryStatus("allowed_from", "NO_SESSION_OPEN", "Waiting for the next session.", None, None, next_attempt_at_ms),
     )
     base = _rail_projection(orders=())
     projection = replace(
@@ -1473,7 +1473,7 @@ def test_the_mission_verdict_carries_retry_eligibility(offset_ms: int) -> None:
             base.guidance,
             explanation=episode.explanation,
             next_step=episode.next_step,
-            next_attempt_at_ms=next_attempt_at_ms,
+            recovery_status=RecoveryStatus("allowed_from", "NO_SESSION_OPEN", "Waiting for the next session.", None, None, next_attempt_at_ms),
         ),
     )
 
@@ -1481,7 +1481,7 @@ def test_the_mission_verdict_carries_retry_eligibility(offset_ms: int) -> None:
 
     assert verdict.state == "blocked"
     assert verdict.next_action == episode.next_step
-    assert verdict.next_attempt_at_ms == next_attempt_at_ms
+    assert verdict.recovery_status.allowed_from_ms == next_attempt_at_ms
 
 
 @pytest.mark.parametrize(
@@ -1500,17 +1500,14 @@ def test_the_mission_verdict_says_an_exit_is_working_or_its_next_try_is_unknown(
     projection = replace(
         base,
         guidance=replace(
-            base.guidance, exit_working=exit_working, facts_unreadable=facts_unreadable
+            base.guidance, recovery_status=RecoveryStatus("working" if exit_working else "unknown", "OWN_EXIT_WORKING" if exit_working else "RECOVERY_RECORD_UNREADABLE", "Recovery status", None, None)
         ),
     )
 
     verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection).mission_verdict
 
-    assert (verdict.next_attempt_at_ms, verdict.exit_working, verdict.facts_unreadable) == (
-        None,
-        exit_working,
-        facts_unreadable,
-    )
+    assert verdict.recovery_status.kind == ("working" if exit_working else "unknown")
+    assert verdict.recovery_status.allowed_from_ms is None
 
 
 def test_reconciled_station_requires_resolved_success_outcome() -> None:
@@ -3035,11 +3032,11 @@ def _exposure_projection(*, orders: tuple[ProjectedOrder, ...]) -> ClerkProjecti
     ))
 
 
-def _refused_panel(reason_code: str = "RESUME_HOLE_UNFILLED") -> BotPanelView:
+def _refused_panel(reason_code: str = "RESUME_HOLE_UNFILLED", kind: str = "CRASHED") -> BotPanelView:
     status = _status(running=False).model_copy(
         update={
             "duty_outcome": BotDutyOutcomeView(
-                kind="CRASHED", reason_code=reason_code, recorded_at_ms=_NOW - 10, run_id="r1"
+                kind=kind, reason_code=reason_code, recorded_at_ms=_NOW - 10, run_id="r1"
             )
         }
     )
@@ -3072,7 +3069,7 @@ def _notices(
     *,
     startup_join: RetainedStartupJoin | None = None,
 ) -> list[tuple[str, str]]:
-    outcome = adapt_sqlite_panel(panel, projection, startup_join=startup_join).health.duty_outcome
+    outcome = adapt_sqlite_panel(panel, projection).health.duty_outcome
     assert outcome is not None
     return [(notice.kind, notice.label) for notice in outcome.exposure_notices]
 
@@ -3106,16 +3103,16 @@ def test_a_refusal_the_clerk_cannot_vouch_for_says_the_position_is_unverified() 
     ]
 
 
-@pytest.mark.parametrize("reason", ["CRASHED", "FEED_DEATH", "EXITED_UNVERIFIED", "DECISION_BAR_MISSED", "WARMUP_HISTORY_UNAVAILABLE"])
+@pytest.mark.parametrize("kind,reason", [("CRASHED", "RuntimeError"), ("CRASHED", "FEED_DEATH"), ("EXITED_UNVERIFIED", "CANCELLED_WITHOUT_STOP_INTENT"), ("EXITED_UNVERIFIED", "BAR_STREAM_ENDED"), ("EXITED_UNVERIFIED", "INTERRUPTED_BY_RESTART"), ("CRASHED", "WARMUP_HISTORY_UNAVAILABLE")])
 @pytest.mark.parametrize("exposure", ["held", "flat", "unknown"])
 @pytest.mark.parametrize("working_entry", [False, True])
-def test_every_abnormal_end_reports_reconciled_exposure(reason: str, exposure: str, working_entry: bool) -> None:
+def test_every_abnormal_end_reports_reconciled_exposure(kind: str, reason: str, exposure: str, working_entry: bool) -> None:
     projection = replace(
         _exposure_projection(orders=(_entry_order(),) if working_entry else ()),
         positions=_held(3.0) if exposure == "held" else (),
         authority_health="degraded_to_mirror" if exposure == "unknown" else "healthy",
     )
-    notices = _notices(_refused_panel(reason), projection)
+    notices = _notices(_refused_panel(reason, kind), projection)
     expected = []
     if exposure == "held":
         expected.append(("position_unmanaged", "Bot is not managing this position"))

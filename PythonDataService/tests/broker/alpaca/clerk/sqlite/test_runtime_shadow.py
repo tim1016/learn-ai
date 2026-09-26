@@ -318,7 +318,7 @@ async def test_shadow_safe_flatten_binds_retained_evidence_and_finishes_flat(
         )
         await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
@@ -528,9 +528,11 @@ async def test_shadow_canceled_exit_exposes_missing_evidence_through_the_economi
         [canceled] = [order for order in orders if order.status == "canceled"]
         source = EconomicFillSource.from_database_path(repo.db_path)
         try:
-            assert source.missing_exit_execution_evidence(
+            [missing] = source.missing_exit_execution_evidence(
                 strategy_instance_id=SID, from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
-            ) == (canceled.client_order_id,)
+            )
+            assert missing.order_ref == canceled.client_order_id
+            assert (missing.decision_id, missing.symbol, missing.side, missing.quantity) == ("exit-evidence", "SPY", "sell", 1)
             assert source.missing_exit_execution_evidence(
                 strategy_instance_id="someone-else", from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
             ) == ()

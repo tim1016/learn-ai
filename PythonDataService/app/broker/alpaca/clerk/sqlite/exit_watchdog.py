@@ -35,29 +35,38 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Callable
-from functools import partial
+from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
-from app.broker.alpaca.clerk.program_leg import ProgramLegRefused
+from app.broker.alpaca.clerk.program_leg import LegRefusal, ProgramLegPolicy, ProgramLegRefused
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryShape,
+    PricingSnapshot,
     RecoveryPricing,
     market_leg_sendable,
     next_redrive_at_ms,
-    reduction_market_hold,
+    reducing_send_verdict,
 )
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     accept_recovery_exit,
     resolve_accepted_exit,
 )
-from app.broker.alpaca.clerk.sqlite.exit_recovery import defer_recovery_escalation, observe_exit_recovery
+from app.broker.alpaca.clerk.sqlite.exit_recovery import (
+    DEFAULT_RECOVERY_INTERVAL_MS,
+    RecoveryResult,
+    latest_exit_recovery,
+    record_exit_recovery,
+)
 from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION_PREFIX
-from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts, UncertaintyRaisedFacts
+from app.broker.alpaca.clerk.sqlite.facts import (
+    ExitAcceptedFacts,
+    ExitReducingOrderCreatedFacts,
+    UncertaintyRaisedFacts,
+)
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
@@ -84,18 +93,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
 )
 from app.broker.contract.models import OrderSide
 from app.broker.contract.ports import BrokerTradePort
+from app.schemas.market_liveness import MarketLivenessFact
 
 logger = logging.getLogger(__name__)
 
 
 class BrokerSymbolView(NamedTuple):
-    """One symbol as this pass's broker snapshot and the Clerk's books see it.
-
-    ``attributed_qty`` is the account-wide attributed total across every
-    strategy instance — the quantity the broker's signed position must equal.
-    ``working`` is whether an order for the symbol is working in the snapshot.
-    ``agrees`` is that equality with no order working.
-    """
+    """Fresh broker quantity, account attribution, and work in flight for a symbol."""
 
     broker_qty: float
     attributed_qty: float
@@ -107,395 +111,249 @@ type BrokerSymbolReader = Callable[[str], BrokerSymbolView]
 
 
 class _RedriveRefused(NamedTuple):
-    """A pre-acceptance refusal: logged, nothing sent, nothing accepted."""
-
     action: str
+    reason_code: str
     message: str
     facts: dict[str, object]
     outcome: Literal["failure", "hold"] = "failure"
 
 
-class _StaleExit(NamedTuple):
-    """One age-qualified EXIT_NOT_FLAT episode and its redrive count."""
+@dataclass(frozen=True)
+class EpisodeAttempt:
+    """One durable reducing order in this recovery episode."""
 
+    order_ref: str
+    submitted: bool
+    failed: bool
+    extended_hours: bool
+    valid_until_ms: int | None
+    redrive: bool
+
+
+@dataclass(frozen=True)
+class _StaleExit:
     strategy_instance_id: str
     episode: dict
     cause: ExitNotFlatCause
     remaining: float
     redrives: int
     episode_token: str
-    regular_failures: int
+    attempts: tuple[EpisodeAttempt, ...]
     ready_at_ms: int
     stopped: bool
 
-
-async def redrive_or_escalate_stale_exits(
-    repo: ClerkSqliteRepository,
-    *,
-    trade: BrokerTradePort,
-    intake: ReentrantAsyncLock,
-    broker_symbol: BrokerSymbolReader,
-    pricing: RecoveryPricing,
-    off_loop: OffLoop | None = None,
-) -> None:
-    """Age-gate active EXIT_NOT_FLAT episodes: bounded re-drive, then escalate.
-
-    ``broker_symbol`` reads one symbol from this pass's broker snapshot
-    against the Clerk's current attribution (#2343). It has no default: a
-    caller without a broker snapshot cannot re-drive.
-
-    ``pricing`` is what an extended-hours re-drive prices from (#2229): the
-    authority's own ``recovery_pricing``. It has no default either — the
-    re-drive and the notice's next-attempt time must come from the same
-    seam; a caller with nothing to price from names
-    :data:`~recovery_reduction.UNPRICEABLE_RECOVERY`, which defers outside
-    the regular session rather than guessing a price.
-
-    ``off_loop`` moves the episode/entry scans onto a worker thread and the
-    escalation/acceptance folds through the fence's sanctioned hop (#1993);
-    the default keeps the pre-#1993 inline behavior for non-sweep callers.
-    """
-    run = off_loop if off_loop is not None else run_inline
-    # The single declared age policy (ADR 0048 Decision 1) — replaces the
-    # former EXIT_NOT_FLAT_REDRIVE_AFTER_MS / EXIT_NOT_FLAT_MAX_REDRIVES
-    # module constants; the watchdog keeps its execution logic and loses
-    # its policy.
-    redrive_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
-
-    def _scan_stale_exits() -> tuple[int, list[_StaleExit]]:
-        now_ms = repo.clock()
-        stale: list[_StaleExit] = []
-        for instance in repo.strategy_instances():
-            sid = instance["strategy_instance_id"]
-            episode = repo.active_uncertainty(
-                scope="CUSTODY_SUBJECT",
-                reason_code=EXIT_NOT_FLAT_REASON_CODE,
-                strategy_instance_id=sid,
-            )
-            if episode is None:
-                continue
-            stopped = (
-                repo.active_uncertainty(
-                    scope="CUSTODY_SUBJECT",
-                    reason_code=EXIT_STUCK_REASON_CODE,
-                    strategy_instance_id=sid,
-                )
-                is not None
-            )
-            try:
-                facts = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"])
-                cause = ExitNotFlatCause.from_mapping(facts.cause_facts)
-            except (TypeError, ValueError, KeyError):
-                logger.error(
-                    "stale EXIT_NOT_FLAT episode carries unreadable cause facts",
-                    extra={
-                        "action": "exit_watchdog_unreadable_cause",
-                        "account_id": repo.account_id,
-                        "strategy_instance_id": sid,
-                        "uncertainty_id": episode["uncertainty_id"],
-                    },
-                )
-                continue
-            ready_at_ms = (
-                now_ms if replacement_ready(repo, facts.evidence_refs)
-                else episode["observed_at_ms"] + redrive_policy.after_ms
-            )
-            remaining = repo.position(sid, cause.symbol)
-            if not position_quantity_is_nonzero(remaining):
-                continue  # the flat fence resolver clears this episode in this pass
-            # Episode-scoped redrive count. `_exit_identity` keys idempotency on
-            # (strategy_instance_id, decision_id) only, and a completed-but-non-flat
-            # redrive REFRESHES this EXIT_NOT_FLAT episode (exit_resolution re-raises
-            # with the new reducing order_ref), which overwrites observed_at_ms. A
-            # time-anchored count would therefore reset to zero every cycle and the
-            # watchdog would loop at attempt 1 forever, never escalating. Count by
-            # the stable per-episode redrive namespace instead, minted from the
-            # immutable uncertainty id (colon-bearing "uncertainty:<seq>" hashed to
-            # a colon-free hex token) so successive episodes never collide.
-            episode_token = hashlib.sha256(
-                episode["uncertainty_id"].encode("utf-8")
-            ).hexdigest()[:12]
-            redrives = 0
-            regular_failures = 0
-            while (command := repo.get_command(
-                    f"cmd:{sid}:{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-{redrives + 1}"
-                )) is not None:
-                if command.effect_operation_id is not None:
-                    effect = repo.effect_operation(command.effect_operation_id)
-                    created = repo.first_effect_transition(
-                        effect_operation_id=command.effect_operation_id,
-                        transition_kind="EXIT_REDUCING_ORDER_CREATED",
-                    )
-                    if effect is not None and effect.state == "failed" and created is not None:
-                        leg = ExitReducingOrderCreatedFacts.from_facts_json(created["facts_json"])
-                        if not leg.extended_hours and repo.has_order_transition(
-                            order_ref=created["order_ref"], transition_kind="ORDER_SUBMIT_REQUESTED",
-                        ):
-                            regular_failures += 1
-                redrives += 1
-            stale.append(_StaleExit(sid, episode, cause, remaining, redrives, episode_token, regular_failures, ready_at_ms, stopped))
-        return now_ms, stale
-
-    now_ms, stale = await run(_scan_stale_exits)
-    for stale_exit in stale:
-        sid = stale_exit.strategy_instance_id
-        episode = stale_exit.episode
-        cause = stale_exit.cause
-        remaining = stale_exit.remaining
-        redrives = stale_exit.redrives
-        if stale_exit.stopped:
-            await intake.off_loop(
-                observe_exit_recovery, repo, strategy_instance_id=sid,
-                uncertainty_id=episode["uncertainty_id"], outcome="hold", reason_code="EXIT_STUCK",
-                explanation="Automatic recovery stopped after repeated regular-session failures.",
-            )
-            continue
-        if await run(lambda sid=sid: repo.active_exit_for_strategy(sid)) is not None:
-            await intake.off_loop(
-                observe_exit_recovery, repo, strategy_instance_id=sid,
-                uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                reason_code="OWN_EXIT_WORKING",
-            )
-            continue
-        if hold := reduction_market_hold(
-            now_ms=now_ms, fact=pricing.read_liveness(cause.symbol, now_ms),
-        ):
-            await intake.off_loop(
-                observe_exit_recovery, repo, strategy_instance_id=sid,
-                uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                reason_code=hold.reason_code,
-                explanation=hold.explanation,
-            )
-            continue
-        if now_ms < stale_exit.ready_at_ms:
-            await intake.off_loop(
-                observe_exit_recovery, repo, strategy_instance_id=sid,
-                uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                reason_code="RECOVERY_RETRY_WAIT", allowed_from_ms=next_redrive_at_ms(
-                    not_before_ms=stale_exit.ready_at_ms, policy=pricing.policy_source(),
-                ),
-                explanation="The Clerk is allowing the previous exit's evidence to settle.",
-            )
-            continue
-        if stale_exit.regular_failures >= redrive_policy.max_count and market_leg_sendable(now_ms):
-            await _escalate_to_exit_stuck(
-                repo,
-                intake=intake,
-                redrive_policy=redrive_policy,
-                stale_exit=stale_exit,
-                now_ms=now_ms,
-                deferred_since_ms=None,
-            )
-            continue
-
-        def _candidate_entries(sid: str = sid, cause: ExitNotFlatCause = cause) -> list[OrderResource]:
-            return [
-                order
-                for order in repo.entry_orders_for_strategy(sid)
-                if entry_order_symbol(repo, order.order_ref).upper() == cause.symbol
-                and repo.active_exit_for_order(order.order_ref) is None
-            ]
-
-        entries = await run(_candidate_entries)
-        if not entries:
-            await intake.off_loop(
-                observe_exit_recovery, repo, strategy_instance_id=sid,
-                uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                reason_code="RECOVERY_ENTRY_UNAVAILABLE",
-                explanation="No releasable entry evidence is available for this exit.",
-            )
-            continue
-        confirmed_shape = None
-        quote_spread = None
-        if not market_leg_sendable(now_ms):
-            waiting_until = await run(lambda stale_exit=stale_exit: _extended_attempt_wait_until(repo, stale_exit, now_ms))
-            if waiting_until is not None:
-                await intake.off_loop(
-                    observe_exit_recovery, repo, strategy_instance_id=sid,
-                    uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                    reason_code="EXTENDED_EXIT_WAIT", allowed_from_ms=waiting_until,
-                    explanation="The extended-hours exit ended; the Clerk will retry in the next session.",
-                )
-                continue
-            # Owner decision 2026-09-19 (evening, #2229): an extended-hours
-            # re-drive prices a limit itself instead of waiting for the open.
-            # A refusal (no session, no allowance, no live quote, or a spread
-            # past the cap) defers — the episode stays raised and the entry
-            # stays free. Read here, on the event loop (#2440 review). Both
-            # this choice and the price are judged at the send instant, as
-            # the send-time rule judges the leg, so a re-drive the rule would
-            # refuse is refused here, before an attempt is burned.
-            touch = pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
-            try:
-                priced = touch.price(
-                    side=OrderSide.SELL if remaining > 0 else OrderSide.BUY,
-                    symbol=cause.symbol,
-                    quantity=remaining,
-                    now_ms=now_ms,
-                )
-            except ProgramLegRefused as exc:
-                await intake.off_loop(
-                    observe_exit_recovery, repo, strategy_instance_id=sid,
-                    uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                    reason_code=exc.reason_code,
-                    explanation=exc.refusal.explanation,
-                    allowed_from_ms=exc.refusal.available_at_ms,
-                )
-                logger.info(
-                    "deferred an extended-hours stuck-EXIT re-drive: no reduction can be priced",
-                    extra={
-                        "action": "exit_redrive_unpriceable",
-                        "account_id": repo.account_id,
-                        "strategy_instance_id": sid,
-                        "symbol": cause.symbol,
-                        "reason_code": exc.reason_code,
-                        "available_at_ms": exc.refusal.available_at_ms,
-                        # The spread beside every refusal is the series an
-                        # operator tunes ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS
-                        # from — a too-tight gate should be visible in data.
-                        "quote_spread_bps": touch.quote_spread_bps,
-                    },
-                )
-                continue
-            if priced is None:
-                # Unreachable while the two session notions agree — outside
-                # the regular session the answer is a shape or a refusal —
-                # but an AssertionError here would abort the whole account's
-                # reconciliation pass, not just this instance. Loud, contained,
-                # and the episode stays raised either way.
-                logger.error(
-                    "an extended-hours re-drive priced a market leg outside the "
-                    "regular session; deferring the instance for re-examination",
-                    extra={
-                        "action": "exit_redrive_priced_market_leg",
-                        "account_id": repo.account_id,
-                        "strategy_instance_id": sid,
-                        "symbol": cause.symbol,
-                    },
-                )
-                continue
-            confirmed_shape = priced
-            quote_spread = touch.quote_spread_bps
-        try:
-            accepted = await intake.off_loop(
-                _accept_admissible_redrive,
-                repo,
-                broker_symbol=broker_symbol,
-                strategy_instance_id=sid,
-                symbol=cause.symbol,
-                decision_id=(
-                    f"{EXIT_REDRIVE_DECISION_PREFIX}{stale_exit.episode_token}-{redrives + 1}"
-                ),
-                entry_order_ref=entries[-1].order_ref,
-                confirmed_shape=confirmed_shape,
-            )
-            if accepted is None:
-                continue  # attributed-flat since the scan; the flat fence resolver clears it
-            if isinstance(accepted, _RedriveRefused):
-                await _defer_or_escalate(
-                    repo,
-                    intake=intake,
-                    redrive_policy=redrive_policy,
-                    stale_exit=stale_exit,
-                    now_ms=now_ms,
-                    refusal=accepted,
-                )
-                continue
-            resolved = await resolve_accepted_exit(
-                repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run
-            )
-            await intake.off_loop(
-                _record_redrive_result, repo, stale_exit, resolved,
-            )
-        except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
-            await intake.off_loop(
-                observe_exit_recovery, repo, strategy_instance_id=sid,
-                uncertainty_id=episode["uncertainty_id"], outcome="hold",
-                reason_code="RECOVERY_EVALUATION_CONTENDED",
-            )
-            logger.info(
-                "deferred a contended or policy-blocked stuck-EXIT re-drive",
-                extra={
-                    "action": "exit_redrive_deferred",
-                    "account_id": repo.account_id,
-                    "strategy_instance_id": sid,
-                },
-            )
-            continue
-        logger.warning(
-            "re-drove a stale EXIT_NOT_FLAT episode with a fresh recovery EXIT",
-            extra={
-                "action": "exit_redrive_submitted",
-                "account_id": repo.account_id,
-                "strategy_instance_id": sid,
-                "symbol": cause.symbol,
-                "attempt": redrives + 1,
-                # The spread at every priced send is the series the cap is
-                # tuned from (#2229).
-                "quote_spread_bps": quote_spread,
-            },
-        )
+    @property
+    def regular_failures(self) -> int:
+        return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
 
 
-def _record_redrive_result(repo: ClerkSqliteRepository, stale: _StaleExit, result: ExitSubmission) -> None:
-    """Acceptance alone is not a send; a new hold must preserve the failure budget."""
-    effect = repo.effect_operation(result.effect_operation_id)
-    assert effect is not None
-    sent = result.reducing_order_ref is not None and repo.has_order_transition(
-        order_ref=result.reducing_order_ref, transition_kind="ORDER_SUBMIT_REQUESTED",
-    )
-    outcome: Literal["failure", "hold", "accepted"]
-    if sent and effect.state == "failed":
-        outcome, reason = "failure", "EXIT_REDRIVE_NOT_FLAT"
-        explanation = "The recovery order ended while attributed exposure remained."
-    elif sent:
-        outcome, reason = "accepted", "RECOVERY_EXIT_ACCEPTED"
-        explanation = "The Clerk submitted a recovery exit and is checking its outcome."
-    else:
-        # The resolver may already have recorded a specific halt. Preserve it.
-        if effect.state == "failed":
-            return
-        outcome, reason = "hold", "OWN_EXIT_WORKING"
-        explanation = "The accepted exit is waiting for custody evidence before submission."
-    observe_exit_recovery(
-        repo, strategy_instance_id=stale.strategy_instance_id,
-        uncertainty_id=stale.episode["uncertainty_id"], outcome=outcome,
-        reason_code=reason, explanation=explanation,
-    )
+@dataclass(frozen=True)
+class RecoveryEvaluation:
+    stale: _StaleExit
+    result: RecoveryResult
+    evaluated_at_ms: int
 
 
-def _extended_attempt_wait_until(repo: ClerkSqliteRepository, stale: _StaleExit, now_ms: int) -> int | None:
-    """One submitted automatic limit per extended session; no repeated chasing."""
-    episode_facts = UncertaintyRaisedFacts.from_facts_json(stale.episode["facts_json"])
-    command_prefix = f"cmd:{stale.strategy_instance_id}:{EXIT_REDRIVE_DECISION_PREFIX}{stale.episode_token}-"
-    for order in reversed(repo.orders_for_strategy(stale.strategy_instance_id)):
-        if order.role != "REDUCING" or not repo.has_order_transition(
-            order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED",
-        ):
+def episode_attempts(
+    repo: ClerkSqliteRepository, *, sid: str, episode: dict, episode_token: str,
+) -> tuple[int, tuple[EpisodeAttempt, ...]]:
+    """The single history reader for counts, session waits and send outcomes."""
+    prefix = f"cmd:{sid}:{EXIT_REDRIVE_DECISION_PREFIX}{episode_token}-"
+    redrives = 0
+    while repo.get_command(f"{prefix}{redrives + 1}") is not None:
+        redrives += 1
+    refs = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"]).evidence_refs
+    attempts = []
+    for order in repo.orders_for_strategy(sid):
+        if order.role != "REDUCING":
             continue
         effect = repo.effect_operation(order.effect_operation_id)
-        if order.order_ref not in episode_facts.evidence_refs and (
-            effect is None or not effect.command_id.startswith(command_prefix)
-        ):
-            continue  # A completed earlier obligation cannot hold a new one.
-        row = repo.first_order_transition(
-            order_ref=order.order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED",
-        )
+        if effect is None:
+            continue
+        redrive = effect.command_id.startswith(prefix)
+        if order.order_ref not in refs and not redrive:
+            continue
+        row = repo.first_order_transition(order_ref=order.order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED")
         if row is None:
             continue
         created = ExitReducingOrderCreatedFacts.from_facts_json(row["facts_json"])
-        if created.extended_hours:
-            bound = created.valid_until_ms
-            if bound is None:
-                accepted = repo.first_effect_transition(
-                    effect_operation_id=order.effect_operation_id, transition_kind="EXIT_ACCEPTED",
-                )
-                if accepted is not None:
-                    from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
-                    bound = ExitAcceptedFacts.from_facts_json(accepted["facts_json"]).reducing_valid_until_ms
-            if bound is not None and now_ms < bound:
-                return bound
+        bound = created.valid_until_ms
+        if created.extended_hours and bound is None:
+            accepted = repo.first_effect_transition(effect_operation_id=order.effect_operation_id, transition_kind="EXIT_ACCEPTED")
+            if accepted is not None:
+                bound = ExitAcceptedFacts.from_facts_json(accepted["facts_json"]).reducing_valid_until_ms
+        attempts.append(EpisodeAttempt(
+            order.order_ref,
+            repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"),
+            effect.state == "failed", created.extended_hours, bound, redrive,
+        ))
+    return redrives, tuple(attempts)
+
+
+def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
+    policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+    stale = []
+    for instance in repo.strategy_instances():
+        sid = instance["strategy_instance_id"]
+        episode = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=sid)
+        if episode is None:
+            continue
+        try:
+            facts = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"])
+            cause = ExitNotFlatCause.from_mapping(facts.cause_facts)
+        except (TypeError, ValueError, KeyError):
+            logger.error("stale EXIT_NOT_FLAT episode carries unreadable cause facts", extra={
+                "action": "exit_watchdog_unreadable_cause", "account_id": repo.account_id,
+                "strategy_instance_id": sid, "uncertainty_id": episode["uncertainty_id"],
+            })
+            continue
+        remaining = repo.position(sid, cause.symbol)
+        if not position_quantity_is_nonzero(remaining):
+            continue
+        token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+        redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
+        stopped = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=sid) is not None
+        ready = repo.clock() if not stopped and replacement_ready(repo, facts.evidence_refs) else episode["observed_at_ms"] + policy.after_ms
+        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped))
+    return stale
+
+
+def evaluate_recovery_wait(
+    stale: _StaleExit, *, now_ms: int, own_exit_working: bool,
+    policy: ProgramLegPolicy, liveness: MarketLivenessFact | None,
+) -> RecoveryResult | None:
+    """Decide from the episode and current market evidence; never record or send."""
+    if stale.stopped:
+        return RecoveryResult("hold", "EXIT_STUCK", "Automatic recovery stopped after repeated regular-session failures.")
+    if own_exit_working:
+        return RecoveryResult("hold", "OWN_EXIT_WORKING", "An exit is in progress; the Clerk is waiting for its outcome.")
+    verdict = reducing_send_verdict(now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=liveness)
+    if isinstance(verdict, LegRefusal):
+        return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
+    if now_ms < stale.ready_at_ms:
+        return RecoveryResult("hold", "RECOVERY_RETRY_WAIT", "The Clerk is allowing the previous exit's evidence to settle.",
+                              next_redrive_at_ms(not_before_ms=stale.ready_at_ms, policy=policy))
+    if verdict == "send":
+        age_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+        if stale.regular_failures >= age_policy.max_count:
+            return RecoveryResult("failure", "EXIT_REDRIVES_EXHAUSTED", "Automatic regular-session exit attempts were exhausted.")
+    else:
+        bound = max((a.valid_until_ms for a in stale.attempts if a.submitted and a.extended_hours
+                     and a.valid_until_ms is not None and a.valid_until_ms > now_ms), default=None)
+        if bound is not None:
+            return RecoveryResult("hold", "EXTENDED_EXIT_WAIT", "The extended-hours exit ended; the Clerk will retry in the next session.",
+                                  next_redrive_at_ms(not_before_ms=bound, policy=policy))
     return None
+
+
+async def redrive_or_escalate_stale_exits(
+    repo: ClerkSqliteRepository, *, trade: BrokerTradePort, intake: ReentrantAsyncLock,
+    broker_symbol: BrokerSymbolReader, pricing: RecoveryPricing, off_loop: OffLoop | None = None,
+) -> list[RecoveryEvaluation]:
+    """Perform recoveries and return evaluations for an explicit successful-pass commit."""
+    run = off_loop if off_loop is not None else run_inline
+    evaluations = []
+    for stale in await run(lambda: _scan_stale_exits(repo)):
+        result = await _recover_stale_exit(repo, stale, trade=trade, intake=intake, broker_symbol=broker_symbol, pricing=pricing, run=run)
+        if result is not None:
+            evaluations.append(RecoveryEvaluation(stale, result, repo.clock()))
+    return evaluations
+
+
+async def _recover_stale_exit(
+    repo: ClerkSqliteRepository, stale: _StaleExit, *, trade: BrokerTradePort,
+    intake: ReentrantAsyncLock, broker_symbol: BrokerSymbolReader, pricing: RecoveryPricing, run: OffLoop,
+) -> RecoveryResult | None:
+    sid, cause = stale.strategy_instance_id, stale.cause
+    own_working = await run(lambda: repo.active_exit_for_strategy(sid) is not None)
+    now_ms = repo.clock()
+    result = evaluate_recovery_wait(
+        stale, now_ms=now_ms, own_exit_working=own_working, policy=pricing.policy_for(sid),
+        liveness=pricing.read_liveness(cause.symbol, now_ms),
+    )
+    if result is not None:
+        return result
+    entries = await run(lambda: [order for order in repo.entry_orders_for_strategy(sid)
+                                if entry_order_symbol(repo, order.order_ref).upper() == cause.symbol
+                                and repo.active_exit_for_order(order.order_ref) is None])
+    if not entries:
+        return RecoveryResult("hold", "RECOVERY_ENTRY_UNAVAILABLE", "No releasable entry evidence is available for this exit.")
+    # Read the instant after repository hops, immediately before quote/liveness.
+    now_ms = repo.clock()
+    touch = (
+        PricingSnapshot(pricing.policy_for(sid), None, pricing.read_liveness(cause.symbol, now_ms))
+        if market_leg_sendable(now_ms) else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
+    )
+    try:
+        shape = touch.price(side=OrderSide.SELL if stale.remaining > 0 else OrderSide.BUY,
+                            symbol=cause.symbol, quantity=stale.remaining, now_ms=now_ms)
+    except ProgramLegRefused as exc:
+        logger.info("deferred a stuck-EXIT re-drive: no reduction can be priced", extra={
+            "action": "exit_redrive_unpriceable", "account_id": repo.account_id,
+            "strategy_instance_id": sid, "reason_code": exc.reason_code,
+            "available_at_ms": exc.refusal.available_at_ms, "quote_spread_bps": touch.quote_spread_bps,
+        })
+        return RecoveryResult("hold", exc.reason_code, exc.refusal.explanation, exc.refusal.available_at_ms)
+    try:
+        accepted = await intake.off_loop(
+            _accept_admissible_redrive, repo, broker_symbol=broker_symbol, strategy_instance_id=sid,
+            symbol=cause.symbol, decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}{stale.episode_token}-{stale.redrives + 1}",
+            entry_order_ref=entries[-1].order_ref, confirmed_shape=shape,
+        )
+        if accepted is None:
+            return None
+        if isinstance(accepted, _RedriveRefused):
+            outcome = accepted.outcome if market_leg_sendable(repo.clock()) else "hold"
+            previous = await run(lambda: latest_exit_recovery(repo, strategy_instance_id=sid, uncertainty_id=stale.episode["uncertainty_id"]))
+            if outcome == "failure" and (previous is None or previous.first_failure_at_ms is None):
+                logger.warning(accepted.message, extra={
+                    "action": accepted.action, "account_id": repo.account_id,
+                    "strategy_instance_id": sid, "symbol": cause.symbol, **accepted.facts,
+                })
+            return RecoveryResult(outcome, accepted.reason_code, accepted.message)
+        resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run)
+        return await run(lambda: _redrive_result(repo, stale, resolved))
+    except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
+        return RecoveryResult("hold", "RECOVERY_CUSTODY_BUSY", "Another custody operation owns this exit; the Clerk will check again.")
+
+
+def _redrive_result(repo: ClerkSqliteRepository, stale: _StaleExit, result: ExitSubmission) -> RecoveryResult:
+    _, attempts = episode_attempts(repo, sid=stale.strategy_instance_id, episode=stale.episode, episode_token=stale.episode_token)
+    attempt = next((a for a in attempts if a.order_ref == result.reducing_order_ref), None)
+    if attempt is not None and attempt.submitted:
+        if attempt.failed:
+            outcome = "failure" if market_leg_sendable(repo.clock()) else "hold"
+            return RecoveryResult(outcome, "EXIT_REDRIVE_NOT_FLAT", "The recovery order ended while attributed exposure remained.")
+        return RecoveryResult("accepted", "RECOVERY_EXIT_ACCEPTED", "The Clerk submitted a recovery exit and is checking its outcome.")
+    row = repo.first_effect_transition(effect_operation_id=result.effect_operation_id, transition_kind="EXIT_NOT_FLAT")
+    if row is not None:
+        return RecoveryResult("hold", row["summary_code"], "The exit could not be submitted; the Clerk will check again.")
+    return RecoveryResult("hold", "OWN_EXIT_WORKING", "The accepted exit is waiting for custody evidence before submission.")
+
+
+def commit_recovery_evaluations(
+    repo: ClerkSqliteRepository, evaluations: list[RecoveryEvaluation], *, pass_started_at_ms: int,
+    interval_ms: int = DEFAULT_RECOVERY_INTERVAL_MS,
+) -> None:
+    """Apply the whole pass's observations and escalation only after its verdict."""
+    policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+    for evaluation in evaluations:
+        stale, result = evaluation.stale, evaluation.result
+        observation = record_exit_recovery(
+            repo, strategy_instance_id=stale.strategy_instance_id, uncertainty_id=stale.episode["uncertainty_id"],
+            result=result, evaluated_at_ms=evaluation.evaluated_at_ms,
+            pass_started_at_ms=pass_started_at_ms, interval_ms=interval_ms,
+        )
+        if observation is None or result.outcome != "failure":
+            continue
+        exhausted = stale.regular_failures >= policy.max_count
+        if not exhausted and observation.failure_elapsed_ms < policy.after_ms * (policy.max_count + 1):
+            continue
+        _escalate_to_exit_stuck(
+            repo, redrive_policy=policy, stale_exit=stale, now_ms=repo.clock(),
+            deferred_since_ms=None if exhausted else observation.first_failure_at_ms,
+            failure_elapsed_ms=observation.failure_elapsed_ms, failure_reason=result.explanation,
+        )
 
 
 def _accept_admissible_redrive(
@@ -523,13 +381,13 @@ def _accept_admissible_redrive(
         return None
     if repo.active_exit_for_strategy(strategy_instance_id) is not None:
         return _RedriveRefused(
-            action="OWN_EXIT_WORKING",
+            action="OWN_EXIT_WORKING", reason_code="OWN_EXIT_WORKING",
             message="An EXIT for this strategy is already working.",
             facts={}, outcome="hold",
         )
     if clerk_work_in_flight(repo, symbol):
         return _RedriveRefused(
-            action="exit_redrive_deferred_work_in_flight",
+            action="exit_redrive_deferred_work_in_flight", reason_code="EXIT_OTHER_ORDER_WORKING",
             message=(
                 "deferred a stuck-EXIT re-drive: the Clerk still has work in flight "
                 "that could fill under it"
@@ -544,6 +402,7 @@ def _accept_admissible_redrive(
     if not view.agrees:
         return _RedriveRefused(
             action="exit_redrive_deferred_broker_disagrees",
+            reason_code="EXIT_OTHER_ORDER_WORKING" if view.working else "EXIT_BROKER_POSITION_MISMATCH",
             message=(
                 "Another broker order is still working on this symbol." if view.working
                 else "The broker position differs from the account's attributed position."
@@ -568,7 +427,7 @@ def _accept_admissible_redrive(
     )
     if not decision.allowed:
         return _RedriveRefused(
-            action="exit_redrive_deferred",
+            action="exit_redrive_deferred", reason_code="RECOVERY_REDUCTION_BLOCKED",
             message="deferred a policy-blocked stuck-EXIT re-drive before accepting it",
             facts={"reason_code": decision.reason_code},
         )
@@ -599,53 +458,9 @@ def clerk_work_in_flight(repo: ClerkSqliteRepository, symbol: str) -> bool:
     )
 
 
-async def _defer_or_escalate(
+def _escalate_to_exit_stuck(
     repo: ClerkSqliteRepository,
     *,
-    intake: ReentrantAsyncLock,
-    redrive_policy: RedriveThenEscalate,
-    stale_exit: _StaleExit,
-    now_ms: int,
-    refusal: _RedriveRefused,
-) -> None:
-    """Escalate only the durable budget of observed regular-session failures."""
-    observation = await intake.off_loop(
-        observe_exit_recovery, repo,
-        strategy_instance_id=stale_exit.strategy_instance_id,
-        uncertainty_id=stale_exit.episode["uncertainty_id"], outcome=refusal.outcome,
-        reason_code=str(refusal.facts.get("reason_code", refusal.action)),
-        explanation=refusal.message,
-    )
-    if observation is None or observation.outcome != "failure":
-        return
-    if observation.first_failure_at_ms == observation.last_checked_at_ms:
-        logger.warning(
-            refusal.message,
-            extra={
-                "action": refusal.action,
-                "account_id": repo.account_id,
-                "strategy_instance_id": stale_exit.strategy_instance_id,
-                "symbol": stale_exit.cause.symbol,
-                **refusal.facts,
-            },
-        )
-    if observation.failure_elapsed_ms < redrive_policy.after_ms * (redrive_policy.max_count + 1):
-        return
-    await _escalate_to_exit_stuck(
-        repo,
-        intake=intake,
-        redrive_policy=redrive_policy,
-        stale_exit=stale_exit,
-        now_ms=now_ms,
-        deferred_since_ms=observation.first_failure_at_ms,
-        failure_elapsed_ms=observation.failure_elapsed_ms, failure_reason=refusal.message,
-    )
-
-
-async def _escalate_to_exit_stuck(
-    repo: ClerkSqliteRepository,
-    *,
-    intake: ReentrantAsyncLock,
     redrive_policy: RedriveThenEscalate,
     stale_exit: _StaleExit,
     now_ms: int,
@@ -657,12 +472,6 @@ async def _escalate_to_exit_stuck(
     ``deferred_since_ms`` is ``None`` for exhausted re-drives and the first
     deferral's clock otherwise; it only changes the operator-facing wording.
     """
-    if defer_recovery_escalation(repo, partial(
-        _escalate_to_exit_stuck, repo, intake=intake, redrive_policy=redrive_policy,
-        stale_exit=stale_exit, now_ms=now_ms, deferred_since_ms=deferred_since_ms,
-        failure_elapsed_ms=failure_elapsed_ms, failure_reason=failure_reason,
-    )):
-        return
     sid = stale_exit.strategy_instance_id
     cause = stale_exit.cause
     redrives = stale_exit.regular_failures
@@ -718,7 +527,7 @@ async def _escalate_to_exit_stuck(
             severity="error",
         )
 
-    escalated = await intake.off_loop(_escalate_if_still_stuck)
+    escalated = _escalate_if_still_stuck()
     if escalated is not None and escalated != "unchanged":
         logger.error(
             "stale EXIT escalated to a durable operator-visible EXIT_STUCK episode",

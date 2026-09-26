@@ -52,17 +52,15 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     PricingSnapshot,
     RecoveryPricing,
     ReducingLegVerdict,
-    next_redrive_at_ms,
     reducing_leg_session_end_ms,
-    reducing_leg_verdict,
-    reduction_market_hold,
+    reducing_send_verdict,
     reduction_touch,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
-from app.broker.alpaca.clerk.sqlite.exit_recovery import observe_exit_recovery
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
+    OrderCancelRequestedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -78,7 +76,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_drained,
     run_inline,
 )
-from app.broker.alpaca.clerk.sqlite.open_replacement import cancel_at_regular_open
+from app.broker.alpaca.clerk.sqlite.open_replacement import OPEN_REPLACEMENT, replacement_due
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     entry_never_accepted_durably,
@@ -107,28 +105,22 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_exit_not_flat_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
-from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
-    RedriveThenEscalate,
-    reason_age_policy,
-)
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
+from app.schemas.market_liveness import MarketLivenessFact
 
 logger = logging.getLogger(__name__)
 
 _REDRIVE_NEXT_STEP = (
-    "Flatten with a priced limit now, or let the automatic re-drive reduce it at the "
-    "next attempt shown with this notice."
+    "Flatten with a priced limit now, or let the Clerk retry after a fresh recovery check."
 )
 """What the operator can do about an EXIT that folded with exposure the watchdog re-drives.
 
-Every ``EXIT_NOT_FLAT`` fold carries the time of that re-drive
-(:func:`_fold_exit_not_flat`); this is the next step of the folds whose copy
-has nothing more specific to ask — a leg the send-time rule could not send, a
-broker's refusal, an extended-hours limit that ended unfilled — so it points
-at the time the notice shows."""
+A leg that could not be sent, a broker refusal, or an unfilled extended-hours
+limit stays visible. The separate observed recovery status explains current
+eligibility; the failed order itself promises no future send time."""
 
 PROGRAM_EXIT_SESSION_ENDED = LegRefusal(
     reason_code="PROGRAM_EXIT_SESSION_ENDED",
@@ -247,10 +239,10 @@ async def cancel_and_prove_owned_entry(
         trade=trade,
     )
     try:
-        await _cancel_and_prove_entry(
+        await _cancel_and_prove_order(
             repo,
             effect_operation_id=effect_operation_id,
-            entry=entry,
+            order=entry,
             broker=broker,
             run=claim_scoped(run),
         )
@@ -309,14 +301,13 @@ def _prepare_reduction(
     effect_operation_id: str,
     state: _ClaimedState,
     touch: PricingSnapshot | None,
-    pricing: RecoveryPricing,
+    liveness: MarketLivenessFact | None,
 ) -> OrderResource | ExitSubmission | _TouchNeeded:
     """One atomic admission-to-append run: the created reducing order, or
     the EXIT's snapshot when a precondition folded it to an early end —
     attributed-flat, the send-time rule, or a moved quantity — or
     :data:`_TOUCH_NEEDED`, having written nothing, when the recorded leg
-    must be re-priced and ``touch`` was not read yet. ``pricing`` names the
-    policy a fold reads the watchdog's next attempt from.
+    must be re-priced and ``touch`` was not read yet.
     """
     remaining_qty = repo.position(state.effect.strategy_instance_id, state.symbol)
     order_ref = _primary_entry_ref(repo, state.entries)
@@ -329,8 +320,7 @@ def _prepare_reduction(
         order_ref=order_ref,
         symbol=state.symbol,
         remaining_qty=remaining_qty,
-        touch=touch,
-        pricing=pricing,
+        touch=touch, liveness=liveness,
     )
     if isinstance(leg, _TouchNeeded):
         return leg
@@ -360,7 +350,6 @@ def _finalize_claimed_exit(
     effect_operation_id: str,
     state: _ClaimedState,
     submitted_reducing: OrderResource,
-    pricing: RecoveryPricing,
 ) -> ExitSubmission:
     """Fold the driven reducing order's outcome and snapshot the EXIT."""
     refreshed = repo.order(submitted_reducing.order_ref)
@@ -438,7 +427,6 @@ def _finalize_claimed_exit(
         headline=headline,
         explanation=explanation,
         next_step=next_step,
-        pricing=pricing,
     )
     return _snapshot(repo, effect_operation_id)
 
@@ -498,19 +486,14 @@ async def _resolve_claimed(
         ):
             return await run(lambda: _snapshot(repo, effect_operation_id))
         now_ms = repo.clock()
-        hold = reduction_market_hold(now_ms=now_ms, fact=pricing.read_liveness(state.symbol, now_ms))
-        if hold is not None:
-            await run(lambda: _fold_market_hold(
-                repo, effect_operation_id, _primary_entry_ref(repo, state.entries), state.symbol, hold, pricing,
-            ))
-            return await run(lambda: _snapshot(repo, effect_operation_id))
+        liveness = pricing.read_liveness(state.symbol, now_ms)
         prepared = await run(
-            lambda: _prepare_reduction(repo, effect_operation_id, state, None, pricing)
+            lambda: _prepare_reduction(repo, effect_operation_id, state, None,  liveness)
         )
         if isinstance(prepared, _TouchNeeded):
             touch = pricing.read(state.symbol, repo.clock(), strategy_instance_id=state.effect.strategy_instance_id)
             prepared = await run(
-                lambda: _prepare_reduction(repo, effect_operation_id, state, touch, pricing)
+                lambda: _prepare_reduction(repo, effect_operation_id, state, touch,  touch.market_liveness)
             )
         if isinstance(prepared, ExitSubmission):
             return prepared
@@ -536,8 +519,19 @@ async def _resolve_claimed(
             pricing=pricing,
             run=run,
         )
+    refreshed, accepted, created = await run(lambda: (
+        repo.order(reducing.order_ref), _accepted_facts(repo, effect_operation_id),
+        _reducing_order_facts(repo, reducing.order_ref),
+    ))
+    if refreshed is not None and replacement_due(
+        order=refreshed, accepted=accepted, created=created, now_ms=repo.clock(),
+    ):
+        await _cancel_and_prove_order(
+            repo, effect_operation_id=effect_operation_id, order=refreshed,
+            reason=OPEN_REPLACEMENT, broker=broker, run=run,
+        )
     return await run(
-        lambda: _finalize_claimed_exit(repo, effect_operation_id, state, reducing, pricing)
+        lambda: _finalize_claimed_exit(repo, effect_operation_id, state, reducing)
     )
 
 
@@ -553,7 +547,6 @@ def _fold_exit_not_flat(
     headline: str,
     explanation: str,
     next_step: str,
-    pricing: RecoveryPricing,
     why: str | None = None,
 ) -> None:
     """Fail the EXIT and raise the ``EXIT_NOT_FLAT`` episode exposure is still held under.
@@ -561,13 +554,10 @@ def _fold_exit_not_flat(
     The episode is what flags the bot for the operator — on the bot page and
     in the lane's attention bell — and what the stuck-EXIT watchdog re-drives:
     the market leg inside the regular session, a limit it prices itself in a
-    declared extended session (#2229). Every such episode carries when that
-    re-drive is first session-eligible (#2440), computed here from ``pricing`` so no fold
-    can omit or disagree on it: an ``int64 ms UTC`` value the UI renders,
-    never prose. What the fold cannot know — that the watchdog has since
-    escalated, an EXIT is working, or session eligibility has rolled over — the projection says
-    (``projections.project_uncertainties``). ``why`` is the cause recorded on
-    the failed transition beside the quantity still held.
+    declared extended session (#2229). Recovery eligibility is recorded only
+    after a successful reconciliation pass, then projected from that check.
+    This fold retains custody and the failure cause without guessing a retry
+    time. ``why`` is recorded beside the quantity still held.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -595,7 +585,6 @@ def _fold_exit_not_flat(
             attributed_qty=attributed_qty,
         ).to_mapping(),
         severity="error",
-        next_attempt_at_ms=_next_redrive_at_ms(repo, pricing),
     )
 
 
@@ -603,20 +592,6 @@ _EXIT_NOT_FLAT_OPERATOR_IMPACT = (
     "New exposure is paused for this strategy; exact risk reduction and "
     "reconciliation remain available."
 )
-
-
-def _next_redrive_at_ms(repo: ClerkSqliteRepository, pricing: RecoveryPricing) -> int:
-    """When the stuck-EXIT watchdog will next try to reduce what a fold leaves held (#2440).
-
-    Not before the episode's re-drive age, and then in the first session the
-    pricing seam can send in: the regular session, or a declared extended one
-    when the policy carries the exit allowance. Only
-    :func:`_fold_exit_not_flat` asks, so every fold agrees; no quote is read.
-    """
-    redrive = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
-    return next_redrive_at_ms(
-        not_before_ms=repo.clock() + redrive.after_ms, policy=pricing.policy_source()
-    )
 
 
 def _fold_observed_reducing_order(
@@ -754,7 +729,7 @@ def _leg_to_create(
     symbol: str,
     remaining_qty: float,
     touch: PricingSnapshot | None,
-    pricing: RecoveryPricing,
+    liveness: MarketLivenessFact | None,
 ) -> _SendableLeg | _TouchNeeded | None:
     """The send-time rule at creation: the leg to create now, or ``None`` once the EXIT folded.
 
@@ -785,10 +760,14 @@ def _leg_to_create(
     recorded = facts.reducing_shape()
     shape = _resolved_reducing_shape(recorded, reducing_side=reducing_side)
     valid_until_ms = facts.reducing_valid_until_ms if shape.extended_hours else None
-    verdict = reducing_leg_verdict(
-        extended_hours=shape.extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms
+    verdict = reducing_send_verdict(
+        extended_hours=shape.extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms,
+        liveness=liveness,
     )
-    operator_priced = _operator_priced(facts)
+    if isinstance(verdict, LegRefusal):
+        _fold_market_hold(repo, effect_operation_id, order_ref, symbol, verdict)
+        return None
+    operator_priced = facts.operator_priced
     if verdict != "send" and not operator_priced and touch is None:
         return _TOUCH_NEEDED
     if recorded is not None and shape != recorded:
@@ -808,7 +787,6 @@ def _leg_to_create(
             order_ref=order_ref,
             symbol=symbol,
             remaining_qty=remaining_qty,
-            pricing=pricing,
         ):
             return None
         return _SendableLeg(shape, valid_until_ms, clerk_price=None)
@@ -822,7 +800,6 @@ def _leg_to_create(
             remaining_qty=remaining_qty,
             verdict=verdict,
             not_repriced=not_repriced,
-            pricing=pricing,
         )
 
     if operator_priced:
@@ -862,7 +839,7 @@ def _created_leg_may_be_sent(
     effect_operation_id: str,
     created: ExitReducingOrderCreatedFacts,
     order_ref: str,
-    pricing: RecoveryPricing,
+    liveness: MarketLivenessFact | None,
 ) -> bool:
     """The send-time rule at (re)submission: ``True`` only to send the created order now.
 
@@ -882,11 +859,14 @@ def _created_leg_may_be_sent(
     if not position_quantity_is_nonzero(remaining_qty):
         _fold_attributed_flat(repo, effect_operation_id, order_ref)
         return False
-    verdict = reducing_leg_verdict(
+    verdict = reducing_send_verdict(
         extended_hours=created.extended_hours,
         valid_until_ms=_created_leg_valid_until_ms(repo, effect_operation_id, created),
-        now_ms=repo.clock(),
+        now_ms=repo.clock(), liveness=liveness,
     )
+    if isinstance(verdict, LegRefusal):
+        _fold_market_hold(repo, effect_operation_id, order_ref, created.symbol, verdict)
+        return False
     if verdict == "send":
         return True
     _fold_unsendable_leg(
@@ -905,7 +885,6 @@ def _created_leg_may_be_sent(
                 else _accepted_facts(repo, effect_operation_id).reducing_priced_by
             )
         ),
-        pricing=pricing,
     )
     return False
 
@@ -925,17 +904,6 @@ def _created_leg_valid_until_ms(
     if created.valid_until_ms is not None:
         return created.valid_until_ms
     return _accepted_facts(repo, effect_operation_id).reducing_valid_until_ms
-
-
-def _operator_priced(facts: ExitAcceptedFacts) -> bool:
-    """Did an operator confirm this EXIT's recorded price (#2007)?
-
-    Read from the acceptance alone, whatever shape side reconciliation later
-    makes of it. A confirmed quantity comes with every recovery price; only
-    the Clerk's own stamps ``priced_by`` (#2229). A deciding program confirms
-    no quantity.
-    """
-    return facts.reducing_confirmed_quantity is not None and facts.reducing_priced_by is None
 
 
 @dataclass(frozen=True)
@@ -989,15 +957,13 @@ def _fold_unsendable_leg(
     remaining_qty: float,
     verdict: ReducingLegVerdict,
     not_repriced: _NotRepriced,
-    pricing: RecoveryPricing,
 ) -> None:
     """Fold an EXIT whose leg can no longer be sent, releasably, through ``EXIT_NOT_FLAT``.
 
     Nothing is queued for a later session: the entry is freed, the episode is
     what the operator sees on the bot page and in the lane's attention bell,
     and it is what the stuck-EXIT watchdog re-drives — pricing a limit itself
-    in an extended session (#2229), at the time the episode carries (owner
-    decision 2026-09-25: the notice says when the sell will be tried). The
+    in an extended session (#2229), after a fresh eligibility check. The
     copy is chosen from ``not_repriced`` alone, so a trader is never told a
     price was confirmed that nobody confirmed.
     """
@@ -1029,7 +995,6 @@ def _fold_unsendable_leg(
             headline=headline,
             explanation=f"{explanation} {why_not_repriced}".rstrip(),
             next_step=next_step,
-            pricing=pricing,
         )
 
     if not _is_recovery_exit(repo, effect_operation_id):
@@ -1122,7 +1087,6 @@ def _confirmed_quantity_still_holds(
     order_ref: str,
     symbol: str,
     remaining_qty: float,
-    pricing: RecoveryPricing,
 ) -> bool:
     """``True`` unless the reduction is no longer the one the operator priced (#2007).
 
@@ -1159,7 +1123,6 @@ def _confirmed_quantity_still_holds(
                 "No action needed: the next automatic re-drive prices the new "
                 "quantity afresh, or the operator can flatten it themselves."
             ),
-            pricing=pricing,
         )
         return False
     _fold_exit_not_flat(
@@ -1176,7 +1139,6 @@ def _confirmed_quantity_still_holds(
             f"{abs(remaining_qty):g} is attributed now; the confirmation does not cover it."
         ),
         next_step=RECOVERY_LIMIT_QUANTITY_CHANGED.next_step,
-        pricing=pricing,
     )
     return False
 
@@ -1200,10 +1162,10 @@ async def _prove_entry_set_terminal(
     for entry in entries:
         if reducing_exists and _is_terminal(entry.broker_state):
             continue
-        if not await _cancel_and_prove_entry(
+        if not await _cancel_and_prove_order(
             repo,
             effect_operation_id=effect_operation_id,
-            entry=entry,
+            order=entry,
             broker=broker,
             run=run,
         ):
@@ -1211,52 +1173,45 @@ async def _prove_entry_set_terminal(
     return True
 
 
-async def _cancel_and_prove_entry(
+async def _cancel_and_prove_order(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
-    entry: OrderResource,
+    order: OrderResource,
+    reason: str = "EXIT_ENTRY_TERMINAL_PROOF",
     broker: ClaimedBrokerIO,
     run: OffLoop,
 ) -> bool:
-    if await run(
+    if order.role == "ENTRY" and await run(
         lambda: _prove_never_accepted_durably(
-            repo, effect_operation_id=effect_operation_id, entry=entry
+            repo, effect_operation_id=effect_operation_id, entry=order
         )
     ):
         return True
+    if order.broker_state == "pending_cancel":
+        await run(lambda: _append_order_phase_once(
+            repo, effect_operation_id, order, "ORDER_CANCEL_REQUESTED", cancel_reason=reason,
+        ))
     cancel_error: BrokerError | None = None
-    if not _is_terminal(entry.broker_state) and entry.broker_order_id is not None:
+    if not _is_terminal(order.broker_state) and order.broker_order_id is not None and order.broker_state != "pending_cancel":
         await run(
             lambda: _append_order_phase_once(
-                repo, effect_operation_id, entry, "ORDER_CANCEL_REQUESTED"
+                repo, effect_operation_id, order, "ORDER_CANCEL_REQUESTED", cancel_reason=reason
             )
         )
         try:
             # Reissuing cancel for the same broker identity is a retry of the
             # durable phase, not a second intent. This makes a lost cancel
             # response recoverable when the exact poll still shows working.
-            await broker.cancel(entry.broker_order_id, order_ref=entry.order_ref)
-        except BrokerUnavailable as exc:
-            unavailable_why = str(exc)
-            await run(
-                lambda: fold_uncertain(
-                    repo,
-                    effect_operation_id=effect_operation_id,
-                    order_ref=entry.order_ref,
-                    why=unavailable_why,
-                    transition_kind="ORDER_CANCEL_UNCERTAIN",
-                )
-            )
-            return False
+            await broker.cancel(order.broker_order_id, order_ref=order.order_ref)
         except BrokerError as exc:
             # The exact lookup below, not the cancel response, proves state.
             cancel_error = exc
 
-    observed = await broker.observe_exact(entry.client_order_id)
-    if await run(
+    observed = await broker.observe_exact(order.client_order_id)
+    if order.role == "ENTRY" and await run(
         lambda: _prove_never_accepted_if_absent(
-            repo, effect_operation_id=effect_operation_id, entry=entry, observed=observed
+            repo, effect_operation_id=effect_operation_id, entry=order, observed=observed
         )
     ):
         return True
@@ -1266,7 +1221,7 @@ async def _cancel_and_prove_entry(
             fold_uncertain(
                 repo,
                 effect_operation_id=effect_operation_id,
-                order_ref=entry.order_ref,
+                order_ref=order.order_ref,
                 why=(
                     str(observed)
                     if isinstance(observed, BrokerError)
@@ -1287,12 +1242,16 @@ async def _cancel_and_prove_entry(
             order=observed,
             simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
         )
-        refreshed = repo.order(entry.order_ref)
+        refreshed = repo.order(order.order_ref)
         assert refreshed is not None
         if not _is_terminal(refreshed.broker_state):
+            if cancel_error is not None:
+                fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order.order_ref,
+                               why=str(cancel_error), transition_kind="ORDER_CANCEL_UNCERTAIN")
             return False
-        _append_order_phase_once(repo, effect_operation_id, refreshed, "ENTRY_TERMINAL_CONFIRMED")
-        return True
+        if order.role == "ENTRY":
+            _append_order_phase_once(repo, effect_operation_id, refreshed, "ENTRY_TERMINAL_CONFIRMED")
+        return not repo.order_fills_short_of_broker_cumulative(order.order_ref)
 
     return await run(_fold_observed_entry)
 
@@ -1550,14 +1509,6 @@ async def _refresh_or_resume_reducing_order(
                 simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
             )
         )
-        refreshed, accepted, created = await run(lambda: (
-            repo.order(reducing.order_ref), _accepted_facts(repo, effect_operation_id),
-            _reducing_order_facts(repo, reducing.order_ref),
-        ))
-        assert refreshed is not None
-        await cancel_at_regular_open(
-            repo, broker=broker, order=refreshed, accepted=accepted, created=created, run=run,
-        )
         return
 
     def _absence_folds_uncertain() -> bool:
@@ -1621,12 +1572,7 @@ async def _submit_reducing_order(
 ) -> None:
     created = await run(lambda: _reducing_order_facts(repo, reducing.order_ref))
     now_ms = repo.clock()
-    hold = reduction_market_hold(now_ms=now_ms, fact=pricing.read_liveness(created.symbol, now_ms))
-    if hold is not None:
-        await run(lambda: _fold_market_hold(
-            repo, effect_operation_id, reducing.order_ref, created.symbol, hold, pricing,
-        ))
-        return
+    liveness = pricing.read_liveness(created.symbol, now_ms)
 
     def _prepare_submit() -> BrokerOrderLeg | None:
         facts = _reducing_order_facts(repo, reducing.order_ref)
@@ -1646,7 +1592,7 @@ async def _submit_reducing_order(
             effect_operation_id=effect_operation_id,
             created=facts,
             order_ref=reducing.order_ref,
-            pricing=pricing,
+             liveness=liveness,
         ):
             return None
         if _is_recovery_exit(repo, effect_operation_id) and not broker.bind_latest_recovery_bar(
@@ -1658,7 +1604,6 @@ async def _submit_reducing_order(
                 effect_operation_id=effect_operation_id,
                 reducing=reducing,
                 why="Shadow recovery has no retained source bar in its send session; no order was sent.",
-                pricing=pricing,
             )
             return None
         _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")
@@ -1688,7 +1633,6 @@ async def _submit_reducing_order(
                 effect_operation_id=effect_operation_id,
                 reducing=reducing,
                 why=failed_why,
-                pricing=pricing,
             )
         )
         return
@@ -1716,7 +1660,7 @@ async def _submit_reducing_order(
 
 def _fold_market_hold(
     repo: ClerkSqliteRepository, effect_operation_id: str, order_ref: str,
-    symbol: str, hold: LegRefusal, pricing: RecoveryPricing,
+    symbol: str, hold: LegRefusal,
 ) -> None:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -1725,16 +1669,7 @@ def _fold_market_hold(
         symbol=symbol, attributed_qty=repo.position(effect.strategy_instance_id, symbol),
         summary_code=hold.reason_code, reason=hold.explanation,
         headline="Exit on hold; the position is still open", explanation=hold.explanation,
-        next_step=hold.next_step, pricing=pricing,
-    )
-    episode = repo.active_uncertainty(
-        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
-        strategy_instance_id=effect.strategy_instance_id,
-    )
-    assert episode is not None
-    observe_exit_recovery(
-        repo, strategy_instance_id=effect.strategy_instance_id,
-        uncertainty_id=episode["uncertainty_id"], outcome="hold", reason_code=hold.reason_code,
+        next_step=hold.next_step,
     )
 
 
@@ -1744,7 +1679,6 @@ def _fold_submit_refused(
     effect_operation_id: str,
     reducing: OrderResource,
     why: str,
-    pricing: RecoveryPricing,
 ) -> None:
     """The broker refused the reducing order outright (a 4xx): fail the EXIT, and tell the operator.
 
@@ -1784,7 +1718,6 @@ def _fold_submit_refused(
             "held. The broker's reason is on the order's evidence."
         ),
         next_step=_REDRIVE_NEXT_STEP,
-        pricing=pricing,
     )
 
 
@@ -1833,6 +1766,7 @@ def _append_order_phase(
     effect_operation_id: str,
     order: OrderResource,
     transition_kind: str,
+    *, cancel_reason: str | None = None,
 ) -> None:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -1850,8 +1784,8 @@ def _append_order_phase(
             execution_authority="ACCOUNT_CLERK",
             operation_state=effect.state,
             clerk_observed_at_ms=repo.clock(),
-            summary_code=transition_kind,
-            facts_json=canonicalize({}),
+            summary_code=cancel_reason or transition_kind,
+            facts_json=OrderCancelRequestedFacts(cancel_reason).to_facts_json() if cancel_reason else canonicalize({}),
         )
     )
 
@@ -1861,9 +1795,10 @@ def _append_order_phase_once(
     effect_operation_id: str,
     order: OrderResource,
     transition_kind: str,
+    *, cancel_reason: str | None = None,
 ) -> None:
     if not repo.has_order_transition(order_ref=order.order_ref, transition_kind=transition_kind):
-        _append_order_phase(repo, effect_operation_id, order, transition_kind)
+        _append_order_phase(repo, effect_operation_id, order, transition_kind, cancel_reason=cancel_reason)
 
 
 def _fold_attributed_flat(repo: ClerkSqliteRepository, effect_operation_id: str, order_ref: str) -> None:

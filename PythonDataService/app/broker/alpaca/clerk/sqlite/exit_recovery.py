@@ -1,17 +1,14 @@
-"""Durable exit-recovery observations, independent of the uncertainty's age gate.
+"""Explicit recovery outcomes and durable failure-budget accounting.
 
-Only adjacent failure observations in the same regular session and writer
-generation spend the failure-time budget. Gaps longer than two normal sweep
-intervals are unobserved time, not proof that a failure kept happening.
+Decision changes belong in the custody journal. Successful-pass freshness is
+replaceable operational evidence, so a weekend hold does not grow that journal.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, field
-from typing import Literal
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from typing import Any, Literal
 
 from app.broker.alpaca.clerk.sqlite.facts import ExitRecoveryEvaluatedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -19,130 +16,108 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
 from app.services.session_authority import session_state_at_ms
 
-RECOVERY_OBSERVATION_MAX_GAP_MS = 30_000
-"""Observation continuity bound: two normal 15-second sweep intervals.
-
-A slower or stalled sweep may still recover orders, but cannot retrospectively
-spend an escalation budget over time it did not observe.
-"""
+DEFAULT_RECOVERY_INTERVAL_MS = 15_000
 
 
-@dataclass
-class RecoveryEvaluationBatch:
-    repository: ClerkSqliteRepository
-    observations: dict[str, ExitRecoveryEvaluatedFacts] = field(default_factory=dict)
-    escalations: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
+@dataclass(frozen=True)
+class RecoveryResult:
+    """A decided outcome; persistence never changes failure into hold."""
 
-    def commit(self) -> None:
-        for sid, facts in self.observations.items():
-            episode = self.repository.active_uncertainty(
-                scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=sid,
-            )
-            if episode is not None and episode["uncertainty_id"] == facts.uncertainty_id:
-                _append_observation(self.repository, sid, facts)
-
-
-_EVALUATION_BATCH: ContextVar[RecoveryEvaluationBatch | None] = ContextVar("exit_recovery_batch", default=None)
-
-
-@contextmanager
-def collect_recovery_evaluations(repo: ClerkSqliteRepository) -> Iterator[RecoveryEvaluationBatch]:
-    """Only a pass with fresh final broker evidence commits checks or escalation.
-
-    Broker commands retain their own durable facts throughout. This buffer
-    contains only recovery observations, so an incomplete pass cannot spend
-    failure time or make its last successful check appear newer.
-    """
-    batch = RecoveryEvaluationBatch(repo)
-    token = _EVALUATION_BATCH.set(batch)
-    try:
-        yield batch
-    finally:
-        _EVALUATION_BATCH.reset(token)
-
-
-def defer_recovery_escalation(repo: ClerkSqliteRepository, escalate: Callable[[], Awaitable[None]]) -> bool:
-    batch = _EVALUATION_BATCH.get()
-    if batch is None or batch.repository is not repo:
-        return False
-    batch.escalations.append(escalate)
-    return True
+    outcome: Literal["failure", "hold", "accepted"]
+    reason_code: str
+    explanation: str
+    allowed_from_ms: int | None = None
 
 
 def latest_exit_recovery(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, uncertainty_id: str,
 ) -> ExitRecoveryEvaluatedFacts | None:
+    checkpoint = repo.recovery_check(strategy_instance_id)
     row = repo.last_strategy_transition(
         strategy_instance_id=strategy_instance_id, transition_kind="EXIT_RECOVERY_EVALUATED",
     )
     if row is None:
         return None
     facts = ExitRecoveryEvaluatedFacts.from_facts_json(row["facts_json"])
-    return facts if facts.uncertainty_id == uncertainty_id else None
+    if facts.uncertainty_id != uncertainty_id:
+        return None
+    return recovery_with_freshness(facts, checkpoint)
 
 
-def observe_exit_recovery(
+def recovery_with_freshness(
+    facts: ExitRecoveryEvaluatedFacts, checkpoint: Mapping[str, Any] | None,
+) -> ExitRecoveryEvaluatedFacts:
+    """Use same-episode pass freshness without replacing the journal's decision."""
+    if checkpoint is not None and checkpoint["uncertainty_id"] == facts.uncertainty_id and (
+        facts.last_checked_at_ms is None or checkpoint["completed_at_ms"] >= facts.last_checked_at_ms
+    ):
+        return replace(facts, last_checked_at_ms=checkpoint["last_checked_at_ms"], lease_owner=checkpoint["lease_owner"])
+    return facts
+
+
+
+def record_exit_recovery(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, uncertainty_id: str,
-    outcome: Literal["failure", "hold", "accepted"], reason_code: str,
-    checked: bool = True, allowed_from_ms: int | None = None, explanation: str = "",
+    result: RecoveryResult, evaluated_at_ms: int, pass_started_at_ms: int,
+    interval_ms: int = DEFAULT_RECOVERY_INTERVAL_MS,
 ) -> ExitRecoveryEvaluatedFacts | None:
-    """Record under intake; a failed pass pauses without inventing a watchdog check."""
+    """Commit one result only after the caller proves its complete pass succeeded."""
     episode = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=strategy_instance_id,
     )
     if episode is None or episode["uncertainty_id"] != uncertainty_id:
         return None
-    now_ms = repo.clock()
-    session = session_state_at_ms(now_ms=now_ms)
-    if outcome == "failure" and session.phase != "RTH":
-        outcome = "hold"
     previous = latest_exit_recovery(
         repo, strategy_instance_id=strategy_instance_id, uncertainty_id=uncertainty_id,
     )
-    batch = _EVALUATION_BATCH.get()
-    if batch is not None and batch.repository is repo:
-        if checked:
-            pending = batch.observations.get(strategy_instance_id)
-            if pending is not None and pending.uncertainty_id == uncertainty_id:
-                previous = pending
-        else:
-            batch.observations.pop(strategy_instance_id, None)
+    checkpoint = repo.recovery_check(strategy_instance_id)
     elapsed = 0 if previous is None else previous.failure_elapsed_ms
     first_failure = None if previous is None else previous.first_failure_at_ms
-    if outcome == "accepted":
+    if result.outcome == "accepted":
         elapsed, first_failure = 0, None
-    elif outcome == "failure":
+    elif result.outcome == "failure":
         if first_failure is None:
-            first_failure = now_ms
+            first_failure = evaluated_at_ms
         if (
             previous is not None and previous.outcome == "failure"
             and previous.lease_owner == repo.lease_owner and previous.last_checked_at_ms is not None
+            and checkpoint is not None
+            and 0 <= pass_started_at_ms - checkpoint["completed_at_ms"] <= 2 * interval_ms
         ):
-            delta = now_ms - previous.last_checked_at_ms
-            if 0 <= delta <= RECOVERY_OBSERVATION_MAX_GAP_MS:
-                prior_session = session_state_at_ms(now_ms=previous.last_checked_at_ms)
-                if prior_session.phase == "RTH" and prior_session.next_transition_ms == session.next_transition_ms:
-                    elapsed += delta
+            prior_session = session_state_at_ms(now_ms=previous.last_checked_at_ms)
+            session = session_state_at_ms(now_ms=evaluated_at_ms)
+            if prior_session.phase == session.phase == "RTH" and prior_session.next_transition_ms == session.next_transition_ms:
+                # The real cadence plus this observed pass bounds continuity.
+                # A slow successful pass progresses; an idle/downtime gap does not.
+                elapsed += min(
+                    max(0, evaluated_at_ms - previous.last_checked_at_ms),
+                    2 * interval_ms + max(0, evaluated_at_ms - pass_started_at_ms),
+                )
     facts = ExitRecoveryEvaluatedFacts(
-        uncertainty_id=uncertainty_id, outcome=outcome, reason_code=reason_code,
-        last_checked_at_ms=now_ms if checked else (None if previous is None else previous.last_checked_at_ms),
-        first_failure_at_ms=first_failure,
+        uncertainty_id=uncertainty_id, outcome=result.outcome, reason_code=result.reason_code,
+        last_checked_at_ms=evaluated_at_ms, first_failure_at_ms=first_failure,
         failure_elapsed_ms=elapsed, lease_owner=repo.lease_owner,
-        allowed_from_ms=allowed_from_ms, explanation=explanation,
+        allowed_from_ms=result.allowed_from_ms, explanation=result.explanation,
     )
-    if facts != previous:
-        if checked and batch is not None and batch.repository is repo:
-            batch.observations[strategy_instance_id] = facts
-        else:
-            _append_observation(repo, strategy_instance_id, facts)
+    _append_changed_decision(repo, strategy_instance_id, facts, previous)
+    repo.record_recovery_check(
+        strategy_instance_id=strategy_instance_id, uncertainty_id=uncertainty_id, last_checked_at_ms=facts.last_checked_at_ms,
+        completed_at_ms=repo.clock(), interval_ms=interval_ms,
+    )
     return facts
 
 
-def _append_observation(repo: ClerkSqliteRepository, sid: str, facts: ExitRecoveryEvaluatedFacts) -> None:
+def _append_changed_decision(
+    repo: ClerkSqliteRepository, sid: str, facts: ExitRecoveryEvaluatedFacts,
+    previous: ExitRecoveryEvaluatedFacts | None,
+) -> None:
+    if previous is not None and replace(
+        facts, last_checked_at_ms=previous.last_checked_at_ms, lease_owner=previous.lease_owner,
+    ) == previous:
+        return
     repo.append_transition(TransitionInput(
-        strategy_instance_id=sid,
-        transition_kind="EXIT_RECOVERY_EVALUATED", custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=sid, transition_kind="EXIT_RECOVERY_EVALUATED", custody_owner="ACCOUNT_CLERK",
         execution_authority="ACCOUNT_CLERK", operation_state="succeeded",
         clerk_observed_at_ms=repo.clock(), summary_code=facts.reason_code,
         proof_reference=facts.uncertainty_id, facts_json=facts.to_facts_json(),
@@ -150,15 +125,24 @@ def _append_observation(repo: ClerkSqliteRepository, sid: str, facts: ExitRecove
 
 
 def pause_exit_recovery(repo: ClerkSqliteRepository, *, reason_code: str) -> None:
-    """An unsuccessful pass breaks observation continuity without spending time."""
+    """A failed pass breaks continuity, retaining its last successful check."""
     for instance in repo.strategy_instances():
         sid = instance["strategy_instance_id"]
         episode = repo.active_uncertainty(
-            scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
-            strategy_instance_id=sid,
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=sid,
         )
-        if episode is not None:
-            observe_exit_recovery(
-                repo, strategy_instance_id=sid, uncertainty_id=episode["uncertainty_id"],
-                outcome="hold", reason_code=reason_code, checked=False,
-            )
+        if episode is None:
+            continue
+        previous = latest_exit_recovery(repo, strategy_instance_id=sid, uncertainty_id=episode["uncertainty_id"])
+        facts = ExitRecoveryEvaluatedFacts(
+            uncertainty_id=episode["uncertainty_id"], outcome="hold", reason_code=reason_code,
+            last_checked_at_ms=None if previous is None else previous.last_checked_at_ms,
+            first_failure_at_ms=None if previous is None else previous.first_failure_at_ms,
+            failure_elapsed_ms=0 if previous is None else previous.failure_elapsed_ms,
+            lease_owner=repo.lease_owner,
+        )
+        _append_changed_decision(repo, sid, facts, previous)
+        repo.record_recovery_check(
+            strategy_instance_id=sid, uncertainty_id=facts.uncertainty_id, last_checked_at_ms=facts.last_checked_at_ms,
+            completed_at_ms=repo.clock(), interval_ms=DEFAULT_RECOVERY_INTERVAL_MS,
+        )

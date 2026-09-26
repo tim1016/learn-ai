@@ -53,6 +53,20 @@ FACTS_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
+class OrderCancelRequestedFacts:
+    """Why this exact order is being canceled; legacy markers may omit it."""
+
+    reason_code: str = "EXIT_ENTRY_TERMINAL_PROOF"
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderCancelRequestedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class ExitRecoveryEvaluatedFacts:
     """One episode's observed recovery outcome and durable failure-time budget."""
 
@@ -332,6 +346,11 @@ class ExitAcceptedFacts:
     reference_bid: float | None = None
     reference_ask: float | None = None
     reference_quote_observed_at_ms: int | None = None
+
+    @property
+    def operator_priced(self) -> bool:
+        """Only an operator-confirmed shape carries quantity without a Clerk price stamp."""
+        return self.reducing_confirmed_quantity is not None and self.reducing_priced_by is None
 
     def with_reducing_shape(
         self,

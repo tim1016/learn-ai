@@ -341,17 +341,57 @@ def evaluate_run_admission(
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
     # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
     extended_refusal = bot.extended_hours.refusal
-    if (
-        isinstance(bot, ResumeRunFacts)
-        and clerk.exposure.state == "non_zero"
-        and not bot.exposure_carryover_supported
-    ):
-        return decide(
-            allowed=False,
-            reason_code="RESUME_CARRYOVER_UNSUPPORTED",
-            explanation="This bot still holds a position and cannot carry it into another run.",
-            next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+    if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
+        if not bot.exposure_carryover_supported:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CARRYOVER_UNSUPPORTED",
+                explanation="This strategy cannot safely restore its prior open-position lifecycle.",
+                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+            )
+        if bot.carryover_policy != "ALLOW" or not bot.carryover_account_policy_enabled:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CARRYOVER_NOT_ALLOWED",
+                explanation=(
+                    "The stopped exposure is not approved by both the immutable instance and account policy."
+                ),
+                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+            )
+        checkpoint = bot.checkpoint
+        if checkpoint is None or not checkpoint.approved:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CHECKPOINT_MISSING",
+                explanation="No approved terminal STOP checkpoint proves this carried exposure.",
+                next_step="Flatten the attributed exposure or restore the approved STOP checkpoint.",
+            )
+        matches = (
+            checkpoint.account_id == clerk.account_id
+            and checkpoint.stopped_run_id == bot.prior_run_id
+            and checkpoint.configuration_hash == bot.configuration_hash
+            and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
         )
+        if not matches:
+            logger.warning(
+                "Resume checkpoint custody does not match current Clerk exposure",
+                extra={
+                    "action": "resume_checkpoint_mismatch",
+                    "strategy_instance_id": bot.strategy_instance_id,
+                    "checkpoint_exposure": checkpoint.exposure,
+                    "clerk_exposure": clerk.exposure.positions,
+                },
+            )
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CHECKPOINT_MISMATCH",
+                explanation=(
+                    "The carryover custody proof changed: account, prior run, "
+                    "configuration, or Clerk-attributed exposure no longer matches STOP."
+                ),
+                next_step="Reconcile and flatten rather than adopting changed custody.",
+            )
+
     if extended_refusal is not None:
         return decide(
             allowed=False,
@@ -446,56 +486,6 @@ def evaluate_run_admission(
                 explanation=f"The Clerk proves that unresolved {remaining} remain.",
                 next_step=f"Resolve the remaining Clerk work before {bot.operation.title()}.",
             )
-        if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
-            if not bot.exposure_carryover_supported:
-                return decide(
-                    allowed=False,
-                    reason_code="RESUME_CARRYOVER_UNSUPPORTED",
-                    explanation="This strategy cannot safely restore its prior open-position lifecycle.",
-                    next_step="Flatten the exact Clerk-attributed exposure before Resume.",
-                )
-            if bot.carryover_policy != "ALLOW" or not bot.carryover_account_policy_enabled:
-                return decide(
-                    allowed=False,
-                    reason_code="RESUME_CARRYOVER_NOT_ALLOWED",
-                    explanation=(
-                        "The stopped exposure is not approved by both the immutable instance and account policy."
-                    ),
-                    next_step="Flatten the exact Clerk-attributed exposure before Resume.",
-                )
-            checkpoint = bot.checkpoint
-            if checkpoint is None or not checkpoint.approved:
-                return decide(
-                    allowed=False,
-                    reason_code="RESUME_CHECKPOINT_MISSING",
-                    explanation="No approved terminal STOP checkpoint proves this carried exposure.",
-                    next_step="Flatten the attributed exposure or restore the approved STOP checkpoint.",
-                )
-            matches = (
-                checkpoint.account_id == clerk.account_id
-                and checkpoint.stopped_run_id == bot.prior_run_id
-                and checkpoint.configuration_hash == bot.configuration_hash
-                and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
-            )
-            if not matches:
-                logger.warning(
-                    "Resume checkpoint custody does not match current Clerk exposure",
-                    extra={
-                        "action": "resume_checkpoint_mismatch",
-                        "strategy_instance_id": bot.strategy_instance_id,
-                        "checkpoint_exposure": checkpoint.exposure,
-                        "clerk_exposure": clerk.exposure.positions,
-                    },
-                )
-                return decide(
-                    allowed=False,
-                    reason_code="RESUME_CHECKPOINT_MISMATCH",
-                    explanation=(
-                        "The carryover custody proof changed: account, prior run, "
-                        "configuration, or Clerk-attributed exposure no longer matches STOP."
-                    ),
-                    next_step="Reconcile and flatten rather than adopting changed custody.",
-                )
     return decide(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",

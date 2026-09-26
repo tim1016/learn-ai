@@ -245,16 +245,7 @@ class ProjectedUncertaintyResponse(BaseModel):
     observed_at_ms: int
     evidence_age_ms: int
     evidence_refs: tuple[str, ...]
-    # Earliest session eligibility for automatic recovery (int64 ms UTC).
-    # No time while an exit works or automatic recovery has stopped.
-    # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    # An exit for this strategy is in progress, so no automatic attempt is
-    # due while it works (#2440 review).
-    exit_working: bool = False
-    # The episode's recorded facts could not be read: its next attempt is
-    # unknown, not unscheduled (#2440 review). The row itself still projects.
-    facts_unreadable: bool = False
+    # The one observed recovery status shared across operator surfaces.
     recovery_status: RecoveryStatusResponse | None = None
 
 
@@ -362,9 +353,6 @@ class ProjectionGuidanceResponse(BaseModel):
     next_step: str
     # The primary episode's next automatic attempt, as its uncertainty
     # projects it (#2440).
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    exit_working: bool = False
-    facts_unreadable: bool = False
     recovery_status: RecoveryStatusResponse | None = None
 
 

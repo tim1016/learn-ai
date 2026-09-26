@@ -169,7 +169,7 @@ describe('BotTriageDetailComponent', () => {
 
   it.each([
     [{ recovery_status: { kind: 'working' as const, reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' } }, 'An exit is in progress.'],
-    [{ facts_unreadable: true }, "Recovery status is unknown; this notice's record could not be read."],
+    [{ recovery_status: { kind: 'unknown' as const, reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." } }, "Recovery status is unknown; this notice's record could not be read."],
   ])('says what the desk says when the verdict carries no time (%o) (#2440 review)', async (facts, text) => {
     await renderDetail(
       fakeBotPanelView({
@@ -179,7 +179,7 @@ describe('BotTriageDetailComponent', () => {
           explanation: '10 SPY is still held: this exit could not go out after its session ended.',
           next_action: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
           evaluated_at_ms: 1_700_000_001_000,
-          next_attempt_at_ms: null,
+
           ...facts,
         },
       }),

@@ -8,7 +8,6 @@ from typing import Literal, NoReturn, cast
 
 import pytest
 
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -221,7 +220,7 @@ def _recovery_action(
     repo: ClerkSqliteRepository,
 ) -> tuple[RecoveryPolicyContext, RecoveryCapability]:
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -247,7 +246,7 @@ def test_timeline_filters_bind_one_historical_conflict_and_cursor_scope(tmp_path
         ).fetchone()
         assert row is not None
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             by_bot = reader.timeline_page(strategy_instance_id=SID)
@@ -315,7 +314,7 @@ def test_timeline_uncertainty_filter_includes_refreshed_episode(tmp_path: Path) 
             cause_facts=cause,
         ) != "unchanged"
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             page = reader.timeline_page(uncertainty_id=uncertainty_id)
@@ -398,7 +397,7 @@ async def test_timeline_execution_filter_includes_a_correction_of_that_execution
         ).fetchone()
         assert correction_row is not None
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             page = reader.timeline_page(execution_id=EXECUTION_ID)
@@ -459,7 +458,7 @@ async def test_historical_exact_execution_recovery_prepares_confirms_and_replays
         ]
         assert repo.position(SID, "SPY") == pytest.approx(5.0, abs=1e-9, rel=0)
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             refreshed = reader.recovery_context(strategy_instance_id=SID)

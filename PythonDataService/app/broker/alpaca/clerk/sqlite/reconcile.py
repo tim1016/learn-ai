@@ -12,10 +12,12 @@ from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
-from app.broker.alpaca.clerk.sqlite.exit_recovery import collect_recovery_evaluations, pause_exit_recovery
+from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS, pause_exit_recovery
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolReader,
     BrokerSymbolView,
+    RecoveryEvaluation,
+    commit_recovery_evaluations,
     redrive_or_escalate_stale_exits,
 )
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
@@ -879,6 +881,7 @@ async def reconcile_account(
     intake: ReentrantAsyncLock | None = None,
     pricing: RecoveryPricing,
     run_ownership: RunOwnership | None = None,
+    recovery_interval_ms: int = DEFAULT_RECOVERY_INTERVAL_MS,
 ) -> AccountReconciliationResult:
     """Serialize snapshot-to-verdict passes for one live account authority.
 
@@ -916,20 +919,17 @@ async def reconcile_account(
 
         try:
             await _under_intake(intake, _begin)
-            with collect_recovery_evaluations(repo) as recovery_checks:
-                result = await _reconcile_account_serialized(
-                    repo,
-                    read=read,
-                    trade=trade,
-                    trigger=trigger,
-                    intake=intake,
-                    pricing=pricing,
-                    run_ownership=run_ownership,
-                )
+            pass_started_at_ms = repo.clock()
+            recovery_checks: list[RecoveryEvaluation] = []
+            result = await _reconcile_account_serialized(
+                repo, read=read, trade=trade, trigger=trigger, intake=intake,
+                pricing=pricing, run_ownership=run_ownership, recovery_checks=recovery_checks,
+            )
             if result.verdict != "stale":
-                await _under_intake(intake, recovery_checks.commit)
-                for escalate in recovery_checks.escalations:
-                    await escalate()
+                await _under_intake(
+                    intake, commit_recovery_evaluations, repo, recovery_checks,
+                    pass_started_at_ms=pass_started_at_ms, interval_ms=recovery_interval_ms,
+                )
         except asyncio.CancelledError:
             if began:
                 await asyncio.shield(
@@ -1028,6 +1028,7 @@ async def _reconcile_account_serialized(
     trigger: Trigger,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
+    recovery_checks: list[RecoveryEvaluation],
     run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""
@@ -1075,7 +1076,7 @@ async def _reconcile_account_serialized(
 
     # The re-drive is sized from attribution, so it may only send what this
     # pass's broker snapshot agrees with, with nothing working on the symbol (#2343).
-    await redrive_or_escalate_stale_exits(
+    recovery_checks.extend(await redrive_or_escalate_stale_exits(
         repo,
         trade=trade,
         intake=intake,
@@ -1084,7 +1085,7 @@ async def _reconcile_account_serialized(
         ),
         pricing=pricing,
         off_loop=to_thread,
-    )
+    ))
 
     # A run whose in-process runner is gone is retired first (#2369), so the
     # step below also cancels the ENTERs of a runner that ended without

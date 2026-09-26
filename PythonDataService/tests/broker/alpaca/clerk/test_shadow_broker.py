@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SYNTHESIZED_ORDER_LEDGER_FILENAME,
     SynthesizedOrderLedger,
 )
+from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerClockEvidence,
@@ -408,6 +409,7 @@ async def test_a_bar_retained_by_another_instance_cannot_be_bound(
     with pytest.raises(ShadowFillBindingError) as refused:
         ports.trade.bind_evaluated_bar(f"{NAMESPACE}:steal", stolen)
 
+    assert not isinstance(refused.value, BrokerError)
     assert "shadow-evidence:some-other-bot" in str(refused.value)
     assert EVIDENCE in str(refused.value)
     other.close()

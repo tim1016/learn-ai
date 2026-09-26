@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.v2panel.vocabulary import copy_for, duty_outcome_copy_key
+from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
 
@@ -106,7 +107,7 @@ def _lifecycle_needs_attention(status: BotStatusView) -> bool:
     eye even though the rollup's decision heuristic knows nothing about it.
     """
     outcome = status.duty_outcome
-    return outcome is not None and outcome.kind in ("CRASHED", "EXITED_UNVERIFIED")
+    return outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES
 
 
 def status_explanation_for(status: BotStatusView, rollup: CatalogEconomicRollup) -> str:

@@ -151,7 +151,6 @@ class BotCatalogView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    exposure_notices: list[ExposureNoticeView] = Field(default_factory=list)
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str
@@ -435,9 +434,6 @@ class MissionVerdictView(BaseModel):
     # Earliest session eligibility for automatic recovery (int64 ms UTC).
     # No time while an exit works or automatic recovery has stopped.
     # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    exit_working: bool = False
-    facts_unreadable: bool = False
     recovery_status: RecoveryStatusResponse | None = None
 
 
@@ -1182,9 +1178,6 @@ class LaneAttentionItem(BaseModel):
     # Earliest session eligibility for automatic recovery (int64 ms UTC).
     # No time while an exit works or automatic recovery has stopped.
     # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    exit_working: bool = False
-    facts_unreadable: bool = False
     recovery_status: RecoveryStatusResponse | None = None
 
 

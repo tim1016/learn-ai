@@ -9394,8 +9394,6 @@ export interface components {
             exposure: {
                 [key: string]: number;
             };
-            /** Exposure Notices */
-            exposure_notices?: components["schemas"]["ExposureNoticeView"][];
             /** Fills Today */
             fills_today: number | null;
             /** Last Activity At Ms */
@@ -17242,16 +17240,6 @@ export interface components {
             action_label?: string;
             /** Condition Id */
             condition_id: string;
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /**
@@ -17259,8 +17247,6 @@ export interface components {
              * @default uncertainty
              */
             kind?: string;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             /** Reason Code */
             reason_code: string;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
@@ -18810,24 +18796,12 @@ export interface components {
         MissionVerdictView: {
             /** Evaluated At Ms */
             evaluated_at_ms: number;
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
             /** Explanation */
             explanation: string;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Label */
             label: string;
             /** Next Action */
             next_action: string | null;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * State
@@ -20168,8 +20142,8 @@ export interface components {
          *     regular-hours run's EXIT on the day's last bar goes out after the close
          *     as such a limit, so Start of a regular-hours run refuses
          *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
-         *     Resume of a flat run; a run still holding a position always resumes
-         *     (#2440, owner decisions 2026-09-25).
+         *     Resume. A held position must pass the carry-over and checkpoint gates;
+         *     unsupported carry-over requires Flatten before Resume (#2504).
          *
          *     Paper only, and only the two: a live revision carries its pair inside
          *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
@@ -20852,22 +20826,10 @@ export interface components {
             evidence_age_ms: number;
             /** Evidence Refs */
             evidence_refs: string[];
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
             /** Explanation */
             explanation: string;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             /** Next Step */
             next_step: string;
             /** Observed At Ms */
@@ -20897,26 +20859,14 @@ export interface components {
             available_safety_actions: string[];
             /** Custody Owner */
             custody_owner: string;
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
             /** Explanation */
             explanation: string;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /** Impact */
             impact: string;
             /** May Create Exposure */
             may_create_exposure: boolean;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             /** Next Step */
             next_step: string;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;

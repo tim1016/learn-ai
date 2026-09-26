@@ -59,6 +59,8 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     FillPage,
     FillWindowProjection,
     MarketMark,
+    MissingExitExecutionEvidence,
+    OrderDecisionIdentity,
     SessionEconomicProjection,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, RunResource
@@ -440,44 +442,40 @@ class SqliteEconomicProjectionReader:
                 )
             )
 
-    def missing_exit_execution_evidence(
-        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
-    ) -> tuple[str, ...]:
-        """Read canceled shadow EXITs with an explicitly unwitnessed fill window.
-
-        The synthesized WAL owns execution provenance; SQLite owns which orders
-        reduce this instance. Historical orders without the new fact stay unknown.
-        """
-        from app.broker.alpaca.clerk.synthesized_orders import (
-            SYNTHESIZED_ORDER_LEDGER_FILENAME,
-            SynthesizedOrderRecord,
-        )
-        from app.services.jsonl_wal import JsonlWal
-
+    def order_decisions(self, strategy_instance_id: str) -> dict[str, OrderDecisionIdentity]:
+        """Semantic program decisions shared by twins; never correlate opaque order ids."""
         with self._read_transaction():
             self._verify_identity()
-            refs = {row[0] for row in self._conn.execute(
-                "SELECT o.client_order_id FROM orders o JOIN effect_operations e "
-                "ON e.effect_operation_id = o.effect_operation_id "
-                "WHERE e.strategy_instance_id = ? AND o.role = 'REDUCING'",
-                (strategy_instance_id,),
-            )}
-        if not refs:
+            rows = self._conn.execute(
+                "SELECT o.order_ref, e.kind, t.facts_json FROM orders o "
+                "JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
+                "JOIN custody_transitions t ON t.effect_operation_id=e.effect_operation_id "
+                "AND t.transition_kind IN ('ENTER_ACCEPTED', 'EXIT_ACCEPTED') "
+                "WHERE e.strategy_instance_id = ?", (strategy_instance_id,),
+            ).fetchall()
+        return {row["order_ref"]: OrderDecisionIdentity(row["kind"], json.loads(row["facts_json"])["decision_id"]) for row in rows}
+
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[MissingExitExecutionEvidence, ...]:
+        """Canceled shadow EXITs whose own execution window was unwitnessed."""
+        from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
+
+        decisions = self.order_decisions(strategy_instance_id)
+        if not decisions:
             return ()
-        wal = JsonlWal(
-            self._db_path.parent / SYNTHESIZED_ORDER_LEDGER_FILENAME,
-            record_model=SynthesizedOrderRecord, seq_of=lambda row: row.seq,
-            corrupt_error=lambda path, detail: EconomicProjectionUnavailable(
-                f"Shadow execution evidence is unreadable at {path}: {detail}"
-            ), label="shadow_execution_evidence", trusted_root=self._db_path.parent,
-        )
-        latest = {row.order.client_order_id: row for row in wal.read_all()}
-        return tuple(sorted(
-            ref for ref in refs if (row := latest.get(ref)) is not None
+        try:
+            latest = SynthesizedOrderLedger.read_latest_beside_database(account_id=self._account_id, db_path=self._db_path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise EconomicProjectionUnavailable(f"Shadow execution evidence is unreadable: {exc}") from exc
+        return tuple(
+            MissingExitExecutionEvidence(ref, decision.decision_id, row.order.symbol, str(row.order.side), row.order.quantity)
+            for ref, decision in sorted(decisions.items()) if decision.kind == "EXIT"
+            and (row := latest.get(ref)) is not None
             and row.order.status == "canceled" and row.anchor is not None
             and row.anchor.unfilled_reason == "no_evidence"
             and from_ms <= row.anchor.decision_bar_end_ms < to_ms
-        ))
+        )
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         """Every run the authority recorded for one instance, oldest first."""

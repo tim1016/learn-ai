@@ -125,8 +125,8 @@ class PaperXhAllowancesPayload(BaseModel):
     regular-hours run's EXIT on the day's last bar goes out after the close
     as such a limit, so Start of a regular-hours run refuses
     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
-    Resume of a flat run; a run still holding a position always resumes
-    (#2440, owner decisions 2026-09-25).
+    Resume. A held position must pass the carry-over and checkpoint gates;
+    unsupported carry-over requires Flatten before Resume (#2504).
 
     Paper only, and only the two: a live revision carries its pair inside
     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only

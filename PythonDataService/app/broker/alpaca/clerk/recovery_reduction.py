@@ -65,7 +65,7 @@ from app.broker.alpaca.marketable_limit import (
 )
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import MarketLivenessFact, TopOfBookQuote
-from app.services.market_liveness import MARKET_CLOCK_MAX_AGE_MS
+from app.services.market_liveness import compose_market_liveness
 from app.services.session_authority import (
     TRADEABLE_EXTENDED_PHASES,
     SessionAuthorityState,
@@ -517,7 +517,10 @@ class PricingSnapshot:
     market_liveness: MarketLivenessFact | None = None
 
     def hold(self, now_ms: int) -> LegRefusal | None:
-        return reduction_market_hold(now_ms=now_ms, fact=self.market_liveness)
+        verdict = reducing_send_verdict(
+            now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=self.market_liveness,
+        )
+        return verdict if isinstance(verdict, LegRefusal) else None
 
     @property
     def quote_spread_bps(self) -> float | None:
@@ -556,12 +559,16 @@ class RecoveryPricing:
     liveness_source: LivenessSource | None = None
     instance_policy_source: Callable[[str], ProgramLegPolicy] | None = None
 
+    def policy_for(self, strategy_instance_id: str | None) -> ProgramLegPolicy:
+        """Resolve the bot's sealed terms for both eligibility and pricing."""
+        return (self.instance_policy_source(strategy_instance_id)
+                if self.instance_policy_source is not None and strategy_instance_id is not None
+                else self.policy_source())
+
     def read(self, symbol: str, now_ms: int, *, strategy_instance_id: str | None = None) -> PricingSnapshot:
         """Resolve the policy and read the live touch for ``symbol`` — on the event loop."""
         return PricingSnapshot(
-            policy=(self.instance_policy_source(strategy_instance_id)
-                    if self.instance_policy_source is not None and strategy_instance_id is not None
-                    else self.policy_source()), quote=self.quote_source(symbol, now_ms),
+            policy=self.policy_for(strategy_instance_id), quote=self.quote_source(symbol, now_ms),
             market_liveness=self.read_liveness(symbol, now_ms),
         )
 
@@ -588,12 +595,14 @@ def reduction_market_hold(*, now_ms: int, fact: MarketLivenessFact | None) -> Le
             explanation="IBKR reports this symbol halted; the Clerk is holding the Alpaca exit.",
             next_step="The Clerk will check again when the halt is explicitly cleared.",
         )
-    clock = fact.market_clock
-    if (
-        clock.state == "CLOSED"
-        and 0 <= now_ms - clock.observed_at_ms <= MARKET_CLOCK_MAX_AGE_MS
-        and regular_session_open(now_ms)
-    ):
+    # Compose the market-wide evidence with the canonical freshness rule.
+    # Unknown per-symbol status does not veto a reducing order; the retained
+    # positive halt above does. IBKR is evidence only; execution stays Alpaca.
+    clock_fact = compose_market_liveness(
+        fact.symbol, now_ms=now_ms, market_clock=fact.market_clock,
+        connected=True, connection_changed_at_ms=fact.observed_at_ms, symbol_status=None,
+    )
+    if clock_fact.state == "CLOSED" and regular_session_open(now_ms):
         return LegRefusal(
             reason_code="EXIT_EMERGENCY_CLOSE",
             explanation="The live market clock reports closed during the scheduled regular session.",
@@ -691,6 +700,21 @@ def price_automatic_recovery_reduction(
         reference_quote=proposal.quote,
         quantity=abs(quantity),
         priced_by="clerk",
+    )
+
+
+def reducing_send_verdict(
+    *, extended_hours: bool, valid_until_ms: int | None, now_ms: int,
+    liveness: MarketLivenessFact | None,
+) -> ReducingLegVerdict | LegRefusal:
+    """One EXIT send verdict: calendar eligibility plus positive live holds.
+
+    Unknown/stale evidence falls back to the canonical calendar; an explicit
+    retained halt survives reconnects until cleared (ADR 0067).
+    """
+    hold = reduction_market_hold(now_ms=now_ms, fact=liveness)
+    return hold if hold is not None else reducing_leg_verdict(
+        extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms,
     )
 
 

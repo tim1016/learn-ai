@@ -28,8 +28,8 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
-from app.marketdata.feed import FEED_REFUSAL_REASON_CODES
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
+from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -60,7 +60,6 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
 from app.services.session_authority import SessionAuthorityState
-from app.services.source_bar_ledger import RetainedStartupJoin
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -90,7 +89,6 @@ def adapt_sqlite_panel(
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
-    startup_join: RetainedStartupJoin | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -110,8 +108,6 @@ def adapt_sqlite_panel(
     session the generic Execute safe flatten button is not the way to flatten
     (#2007): see ``_flatten_session_blocker``.
 
-    ``startup_join`` remains accepted for callers retaining preparation evidence;
-    exposure notices now cover abnormal endings in every phase (PRD #2504).
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -354,14 +350,6 @@ def build_sqlite_catalog(
         for status in statuses
     ]
     rows = adapt_sqlite_catalog(rows, projections, economic_rollups)
-    for index, status in enumerate(statuses):
-        outcome = status.duty_outcome
-        projection = projections.get(status.strategy_instance_id)
-        if outcome is not None and projection is not None:
-            rows[index] = rows[index].model_copy(update={"exposure_notices": terminal_exposure_notices(
-                projection, sid=status.strategy_instance_id, symbol=status.symbol,
-                kind=outcome.kind, reason_code=outcome.reason_code, running=status.running,
-            )})
     return rows
 
 
@@ -676,9 +664,6 @@ def _mission_verdict(
         explanation=guidance.explanation,
         next_action=guidance.next_step,
         evaluated_at_ms=projection.generated_at_ms,
-        next_attempt_at_ms=guidance.next_attempt_at_ms,
-        exit_working=guidance.exit_working,
-        facts_unreadable=guidance.facts_unreadable,
         recovery_status=guidance.recovery_status,
     )
 
@@ -738,11 +723,7 @@ def terminal_exposure_notices(
     projection: ClerkProjection, *, sid: str, symbol: str, kind: str, reason_code: str, running: bool,
 ) -> list[ExposureNoticeView]:
     """One backend-authored warning set shared by panel, account desk and bell."""
-    if running or not (
-        kind in {"CRASHED", "FAILED_LAUNCH", "EXITED_UNVERIFIED"}
-        or reason_code in FEED_REFUSAL_REASON_CODES
-        or reason_code in {"FEED_DEATH", "DECISION_BAR_MISSED"}
-    ):
+    if running or kind not in UNCLEAN_DUTY_OUTCOMES:
         return []
     notices: list[ExposureNoticeView] = []
     if not _clerk_vouches_for_positions(projection):

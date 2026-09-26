@@ -4044,13 +4044,6 @@
             "title": "Exposure",
             "type": "object"
           },
-          "exposure_notices": {
-            "items": {
-              "$ref": "#/components/schemas/ExposureNoticeView"
-            },
-            "title": "Exposure Notices",
-            "type": "array"
-          },
           "fills_today": {
             "anyOf": [
               {
@@ -22124,16 +22117,6 @@
             "title": "Condition Id",
             "type": "string"
           },
-          "exit_working": {
-            "default": false,
-            "title": "Exit Working",
-            "type": "boolean"
-          },
-          "facts_unreadable": {
-            "default": false,
-            "title": "Facts Unreadable",
-            "type": "boolean"
-          },
           "headline": {
             "title": "Headline",
             "type": "string"
@@ -22142,19 +22125,6 @@
             "default": "uncertainty",
             "title": "Kind",
             "type": "string"
-          },
-          "next_attempt_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Attempt At Ms"
           },
           "reason_code": {
             "title": "Reason Code",
@@ -25481,19 +25451,9 @@
             "title": "Evaluated At Ms",
             "type": "integer"
           },
-          "exit_working": {
-            "default": false,
-            "title": "Exit Working",
-            "type": "boolean"
-          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
-          },
-          "facts_unreadable": {
-            "default": false,
-            "title": "Facts Unreadable",
-            "type": "boolean"
           },
           "label": {
             "title": "Label",
@@ -25509,19 +25469,6 @@
               }
             ],
             "title": "Next Action"
-          },
-          "next_attempt_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Attempt At Ms"
           },
           "recovery_status": {
             "anyOf": [
@@ -28547,7 +28494,7 @@
       },
       "PaperXhAllowancesPayload": {
         "additionalProperties": false,
-        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far from the price an extended-hours or after-close limit is placed:\nan entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the\nprice for a buy and below it for a sell (a short entry sells the entry\nallowance below; a cover buys the exit allowance above). The price is the\ndecision bar's close for a leg placed as the program decides, and the live\nbid (sell) or ask (buy) for an exit priced later \u2014 the automatic re-drive,\nor the send-time re-price of an exit sent after its session. A\nregular-hours run's EXIT on the day's last bar goes out after the close\nas such a limit, so Start of a regular-hours run refuses\n``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a\nResume of a flat run; a run still holding a position always resumes\n(#2440, owner decisions 2026-09-25).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at arming. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
+        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far from the price an extended-hours or after-close limit is placed:\nan entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the\nprice for a buy and below it for a sell (a short entry sells the entry\nallowance below; a cover buys the exit allowance above). The price is the\ndecision bar's close for a leg placed as the program decides, and the live\nbid (sell) or ask (buy) for an exit priced later \u2014 the automatic re-drive,\nor the send-time re-price of an exit sent after its session. A\nregular-hours run's EXIT on the day's last bar goes out after the close\nas such a limit, so Start of a regular-hours run refuses\n``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a\nResume. A held position must pass the carry-over and checkpoint gates;\nunsupported carry-over requires Flatten before Resume (#2504).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at arming. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
         "properties": {
           "xh_entry_bps": {
             "exclusiveMaximum": 10000.0,
@@ -30226,36 +30173,13 @@
             "title": "Evidence Refs",
             "type": "array"
           },
-          "exit_working": {
-            "default": false,
-            "title": "Exit Working",
-            "type": "boolean"
-          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
           },
-          "facts_unreadable": {
-            "default": false,
-            "title": "Facts Unreadable",
-            "type": "boolean"
-          },
           "headline": {
             "title": "Headline",
             "type": "string"
-          },
-          "next_attempt_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Attempt At Ms"
           },
           "next_step": {
             "title": "Next Step",
@@ -30348,19 +30272,9 @@
             "title": "Custody Owner",
             "type": "string"
           },
-          "exit_working": {
-            "default": false,
-            "title": "Exit Working",
-            "type": "boolean"
-          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
-          },
-          "facts_unreadable": {
-            "default": false,
-            "title": "Facts Unreadable",
-            "type": "boolean"
           },
           "headline": {
             "title": "Headline",
@@ -30373,19 +30287,6 @@
           "may_create_exposure": {
             "title": "May Create Exposure",
             "type": "boolean"
-          },
-          "next_attempt_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Attempt At Ms"
           },
           "next_step": {
             "title": "Next Step",

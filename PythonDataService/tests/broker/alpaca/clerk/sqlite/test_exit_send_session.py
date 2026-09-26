@@ -45,7 +45,8 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     priced_reduction_reference_price,
     resolve_exit,
 )
-from app.broker.alpaca.clerk.sqlite.exit_watchdog import BrokerSymbolView, redrive_or_escalate_stale_exits
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import BrokerSymbolView, commit_recovery_evaluations
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import redrive_or_escalate_stale_exits as evaluate_stale_exits
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
@@ -179,12 +180,9 @@ async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_mar
     # the truth: after-hours IS open at 16:01; this Clerk cannot price it.
     assert "cannot price an extended-hours limit automatically" in episode["explanation"]
     assert "No trading session would be open" not in episode["explanation"]
-    # The degraded seam prices nothing outside the regular session, so the
-    # watchdog's next try is the first send that lands in Thursday's open —
-    # the guard band before it (a time value, not prose).
-    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == _at(
-        9, 30, 0, day=date(2026, 9, 3)
-    )
+    # No retry time is invented by a failed send; only a completed recovery
+    # evaluation can publish eligibility.
+    assert "next_attempt_at_ms" not in json.loads(episode["facts_json"])
 
 
 @pytest.mark.parametrize(
@@ -635,7 +633,7 @@ async def test_a_limit_judged_within_the_guard_band_of_its_bound_is_not_sent(
     episode = _exit_not_flat(repo)
     assert episode is not None
     assert "No trading session would be open" in episode["explanation"]
-    assert _next_attempt_at_ms(episode) == _at(4, 0, 0, day=date(2026, 9, 3))
+    assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
 
 
 def test_the_next_redrive_is_judged_where_its_send_would_land() -> None:
@@ -659,7 +657,7 @@ def test_the_next_redrive_is_judged_where_its_send_would_land() -> None:
 
 def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool]:
     """What the bot page shows for SID's ``EXIT_NOT_FLAT``: eligibility and exit working."""
-    reader = SqliteClerkProjectionReader.from_repository(repo, pricing=_live_touch())
+    reader = SqliteClerkProjectionReader.from_repository(repo)
     try:
         snapshot = reader.bot_snapshot(SID)
     finally:
@@ -667,8 +665,8 @@ def _projected_notice(repo: ClerkSqliteRepository) -> tuple[int | None, bool]:
     assert snapshot is not None
     [episode] = [item for item in snapshot.uncertainties if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
     guidance = snapshot.guidance
-    shown = (episode.next_attempt_at_ms, episode.exit_working)
-    assert (guidance.next_attempt_at_ms, guidance.exit_working) == shown
+    shown = (episode.recovery_status.allowed_from_ms, episode.recovery_status.kind == "working")
+    assert guidance.recovery_status == episode.recovery_status
     return shown
 
 
@@ -791,7 +789,7 @@ async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
         episode = _exit_not_flat(repo)
         assert episode is not None
         assert "No trading session would be open" in episode["explanation"]
-        assert _next_attempt_at_ms(episode) == _at(4, 0, 0, day=date(2026, 11, 30))
+        assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
     finally:
         repo.close()
 
@@ -1011,7 +1009,7 @@ async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_a
     assert "still working" not in episode["explanation"]
     assert "cancel it there" not in episode["next_step"]
     # The watchdog's next try: its 120 s re-drive age, inside after-hours.
-    assert _next_attempt_at_ms(episode) == _at(16, 12)
+    assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
     assert _open_unknown_outcome(repo) is None
 
 
@@ -1118,7 +1116,7 @@ async def test_a_reducing_order_the_broker_refuses_tells_the_operator(
     assert episode["headline"] == "The broker refused this exit's order; the position is still open"
     assert "10 SPY is still held" in episode["explanation"]
     # Inside the regular session the watchdog's next try is its re-drive age away.
-    assert _next_attempt_at_ms(episode) == _at(15, 59) + 120_000
+    assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
     failed = repo.first_effect_transition(
         effect_operation_id=effect_operation_id, transition_kind="EXIT_NOT_FLAT"
     )
@@ -1146,7 +1144,7 @@ async def test_a_completed_exit_that_left_exposure_says_when_the_watchdog_tries_
     episode = _exit_not_flat(repo)
     assert episode is not None
     assert episode["headline"] == "A completed EXIT left attributed exposure"
-    assert _next_attempt_at_ms(episode) == _at(15, 59) + 120_000
+    assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
 
 
 @pytest.mark.parametrize(
@@ -1230,7 +1228,7 @@ async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
     assert episode is not None
     assert "cannot price an extended-hours limit automatically" in episode["explanation"]
     assert "No trading session would be open" not in episode["explanation"]
-    assert _next_attempt_at_ms(episode) == _at(9, 30, 0, day=date(2026, 9, 3))
+    assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
 
 
 @pytest.mark.parametrize("hour,minute,second", [(3, 59, 55), (3, 59, 59), (9, 29, 56), (9, 29, 59)])
@@ -1287,7 +1285,7 @@ async def test_live_market_exceptions_gate_program_exits_and_watchdog(
         assert _exit_not_flat(repo) is not None
 
 
-@pytest.mark.parametrize("cancel_result,filled_quantity", [("canceled", 0), ("canceled", 3), ("canceled", 10), ("working", 0), ("unknown", 0)])
+@pytest.mark.parametrize("cancel_result,filled_quantity", [("canceled", 0), ("canceled", 3), ("canceled", 10), ("working", 0), ("unknown", 0), ("pending_cancel", 0), ("cancel_error", 0)])
 async def test_regular_open_replacement_requires_exact_cancel_proof(
     repo: ClerkSqliteRepository, cancel_result: str, filled_quantity: float,
 ) -> None:
@@ -1309,16 +1307,16 @@ async def test_regular_open_replacement_requires_exact_cancel_proof(
     original = repo.order(sent.reducing_order_ref)
     assert original is not None
     _walk_clock_to(repo, _at(9, 30, day=date(2026, 9, 3)))
-    trade = _FakeTrade(lookup_results=[
-        _broker_order(original.client_order_id, order_id=original.broker_order_id, side="sell", status="accepted"),
+    trade = _FakeTrade(cancel_error=BrokerOrderRejected("already canceled", broker="alpaca") if cancel_result == "cancel_error" else None, lookup_results=[
+        _broker_order(original.client_order_id, order_id=original.broker_order_id, side="sell", status="pending_cancel" if cancel_result == "pending_cancel" else "accepted"),
         None if cancel_result == "unknown" else _broker_order(
             original.client_order_id, order_id=original.broker_order_id, side="sell",
-            status="canceled" if cancel_result == "canceled" else "accepted",
+            status="canceled" if cancel_result in {"canceled", "pending_cancel", "cancel_error"} else "accepted",
             filled_quantity=filled_quantity, filled_avg_price=100.0 if filled_quantity else None,
         ),
     ])
     await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch())
-    assert trade.cancel_calls == [original.broker_order_id]
+    assert trade.cancel_calls == ([] if cancel_result == "pending_cancel" else [original.broker_order_id])
     assert trade.submit_calls == []
     replacement = _acked()
     await redrive_or_escalate_stale_exits(
@@ -1328,7 +1326,7 @@ async def test_regular_open_replacement_requires_exact_cancel_proof(
     if filled_quantity == 10:
         assert repo.position(SID, "SPY") == 0
         assert replacement.submit_calls == []
-    elif cancel_result == "canceled":
+    elif cancel_result in {"canceled", "pending_cancel", "cancel_error"}:
         [leg_and_id] = replacement.submit_calls
         leg, client_id = leg_and_id
         assert leg.order_type == "market" and leg.quantity == 10 - filled_quantity
@@ -1402,8 +1400,9 @@ async def test_reconciliation_replaces_at_open_using_post_cancel_position(repo: 
     assert repo.position(SID, "SPY") == 7
 
 
-async def test_failed_extended_limit_waits_for_regular_open_without_chasing(repo: ClerkSqliteRepository) -> None:
-    _walk_clock_to(repo, _at(4, day=date(2026, 9, 3)))
+@pytest.mark.parametrize("hour,eligible", [(4, (2026, 9, 3, 9, 30)), (17, (2026, 9, 4, 4, 0))])
+async def test_failed_extended_limit_waits_for_next_eligible_session_without_chasing(repo: ClerkSqliteRepository, hour: int, eligible: tuple[int, ...]) -> None:
+    _walk_clock_to(repo, _at(hour, day=date(2026, 9, 3)))
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     priced = _live_touch().read("SPY", repo.clock()).price(
         side=OrderSide.SELL, symbol="SPY", quantity=10, now_ms=repo.clock(),
@@ -1428,10 +1427,19 @@ async def test_failed_extended_limit_waits_for_regular_open_without_chasing(repo
     observation = repo.last_strategy_transition(strategy_instance_id=SID, transition_kind="EXIT_RECOVERY_EVALUATED")
     assert json.loads(observation["facts_json"])["reason_code"] == "EXTENDED_EXIT_WAIT"
     assert json.loads(observation["facts_json"])["failure_elapsed_ms"] == 0
-    _walk_clock_to(repo, _at(9, 30, day=date(2026, 9, 3)))
+    year, month, day, eligible_hour, minute = eligible
+    assert json.loads(observation["facts_json"])["allowed_from_ms"] == _at(eligible_hour, minute, day=date(year, month, day))
+    _walk_clock_to(repo, _at(9, 30, day=date(year, month, day)))
     await redrive_or_escalate_stale_exits(
         repo, trade=trade, intake=ReentrantAsyncLock(), pricing=_live_touch(),
         broker_symbol=lambda _: BrokerSymbolView(10, 10, False, True),
     )
     [(leg, _)] = trade.submit_calls
     assert leg.order_type == "market"
+
+
+async def redrive_or_escalate_stale_exits(repo, **kwargs):
+    """Commit the same explicit result batch the successful reconcile pass uses."""
+    started = repo.clock()
+    results = await evaluate_stale_exits(repo, **kwargs)
+    commit_recovery_evaluations(repo, results, pass_started_at_ms=started)

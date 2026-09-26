@@ -801,9 +801,6 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
             strategy_instance_id=uncertainty.strategy_instance_id,
             symbol=uncertainty.symbol,
             headline=uncertainty.headline,
-            next_attempt_at_ms=uncertainty.next_attempt_at_ms,
-            exit_working=uncertainty.exit_working,
-            facts_unreadable=uncertainty.facts_unreadable,
             recovery_status=uncertainty.recovery_status,
         )
         for uncertainty in uncertainties

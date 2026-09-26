@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
@@ -307,7 +306,7 @@ async def test_the_panel_dispatcher_discharges_a_drifted_residue_end_to_end(cloc
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=WATCHDOG_SID)
@@ -476,7 +475,7 @@ async def test_an_unreadable_broker_is_a_recovery_refusal(clocked_repo) -> None:
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=WATCHDOG_SID)

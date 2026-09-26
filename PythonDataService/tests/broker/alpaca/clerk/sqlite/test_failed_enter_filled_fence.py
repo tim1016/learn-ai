@@ -382,7 +382,7 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
     # The pass proved broker truth, so the operator's flatten is offered and
     # the fence it exists to clear does not gate it.
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)

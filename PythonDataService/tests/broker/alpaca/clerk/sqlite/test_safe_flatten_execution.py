@@ -270,7 +270,7 @@ async def _reconciled_flatten_plan(repo: ClerkSqliteRepository):
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -374,7 +374,7 @@ async def test_execute_safe_flatten_presented_for_stopped_bot_with_exposure(
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -399,7 +399,7 @@ def _unfoldable_open_order() -> BrokerOrder:
 
 def _flatten_catalog(repo: ClerkSqliteRepository) -> dict[str, Any]:
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -528,7 +528,7 @@ async def test_execute_safe_flatten_blocked_while_a_run_is_active(
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -562,7 +562,7 @@ async def test_execute_recovery_action_dispatches_safe_flatten(
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
@@ -710,7 +710,7 @@ async def test_execute_safe_flatten_unavailable_for_account_scope(
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         account_context = reader.recovery_context(strategy_instance_id=None)
@@ -876,7 +876,7 @@ async def _stopped_facade_at(
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)

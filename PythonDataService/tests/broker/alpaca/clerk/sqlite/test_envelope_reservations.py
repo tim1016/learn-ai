@@ -172,8 +172,8 @@ def _rewind_to_v12(db_path: Path) -> None:
 def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
     envelope_repo: ClerkSqliteRepository,
 ) -> None:
-    assert schema.SCHEMA_VERSION == 16
-    assert envelope_repo.control_meta_snapshot().schema_version == 16
+    assert schema.SCHEMA_VERSION == 17
+    assert envelope_repo.control_meta_snapshot().schema_version == 17
     assert (
         envelope_repo._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='envelope_reservations'"
@@ -218,7 +218,7 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clo
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
     try:
-        assert reopened.control_meta_snapshot().schema_version == 16
+        assert reopened.control_meta_snapshot().schema_version == 17
         assert (
             reopened._conn.execute(
                 "SELECT name FROM sqlite_master "

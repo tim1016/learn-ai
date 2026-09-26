@@ -18,9 +18,6 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.broker.alpaca.clerk.recovery_reduction import (
-    RecoveryPricing,
-)
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ActiveExecutionCoverageConflict,
@@ -77,7 +74,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
@@ -161,25 +157,11 @@ record is logged once per process, not once per poll. A refresh rewrites
 logged again. Bounded by the unreadable records this process ever reads."""
 
 
-def _checked_record(
-    facts: UncertaintyRaisedFacts,
-) -> tuple[Mapping[str, Any], int | None]:
-    """The facts only the record carries — the cause and the recorded next attempt — type-checked.
-
-    ``from_facts_json`` checks the keys, not the values: a record whose cause
-    is not an object, or whose time is not an ``int64 ms UTC`` in the
-    admissible range, is unreadable like one that does not parse.
-    """
-    cause_facts, recorded = facts.cause_facts, facts.next_attempt_at_ms
-    if not isinstance(cause_facts, Mapping):
-        raise TypeError(f"cause_facts is {type(cause_facts).__name__}, not an object")
-    if recorded is not None and (
-        isinstance(recorded, bool)
-        or not isinstance(recorded, int)
-        or not 0 <= recorded <= MAX_TIMESTAMP_MS
-    ):
-        raise ValueError(f"next_attempt_at_ms {recorded!r} is not an int64 ms UTC instant")
-    return cause_facts, recorded
+def _checked_record(facts: UncertaintyRaisedFacts) -> Mapping[str, Any]:
+    """Only current cause facts affect the projection; legacy retry hints are ignored."""
+    if not isinstance(facts.cause_facts, Mapping):
+        raise TypeError(f"cause_facts is {type(facts.cause_facts).__name__}, not an object")
+    return facts.cause_facts
 
 
 def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
@@ -196,19 +178,10 @@ def _projected_uncertainty(
     redrives_stopped: bool,
     exit_working: bool,
 ) -> ProjectedUncertainty:
-    """One open episode, projected from its columns and the facts only they cannot carry.
-
-    The facts carry what the columns do not — earliest retry eligibility
-    (#2440), and the symbol the cause names. A row whose facts cannot be read
-    — or whose next attempt cannot be projected — is still projected, flagged
-    ``facts_unreadable`` with no next attempt, and logged at error level once:
-    one bad row fails loudly on its own and never blanks the whole read
-    (#2440 review).
-    """
-    next_attempt_at_ms = None
+    """Project current cause and recovery evidence; contain one unreadable row."""
     recovery_status = None
     try:
-        cause_facts, _recorded = _checked_record(
+        cause_facts = _checked_record(
             UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
         )
         symbol = _cause_symbol(cause_facts)
@@ -221,12 +194,12 @@ def _projected_uncertainty(
                     stopped=redrives_stopped, working=exit_working,
                 )
             )
-            next_attempt_at_ms = recovery_status.allowed_from_ms
-        facts_unreadable = False
     except (TypeError, ValueError, OverflowError):
         _log_unreadable_once(row)
         symbol = None
-        facts_unreadable = True
+        recovery_status = RecoveryStatus(
+            "unknown", "RECOVERY_RECORD_UNREADABLE", "Recovery status is unknown; this notice's record could not be read.", None, None,
+        )
     return ProjectedUncertainty(
         uncertainty_id=row["uncertainty_id"],
         scope=row["scope"],
@@ -244,9 +217,6 @@ def _projected_uncertainty(
         evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
         evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
         symbol=symbol,
-        next_attempt_at_ms=next_attempt_at_ms,
-        exit_working=exit_working,
-        facts_unreadable=facts_unreadable,
         recovery_status=recovery_status,
     )
 
@@ -272,11 +242,7 @@ def _log_unreadable_once(row: Mapping[str, Any]) -> None:
 class SqliteClerkProjectionReader:
     """One reusable read-only connection over an already-verified authority.
 
-    ``pricing`` is the authority's own ``recovery_pricing`` — the seam its
-    stuck-EXIT watchdog re-drives from and its folds record the next attempt
-    from — so an ``EXIT_NOT_FLAT`` notice projects retry eligibility
-    under the same authority. Required: callers must name the pricing seam,
-    including an explicitly unpriceable seam for an isolated reader.
+    Recovery eligibility is read from the Clerk's committed evaluation.
     """
 
     def __init__(
@@ -287,14 +253,12 @@ class SqliteClerkProjectionReader:
         authority_generation: int,
         db_identity_token: str,
         clock: Clock = now_ms_utc,
-        pricing: RecoveryPricing,
     ) -> None:
         self._db_path = db_path
         self._account_id = account_id
         self._authority_generation = authority_generation
         self._db_identity_token = db_identity_token
         self._clock = clock
-        self._pricing = pricing
         self._lock = threading.Lock()
         if not db_path.is_file():
             # A resolvable broker account whose local authority is absent is a
@@ -361,7 +325,6 @@ class SqliteClerkProjectionReader:
         repository: ClerkSqliteRepository,
         *,
         clock: Clock | None = None,
-        pricing: RecoveryPricing,
     ) -> SqliteClerkProjectionReader:
         """A reader over ``repository``, judging freshness by the repository's own clock.
 
@@ -376,17 +339,12 @@ class SqliteClerkProjectionReader:
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
             clock=clock or repository.clock,
-            pricing=pricing,
         )
 
     @classmethod
     def from_facade(cls, facade: SqliteAlpacaClerkFacade) -> SqliteClerkProjectionReader:
-        """A reader over an authority's repository that projects from the authority's own pricing seam.
-
-        Every surface that shows an ``EXIT_NOT_FLAT`` notice reads through
-        here, so eligibility uses that authority's own recovery policy (#2440 review).
-        """
-        return cls.from_repository(facade.repository, pricing=facade.recovery_pricing)
+        """Read the authority's committed recovery evaluations and custody."""
+        return cls.from_repository(facade.repository)
 
     def close(self) -> None:
         with self._lock:

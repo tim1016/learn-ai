@@ -339,8 +339,8 @@ describe('AlpacaSqliteCustodyComponent', () => {
           observed_at_ms: NOW,
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
-          next_attempt_at_ms: null,
-          facts_unreadable: true,
+
+          recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." },
         }],
       }),
     });
@@ -370,7 +370,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
           observed_at_ms: NOW,
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
-          next_attempt_at_ms: null,
+
           recovery_status: { kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' },
         }],
       }),

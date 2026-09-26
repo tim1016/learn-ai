@@ -111,6 +111,11 @@
   `UNFOLDABLE_BROKER_ORDER` episode without scanning `uncertainties`. The
   registered v15 → v16 migration is the same two `CREATE INDEX IF NOT EXISTS`
   statements.
+- Schema-v17 adds `exit_recovery_checks`, one replaceable freshness row per bot.
+  It stores the current episode, lease owner, successful-check and completed-pass
+  times, and configured interval. It stores no failure budget or recovery decision:
+  those remain hash-chained `EXIT_RECOVERY_EVALUATED` facts. The additive v16 → v17
+  migration starts with no freshness proof; the current owner must complete a pass.
 - Issue #1775 narrows one clause of §3f. `EXIT_ACCEPTED.entry_order_refs`
   captured *every* same-strategy/symbol sibling entry; it now captures every
   sibling that is still **cancel-provable**, excluding one already carrying
@@ -1179,6 +1184,8 @@ CREATE INDEX IF NOT EXISTS ix_fills_superseded_execution_ref ON fills(superseded
 
 CREATE INDEX IF NOT EXISTS ix_custody_transitions_resolution_summary ON custody_transitions(summary_code) WHERE transition_kind = 'UNCERTAINTY_RESOLVED';
 CREATE INDEX IF NOT EXISTS ix_uncertainties_reason_code ON uncertainties(reason_code);
+
+CREATE TABLE IF NOT EXISTS exit_recovery_checks (strategy_instance_id TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id), uncertainty_id TEXT NOT NULL, lease_owner TEXT NOT NULL, last_checked_at_ms INTEGER, completed_at_ms INTEGER NOT NULL, interval_ms INTEGER NOT NULL);
 ```
 
 The `holds` view appears **twice** on purpose: v12 creates it, and the v13
@@ -1342,6 +1349,7 @@ fidelity concern:
 | Transition | Facts | Fold effect |
 | --- | --- | --- |
 | `EXIT_REDUCING_ORDER_CREATED` | `symbol`, `side`, `quantity` (the Clerk-proven final attributed quantity after every entry is terminal and immediately refreshed — the durable audit proof of the "final attributed-quantity calculation" pinned-contract step) | Inserts one immutable-origin `role='REDUCING'` `orders` row and one EXIT custody link. A partial unique index permits at most one reducing identity per EXIT. The facts reconstruct the order instruction during recovery. |
+| `ORDER_CANCEL_REQUESTED` | `reason_code` (`EXIT_OPEN_REPLACEMENT` for a regular-open replacement; legacy empty facts remain readable) | Records cancellation intent before broker I/O. Exact terminal evidence and complete cumulative fills must prove cancellation before a replacement can reduce the remainder. |
 | `ORDER_CANCEL_UNCERTAIN` | `why` | Same fold body as `ORDER_SUBMIT_UNCERTAIN` (registered under both transition_kind names) — a lost cancel-poll response is the identical "effect/command → `unknown`, no receipt" outcome, under a distinct name for audit-trail honesty about which broker call was actually attempted. |
 | `ENTRY_NEVER_ACCEPTED` (#1775) | `reason`, `why` | Records that an enumerated entry provably never reached the broker, so cancel proof has a terminal answer instead of folding `ORDER_CANCEL_UNCERTAIN` forever. Deliberately **not** `ORDER_SUBMIT_FAILED`: this transition belongs to the EXIT that enumerated the dead entry, and that EXIT has not failed. The fold releases the exact `(effect, order)` identity from any open unknown-outcome episode and returns the effect to `in_progress` only when nothing else about it is still unknown. The entry's own ENTER is voided separately, through the canonical definitive-absence producer. |
 | `EXIT_ATTRIBUTED_FLAT` | none (`{}`) | Same fold body as the generic terminal-success tail (`_fold_effect_terminal(..., terminal_state="succeeded")`) — EXIT is the first caller to ever reach `succeeded` through it; ENTER never does within its own module (#1377's own docstring defers that to EXIT/reconciliation). |

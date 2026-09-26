@@ -13,7 +13,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import schema, writes
 from app.broker.alpaca.clerk.sqlite.hashchain import canonical_payload, compute_row_hash
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, PendingTransition
@@ -216,7 +215,7 @@ def _run_scale(root: Path, bot_count: int, transition_count: int) -> dict[str, A
         authority_generation=meta.authority_generation,
         db_identity_token=meta.db_identity_token,
         clock=lambda: FIXED_NOW_MS,
-        pricing=UNPRICEABLE_RECOVERY,
+
     )
     try:
         account_samples = _measure(lambda: reader.account_snapshot())

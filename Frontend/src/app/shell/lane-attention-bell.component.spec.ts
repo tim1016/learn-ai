@@ -144,12 +144,12 @@ describe('LaneAttentionBellComponent', () => {
       unknown: false,
       errorReason: null,
       items: [
-        item({ next_attempt_at_ms: null, recovery_status: { kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' } }),
+        item({  recovery_status: { kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' } }),
         item({
           condition_id: 'unc-2',
           strategy_instance_id: 'ema-2',
-          next_attempt_at_ms: null,
-          facts_unreadable: true,
+
+          recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." },
         }),
       ],
     });

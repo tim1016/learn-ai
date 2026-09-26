@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ControlMetaSnapshot,
     DecisionReceiptResource,
 )
+from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
@@ -42,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView
+from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -1028,9 +1030,8 @@ __all__ = [
 
 
 async def read_terminal_exposure_notices(facade: SqliteAlpacaClerkFacade) -> list[ExposureNoticeView]:
-    """Read terminal lifecycle and custody without loading the economic roster."""
+    """Reuse roster lifecycle truth; a bad bot never hides its healthy siblings."""
     from app.services.broker_v2_panel.sqlite_panel_adapter import terminal_exposure_notices
-    from app.services.broker_v2_panel.sqlite_roster_status import lifecycle_record, terminal_duty_outcome
 
     def read() -> list[ExposureNoticeView]:
         notices: list[ExposureNoticeView] = []
@@ -1041,14 +1042,26 @@ async def read_terminal_exposure_notices(facade: SqliteAlpacaClerkFacade) -> lis
                 sid = str(registration["strategy_instance_id"])
                 if repository.active_run(sid) is not None:
                     continue
-                outcome = terminal_duty_outcome(sid, lifecycle_record(sid), repository, running=False)
-                if outcome is None:
-                    continue
-                projection = reader.bot_snapshot(sid)
-                notices.extend(terminal_exposure_notices(
-                    projection, sid=sid, symbol=str(registration["symbol"]),
-                    kind=outcome.kind, reason_code=outcome.reason_code, running=False,
-                ))
+                try:
+                    status = build_roster_status("alpaca", registration, repository)
+                    outcome = status.duty_outcome
+                    if outcome is None or outcome.kind not in UNCLEAN_DUTY_OUTCOMES:
+                        continue
+                    notices.extend(terminal_exposure_notices(
+                        reader.bot_snapshot(sid), sid=sid, symbol=status.symbol,
+                        kind=outcome.kind, reason_code=outcome.reason_code, running=status.running,
+                    ))
+                except (SqliteCatalogProjectionUnavailable, ProjectionReadError):
+                    logger.error("Could not read one bot's terminal custody evidence", extra={
+                        "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
+                        "account_id": repository.account_id,
+                    }, exc_info=True)
+                    notices.append(ExposureNoticeView(
+                        strategy_instance_id=sid, symbol=str(registration["symbol"]),
+                        kind="position_unverified", label="Position could not be verified; check the broker",
+                        explanation="This bot's lifecycle or custody evidence could not be read. Check its position and working orders at the broker.",
+                        action_label="Open bot",
+                    ))
         finally:
             reader.close()
         return notices

@@ -6,7 +6,6 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 
 export interface NextAttemptFacts {
   readonly recovery_status?: components['schemas']['RecoveryStatusResponse'] | null;
-  readonly facts_unreadable?: boolean;
 }
 
 /** The Clerk's evaluated recovery status, shared by the desk, bot and lane bell. */
@@ -14,7 +13,7 @@ export interface NextAttemptFacts {
   selector: 'app-next-attempt',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ReceiptLabelPipe, TimestampDisplayComponent],
-  host: { '[style.display]': "facts().recovery_status || facts().facts_unreadable ? null : 'none'" },
+  host: { '[style.display]': "facts().recovery_status ? null : 'none'" },
   styles: ':host { display: block; } .recovery-detail { display: block; }',
   template: `
     @if (facts().recovery_status; as status) {
@@ -37,8 +36,6 @@ export interface NextAttemptFacts {
           <app-timestamp-display [value]="status.last_checked_at_ms" />
         </span>
       }
-    } @else if (facts().facts_unreadable) {
-      Recovery status is unknown; this notice's record could not be read.
     }
   `,
 })

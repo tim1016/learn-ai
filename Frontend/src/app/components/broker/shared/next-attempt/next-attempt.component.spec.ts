@@ -42,7 +42,7 @@ describe('NextAttemptComponent (#2504)', () => {
   });
 
   it('shows an unreadable record as unknown', async () => {
-    await render(NextAttemptComponent, { inputs: { facts: { facts_unreadable: true } } });
+    await render(NextAttemptComponent, { inputs: { facts: { recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." } } } });
     expect(screen.getByText(/Recovery status is unknown/)).toBeTruthy();
   });
 
