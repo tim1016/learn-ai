@@ -21,9 +21,9 @@ Formula (the suggested limit, and the band a confirmed limit must stay inside):
     suggested buy:  ceil_tick(  ask × (1 + exit_bps / 10⁴) )
     band sell:      limit ≥ floor_tick( bid × (1 − k · exit_bps / 10⁴) )
     band buy:       limit ≤ ceil_tick(  ask × (1 + k · exit_bps / 10⁴) )
-    where k is the deploy-time band multiple — ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE,
-    default RECOVERY_BAND_ALLOWANCE_MULTIPLE — and bid/ask are the Clerk's
-    live quote at send.
+    where k is the owning bot's sealed band multiple, and bid/ask are the
+    Clerk's live quote at send. An operator may explicitly acknowledge a price
+    beyond that band; the acknowledgement is durably recorded with the EXIT.
 Formula (realized slippage of a fill, positive = worse than the reference):
     sell: (reference_bid − fill_price) / reference_bid × 10⁴ bps
     buy:  (fill_price − reference_ask) / reference_ask × 10⁴ bps
@@ -53,6 +53,7 @@ from typing import Literal
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.program_leg import (
+    EXTENDED_HOURS_ALLOWANCE_UNSET,
     LegRefusal,
     LegShape,
     ProgramLegPolicy,
@@ -64,7 +65,8 @@ from app.broker.alpaca.marketable_limit import (
     marketable_limit_price,
 )
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
-from app.schemas.market_liveness import TopOfBookQuote
+from app.schemas.market_liveness import MarketLivenessFact, TopOfBookQuote
+from app.services.market_liveness import compose_market_liveness
 from app.services.session_authority import (
     TRADEABLE_EXTENDED_PHASES,
     SessionAuthorityState,
@@ -73,12 +75,13 @@ from app.services.session_authority import (
     scheduled_extended_session_bounds,
     session_state_at_ms,
 )
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import et_date_at_ms
 
 # Where the live bid/ask comes from: ``(symbol, now_ms) -> quote or None``.
 # Injected so the pricing seam is a pure function and a test can state the
 # quote; production reads the market-liveness store's IBKR top of book.
 type QuoteSource = Callable[[str, int], TopOfBookQuote | None]
+type LivenessSource = Callable[[str, int], MarketLivenessFact | None]
 
 RECOVERY_QUOTE_MAX_AGE_MS = 10_000
 """How old the quote an operator confirmed against may be when they send.
@@ -88,16 +91,11 @@ the bid/ask the operator looked at is more than about ten seconds old.
 """
 
 EXIT_SEND_GUARD_BAND_MS = 5_000
-"""How close to the end of its session a reducing leg is treated as past it (#2440 review).
+"""Close-side transport guard for a reducing leg (#2504).
 
-The send-time rule is judged a moment before the order reaches Alpaca: a
-market leg that passes the check at 15:59:59.9 can arrive after 16:00 and be
-queued for the next open, and a limit checked at 19:59:59 can arrive after
-the after-hours close. So every judgement — may this leg still go out, and if
-not, what would be priced in its place — is made at the latest instant the
-leg may reach the broker: now plus this band (:func:`send_arrival_ms`). Just
-before the open the same rule lets a market leg rest at most this band for the
-opening auction; that is not the overnight queue #2440 closes.
+A leg must be eligible now and remain eligible when it reaches Alpaca five
+seconds later. The guard never advances a session open: pre-market begins
+at its actual calendar boundary, and market exits wait for the regular open.
 """
 
 REDUCING_ORDER_PAST_SESSION_GRACE_MS = 300_000
@@ -124,11 +122,9 @@ limit may go, in multiples of the sealed exit allowance.
 
 Owner decision 2026-09-19: refuse a price more than twice the allowance past
 the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
-Deploy-time configurable since #2229 — ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE``,
-carried on ``ExtendedHoursAllowances.exit_band_multiple`` — and this constant
-is the value every unset deployment prices the band at. An alias of
-``marketable_limit.DEFAULT_EXIT_BAND_MULTIPLE``, the dataclass default's own
-number: one concept, one value.
+The deploy form pre-fills this value; each bot seals its explicit choice.
+Runtime recovery reads that immutable seal. The legacy environment override
+is consulted only during the one-time upgrade of existing registrations.
 """
 
 RECOVERY_SPREAD_WARNING_BPS = int(DEFAULT_EXIT_SPREAD_CAP_BPS)
@@ -235,7 +231,7 @@ RECOVERY_LIMIT_OUTSIDE_BAND = LegRefusal(
     explanation=(
         "The limit is further through the book than the accepted band — the "
         "sealed exit allowance times the deploy-time band multiple "
-        "(ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE) — from the live bid (sell) or ask "
+        "(the bot’s sealed band multiple) — from the live bid (sell) or ask "
         "(cover)."
     ),
     next_step="Check the price against the live quote and confirm again.",
@@ -248,7 +244,7 @@ RECOVERY_SPREAD_TOO_WIDE = LegRefusal(
         "price would reach through a broken book."
     ),
     next_step=(
-        "Widen ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS after reviewing the logged "
+        "Review the logged "
         "spreads, or send the operator's priced flatten — its ticket shows the "
         "wide spread and can override it."
     ),
@@ -320,6 +316,7 @@ class ExtendedLimitProposal:
     # band past 100 % of the touch floors to zero or below, which is not a
     # price; any positive limit is then inside the band (PR #2230 review).
     band_limit_price: Decimal | None
+    band_cap_bps: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -346,6 +343,7 @@ class ConfirmedRecoveryLimit:
 
     limit_price: Decimal
     quote_observed_at_ms: int
+    band_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -367,6 +365,7 @@ class ConfirmedRecoveryShape:
     # real quantity later; a different one is not what the operator reviewed.
     quantity: float
     priced_by: PricingProvenance = "operator"
+    band_override: bool = False
 
 
 def regular_session_open(now_ms: int) -> bool:
@@ -406,9 +405,8 @@ def price_recovery_reduction(
     state = _tradeable_state(now_ms=now_ms, policy=policy)
     if state.phase == "RTH":
         return RegularSessionReduction()
-    if policy.allowances is None:
-        assert policy.allowance_refusal is not None
-        raise ProgramLegRefused(policy.allowance_refusal)
+    if policy.allowances is None or policy.allowances.exit_bps is None:
+        raise ProgramLegRefused(policy.allowance_refusal or EXTENDED_HOURS_ALLOWANCE_UNSET)
     if quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
     return ExtendedLimitProposal(
@@ -419,6 +417,7 @@ def price_recovery_reduction(
         suggested_limit_price=_through_the_book(
             side, quote, policy.allowances.exit_bps
         ),
+        band_cap_bps=policy.allowances.exit_bps * policy.allowances.exit_band_multiple,
         band_limit_price=_band_limit_price(
             side, quote, policy.allowances.exit_bps * policy.allowances.exit_band_multiple
         ),
@@ -455,9 +454,8 @@ def recovery_reduction_shape(
         return None
     if confirmed is None:
         raise ProgramLegRefused(RECOVERY_LIMIT_REQUIRED)
-    if policy.allowances is None:
-        assert policy.allowance_refusal is not None
-        raise ProgramLegRefused(policy.allowance_refusal)
+    if policy.allowances is None or policy.allowances.exit_bps is None:
+        raise ProgramLegRefused(policy.allowance_refusal or EXTENDED_HOURS_ALLOWANCE_UNSET)
     if current_quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
     if (
@@ -490,13 +488,14 @@ def recovery_reduction_shape(
     past_band = band is not None and (
         confirmed.limit_price < band if side is OrderSide.SELL else confirmed.limit_price > band
     )
-    if past_band:
+    if past_band and not confirmed.band_override:
         raise ProgramLegRefused(RECOVERY_LIMIT_OUTSIDE_BAND)
     return ConfirmedRecoveryShape(
         shape=shape,
         valid_until_ms=state.next_transition_ms,
         reference_quote=current_quote,
         quantity=abs(quantity),
+        band_override=past_band and confirmed.band_override,
     )
 
 
@@ -512,6 +511,13 @@ class PricingSnapshot:
 
     policy: ProgramLegPolicy
     quote: TopOfBookQuote | None
+    market_liveness: MarketLivenessFact | None = None
+
+    def hold(self, now_ms: int) -> LegRefusal | None:
+        verdict = reducing_send_verdict(
+            now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=self.market_liveness,
+        )
+        return verdict if isinstance(verdict, LegRefusal) else None
 
     @property
     def quote_spread_bps(self) -> float | None:
@@ -522,6 +528,8 @@ class PricingSnapshot:
         self, *, side: OrderSide, symbol: str, quantity: float, now_ms: int
     ) -> ConfirmedRecoveryShape | None:
         """:func:`price_automatic_recovery_reduction` against this read."""
+        if hold := self.hold(now_ms):
+            raise ProgramLegRefused(hold)
         return price_automatic_recovery_reduction(
             side=side,
             symbol=symbol,
@@ -534,23 +542,60 @@ class PricingSnapshot:
 
 @dataclass(frozen=True)
 class RecoveryPricing:
-    """The seam one pass prices an automatic recovery reduction from (#2229).
+    """One bot-scoped policy and fresh market evidence for an automatic reduction.
 
-    One object instead of a policy and a quote source threaded as two optional
-    arguments. ``policy_source`` is a *resolver*, not a value: the facade's
-    ``program_leg_policy`` re-reads the envelope in force on every access, and
-    a holder that snapshotted it at construction would price from a seal the
-    next re-arm replaced.
+    The facade reads immutable terms from its cache. Pricing and scheduling
+    require the same instance identity; neither falls back to account defaults.
     """
 
-    policy_source: Callable[[], ProgramLegPolicy]
+    policy_for: Callable[[str], ProgramLegPolicy]
     quote_source: QuoteSource
+    liveness_source: LivenessSource | None = None
 
-    def read(self, symbol: str, now_ms: int) -> PricingSnapshot:
-        """Resolve the policy and read the live touch for ``symbol`` — on the event loop."""
+    def read(self, symbol: str, now_ms: int, *, strategy_instance_id: str) -> PricingSnapshot:
+        """Read this bot's cached execution policy and the current live touch."""
         return PricingSnapshot(
-            policy=self.policy_source(), quote=self.quote_source(symbol, now_ms)
+            policy=self.policy_for(strategy_instance_id), quote=self.quote_source(symbol, now_ms),
+            market_liveness=self.read_liveness(symbol, now_ms),
         )
+
+    def read_liveness(self, symbol: str, now_ms: int) -> MarketLivenessFact | None:
+        """Read on the event loop immediately before creating or sending a leg."""
+        return None if self.liveness_source is None else self.liveness_source(symbol, now_ms)
+
+
+def reduction_market_hold(*, now_ms: int, fact: MarketLivenessFact | None) -> LegRefusal | None:
+    """A positive vendor halt or fresh emergency close pauses an Alpaca EXIT.
+
+    Missing/stale liveness otherwise falls back to the calendar. A retained
+    IBKR halt survives a stale clock or reconnect until explicitly cleared
+    (ADR 0067); it is evidence of a halt, not absence of evidence.
+    """
+    if fact is None:
+        return None
+    status = fact.symbol_status
+    if fact.state == "HALTED" or (
+        status is not None and status.symbol == fact.symbol and status.state == "HALTED"
+    ):
+        return LegRefusal(
+            reason_code="EXIT_SYMBOL_HALTED",
+            explanation="IBKR reports this symbol halted; the Clerk is holding the Alpaca exit.",
+            next_step="The Clerk will check again when the halt is explicitly cleared.",
+        )
+    # Compose the market-wide evidence with the canonical freshness rule.
+    # Unknown per-symbol status does not veto a reducing order; the retained
+    # positive halt above does. IBKR is evidence only; execution stays Alpaca.
+    clock_fact = compose_market_liveness(
+        fact.symbol, now_ms=now_ms, market_clock=fact.market_clock,
+        connected=True, connection_changed_at_ms=fact.observed_at_ms, symbol_status=None,
+    )
+    if clock_fact.state == "CLOSED" and regular_session_open(now_ms):
+        return LegRefusal(
+            reason_code="EXIT_EMERGENCY_CLOSE",
+            explanation="The live market clock reports closed during the scheduled regular session.",
+            next_step="The Clerk will check again when the market reopens.",
+        )
+    return None
 
 
 def _no_live_quote(symbol: str, now_ms: int) -> TopOfBookQuote | None:
@@ -558,7 +603,7 @@ def _no_live_quote(symbol: str, now_ms: int) -> TopOfBookQuote | None:
 
 
 UNPRICEABLE_RECOVERY = RecoveryPricing(
-    policy_source=lambda: ProgramLegPolicy.regular_only(),
+    policy_for=lambda _sid: ProgramLegPolicy.regular_only(),
     quote_source=_no_live_quote,
 )
 """The degraded default: nothing can be priced, so an out-of-session re-drive
@@ -645,6 +690,21 @@ def price_automatic_recovery_reduction(
     )
 
 
+def reducing_send_verdict(
+    *, extended_hours: bool, valid_until_ms: int | None, now_ms: int,
+    liveness: MarketLivenessFact | None,
+) -> ReducingLegVerdict | LegRefusal:
+    """One EXIT send verdict: calendar eligibility plus positive live holds.
+
+    Unknown/stale evidence falls back to the canonical calendar; an explicit
+    retained halt survives reconnects until cleared (ADR 0067).
+    """
+    hold = reduction_market_hold(now_ms=now_ms, fact=liveness)
+    return hold if hold is not None else reducing_leg_verdict(
+        extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms,
+    )
+
+
 def reducing_leg_verdict(
     *, extended_hours: bool, valid_until_ms: int | None, now_ms: int
 ) -> ReducingLegVerdict:
@@ -659,11 +719,9 @@ def reducing_leg_verdict(
     its bound is already past it.
     """
     if extended_hours:
-        return (
-            "send"
-            if valid_until_ms is not None and send_arrival_ms(now_ms) < valid_until_ms
-            else "expired"
-        )
+        if valid_until_ms is None or send_arrival_ms(now_ms) >= valid_until_ms:
+            return "expired"
+        return "send" if scheduled_exchange_phase_at_ms(now_ms) in ("RTH", *TRADEABLE_EXTENDED_PHASES) else "wait"
     return "send" if market_leg_sendable(now_ms) else "wait"
 
 
@@ -676,7 +734,7 @@ def market_leg_sendable(now_ms: int) -> bool:
     the watchdog's choice to price a re-drive, and the runtime's
     unpriced-exit warning all ask (#2440 review).
     """
-    return regular_session_open(send_arrival_ms(now_ms))
+    return regular_session_open(now_ms) and regular_session_open(send_arrival_ms(now_ms))
 
 
 def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
@@ -691,33 +749,16 @@ def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
     time — the 04:00 pre-market sell after an after-hours exit that could not
     go out.
 
-    Judged at :func:`send_arrival_ms`, as the watchdog's own send is (#2440
-    review): a not-before of 19:59:57 is not a try — the watchdog refuses
-    ``NO_SESSION_OPEN`` then — so the answer is the first instant whose
-    arrival lands in the next session, the guard band before it opens
-    (03:59:55 for a 04:00 pre-market). The one computation behind both the
-    time a fold records and the time the notice projects on every read
-    (``projections.project_uncertainties``).
+    The close-side guard can defer a send to the next session, but eligibility
+    names that session's actual open. A timestamp authorizes evaluation;
+    it is never a promise that the Clerk has submitted an order.
     """
-    sendable = policy if policy.allowances is not None else ProgramLegPolicy.regular_only()
-    state = flatten_session(now_ms=send_arrival_ms(not_before_ms), policy=sendable)
-    if state.phase == "RTH" or state.phase in TRADEABLE_EXTENDED_PHASES:
+    sendable = policy if policy.allowances is not None and policy.allowances.exit_bps is not None else ProgramLegPolicy.regular_only()
+    try:
+        _tradeable_state(now_ms=not_before_ms, policy=sendable)
         return not_before_ms
-    if state.next_transition_ms is None:
-        return not_before_ms
-    return state.next_transition_ms - EXIT_SEND_GUARD_BAND_MS
-
-
-def redrive_window_opened_at_ms(*, now_ms: int, policy: ProgramLegPolicy) -> int:
-    """The first send eligibility on the arrival's ET trading day.
-
-    Assumes one contiguous eligible window per ET trading day: RTH alone,
-    or PRE + RTH + POST when allowances are available. Callers establish
-    that ``now_ms`` is eligible first; this is not a next-window search.
-    The send guard shifts both the day anchor and the opening consistently.
-    """
-    day_floor_ms = et_midnight_ms(et_date_at_ms(send_arrival_ms(now_ms))) - EXIT_SEND_GUARD_BAND_MS
-    return next_redrive_at_ms(not_before_ms=day_floor_ms, policy=policy)
+    except ProgramLegRefused as exc:
+        return exc.refusal.available_at_ms or not_before_ms
 
 
 def reducing_leg_session_end_ms(
@@ -736,8 +777,7 @@ def reducing_leg_session_end_ms(
     ``valid_until_ms`` only when that day has no scheduled session. A market
     leg's end is the regular close of the day it was sent (13:00 on an
     early-close day) — read from the day, not the send instant's phase: a
-    market leg sent inside :data:`EXIT_SEND_GUARD_BAND_MS` before the open
-    reaches the broker in the regular session although it left pre-market.
+    market leg must be sent inside the regular session.
     """
     scheduled = scheduled_extended_session_bounds(et_date_at_ms(sent_at_ms))
     if scheduled is None:
@@ -866,7 +906,13 @@ def _tradeable_state(*, now_ms: int, policy: ProgramLegPolicy) -> SessionAuthori
     not "no session open" (:func:`extended_hours_pricing_unavailable`).
     """
     arrival_ms = send_arrival_ms(now_ms)
+    current = flatten_session(now_ms=now_ms, policy=policy)
     state = flatten_session(now_ms=arrival_ms, policy=policy)
+    # The guard protects closes; it never authorizes an early session open.
+    if current.phase not in ("RTH", *TRADEABLE_EXTENDED_PHASES):
+        state = current
+    elif current.phase == "PRE" and state.phase == "RTH":
+        raise ProgramLegRefused(no_session_open(current.next_transition_ms))
     if state.phase == "RTH" or state.phase in TRADEABLE_EXTENDED_PHASES:
         return state
     if policy.window is None and scheduled_exchange_phase_at_ms(arrival_ms) in TRADEABLE_EXTENDED_PHASES:
@@ -924,7 +970,6 @@ __all__ = [
     "price_recovery_reduction",
     "realized_slippage_bps",
     "recovery_reduction_shape",
-    "redrive_window_opened_at_ms",
     "reducing_leg_session_end_ms",
     "reducing_leg_verdict",
     "reduction_touch",

@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRecord,
     LiveArmingRefused,
     LiveDisarmRecord,
+    arming_version_payload,
 )
 from app.broker.alpaca.clerk.sealed_ledger import (
     append_canonical_jsonl_line,
@@ -62,13 +63,8 @@ def _verified_payload(record: LedgerRecord) -> dict[str, Any]:
         else LiveDisarmRecord.from_payload(payload)
     )
     canonical = asdict(verified)
-    if isinstance(verified, LiveArmingRecord) and verified.schema_version == 1:
-        # These fields were introduced by schema version 2. Keeping their
-        # dataclass defaults makes old rows readable, but writing them as null
-        # would widen a version-1 wire payload that older releases reject and
-        # would serialize bytes the row's digest never sealed.
-        del canonical["predecessor"]
-        del canonical["originating_plan_id"]
+    if isinstance(verified, LiveArmingRecord):
+        return arming_version_payload(canonical, verified.schema_version)
     return canonical
 
 
@@ -227,7 +223,22 @@ class LiveArmingLedger:
         ledgers naming it is a refusal: nothing here can choose between two
         accounts that both armed the same instance id.
         """
-        found: list[LiveArmingLedger] = []
+        found = [cls(artifacts_root, live_account_id=account_id)
+                 for account_id, records in cls.discover_records(artifacts_root).items()
+                 if any(row.strategy_instance_id == strategy_instance_id for row in records)]
+        if len(found) > 1:
+            raise LiveArmingRefused(
+                LIVE_ARMING_INSTANCE_UNSEALED,
+                f"{strategy_instance_id} is armed on more than one live account "
+                f"({', '.join(ledger.live_account_id for ledger in found)}); "
+                "status or disarm cannot choose between them",
+            )
+        return found[0] if found else None
+
+    @classmethod
+    def discover_records(cls, artifacts_root: Path) -> dict[str, tuple[LedgerRecord, ...]]:
+        """Read each confined ledger once; report corrupt siblings without hiding healthy ones."""
+        found: dict[str, tuple[LedgerRecord, ...]] = {}
         for directory in sorted(_arming_root(artifacts_root).glob("*")):
             if not (directory / LIVE_ARMING_FILENAME).is_file():
                 continue
@@ -241,28 +252,19 @@ class LiveArmingLedger:
                 )
                 continue
             try:
-                names_instance = bool(ledger.records_for(strategy_instance_id))
+                records = ledger.records()
             except LiveArmingInvalid:
                 logger.error(
                     "an arming ledger will not verify; it cannot answer for this instance",
                     extra={
                         "action": "live_arming_ledger_invalid",
                         "account_id": ledger.live_account_id,
-                        "strategy_instance_id": strategy_instance_id,
                     },
                     exc_info=True,
                 )
                 continue
-            if names_instance:
-                found.append(ledger)
-        if len(found) > 1:
-            raise LiveArmingRefused(
-                LIVE_ARMING_INSTANCE_UNSEALED,
-                f"{strategy_instance_id} is armed on more than one live account "
-                f"({', '.join(ledger.live_account_id for ledger in found)}); "
-                "status or disarm cannot choose between them",
-            )
-        return found[0] if found else None
+            found[ledger.live_account_id] = records
+        return found
 
     def records_for(self, strategy_instance_id: str) -> tuple[LedgerRecord, ...]:
         return tuple(row for row in self.records() if row.strategy_instance_id == strategy_instance_id)

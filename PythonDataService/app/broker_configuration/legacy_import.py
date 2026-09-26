@@ -232,7 +232,9 @@ def _envelope_from(values: LegacyEnvironmentValues) -> ValidatedLiveEnvelope | N
     }
     if any(value is None for value in supplied.values()):
         return None
-    return ValidatedLiveEnvelope.from_mapping(supplied)
+    envelope = ValidatedLiveEnvelope.from_mapping(supplied)
+    envelope.validate_for_write()
+    return envelope
 
 
 def _missing_envelope_variables(values: LegacyEnvironmentValues) -> tuple[str, ...]:

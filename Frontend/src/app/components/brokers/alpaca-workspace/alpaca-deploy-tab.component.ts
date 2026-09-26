@@ -6,6 +6,7 @@ import { AlpacaDeployWorkflowComponent } from '../../broker/broker-deploy-page/a
 import { DeployResumeBotsComponent } from '../../broker/broker-deploy-page/deploy-resume-bots.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
+import { laneFenceDrifted } from '../../../fleet/lane-fence';
 
 /** Why Deploy is unavailable, in the order the operator can act on: no lane
  * to target, then no declared capability, then no confirmed account.
@@ -48,10 +49,13 @@ export class AlpacaDeployTabComponent {
     const lane = this.lane();
     if (lane === null) return DEPLOY_WITHOUT_LANE;
     if (!lane.capabilities.includes('deploy')) return DEPLOY_WITHOUT_CAPABILITY;
-    return this.accountData.account.hasValue() ? null : DEPLOY_WITHOUT_ACCOUNT;
+    return this.accountData.account.hasValue()
+      ? null : DEPLOY_WITHOUT_ACCOUNT;
   });
 
   protected readonly target = this.accountData.target;
   protected readonly accountId = this.accountData.accountId;
   protected readonly fence = this.accountData.fence;
+  protected readonly laneReviewRequired = computed(() => laneFenceDrifted(this.fence(), this.lane() ?? undefined));
+  protected reviewCurrentLane(): void { this.accountData.reviewCurrentLane(); }
 }

@@ -21,6 +21,21 @@ FeeFidelity = Literal["reported", "not_reported"]
 
 
 @dataclass(frozen=True)
+class OrderDecisionIdentity:
+    kind: str
+    decision_id: str
+
+
+@dataclass(frozen=True)
+class MissingExitExecutionEvidence:
+    order_ref: str
+    decision_id: str | None
+    symbol: str
+    side: str
+    quantity: float
+
+
+@dataclass(frozen=True)
 class MarketMark:
     """One mark supplied to the canonical FIFO open-P&L valuation.
 

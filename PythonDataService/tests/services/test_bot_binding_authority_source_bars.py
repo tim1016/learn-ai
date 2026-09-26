@@ -145,3 +145,31 @@ def test_primary_custody_kind_on_a_synthetic_runtime_refuses_to_guess() -> None:
             primary_custody_kind()
     finally:
         reset_alpaca_clerk_for_testing()
+
+
+async def test_synthetic_runtime_uses_the_runners_clock_for_broker_custody_and_session(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
+    from app.services.bot_binding_authority import SyntheticBindingAuthority
+    from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+
+    clock = _clock_at(FIXTURE_RTH_MS)
+    authority = SyntheticBindingAuthority(
+        binding=_trade_binding("clock-bot").model_copy(update={"mode": "dry_run"}),
+        artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        runtime_in_use=lambda _: False, brokers={}, clock=clock,
+    )
+    try:
+        await authority.ensure_recoverable()
+        async with authority.runtime_for_projection() as runtime:
+            repo = runtime.sqlite_repository
+            broker = authority.brokers[authority.account_id]
+            assert repo.clock() == clock()
+            evidence = await broker.get_clock_evidence()
+            assert evidence.is_open and evidence.observed_at_ms == clock()
+            assert (await broker.get_account()).observed_at_ms == clock()
+            clock.advance(15_000)
+            repo.renew_execution_lease()
+            assert repo.clock() == clock()
+            assert (await broker.get_clock_evidence()).observed_at_ms == clock()
+    finally:
+        await close_synthetic_clerk_runtimes()

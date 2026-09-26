@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from math import isfinite
+from math import isclose, isfinite, ulp
 from typing import Any
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
@@ -163,6 +163,10 @@ class ValidatedLiveEnvelope:
             )
         return cls(**{field: mapping[field] for field in ENVELOPE_FIELDS})
 
+    def validate_for_write(self) -> None:
+        """New limits use whole cents; historical seals retain their exact bytes."""
+        require_whole_cent_loss_cap(self.loss_usd)
+
     def to_values(self) -> LiveEnvelopeValues:
         """The clerk's envelope dataclass, field-for-field — no rename layer."""
         return LiveEnvelopeValues(**{field: getattr(self, field) for field in ENVELOPE_FIELDS})
@@ -181,8 +185,8 @@ class ValidatedPaperAllowances:
     """A paper revision's own extended-hours allowances, in bps (#2440).
 
     Owner decisions 2026-09-25: Start of a regular-hours run refuses until the
-    account has an exit allowance, and so does a Resume of a flat run (a run
-    still holding a position always resumes), because that run's EXIT on the
+    bot has an exit allowance, and so does a Resume of a flat run. Holding
+    Resume requires Flatten first (ADR 0045). The bot's EXIT on the
     day's last bar reaches the broker after the close as an after-hours limit
     priced off the decision bar's close. A live revision carries the pair
     inside its six-value envelope, sealed at arming; a paper revision has no
@@ -239,3 +243,10 @@ __all__ = [
     "ValidatedLiveEnvelope",
     "ValidatedPaperAllowances",
 ]
+
+
+def require_whole_cent_loss_cap(value: float) -> None:
+    """Accept at most four ULPs of binary noise around a whole-cent amount."""
+    cents = value * 100
+    if not isfinite(cents) or not isclose(cents, round(cents), rel_tol=0, abs_tol=4 * ulp(cents)):
+        raise InvalidLiveEnvelope("The daily USD loss cap must be in whole cents.")

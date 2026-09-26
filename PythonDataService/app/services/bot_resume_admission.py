@@ -38,11 +38,11 @@ from app.services.bot_start_admission import (
     new_run_binding,
 )
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
+from app.services.deploy_window import deploy_window
 from app.services.live_arming_admission import ArmingFactResolver, live_arming_admission_fact
 from app.services.market_liveness import get_market_liveness_store, market_liveness_fact
 from app.services.run_admission import (
     evaluate_run_admission,
-    log_resume_admitted_without_exit_allowance,
 )
 from app.services.signal_program_admission import (
     LegacyProgramUnreconstructibleError,
@@ -272,7 +272,7 @@ class BotResumeAdmission:
         custody_guard: CustodyGuard,
     ) -> AsyncIterator[tuple[BrokerBotBinding, RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
-            async with custody_guard(prior) as (custody, policy):
+            async with custody_guard(prior) as (custody, policy, stored_terms):
                 proposed = proposed.model_copy(
                     update={
                         "sealed_account_id": prior.sealed_account_id,
@@ -340,8 +340,9 @@ class BotResumeAdmission:
                         prior.symbol,
                         observed_at_ms,
                     ),
+                    start_window=deploy_window(observed_at_ms) if prior.use_rth else None,
                     extended_hours=extended_hours_admission_fact(
-                        use_rth=prior.use_rth, policy=policy, observed_at_ms=observed_at_ms
+                        use_rth=prior.use_rth, policy=policy, observed_at_ms=observed_at_ms, exit_terms=stored_terms
                     ),
                     desired_state=status.desired_state,
                     phase=status.phase,
@@ -361,8 +362,6 @@ class BotResumeAdmission:
                     custody,
                     evaluated_at_ms=self._now_ms(),
                 )
-                if mutating:
-                    log_resume_admitted_without_exit_allowance(facts, custody, decision)
                 yield (proposed, decision, feed, custody)
         except ClerkAdmissionSnapshotStaleError as exc:
             raise StartAdmissionEvidenceChanged(
@@ -373,6 +372,7 @@ class BotResumeAdmission:
 def _request_from(binding: BrokerBotBinding) -> StartRequest:
     """Reuse immutable instance configuration while minting a new run ID."""
     return StartRequest(
+        exit_terms=None,
         broker=binding.broker,
         strategy_instance_id=binding.strategy_instance_id,
         strategy_key=binding.strategy_key,

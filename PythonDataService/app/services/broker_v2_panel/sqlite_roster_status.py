@@ -120,8 +120,9 @@ def terminal_duty_outcome(
     blank exactly the rows T6 restored. So the projection answers whenever it
     has an answer, and the receipt is consulted only where it does not.
 
-    A running bot has no terminal outcome to look for, so neither the SQLite
-    run lookup nor the receipt read happens on the fleet's hot path.
+    A terminal receipt can outlive a failed RUN_STOPPED commit. Check the
+    current run's receipt even when SQLite still calls that run ACTIVE; an
+    outcome from an older run must not stop a newer one.
 
     Known asymmetry: the legacy registry producer
     (``bot_registry_projection.project_bot_status``) still projects from the
@@ -133,10 +134,10 @@ def terminal_duty_outcome(
     the shape of the fact stays single-sourced either way.
     """
     projected = duty_outcome_view(lifecycle)
-    if projected is not None or running:
-        return projected
     latest = repository.latest_run(strategy_instance_id)
-    if latest is None or latest.state == "ACTIVE":
+    if projected is not None and (not running or (latest is not None and projected.run_id == latest.lifecycle_run_id)):
+        return projected
+    if latest is None:
         return None
     try:
         receipt = live_state_binding_repository(live_artifacts_root()).read_outcome(
@@ -298,6 +299,9 @@ def build_roster_status(
     retired_at_ms = registration.get("retired_at_ms")
     running = active_run is not None
     lifecycle = lifecycle_record(strategy_instance_id)
+    outcome = terminal_duty_outcome(strategy_instance_id, lifecycle, repository, running=running)
+    if outcome is not None:
+        running = False
     return BotStatusView(
         strategy_instance_id=strategy_instance_id,
         strategy_key=config.strategy_key,
@@ -310,13 +314,8 @@ def build_roster_status(
         running=running,
         phase=("RETIRED" if retired_at_ms is not None else "ON_DUTY" if running else "OFF_DUTY"),
         desired_state="RUNNING" if running else "STOPPED",
-        active_run_id=(str(active_run.lifecycle_run_id) if active_run is not None else None),
-        duty_outcome=terminal_duty_outcome(
-            strategy_instance_id,
-            lifecycle,
-            repository,
-            running=running,
-        ),
+        active_run_id=(str(active_run.lifecycle_run_id) if running and active_run is not None else None),
+        duty_outcome=outcome,
         binding_created_at_ms=int(registration["created_at_ms"]),
         last_transition_at_ms=(
             int(retired_at_ms)

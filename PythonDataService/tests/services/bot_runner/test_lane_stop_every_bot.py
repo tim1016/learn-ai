@@ -23,6 +23,7 @@ from app.services.bot_runner import RunAdmissionRefusedError
 from app.services.bot_runner_errors import BotRunnerError
 from tests._helpers.bot_runner.custody import _SID, _registry
 from tests._helpers.bot_runner.doubles import _FakeFeed
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 _OTHER_SID = f"{_SID}-b"
 
@@ -32,9 +33,9 @@ async def test_stop_every_running_bot_stops_each_task_with_durable_stopped_inten
     tmp_path: Path,
 ) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    first = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    first = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     second = await registry.deploy(
-        broker="alpaca", strategy_instance_id=_OTHER_SID, symbol="QQQ"
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_OTHER_SID, symbol="QQQ"
     )
 
     outcome = await registry.stop_every_running_bot(
@@ -73,7 +74,7 @@ async def test_a_refused_stop_is_reported_and_the_lane_is_still_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     real_stop = registry.stop
 
     async def refusing_stop(broker: str, strategy_instance_id: str, **kwargs: object):
@@ -111,9 +112,9 @@ async def test_any_per_bot_stop_failure_is_recorded_and_the_other_bots_still_sto
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
 ) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     other = await registry.deploy(
-        broker="alpaca", strategy_instance_id=_OTHER_SID, symbol="QQQ"
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_OTHER_SID, symbol="QQQ"
     )
     real_stop = registry.stop
 
@@ -153,7 +154,7 @@ async def test_idle_bots_whose_intent_still_says_run_are_recorded_stopped(
     a restart that never resumed it) or PAUSED would still read as a bot that
     wants to run; the lane-wide stop records STOPPED for it, in the receipt."""
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    live = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    live = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     _record_intent(tmp_path, "bot-crashed", DesiredState.RUNNING)
     _record_intent(tmp_path, "bot-paused", DesiredState.PAUSED)
     _record_intent(tmp_path, "bot-stopped", DesiredState.STOPPED)

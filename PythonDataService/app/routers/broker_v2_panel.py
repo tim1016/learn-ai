@@ -26,6 +26,7 @@ from typing import Literal, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
@@ -63,6 +64,7 @@ from app.schemas.canary_admission import (
     CanaryActivationRequest,
     CanaryAdmissionEvent,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
     cohort_archive,
@@ -286,9 +288,19 @@ async def get_alpaca_paper_deploy_view(
             "reports account-level channel presence and connectivity only."
         ),
     ),
+    exit_allowance_bps: float | None = Query(None),
+    band_multiple: float | None = Query(None),
+    spread_cap_bps: float | None = Query(None),
 ) -> AlpacaPaperDeployView:
+    supplied = {name: value for name, value in {
+        "exit_allowance_bps": exit_allowance_bps, "band_multiple": band_multiple, "spread_cap_bps": spread_cap_bps,
+    }.items() if value is not None}
     try:
-        return await panel_deploy.get_alpaca_paper_deploy_view(broker, account_id, symbol)
+        terms = ExitTermsInput.model_validate(supplied) if supplied else None
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc
+    try:
+        return await panel_deploy.get_alpaca_paper_deploy_view(broker, account_id, symbol, terms)
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 

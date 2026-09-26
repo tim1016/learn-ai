@@ -86,7 +86,7 @@ def immutable_configuration_payload(binding: CarryoverBinding) -> dict:
     """Return the exact immutable configuration payload hashed for carryover."""
     return binding.model_dump(
         mode="json",
-        exclude={"run_id", "created_at_ms"},
+        exclude={"run_id", "created_at_ms", "exit_terms"},
         # Optional configuration fields added in later schema versions must
         # not invalidate hashes for older bindings when they remain absent.
         # A populated evidence override is still included and hash-bound.

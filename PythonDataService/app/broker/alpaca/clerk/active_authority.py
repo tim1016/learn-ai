@@ -74,6 +74,7 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.schemas.account_authority import CustodyWorld
+from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +314,7 @@ async def activate_synthetic_clerk_authority(
     account_id: str,
     artifacts_root: Path,
     activation_store: SyntheticActivationStore | None = None,
+    clock: Clock = now_ms_utc,
 ) -> SyntheticActivationRecord:
     """Explicitly initialize and durably activate one isolated ``sim:`` account.
 
@@ -324,6 +326,7 @@ async def activate_synthetic_clerk_authority(
         account_id=account_id,
         artifacts_root=artifacts_root,
         store=activation_store or SyntheticActivationStore(artifacts_root),
+        clock=clock,
     )
     assert isinstance(record, SyntheticActivationRecord)
     return record

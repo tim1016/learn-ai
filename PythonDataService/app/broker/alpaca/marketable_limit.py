@@ -120,8 +120,8 @@ class ExtendedHoursAllowances:
     two of three.
     """
 
-    entry_bps: Decimal
-    exit_bps: Decimal
+    entry_bps: Decimal | None
+    exit_bps: Decimal | None
     exit_band_multiple: Decimal = DEFAULT_EXIT_BAND_MULTIPLE
     exit_spread_cap_bps: Decimal = DEFAULT_EXIT_SPREAD_CAP_BPS
 

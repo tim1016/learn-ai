@@ -75,6 +75,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import (
     ResumeCheckpointAdmissionFact,
     RunAdmissionDecision,
@@ -502,6 +503,7 @@ class BotTaskRegistry:
             real_projector=self._lifecycle_projector,
             external_start_guard=start_custody_guard,
             runtime_in_use=self._synthetic_runtime_in_use,
+            clock=self._now_ms,
         )
         self._boot_recovery = BotBootRecovery(
             self._artifacts_root,
@@ -588,6 +590,7 @@ class BotTaskRegistry:
         strategy_instance_id: str,
         strategy_key: str = "deployment_validation",
         symbol: str,
+        exit_terms: ExitTerms,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -601,6 +604,7 @@ class BotTaskRegistry:
                 strategy_instance_id=strategy_instance_id,
                 strategy_key=strategy_key,
                 symbol=symbol,
+                exit_terms=exit_terms,
                 use_rth=use_rth,
                 mode=mode,
                 quantity=quantity,
@@ -621,6 +625,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
+        exit_terms: ExitTerms,
         strategy_params: dict[str, Any] | None = None,
         # Widened to the canonical 3-member ParameterOrigin: this is threaded
         # straight through to `make_start_request` (bot_start_admission.py),
@@ -651,6 +656,7 @@ class BotTaskRegistry:
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
             strategy_params=strategy_params,
+            exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
         )
         # Graduation re-observes the complete stopped roster and appends the
@@ -680,6 +686,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
+        exit_terms: ExitTerms | None = None,
         strategy_params: dict[str, Any] | None = None,
         # See the widening note on the matching parameter in
         # `deploy_with_admission` above.
@@ -703,6 +710,7 @@ class BotTaskRegistry:
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
             strategy_params=strategy_params,
+            exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
         )
         async with self._operation_lock(strategy_instance_id):
@@ -1063,7 +1071,7 @@ class BotTaskRegistry:
                     detail="The roster has no binding for this instance.",
                 )
             status = self.status(broker, strategy_instance_id)
-            async with self._start_custody_guard(binding) as (custody, _policy):
+            async with self._start_custody_guard(binding) as (custody, _policy, _terms):
                 verdict = evaluate_retirement(
                     running=status.running,
                     phase=status.phase,
@@ -1121,7 +1129,7 @@ class BotTaskRegistry:
                 )
             status = self.status(broker, strategy_instance_id)
             try:
-                async with self._start_custody_guard(binding) as (custody, _policy):
+                async with self._start_custody_guard(binding) as (custody, _policy, _terms):
                     verdict = evaluate_archive(
                         running=status.running,
                         phase=status.phase,

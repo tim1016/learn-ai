@@ -22,6 +22,7 @@ from tests._helpers.bot_runner.ema_parity import (
     _ema_signal_evaluation_id,
 )
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import (
     _EMA_FIRST_ENTER_MS,
@@ -53,7 +54,7 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
     registry = _registry(tmp_path, feed)
 
     await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",
@@ -105,7 +106,7 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
     registry = _registry(tmp_path, feed)
 
     await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",
@@ -135,7 +136,7 @@ async def test_trade_bot_enters_after_two_green_bars_in_window(tmp_path: Path, m
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=2)
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=2)
     await _wait_for(lambda: feed.bars_consumed == 3)
     await registry.stop("alpaca", _SID)
 
@@ -163,7 +164,7 @@ async def test_trade_bot_no_entry_before_window(tmp_path: Path, monkeypatch: pyt
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     await _wait_for(lambda: feed.bars_consumed == 2)
     await registry.stop("alpaca", _SID)
 
@@ -187,7 +188,7 @@ async def test_trade_bot_exits_three_bars_after_entry(tmp_path: Path, monkeypatc
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=3)
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=3)
     await _wait_for(lambda: feed.bars_consumed == 5)
     await registry.stop("alpaca", _SID)
 
@@ -212,7 +213,7 @@ async def test_trade_bot_flattens_at_window_end(tmp_path: Path, monkeypatch: pyt
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=1)
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=1)
     await _wait_for(lambda: feed.bars_consumed == 4)
     await registry.stop("alpaca", _SID)
 
@@ -231,7 +232,7 @@ async def test_trade_bot_quantity_plumbed_from_binding(tmp_path: Path, monkeypat
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=7)
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=7)
     await _wait_for(lambda: feed.bars_consumed == 2)
     await registry.stop("alpaca", _SID)
 
@@ -258,7 +259,7 @@ async def test_trade_bot_submit_exception_crashes_task(tmp_path: Path, monkeypat
     feed = _FakeFeed(bars, mode="finite")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
     view = registry.status("alpaca", _SID)
@@ -275,7 +276,7 @@ async def test_log_only_bot_unchanged_after_trade_mode_added(tmp_path: Path, cap
 
     with caplog.at_level("INFO", logger="app.services.bot_runtime"):
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
             mode="log_only",

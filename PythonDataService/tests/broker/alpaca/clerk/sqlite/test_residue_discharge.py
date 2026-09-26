@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
@@ -42,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExitStuckCause,
 )
 from app.broker.contract.errors import BrokerUnavailable
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (  # noqa: F401  (fixture import)
     ACCOUNT_ID,
@@ -215,7 +215,7 @@ async def test_a_netted_account_discharges_only_the_residue(clocked_repo) -> Non
     A's residue is exactly what restores broker = attribution."""
     repo, _clock = clocked_repo
     other_sid, other_run = "wd-bot-b", "wd-run-b"
-    repo.register_strategy_instance(
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
         strategy_instance_id=other_sid, symbol="SPY", config_hash="wd-h2"
     )
     submit_start_run(
@@ -268,7 +268,7 @@ async def test_a_mirror_rebuild_replays_the_discharge(tmp_path) -> None:
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
-    repo.register_strategy_instance(
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
         strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1"
     )
     submit_start_run(
@@ -302,12 +302,13 @@ async def test_the_panel_dispatcher_discharges_a_drifted_residue_end_to_end(cloc
     facade = SqliteAlpacaClerkFacade(
         account_mode="paper", repo=repo, read=flat, trade=_FakeTrade()
     )
+    facade.upgrade_legacy_exit_terms()
     drifted = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
     assert drifted.verdict == "position_drift"
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=WATCHDOG_SID)
@@ -476,7 +477,7 @@ async def test_an_unreadable_broker_is_a_recovery_refusal(clocked_repo) -> None:
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=WATCHDOG_SID)

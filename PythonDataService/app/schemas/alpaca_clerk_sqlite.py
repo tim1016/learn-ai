@@ -216,6 +216,17 @@ class ProjectedHoldResponse(BaseModel):
     evidence_refs: tuple[str, ...]
 
 
+class RecoveryStatusResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    kind: Literal["working", "on_hold", "allowed_now", "allowed_from", "broker_unreachable", "stuck", "unknown"]
+    reason_code: str
+    explanation: str
+    last_checked_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    stuck_since_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    allowed_from_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class ProjectedUncertaintyResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
@@ -234,16 +245,8 @@ class ProjectedUncertaintyResponse(BaseModel):
     observed_at_ms: int
     evidence_age_ms: int
     evidence_refs: tuple[str, ...]
-    # Earliest session eligibility for automatic recovery (int64 ms UTC).
-    # No time while an exit works or automatic recovery has stopped.
-    # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    # An exit for this strategy is in progress, so no automatic attempt is
-    # due while it works (#2440 review).
-    exit_working: bool = False
-    # The episode's recorded facts could not be read: its next attempt is
-    # unknown, not unscheduled (#2440 review). The row itself still projects.
-    facts_unreadable: bool = False
+    # The one observed recovery status shared across operator surfaces.
+    recovery_status: RecoveryStatusResponse | None = None
 
 
 class ProjectedReconciliationResponse(BaseModel):
@@ -350,9 +353,28 @@ class ProjectionGuidanceResponse(BaseModel):
     next_step: str
     # The primary episode's next automatic attempt, as its uncertainty
     # projects it (#2440).
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    exit_working: bool = False
-    facts_unreadable: bool = False
+    recovery_status: RecoveryStatusResponse | None = None
+
+
+class ExposureNoticeView(BaseModel):
+    """What an abnormal run end left behind at the broker (#2410).
+
+    An ended run manages nothing, so the refusal says so whenever something
+    could still move money: ``position_unmanaged`` for a nonzero position the
+    Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
+    currently vouch for that position, and ``entry_order_working`` for an entry
+    order still working that can open one. Nothing is cancelled or flattened on
+    the operator's behalf.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["position_unmanaged", "position_unverified", "entry_order_working"]
+    label: str
+    explanation: str
+    strategy_instance_id: str | None = None
+    symbol: str | None = None
+    action_label: str = "Open bot"
 
 
 class ClerkProjectionResponse(BaseModel):
@@ -360,6 +382,7 @@ class ClerkProjectionResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    exposure_notices: list[ExposureNoticeView] = Field(default_factory=list)
     account_id: str
     strategy_instance_id: str | None
     authority_generation: int
@@ -490,6 +513,7 @@ class RecoveryActionCheckRequest(BaseModel):
     action_id: RecoveryActionId
     concurrency_token: str = Field(min_length=1, max_length=128)
     proposed_limit_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    band_override: bool = False
 
 
 class RegularSessionFlattenPricing(BaseModel):
@@ -516,6 +540,8 @@ class ProposedLimitEvaluationResponse(BaseModel):
     # Every share filling at the limit, measured against the touch, in dollars.
     worst_case_cost: float
     outside_band: bool
+    band_cap_bps: float | None = None
+    override_acknowledged: bool = False
     thin_book: bool
     resting: bool
 
@@ -582,6 +608,7 @@ def safe_flatten_pricing_response(
     pricing: RecoveryReductionPricing | LegRefusal,
     *,
     proposed_limit_price: float | None = None,
+    band_override: bool = False,
     quantity: float = 0.0,
 ) -> SafeFlattenPricingResponse:
     """The wire shape of the facade's ``price_safe_flatten`` answer.
@@ -637,6 +664,8 @@ def safe_flatten_pricing_response(
                     through_book_bps=proposal.through_book_bps,
                     worst_case_cost=proposal.worst_case_cost,
                     outside_band=proposal.outside_band,
+                    band_cap_bps=None if pricing.band_cap_bps is None else float(pricing.band_cap_bps),
+                    override_acknowledged=band_override,
                     thin_book=proposal.thin_book,
                     resting=proposal.resting,
                 )
@@ -667,11 +696,13 @@ class ExtendedLimitConfirmationRequest(BaseModel):
 
     limit_price: float = Field(gt=0, allow_inf_nan=False)
     quote_observed_at_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    band_override: bool = False
 
     def to_confirmed(self) -> ConfirmedRecoveryLimit:
         return ConfirmedRecoveryLimit(
             limit_price=Decimal(str(self.limit_price)),
             quote_observed_at_ms=self.quote_observed_at_ms,
+            band_override=self.band_override,
         )
 
 

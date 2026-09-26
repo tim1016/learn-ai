@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -76,6 +76,7 @@ FOR EACH ROW WHEN
     OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
     OR OLD.paper_xh_entry_bps IS NOT NEW.paper_xh_entry_bps
     OR OLD.paper_xh_exit_bps IS NOT NEW.paper_xh_exit_bps
+    OR OLD.default_exit_terms_json IS NOT NEW.default_exit_terms_json
     OR OLD.content_sha256 IS NOT NEW.content_sha256
     OR OLD.complete IS NOT NEW.complete
     OR OLD.author_owner_id IS NOT NEW.author_owner_id
@@ -157,6 +158,7 @@ CREATE TABLE profile_revisions (
     -- A paper revision's own two allowances; see ``_PAPER_XH_EXIT_COLUMN``.
     {_PAPER_XH_ENTRY_COLUMN},
     {_PAPER_XH_EXIT_COLUMN},
+    default_exit_terms_json TEXT,
     PRIMARY KEY (profile_id, revision),
     -- A live revision carries the whole envelope or none of it; a paper
     -- revision may carry none. Six-way all-or-nothing, in the schema.
@@ -295,6 +297,34 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         # hashes — exactly as it did.
         f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_ENTRY_COLUMN}",
         f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_EXIT_COLUMN}",
+        "DROP TRIGGER trg_profile_revisions_content_immutable",
+        """CREATE TRIGGER trg_profile_revisions_content_immutable
+BEFORE UPDATE ON profile_revisions
+FOR EACH ROW WHEN
+    OLD.profile_id IS NOT NEW.profile_id
+    OR OLD.revision IS NOT NEW.revision
+    OR OLD.schema_version IS NOT NEW.schema_version
+    OR OLD.credential_slot IS NOT NEW.credential_slot
+    OR OLD.endpoint_mode IS NOT NEW.endpoint_mode
+    OR OLD.live_loss_fraction IS NOT NEW.live_loss_fraction
+    OR OLD.live_loss_usd IS NOT NEW.live_loss_usd
+    OR OLD.live_shadow_sessions IS NOT NEW.live_shadow_sessions
+    OR OLD.live_arming_max_sessions IS NOT NEW.live_arming_max_sessions
+    OR OLD.live_xh_entry_bps IS NOT NEW.live_xh_entry_bps
+    OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
+    OR OLD.paper_xh_entry_bps IS NOT NEW.paper_xh_entry_bps
+    OR OLD.paper_xh_exit_bps IS NOT NEW.paper_xh_exit_bps
+    OR OLD.content_sha256 IS NOT NEW.content_sha256
+    OR OLD.complete IS NOT NEW.complete
+    OR OLD.author_owner_id IS NOT NEW.author_owner_id
+    OR OLD.created_at_ms IS NOT NEW.created_at_ms
+    OR OLD.account_pin IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'a profile revision is immutable apart from binding its account pin once');
+END""",
+    ),
+    3: (
+        "ALTER TABLE profile_revisions ADD COLUMN default_exit_terms_json TEXT",
         "DROP TRIGGER trg_profile_revisions_content_immutable",
         _REVISION_CONTENT_IMMUTABLE_TRIGGER,
     ),

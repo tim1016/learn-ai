@@ -17,11 +17,12 @@ from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.stream_health import STREAM_HEALTH_REASON_CODE, StreamHealthGate
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import OrderType, TimeInForce
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.market_liveness import compose_market_liveness
@@ -81,6 +82,7 @@ def _decision_clock(bar: RetainedSourceBar | None) -> Clock:
 def _binding(*, use_rth: bool) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=SID,
+        exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal(),
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="SPY",
@@ -268,7 +270,7 @@ def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sid
         repo.close()
 
     assert policy.allowances == ExtendedHoursAllowances(
-        entry_bps=Decimal("30"), exit_bps=Decimal("40")
+        entry_bps=Decimal("30"), exit_bps=None
     )
     assert policy.window == _EXTENDED_POLICY.window
 
@@ -276,14 +278,7 @@ def test_the_one_published_leg_policy_carries_the_sealed_allowances_for_both_sid
 async def test_an_extended_exit_is_priced_from_the_sealed_allowance_not_a_staged_edit(
     tmp_path: Path,
 ) -> None:
-    """ADR 0059 D3: an edited allowance reaches an exit at the re-arm, never before.
-
-    The environment here carries a staged 500 bps that nobody armed, and the
-    ledger seals 40. Pricing from the environment would let an operator move a
-    real-money anchor by editing a file — and an exit is never envelope-gated,
-    so nothing else would catch it. The policy's own configured 20 bps is the
-    pre-envelope answer, so a wrong wiring cannot hide behind a plausible price.
-    """
+    """The bot's deployed 20 bps outranks both the account seal (40) and staged edit (500)."""
     envelope = LiveEnvelopeGate(
         values=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=500.0, xh_exit_bps=500.0),
         sealed=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0),
@@ -300,7 +295,7 @@ async def test_an_extended_exit_is_priced_from_the_sealed_allowance_not_a_staged
 
     assert state is not EffectOperationState.REJECTED
     (leg,) = trade.submitted_legs
-    assert leg.limit_price == pytest.approx(99.60)  # 100.00 − the sealed 40 bps
+    assert leg.limit_price == pytest.approx(99.80)  # registered 20 bps outranks account envelope
 
 
 async def test_an_extended_exit_still_prices_when_no_arming_record_seals_the_account(
@@ -473,6 +468,7 @@ def test_a_late_exit_is_repriced_from_the_live_market_only_off_a_synthetic_autho
     market it does not execute in.
     """
     repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path)
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="test", exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal())
     facade = SqliteAlpacaClerkFacade(
         repo=repo,
         read=_FakeReadPort(),
@@ -485,7 +481,7 @@ def test_a_late_exit_is_repriced_from_the_live_market_only_off_a_synthetic_autho
         pricing = facade.recovery_pricing
         assert (pricing is not UNPRICEABLE_RECOVERY) is prices_from_the_live_market
         if prices_from_the_live_market:
-            assert pricing.policy_source() is _EXTENDED_POLICY
+            assert pricing.policy_for(SID) == _EXTENDED_POLICY
     finally:
         repo.close()
 
@@ -589,7 +585,7 @@ def test_the_facade_publishes_its_leg_policy(
         program_leg_policy=policy,
     )
     try:
-        assert facade.program_leg_policy is policy
+        assert facade.program_leg_policy == (policy if policy.allowances is None else replace(policy, allowances=replace(policy.allowances, exit_bps=None)))
         assert facade.program_leg_policy.window == expected_window
     finally:
         repo.close()
@@ -729,3 +725,185 @@ async def test_market_loss_between_admission_and_contact_refuses_the_order(
     assert calls == 2
     assert trade.submitted_legs == []
     assert state is EffectOperationState.REJECTED
+
+
+async def test_explicit_terms_survive_a_crash_after_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.schemas.exit_terms import ExitTermsInput
+    from app.services.bot_carryover import configuration_hash
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: _bar(10, 0, phase='RTH').end_ms)
+    terms = ExitTermsInput(exit_allowance_bps=37, band_multiple=3, spread_cap_bps=70).seal()
+    binding = _binding(use_rth=True).model_copy(update={'exit_terms': terms})
+    assert configuration_hash(binding) == configuration_hash(_binding(use_rth=True))
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode='paper', program_leg_policy=_EXTENDED_POLICY)
+    register = repo.register_strategy_instance
+
+    def crash_after_commit(**kwargs: object) -> None:
+        register(**kwargs)
+        raise RuntimeError('simulated crash after registration commit')
+
+    monkeypatch.setattr(repo, 'register_strategy_instance', crash_after_commit)
+    with pytest.raises(RuntimeError, match='simulated crash'):
+        await facade.register_strategy_run(binding)
+    repo.close()
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: _bar(10, 0, phase='RTH').end_ms)
+    try:
+        restarted = SqliteAlpacaClerkFacade(repo=reopened, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode='paper', program_leg_policy=_EXTENDED_POLICY)
+        await restarted.register_strategy_run(binding)
+        assert reopened.exit_terms(SID) == terms
+        changed = binding.model_copy(update={'run_id': 'run-next', 'exit_terms': terms.model_copy(update={'exit_allowance_bps': 99})})
+        with pytest.raises(StrategyRegistrationConflictError, match='custody-sealed exit terms'):
+            await restarted.register_strategy_run(changed)
+    finally:
+        reopened.close()
+
+
+async def test_each_bots_flatten_ticket_uses_its_own_terms(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan, SafeFlattenPlanLeg
+    from app.schemas.exit_terms import ExitTermsInput
+    from app.schemas.market_liveness import TopOfBookQuote
+
+    now = _bar(8, 0, phase='PRE').end_ms
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: now)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode='paper',
+        program_leg_policy=_EXTENDED_POLICY, quote_source=lambda symbol, stamp: TopOfBookQuote(symbol=symbol, bid=100, ask=100.05, source='ibkr', observed_at_ms=stamp))
+    try:
+        for sid, allowance in [('one', 10), ('two', 40)]:
+            binding = _binding(use_rth=True).model_copy(update={'strategy_instance_id': sid, 'run_id': sid,
+                'exit_terms': ExitTermsInput(exit_allowance_bps=allowance, band_multiple=3, spread_cap_bps=70).seal()})
+            await facade.register_strategy_run(binding)
+            plan = SafeFlattenPlan(version_token='test', account_id=ACCOUNT_ID, authority_generation=1,
+                db_identity_token='test', control_revision=0, scope='strategy', strategy_instance_id=sid,
+                reconciliation_id='test', prepared_at_ms=now, expires_at_ms=now + 1000,
+                legs=(SafeFlattenPlanLeg(sid, 'SPY', 'sell', 1, now),))
+            priced = facade.price_safe_flatten(plan)
+            assert priced.suggested_limit_price == Decimal('99.90' if sid == 'one' else '99.60')
+            assert priced.band_cap_bps == allowance * 3
+    finally:
+        repo.close()
+
+
+async def test_unset_backfill_stays_unset_after_restart_and_allows_regular_market_flatten(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.program_leg import LegRefusal
+    from app.broker.alpaca.clerk.recovery_reduction import RegularSessionReduction
+    from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan, SafeFlattenPlanLeg
+    from app.schemas.market_liveness import TopOfBookQuote
+
+    now = _bar(8, 0, phase="PRE").end_ms
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: now)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),
+        account_mode="paper", program_leg_policy=replace(_EXTENDED_POLICY, allowances=None))
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="legacy")
+    facade.upgrade_legacy_exit_terms()
+    assert repo.exit_terms(SID).provenance == "backfilled"
+    repo.close()
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: now)
+    try:
+        restarted = SqliteAlpacaClerkFacade(repo=reopened, read=_FakeReadPort(), trade=_FakeTradePort(),
+            account_mode="paper", program_leg_policy=_EXTENDED_POLICY,
+            quote_source=lambda symbol, stamp: TopOfBookQuote(symbol=symbol, bid=100, ask=100.05,
+                source="ibkr", observed_at_ms=stamp))
+        plan = SafeFlattenPlan(version_token="test", account_id=ACCOUNT_ID, authority_generation=1,
+            db_identity_token="test", control_revision=0, scope="strategy", strategy_instance_id=SID,
+            reconciliation_id="test", prepared_at_ms=now, expires_at_ms=now + 1000,
+            legs=(SafeFlattenPlanLeg(SID, "SPY", "sell", 1, now),))
+        held = restarted.price_safe_flatten(plan)
+        assert isinstance(held, LegRefusal)
+        assert held.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+        now = _bar(10, 0, phase="RTH").end_ms
+        assert isinstance(restarted.price_safe_flatten(plan), RegularSessionReduction)
+    finally:
+        reopened.close()
+
+
+async def test_new_start_without_explicit_exit_terms_is_refused(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),
+            account_mode="paper", program_leg_policy=_EXTENDED_POLICY)
+        with pytest.raises(StrategyRegistrationConflictError, match="Explicit exit terms"):
+            await facade.register_strategy_run(_binding(use_rth=True).model_copy(update={"exit_terms": None}))
+        assert repo.strategy_instance(SID) is None
+    finally:
+        repo.close()
+
+
+def test_legacy_upgrade_uses_refreshed_live_seal_once(tmp_path: Path, monkeypatch) -> None:
+    from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
+    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+    from tests.broker.alpaca.clerk.test_live_arming import _armed
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="legacy")
+        for sid in ("another-bot", "never-armed"):
+            repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="legacy")
+        ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT_ID)
+        ledger.append(_armed(instance=SID, account=ACCOUNT_ID, envelope=replace(TEST_ENVELOPE_VALUES, xh_exit_bps=40)))
+        ledger.append(_armed(instance="another-bot", account=ACCOUNT_ID, envelope=replace(TEST_ENVELOPE_VALUES, xh_exit_bps=70)))
+        configured = replace(TEST_ENVELOPE_VALUES, xh_exit_bps=20)
+        armed = replace(TEST_ENVELOPE_VALUES, xh_exit_bps=70)
+        gate = LiveEnvelopeGate(values=configured, sealed=armed, custody_is_simulated=False)
+        facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),
+            account_mode="live", live_envelope=gate, live_arming=ArmingGate(), program_leg_policy=_EXTENDED_POLICY)
+        assert repo.exit_terms(SID) is None
+        facade.upgrade_legacy_exit_terms(ledger)
+        terms = repo.exit_terms(SID)
+        assert terms.provenance == "backfilled"
+        assert terms.exit_allowance_bps == 40
+        assert repo.exit_terms("another-bot").exit_allowance_bps == 70
+        assert repo.exit_terms("never-armed").exit_allowance_bps == 20
+        first_sequence = len(repo.custody_transitions())
+        monkeypatch.setenv("ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE", "9")
+        facade.upgrade_legacy_exit_terms(ledger)
+        assert repo.exit_terms(SID) == terms
+        assert len(repo.custody_transitions()) == first_sequence
+        assert facade.exit_policy_for_instance(SID).allowances.exit_bps == Decimal(40)
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("bot_allowance,account_allowance,next_hour", [(20, None, 4), (None, 20, 9)])
+def test_recovery_price_and_schedule_share_bot_terms(tmp_path: Path, bot_allowance, account_allowance, next_hour) -> None:
+    from app.broker.alpaca.clerk.recovery_reduction import next_redrive_at_ms
+    from app.schemas.exit_terms import ExitTerms
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="legacy",
+            exit_terms=ExitTerms(exit_allowance_bps=bot_allowance, band_multiple=2, spread_cap_bps=50, provenance="backfilled"))
+        policy = replace(_EXTENDED_POLICY, allowances=None if account_allowance is None else _ALLOWANCES)
+        facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),
+            account_mode="paper", program_leg_policy=policy)
+        pricing = facade.recovery_pricing
+        next_open = next_redrive_at_ms(not_before_ms=_bar(0, 0, phase="CLOSED").end_ms, policy=pricing.policy_for(SID))
+        assert next_open == _bar(next_hour, 0 if next_hour == 4 else 30, phase="PRE" if next_hour == 4 else "RTH").end_ms
+        assert pricing.read("SPY", next_open, strategy_instance_id=SID).policy.allowances.exit_bps == (
+            None if bot_allowance is None else Decimal(bot_allowance))
+    finally:
+        repo.close()
+
+
+def test_v17_terms_upgrade_and_mirror_rebuild_preserve_the_registration_seal(tmp_path: Path) -> None:
+    import sqlite3
+
+    terms = ExitTermsInput(exit_allowance_bps=37, band_multiple=3, spread_cap_bps=70).seal()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="legacy", exit_terms=terms)
+    journal = repo.custody_transitions()
+    path = repo.db_path
+    repo.close()
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE strategy_exit_terms")
+        conn.execute("UPDATE control_meta SET schema_version=17")
+    migrated = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    assert migrated.exit_terms(SID) == terms
+    assert migrated.custody_transitions() == journal
+    migrated.close()
+    path.rename(path.with_suffix(".before-rebuild"))
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    try:
+        assert rebuilt.exit_terms(SID) == terms
+        assert rebuilt.custody_transitions() == journal
+    finally:
+        rebuilt.close()

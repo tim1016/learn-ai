@@ -22,10 +22,10 @@ is decided again, for every EXIT, by the send-time rule in
 ``sqlite/exit_resolution.py``, which re-prices that market leg off the live
 touch after the close, or folds it loudly for the operator.
 
-Which allowance the policy carries is decided by the authority, not here: on
-the live world it is the one sealed at arming
-(``sqlite/runtime.py::SqliteAlpacaClerkFacade.program_leg_policy``, ADR 0059
-D3). This module is a pure function of the policy it is handed.
+Which allowance the policy carries is decided by the authority, not here.
+Entry keeps the existing profile/arming policy; EXIT reads the owning bot's
+immutable terms through ``exit_policy_for_instance`` (ADR 0045). This module
+is a pure function of the policy it is handed.
 """
 
 from __future__ import annotations
@@ -48,7 +48,6 @@ from app.services.session_authority import TRADEABLE_EXTENDED_PHASES, order_sess
 from app.services.source_bar_ledger import RetainedSourceBar
 
 if TYPE_CHECKING:
-    from app.broker.alpaca.config import AlpacaSettings
     from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
 
 logger = logging.getLogger(__name__)
@@ -73,7 +72,7 @@ type AllowanceResolver = Callable[[], ExtendedHoursAllowances | LegRefusal]
 # never at import, so the deferral costs one dict lookup.
 
 
-def _sealed_allowances(context: AlpacaRuntimeContext) -> ExtendedHoursAllowances | None:
+def _sealed_allowances(context: AlpacaRuntimeContext, strategy_instance_id: str | None = None) -> ExtendedHoursAllowances | None:
     """The newest **armed** record's allowances, or ``None`` when there are none to read.
 
     Reuses the ledger's own reader and ``live_arming.latest_arming`` -- the
@@ -99,7 +98,7 @@ def _sealed_allowances(context: AlpacaRuntimeContext) -> ExtendedHoursAllowances
         return None
     try:
         ledger = LiveArmingLedger(context.settings.clerk_dir, live_account_id=account_id)
-        armed = latest_arming(ledger.records())
+        armed = latest_arming(ledger.records() if strategy_instance_id is None else ledger.records_for(strategy_instance_id))
     except (ValueError, OSError):
         # ``LiveArmingInvalid`` is a ``ValueError``, and so are the account-id
         # and path-containment refusals the ledger's constructor raises.
@@ -145,7 +144,7 @@ def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
         return LegRefusal(
             reason_code=exc.reason,
             explanation=(
-                "This run's exit allowance comes from the Alpaca paper settings, "
+                "This account's entry allowance comes from the Alpaca paper settings, "
                 f"which could not be loaded. {exc.unbound.message}"
             ),
             next_step=f"Fix the Alpaca connection. {exc.unbound.next_step}",
@@ -168,49 +167,12 @@ def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
         return LegRefusal(
             reason_code="ALPACA_CONFIGURATION_UNAVAILABLE",
             explanation=(
-                "This run's exit allowance comes from the Alpaca paper settings, "
+                "This account's entry allowance comes from the Alpaca paper settings, "
                 "which could not be loaded. " + alpaca_configuration_error_detail(exc)
             ),
             next_step="Fix the Alpaca connection and its settings, then restart the clerk.",
         )
     return ExtendedHoursAllowances.from_settings(settings) or EXTENDED_HOURS_ALLOWANCE_UNSET
-
-
-def _resolved_settings(*, concern: str) -> AlpacaSettings | None:
-    """One settings read for the deploy-time recovery knobs (#2229).
-
-    ``None`` means "no settings to read", logged once for the whole concern —
-    not once per knob, which used to emit two "fell back to default" lines for
-    one cause. A worker with no broker binding is an ordinary paper or
-    synthetic posture (info); settings that exist but will not load is a live
-    process about to price real money off declared defaults instead of the
-    configured bounds, so it is loud (error) — the fallback still answers the
-    declared default, never a guess, exactly as an EXIT is never blocked for
-    want of a seal (plan §0 D3).
-    """
-    from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
-
-    try:
-        return resolved_alpaca_settings()
-    except BrokerUnbound as exc:
-        logger.info(
-            "%s fell back to its declared default: no broker binding",
-            concern,
-            extra={"action": "deploy_recovery_knobs_unbound", "reason": exc.reason},
-        )
-        return None
-    except ValidationError as exc:
-        from app.broker.alpaca.config import alpaca_configuration_error_detail
-
-        logger.error(
-            "%s fell back to its declared default: settings did not load",
-            concern,
-            extra={
-                "action": "deploy_recovery_knobs_unavailable",
-                "detail": alpaca_configuration_error_detail(exc),
-            },
-        )
-        return None
 
 
 def _parsed_deploy_knob(
@@ -248,12 +210,12 @@ def _parsed_deploy_knob(
     return value
 
 
-def _exit_band_multiple_from(settings: AlpacaSettings | None) -> Decimal:
+def _exit_band_multiple_from(raw: str | None) -> Decimal:
     """The band multiple one settings read answers, or the declared default."""
     from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_BAND_MULTIPLE
 
     return _parsed_deploy_knob(
-        None if settings is None else settings.live_xh_exit_band_multiple,
+        raw,
         name="ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE",
         low=Decimal(1),
         high=Decimal(10),
@@ -261,12 +223,12 @@ def _exit_band_multiple_from(settings: AlpacaSettings | None) -> Decimal:
     )
 
 
-def _exit_spread_cap_from(settings: AlpacaSettings | None) -> Decimal:
+def _exit_spread_cap_from(raw: str | None) -> Decimal:
     """The spread cap one settings read answers, or the declared default."""
     from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_SPREAD_CAP_BPS
 
     return _parsed_deploy_knob(
-        None if settings is None else settings.live_xh_exit_spread_cap_bps,
+        raw,
         name="ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS",
         low=Decimal(1),
         high=Decimal(1000),
@@ -274,69 +236,31 @@ def _exit_spread_cap_from(settings: AlpacaSettings | None) -> Decimal:
     )
 
 
-def with_deploy_recovery_pricing(
-    allowances: ExtendedHoursAllowances,
-) -> ExtendedHoursAllowances:
-    """Stamp the deploy-time recovery-flatten knobs onto the sealed pair (#2229).
+def legacy_recovery_pricing(allowances: ExtendedHoursAllowances) -> ExtendedHoursAllowances:
+    """One-time upgrade reader for removed environment knobs; never used to price a registered bot."""
+    import os
 
-    The one canonical place the band multiple and the spread cap are applied,
-    from a single settings read. Every path that resolves allowances — sealed
-    arming record, effective revision, settings — and the live facade's
-    per-read rebuild funnels through here, so a deploy-time value applies on
-    every authority or none; before this seam existed the settings path
-    honoured the env var while the two envelope paths silently pinned the
-    default.
-    """
-    settings = _resolved_settings(concern="the deploy recovery-flatten knobs")
-    return replace(
-        allowances,
-        exit_band_multiple=_exit_band_multiple_from(settings),
-        exit_spread_cap_bps=_exit_spread_cap_from(settings),
-    )
+    return replace(allowances,
+                   exit_band_multiple=_exit_band_multiple_from(os.environ.get("ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE")),
+                   exit_spread_cap_bps=_exit_spread_cap_from(os.environ.get("ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS")))
 
 
 def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | LegRefusal:
-    """The allowances an extended-session leg prices from (ADR 0060; plan §0 D3).
+    """Entry composition keeps the confirmed envelope precedence.
 
-    One order, used for **both** the ENTER and the EXIT allowance, because the
-    two numbers live in one document and the question "which document?" has one
-    answer:
-
-    1. the newest **armed** record's sealed envelope -- the six numbers the
-       operator confirmed at the arming ceremony, which is the only act allowed
-       to make a new live limit binding (D3);
-    2. the effective revision's envelope, when no armed record is readable;
-    3. the resolved binding's settings, which is what a paper or ``sim:``
-       authority has and all any authority had before ADR 0060.
-
-    **Nothing raises.** A refused binding, an unpinned account, an unreadable
-    ledger and an absent envelope are each "not this source", so no exit
-    pricing can fail because of a configuration problem.
-
-    When no source supplies allowances, return a typed ``LegRefusal`` that
-    retains the binding's own reason. Admission and :func:`shape_program_leg`
-    share that value — for an EXIT as much as an ENTER. "Never blocked *for lack of a seal*"
-    means falling back to the effective revision, not inventing a number: a
-    number nobody chose must never bound real money (ADR 0059 D4).
-
-    Whichever source wins, :func:`with_deploy_recovery_pricing` stamps the
-    deploy-time recovery-flatten knobs on the result — they are not ceremony
-    numbers and never touch the sealed pair, but they must apply on every
-    path alike (#2229).
+    Registered EXITs replace these defaults with their immutable instance terms.
+    The upgrade path reads only that instance's seal or the effective revision.
     """
     from app.broker.alpaca.active_binding import get_active_alpaca_binding
 
     context = get_active_alpaca_binding()
-    if context is not None:
-        sealed = _sealed_allowances(context)
-        if sealed is not None:
-            return with_deploy_recovery_pricing(sealed)
-        if context.live_envelope is not None:
-            return with_deploy_recovery_pricing(
-                ExtendedHoursAllowances.from_envelope(context.live_envelope)
-            )
+    sealed = None if context is None else _sealed_allowances(context)
+    if sealed is not None:
+        return sealed
+    if context is not None and context.live_envelope is not None:
+        return ExtendedHoursAllowances.from_envelope(context.live_envelope)
     stamped = _settings_allowances()
-    return stamped if isinstance(stamped, LegRefusal) else with_deploy_recovery_pricing(stamped)
+    return stamped
 
 
 @dataclass(frozen=True)
@@ -631,6 +555,8 @@ def _leg_at_decision_close(
         assert policy.allowance_refusal is not None
         raise ProgramLegRefused(policy.allowance_refusal)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
+    if allowance is None:
+        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     try:
         price = marketable_limit_price(side=side, anchor=decision_bar.close, allowance_bps=allowance)
     except ValueError as exc:

@@ -60,6 +60,16 @@ FACADE_WORKFLOW_METHODS = frozenset({"reconcile_account"})
 FACADE_WORKFLOW_HELPERS = frozenset({"execute_recovery_action"})
 
 EXTERNAL_REPOSITORY_WRITER_CENSUS = (
+    ExternalRepositoryWriter(
+        path="app/broker/alpaca/clerk/exit_terms.py", owner="seal_exit_terms",
+        call="append_transition", classification=RepositoryWriterClassification.FACADE_WORKFLOW,
+        rationale="Terms are sealed during startup upgrade or under the registration intake lock.",
+    ),
+    ExternalRepositoryWriter(
+        path="app/broker/alpaca/clerk/exit_terms.py", owner="upgrade_exit_terms",
+        call="append_transition", classification=RepositoryWriterClassification.FACADE_WORKFLOW,
+        rationale="The one-time boot upgrade records completion before recovery begins.",
+    ),
     # The websocket sink's exact-slice append moved inside the package
     # (``exact_execution_evidence.append_exact_execution_slice``, shared with
     # the no-submit adapters' simulated evidence, #2178), so it is no longer

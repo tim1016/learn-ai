@@ -151,7 +151,7 @@ interface BellItem {
                   <app-next-attempt class="item__attempt" [facts]="row.item" />
                   @if (row.link; as link) {
                     <a class="item__open" [routerLink]="link.commands" [queryParams]="link.queryParams">
-                      Open bot
+                      {{ row.item.action_label ?? 'Open bot' }}
                     </a>
                   }
                 </li>

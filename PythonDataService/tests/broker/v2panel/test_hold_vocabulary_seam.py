@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
@@ -108,7 +107,7 @@ def _card_for_stored_cause(tmp_path: Path, reason_code: str) -> ClerkCard:
     )
     _write_hold(repo, reason_code)
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=clock
     )
     try:
         projection = reader.bot_snapshot(SID)
@@ -177,7 +176,7 @@ def test_no_hold_renders_as_no_hold(tmp_path: Path) -> None:
         config_hash="spy-hash",
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=clock
     )
     try:
         projection = reader.bot_snapshot(SID)

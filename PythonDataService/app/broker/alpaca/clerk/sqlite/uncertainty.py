@@ -124,7 +124,6 @@ def raise_uncertainty(
     severity: str = "warning",
     refresh_unchanged: bool = False,
     provenance: TransitionProvenance = TransitionProvenance(),
-    next_attempt_at_ms: int | None = None,
 ) -> str:
     """Raise or refresh one typed episode; unknown causes fail closed account-wide.
 
@@ -150,7 +149,6 @@ def raise_uncertainty(
         next_step=next_step,
         evidence_refs=list(evidence_refs),
         cause_facts=cause_facts or {},
-        next_attempt_at_ms=next_attempt_at_ms,
     )
     facts_json = facts.to_facts_json()
 

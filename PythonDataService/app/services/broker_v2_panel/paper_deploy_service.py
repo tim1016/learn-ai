@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present, public_params_schema
+from app.lean_sidecar.trading_calendar import next_trading_day
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
@@ -23,6 +24,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperSizingOption,
     BotStatusView,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.strategy_params_schema import StrategyParamsSchema
@@ -35,6 +37,9 @@ from app.services.broker_v2_panel.channel_health import (
     evaluate_channels_at_account_scope,
 )
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope, compose_strategy_catalog
+from app.services.deploy_window import deploy_window, session_label, start_window_next_step
+from app.services.session_authority import scheduled_extended_session_bounds
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 
@@ -374,6 +379,8 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
         label="Live",
         availability="planned",
         explanation=(
+            "Live is unavailable on a paper account. Select a live account to deploy real-money bots."
+            if broker_mode == "paper" else
             "Real-money submission follows the live cutover and the arming ceremony; a shadow "
             "rehearsal is optional (ADR 0059, amended 2026-09-09)."
             if broker_mode == "shadow"
@@ -684,6 +691,8 @@ def _eligibility(
             "clerk.exposure_hold": str(blocked.evidence.get("reason_code") or "CLERK_HOLD_ACTIVE"),
             "clerk.intent_custody": "UNRESOLVED_INTENTS",
             "clerk.channel_health": "CLERK_CHANNEL_UNHEALTHY",
+            "deploy.window": "DEPLOY_WINDOW_CLOSED",
+            "deploy.exit_terms": "EXTENDED_HOURS_ALLOWANCE_UNSET",
         }
         return AlpacaPaperDeployEligibility(
             eligible=False,
@@ -767,6 +776,7 @@ def build_alpaca_paper_deploy_view(
     symbol: str | None = None,
     custody_world: CustodyWorld,
     golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
+    default_exit_terms: ExitTermsInput | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict.
 
@@ -795,6 +805,25 @@ def build_alpaca_paper_deploy_view(
         copy=copy,
         custody_world=custody_world,
     )
+    window = deploy_window(evaluated_at_ms)
+    readiness_checks += (
+        AlpacaPaperDeployReadinessCheck(
+            gate_id="deploy.window", label="Start window", ready=window.state != "CLOSED", scope="broker",
+            authority="Canonical session calendar",
+            headline="Start window is open." if window.state != "CLOSED" else "Regular-session bots may start from pre-market open through the regular close.",
+            explanation="Regular-session bots start between pre-market open and regular close.",
+            evidence_summary="Dry Run is exempt from the Start window.",
+            recovery=None if window.state != "CLOSED" else start_window_next_step(window),
+        ),
+        AlpacaPaperDeployReadinessCheck(
+            gate_id="deploy.exit_terms", label="Exit terms", ready=default_exit_terms is not None,
+            scope="strategy", authority="Bot registration",
+            headline="Exit terms are ready." if default_exit_terms is not None else "Set this bot's exit terms before deploying.",
+            explanation="Exit terms are fixed for the life of the bot.",
+            evidence_summary="Profile defaults pre-fill future deployments only.",
+            recovery=None if default_exit_terms is not None else "Enter exit allowance, band multiple and spread cap.",
+        ),
+    )
     eligibility = _eligibility(readiness_checks, copy=copy)
     dry_run_eligibility = _dry_run_eligibility(
         strategies, clerk_status, now_ms=evaluated_at_ms, symbol=symbol
@@ -809,6 +838,9 @@ def build_alpaca_paper_deploy_view(
         eligibility=eligibility,
         dry_run_eligibility=dry_run_eligibility,
         readiness_checks=readiness_checks,
+        default_exit_terms=default_exit_terms,
+        next_deploy_open_ms=window.next_open_ms,
+        exit_steps_summary=exit_steps_summary(default_exit_terms, evaluated_at_ms),
         execution_modes=_execution_modes(broker_mode),
         strategies=strategies,
         sizing_options=(
@@ -840,7 +872,7 @@ def build_alpaca_paper_deploy_view(
             "replay and restart-safety qualification is complete. STOP with exposure "
             "requires a Clerk-proven flatten before Resume."
         ),
-        allowed_actions=("deploy",) if eligibility.eligible else (),
+        allowed_actions=("deploy",) if eligibility.eligible or dry_run_eligibility.eligible else (),
     )
 
 
@@ -866,10 +898,12 @@ def build_alpaca_paper_deploy_receipt(
     copy = _RECEIPT_COPY[request.execution_mode]
     if request.evidence_override is not None:
         copy = _override_receipt_copy(copy)
+    lane_world = next((mode.mode for mode in view.execution_modes
+                       if mode.mode != "dry_run" and mode.availability == "available"), "paper")
     return AlpacaPaperDeployReceipt(
         status="deployed",
         receipt_id=(
-            f"alpaca-paper-deploy:{view.account_id}:{request.strategy_instance_id}:{bot.binding_created_at_ms}"
+            f"alpaca-{lane_world}-deploy:{view.account_id}:{request.strategy_instance_id}:{bot.binding_created_at_ms}"
         ),
         recorded_at_ms=bot.binding_created_at_ms,
         message=f"{request.strategy_instance_id} is on duty in {copy.duty}.",
@@ -886,4 +920,24 @@ def build_alpaca_paper_deploy_receipt(
         bot=bot,
         parameters=resolved_params.effective,
         parameters_diverge_from_defaults=resolved_params.diverges_from_defaults,
+    )
+
+
+def exit_steps_summary(terms: ExitTermsInput | None, now_ms: int) -> str:
+    if terms is None:
+        return "Set exit terms to review this bot's exit steps."
+    window = deploy_window(now_ms)
+    day = et_date_at_ms(window.next_open_ms or now_ms)
+    current = scheduled_extended_session_bounds(day)
+    following = scheduled_extended_session_bounds(next_trading_day(day))
+    if current is None or following is None:
+        raise RuntimeError("The canonical calendar returned no deploy session")
+
+    return (
+        f"Regular close ({session_label(current.rth_close_ms)}): limit at decision close minus {terms.exit_allowance_bps:g} bps. "
+        f"After-hours ends {session_label(current.close_ms)}. "
+        f"Next pre-market ({session_label(following.open_ms)}): limit at bid minus {terms.exit_allowance_bps:g} bps; "
+        f"hold if the spread exceeds {terms.spread_cap_bps:g} bps. "
+        f"Next regular open ({session_label(following.rth_open_ms)}): cancel the unfilled Clerk-priced limit, confirm cancellation, "
+        "then sell the remaining quantity at market. A confirmed halt pauses exits."
     )

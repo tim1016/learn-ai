@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.schemas.run_admission import (
     RunProcessAdmissionFact,
@@ -178,13 +179,13 @@ async def test_preview_projects_custody_and_never_reconciles() -> None:
     async def reconciling_guard(strategy_instance_id: str):
         del strategy_instance_id
         used.append("reconcile")
-        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
     @asynccontextmanager
     async def projection_guard(strategy_instance_id: str):
         del strategy_instance_id
         used.append("project")
-        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
     admission = _minimal_admission(
         custody_guard=reconciling_guard,
@@ -226,7 +227,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
     @asynccontextmanager
     async def custody_guard(strategy_instance_id: str):
         del strategy_instance_id
-        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")

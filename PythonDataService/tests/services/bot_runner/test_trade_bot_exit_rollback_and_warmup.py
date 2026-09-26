@@ -22,6 +22,7 @@ from app.marketdata.feed import MarketDataBar
 from tests._helpers.bot_runner.custody import _SID, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeEffectResult, _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import (
     _SESSION_CLOSE_MS,
@@ -105,7 +106,7 @@ async def test_rejected_exit_is_rolled_back_and_retried(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -209,7 +210,7 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
         registry = _registry(tmp_path, feed)
 
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="rsi_mean_reversion",
             symbol="SPY",
@@ -254,7 +255,7 @@ async def test_final_rth_bucket_decides_without_waiting_for_the_next_session(
         registry = _registry(tmp_path, feed)
 
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="rsi_mean_reversion",
             symbol="SPY",

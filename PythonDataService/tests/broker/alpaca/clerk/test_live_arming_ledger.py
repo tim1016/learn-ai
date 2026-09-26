@@ -110,7 +110,7 @@ def test_appending_version_one_preserves_its_original_payload_and_digest(tmp_pat
     unsigned = {
         key: value
         for key, value in asdict(record).items()
-        if key not in {"record_sha256", "predecessor", "originating_plan_id"}
+        if key not in {"record_sha256", "predecessor", "originating_plan_id", "exit_terms"}
     }
     expected = {**unsigned, "record_sha256": record.record_sha256}
     assert payload == expected

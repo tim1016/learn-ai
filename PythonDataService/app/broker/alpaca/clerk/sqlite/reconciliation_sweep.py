@@ -389,6 +389,7 @@ class ReconciliationSweep:
                 intake=self._intake,
                 pricing=self._pricing,
                 run_ownership=self._run_ownership,
+                recovery_interval_ms=int(self._interval_s * 1000),
             )
             if self._on_result is not None:
                 self._on_result(result)

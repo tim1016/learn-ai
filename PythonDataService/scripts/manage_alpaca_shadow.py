@@ -214,6 +214,7 @@ _REPORTED_RECONCILIATION_FIELDS = (
     "max_fill_price_drift",
     "max_fill_time_drift_ms",
     "fill_price_atol",
+    "execution_evidence_missing",
 )
 
 

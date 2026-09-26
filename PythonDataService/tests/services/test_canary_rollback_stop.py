@@ -44,6 +44,7 @@ from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _regist
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
 @pytest.fixture(autouse=True)
@@ -117,7 +118,7 @@ async def _deploy_trade_bot_as_simulated_canary(
     returns.
     """
     admit_canary_pairing(monkeypatch, *admitted_pairing)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     managed = registry._bots[_SID]
     managed.binding = managed.binding.model_copy(
         update={"program_build": _proven_build(), **(binding_overrides or {})}
@@ -250,7 +251,7 @@ async def test_canary_rollback_verdict_absent_for_dry_run_instance(tmp_path: Pat
     set_alpaca_clerk(clerk)
     try:
         registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
         managed = registry._bots[_SID]
         managed.binding = managed.binding.model_copy(update={"program_build": _proven_build()})
 

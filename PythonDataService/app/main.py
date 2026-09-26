@@ -48,6 +48,7 @@ from app.routers import (
     aggregates,
     alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
+    alpaca_live_arming,
     alpaca_live_graduation,
     backtest_runs,
     baselines,
@@ -1305,6 +1306,10 @@ if _ROLE_RUNS_CLERK:
 if _ROLE_RUNS_CLERK:
     app.include_router(
         alpaca_live_graduation.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
+    app.include_router(
+        alpaca_live_arming.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
 # Aggregated bot gallery wall (S4 — snapshot + SSE stream across every

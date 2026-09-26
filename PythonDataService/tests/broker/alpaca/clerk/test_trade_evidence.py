@@ -11,7 +11,6 @@ from typing import Any, cast
 import pytest
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
@@ -1080,7 +1079,7 @@ async def test_released_unfoldable_order_returns_the_operator_posture_to_normal(
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
 
     def posture_condition() -> str | None:
-        reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
+        reader = SqliteClerkProjectionReader.from_repository(repo)
         try:
             projection = reader.account_snapshot()
         finally:
@@ -1214,7 +1213,7 @@ def test_v16_migration_adds_the_unfoldable_order_indexes(tmp_path: Path) -> None
 
         schema.migrate_schema(conn, from_version=15)
 
-        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 16
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 18
         names = {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
         }

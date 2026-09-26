@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
 from app.schemas.account_authority import CustodyWorld
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.live_arming_fixtures import (
     ARMED_AT_MS,
     ARMING_SID,
@@ -71,7 +72,7 @@ def _snapshot(root: Path) -> dict[str, bytes]:
     return {
         str(path.relative_to(root)): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file()
+        if path.is_file() and not path.name.endswith(("-wal", "-shm"))
     }
 
 
@@ -221,7 +222,7 @@ def test_a_graduated_live_binding_arms_without_a_shadow_activation_record(
 
     test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id="graduated",
         sealed_account_id=LIVE_ACCT,
     )
@@ -257,7 +258,7 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
 
     test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id="live-successor",
         sealed_account_id=LIVE_ACCT,
     )
@@ -271,7 +272,7 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
         clock=_Clock(ARMED_AT_MS),
     )
 
-    assert plan.schema_version == 2
+    assert plan.schema_version == 3
     assert plan.predecessor is not None
     assert plan.predecessor.strategy_instance_id == "rehearsal"
     assert plan.predecessor.seal_hash == rehearsal.bot_configuration_hash
@@ -285,7 +286,7 @@ def test_a_live_successor_seals_its_matching_shadow_rehearsal(
         clock=_Clock(ARMED_AT_MS),
     )
 
-    assert armed.schema_version == 2
+    assert armed.schema_version == 3
     assert armed.predecessor == plan.predecessor
     assert armed.originating_plan_id == plan.plan_id
 
@@ -358,7 +359,7 @@ def test_a_shadow_rehearsal_with_a_different_quantity_cannot_promote(
 
     test_a_never_legacy_account_graduates_end_to_end(artifacts_root, LIVE_ACCT, "live")
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id="larger-live-successor",
         sealed_account_id=LIVE_ACCT,
         quantity=2,
@@ -390,7 +391,7 @@ def test_an_unsealed_or_foreign_binding_is_not_an_armable_instance(roots: tuple[
     # stop a sealed sibling from arming.
     live_state_binding_repository(live_state_root).record_launch(
         BrokerBotBinding(
-            strategy_instance_id="legacy",
+            exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id="legacy",
             broker="alpaca",
             symbol="SPY",
             mode="trade",
@@ -400,8 +401,8 @@ def test_an_unsealed_or_foreign_binding_is_not_an_armable_instance(roots: tuple[
         ),
         launch_reason="deploy",
     )
-    record_sealed_binding(live_state_root, strategy_instance_id="elsewhere", sealed_account_id="PA-OTHER")
-    sealed = record_sealed_binding(live_state_root, strategy_instance_id=ARMING_SID)
+    record_sealed_binding(live_state_root, artifacts_root=artifacts_root, strategy_instance_id="elsewhere", sealed_account_id="PA-OTHER")
+    sealed = record_sealed_binding(live_state_root, artifacts_root=artifacts_root, strategy_instance_id=ARMING_SID)
 
     seals = instance_seal_hashes(live_account_id=LIVE_ACCT, live_state_root=live_state_root)
 
@@ -425,9 +426,9 @@ def test_a_named_custody_world_admits_only_that_worlds_own_custody_id(roots: tup
     shape design R15 leaves behind after graduation. Naming a world must pick
     exactly that world's custody id, whichever world is named.
     """
-    _artifacts_root, live_state_root = roots
-    record_sealed_binding(live_state_root, strategy_instance_id="rehearsed")
-    record_sealed_binding(live_state_root, strategy_instance_id="graduated", sealed_account_id=LIVE_ACCT)
+    artifacts_root, live_state_root = roots
+    record_sealed_binding(live_state_root, artifacts_root=artifacts_root, strategy_instance_id="rehearsed")
+    record_sealed_binding(live_state_root, artifacts_root=artifacts_root, strategy_instance_id="graduated", sealed_account_id=LIVE_ACCT)
 
     def _seals(custody_world: CustodyWorld | None) -> set[str]:
         return set(
@@ -447,7 +448,7 @@ def test_an_instance_with_no_receipt_arms_and_records_none(roots: tuple[Path, Pa
     """Shadow is a mode, not a requirement (owner decision 2026-09-09)."""
     artifacts_root, live_state_root = roots
     activate_shadow_fence(artifacts_root)
-    seal = record_sealed_binding(live_state_root)
+    seal = record_sealed_binding(live_state_root, artifacts_root=artifacts_root)
     # A receipt for a different configured signal is not this seal's, and is not recorded.
     seal_receipt(artifacts_root, configured_signal_hash="f" * 64)
 
@@ -474,7 +475,7 @@ def test_a_receipt_sealed_for_another_live_account_is_not_recorded_on_this_one(
     """
     artifacts_root, live_state_root = roots
     activate_shadow_fence(artifacts_root)
-    seal = record_sealed_binding(live_state_root)
+    seal = record_sealed_binding(live_state_root, artifacts_root=artifacts_root)
     seal_receipt(
         artifacts_root,
         configured_signal_hash=seal.configured_signal_hash,
@@ -497,7 +498,7 @@ def test_a_receipt_sealed_for_another_live_account_is_not_recorded_on_this_one(
 def test_a_receipt_less_arming_applies_and_its_record_carries_null(roots: tuple[Path, Path]) -> None:
     artifacts_root, live_state_root = roots
     activate_shadow_fence(artifacts_root)
-    record_sealed_binding(live_state_root)
+    record_sealed_binding(live_state_root, artifacts_root=artifacts_root)
     plan = plan_arming(
         strategy_instance_id=ARMING_SID,
         artifacts_root=artifacts_root,
@@ -534,7 +535,7 @@ def test_plan_writes_nothing_and_its_two_ids_are_its_own_content_hash(roots: tup
     )
 
     assert _snapshot(artifacts_root) == before
-    assert plan.schema_version == 1
+    assert plan.schema_version == 3
     assert plan.plan_id == plan.confirmation_token and len(plan.plan_id) == 64
     assert (plan.created_at_ms, plan.expires_at_ms) == (ARMED_AT_MS, ARMED_AT_MS + TTL_MS)
     assert plan.live_account_id == LIVE_ACCT
@@ -1025,3 +1026,25 @@ def test_a_size_change_alone_disarms_because_arming_binds_the_whole_seal(
 
     assert statuses[ARMING_SID].state == "disarmed"
     assert statuses[ARMING_SID].reason_code == "LIVE_ARMING_SEAL_CHANGED"
+
+
+@pytest.mark.parametrize("changed_value", [5000])
+def test_envelope_change_uses_the_account_latest_seal_and_preserves_representation(roots, changed_value):
+    from dataclasses import replace
+
+    from app.broker.alpaca.clerk.live_arming_ceremony import envelope_change
+
+    root, live = roots
+    arming_ready(root, live)
+    plan = plan_arming(strategy_instance_id=ARMING_SID, artifacts_root=root, live_state_root=live,
+        settings=live_settings(), clock=_Clock(ARMED_AT_MS))
+    apply_arming(plan=plan, confirmation_token=plan.confirmation_token, artifacts_root=root,
+        live_state_root=live, settings=live_settings(), clock=_Clock(ARMED_AT_MS))
+    other = replace(plan, strategy_instance_id="new-bot")
+    comparison = envelope_change(other, artifacts_root=root)
+    assert comparison["changes"] == []
+    assert comparison["sealed_by"]["strategy_instance_id"] == ARMING_SID
+    assert comparison["exit_terms_changes"]
+    changed = replace(other, envelope_values={**other.envelope_values, "loss_usd": changed_value})
+    assert envelope_change(changed, artifacts_root=root)["changes"] == [
+        {"field": "loss_usd", "before": 5000.0, "after": changed_value}]

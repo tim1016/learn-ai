@@ -46,7 +46,9 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
+    ExitRecoveryEvaluatedFacts,
     ManualOrderCancelResultFacts,
+    OrderCancelRequestedFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
@@ -164,6 +166,11 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
             payload["recorded_at_ms"],
         ),
     )
+    if facts.get("exit_terms") is not None:
+        from app.broker.alpaca.clerk.exit_terms import fold_exit_terms
+        from app.schemas.exit_terms import ExitTerms
+
+        fold_exit_terms(conn, payload["strategy_instance_id"], ExitTerms.model_validate(facts["exit_terms"]))
     conn.execute(
         "INSERT INTO bot_config "
         "(strategy_instance_id, strategy_key, display_name, config_json, config_hash, created_at_ms) "
@@ -1566,9 +1573,30 @@ DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_REFRESHED", _fold_uncertainty_refres
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolved)
 # Audit-only EXIT phase markers. Their facts remain in the canonical transition
 # stream; materialized order/effect state is advanced by the evidence folds.
-DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
+def _fold_exit_recovery_evaluated(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Validate replayed recovery evidence without refreshing the exit uncertainty."""
+    ExitRecoveryEvaluatedFacts.from_facts_json(payload["facts_json"])
+
+
+def _fold_exit_terms_sealed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.exit_terms import fold_exit_terms
+    from app.schemas.exit_terms import ExitTerms
+
+    fold_exit_terms(conn, payload["strategy_instance_id"], ExitTerms.model_validate_json(payload["facts_json"]))
+
+
+DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_SEALED", _fold_exit_terms_sealed)
+DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_UPGRADE_COMPLETED", lambda _conn, _payload: None)
+DEFAULT_FOLD_REGISTRY.register("EXIT_RECOVERY_EVALUATED", _fold_exit_recovery_evaluated)
+def _fold_order_cancel_requested(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    OrderCancelRequestedFacts.from_facts_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", _fold_order_cancel_requested)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
+
+DEFAULT_FOLD_REGISTRY.register("EXIT_MARKET_HOLD", lambda _conn, _payload: None)
 
 # The registry the offline v8-to-v9 ceremony replays with. Identical to the
 # default except for the three kinds whose projection target moved at v12; see

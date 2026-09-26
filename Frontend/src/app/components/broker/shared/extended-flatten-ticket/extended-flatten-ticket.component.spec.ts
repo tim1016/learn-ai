@@ -185,7 +185,7 @@ describe('ExtendedFlattenTicketComponent', () => {
     fixture.detectChanges();
     await review(fixture, 510.25, { outside_band: true });
 
-    expect(screen.getByRole('status').textContent).toContain("Past the Clerk's band");
+    expect(screen.getByRole('status').textContent).toContain('beyond this bot’s');
     expect(screen.queryByRole('button', { name: 'Send limit order' })).toBeNull();
     expect(send).not.toHaveBeenCalled();
   });
@@ -302,5 +302,35 @@ describe('ExtendedFlattenTicketComponent', () => {
 
     expect(screen.getByText(/Buy to cover 10/)).toBeTruthy();
     expect(screen.getByText(/at limit \$513\.39/)).toBeTruthy();
+  });
+});
+
+
+describe('explicit band override', () => {
+  it('waits for an acknowledged fresh response before the separate send confirmation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW_MS);
+    const overridePriceCheck = vi.fn();
+    const send = vi.fn();
+    const { fixture } = await render(ExtendedFlattenTicketComponent, {
+      inputs: { pricing: pricing(), quantity: 10, quoteReceivedAtMs: NOW_MS },
+      on: { overridePriceCheck, send },
+    });
+    try {
+      fireEvent.input(limitInput(), { target: { value: '510.25' } });
+      await review(fixture, 510.25, { outside_band: true, band_cap_bps: 40, override_acknowledged: false });
+      fireEvent.click(screen.getByRole('button', { name: /I acknowledge the price exceeds/ }));
+      fixture.detectChanges();
+      expect(overridePriceCheck).toHaveBeenCalledWith(510.25);
+      expect(screen.queryByRole('button', { name: 'Send limit order' })).toBeNull();
+      fixture.componentRef.setInput('pricing', pricing({ proposal: reading(510.25, {
+        outside_band: true, band_cap_bps: 40, override_acknowledged: true,
+      }) }));
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(send).not.toHaveBeenCalled();
+      fireEvent.click(button('Send limit order'));
+      expect(send).toHaveBeenCalledWith({ limit_price: 510.25, quote_observed_at_ms: NOW_MS, band_override: true });
+    } finally { vi.useRealTimers(); }
   });
 });

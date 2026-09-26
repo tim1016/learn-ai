@@ -37,7 +37,7 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -50,6 +50,48 @@ if TYPE_CHECKING:
     from app.schemas.market_liveness import TopOfBookQuote
 
 FACTS_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class OrderCancelRequestedFacts:
+    """Why this exact order is being canceled; legacy markers may omit it."""
+
+    reason_code: str = "EXIT_ENTRY_TERMINAL_PROOF"
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderCancelRequestedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExitRecoveryEvaluatedFacts:
+    """One episode's observed recovery outcome and durable failure-time budget."""
+
+    uncertainty_id: str
+    outcome: Literal["failure", "hold", "accepted"]
+    reason_code: str
+    last_checked_at_ms: int | None
+    first_failure_at_ms: int | None
+    failure_elapsed_ms: int
+    lease_owner: str
+    allowed_from_ms: int | None = None
+    explanation: str = ""
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExitRecoveryEvaluatedFacts:
+        facts = cls(**json.loads(facts_json))
+        if facts.outcome not in {"failure", "hold", "accepted"}:
+            raise ValueError("Unknown exit recovery outcome")
+        for value in (facts.last_checked_at_ms, facts.failure_elapsed_ms, facts.first_failure_at_ms, facts.allowed_from_ms):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("Exit recovery times must be non-negative integer milliseconds")
+        return facts
 
 
 @dataclass(frozen=True)
@@ -227,6 +269,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "reducing_valid_until_ms": None,
     "reducing_confirmed_quantity": None,
     "reducing_priced_by": None,
+    "band_override": False,
     "reference_bid": None,
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
@@ -297,11 +340,17 @@ class ExitAcceptedFacts:
     # quantity-guard and expiry copy must not tell a trader to confirm a price
     # nobody confirmed — a Clerk-priced leg re-prices on the next pass.
     reducing_priced_by: str | None = None
+    band_override: bool = False
     # The live IBKR quote the Clerk priced an operator's confirmed limit
     # against — the reference its realized slippage is measured from (#2007).
     reference_bid: float | None = None
     reference_ask: float | None = None
     reference_quote_observed_at_ms: int | None = None
+
+    @property
+    def operator_priced(self) -> bool:
+        """Only an operator-confirmed shape carries quantity without a Clerk price stamp."""
+        return self.reducing_confirmed_quantity is not None and self.reducing_priced_by is None
 
     def with_reducing_shape(
         self,
@@ -311,6 +360,7 @@ class ExitAcceptedFacts:
         reference_quote: TopOfBookQuote | None = None,
         confirmed_quantity: float | None = None,
         priced_by: str | None = None,
+        band_override: bool = False,
     ) -> ExitAcceptedFacts:
         """Record the reducing shape, unless it is the default.
 
@@ -333,6 +383,7 @@ class ExitAcceptedFacts:
         return replace(
             self,
             reducing_side=shape.side.value,
+            band_override=band_override,
             order_type=shape.order_type.value,
             time_in_force=shape.time_in_force.value,
             limit_price=shape.limit_price,

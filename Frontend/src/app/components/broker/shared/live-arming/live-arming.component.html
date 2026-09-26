@@ -1,0 +1,40 @@
+<section aria-label="Live arming" class="p-3 border rounded-[var(--radius)] border-[var(--border)]">
+  <strong>Live arming</strong>
+  @if (status(); as current) {
+    <p role="status">{{ current.state | receiptLabel }} · {{ current.sessions_remaining }} sessions remaining · @if (current.armed_instance_count !== null) { {{ current.armed_instance_count }} armed on this account } @else { Account armed count unavailable }</p>
+    @if (current.reason_code) { <p>{{ current.reason_code | receiptLabel }}</p> }
+  }
+  @if (state.error()) { <p role="alert">Arming status could not be read. Review a fresh plan before arming.</p> }
+  @if (!open() && error(); as message) { <p role="alert">{{ message }}</p> }
+  <button type="button" [disabled]="pending()" (click)="review()">Review and arm</button>
+  @if (status()?.state === 'armed' || state.error()) {
+    <button type="button" [disabled]="pending()" (click)="disarm()">Disarm</button>
+  }
+</section>
+<p-dialog header="Review live arming" [visible]="open()" (visibleChange)="close()" [modal]="true" [closable]="!pending()" [style]="{ width: '36rem' }">
+  @if (pending() && !plan()) { <p role="status">Reading the current envelope and this bot’s exit terms…</p> }
+  @if (plan(); as reviewedPlan) {
+    <p>Arming allows this bot to send real-money entry orders through Alpaca within the limits below.</p>
+    <dl>
+      <dt>Daily loss cap</dt><dd>{{ reviewedPlan.envelope.loss_usd | currency: 'USD' }} / fraction {{ reviewedPlan.envelope.loss_fraction | number: '1.0-8' }}</dd>
+      <dt>Arming duration</dt><dd>{{ reviewedPlan.envelope.arming_max_sessions }} sessions</dd>
+      <dt>Entry allowance</dt><dd>{{ reviewedPlan.envelope.xh_entry_bps }} bps</dd>
+      <dt>Profile exit default</dt><dd>{{ reviewedPlan.envelope.xh_exit_bps }} bps · applies to future deploys</dd>
+      <dt>Shadow sessions in envelope</dt><dd>{{ reviewedPlan.envelope.shadow_sessions }}</dd>
+      <dt>This bot’s exit allowance</dt><dd>{{ reviewedPlan.exit_terms.exit_allowance_bps }} bps</dd>
+      <dt>This bot’s band multiple</dt><dd>{{ reviewedPlan.exit_terms.band_multiple }}</dd>
+      <dt>This bot’s spread cap</dt><dd>{{ reviewedPlan.exit_terms.spread_cap_bps }} bps</dd>
+      <dt>Terms source</dt><dd>{{ reviewedPlan.exit_terms.provenance | receiptLabel }}</dd>
+    </dl>
+    <h3>Changes since the previous seal</h3>
+    <ul>@for (change of reviewedPlan.changes; track change) { <li>{{ change }}</li> } @empty { <li>No terms changed.</li> }</ul>
+    @if (reviewedPlan.shadow_receipt_sha256) { <p>Shadow receipt: <code>{{ reviewedPlan.shadow_receipt_sha256 }}</code></p> }
+    @else { <p>No current shadow receipt.</p> }
+    <p>Confirmation expires <app-timestamp-display [value]="reviewedPlan.expires_at_ms" mode="local" />.</p>
+    <p>Type this confirmation token: <code class="break-all">{{ reviewedPlan.confirmation_token }}</code></p>
+    <label>Confirmation token<input type="text" autocomplete="off" [formField]="confirmationForm.token" /></label>
+    <button type="button" [disabled]="!canApply()" (click)="apply()">Arm this live bot</button>
+    <button type="button" [disabled]="pending()" (click)="review()">Read a fresh plan</button>
+  }
+  @if (error(); as message) { <p role="alert">{{ message }}</p> }
+</p-dialog>

@@ -437,7 +437,7 @@ def test_status_and_disarm_still_answer_while_a_different_revision_is_staged(
     )
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)]) == 0
-    status = _last_object(capsys)
+    [status] = _last_object(capsys)["accounts"]
     assert status["live_account_id"] == LIVE_ACCT
     assert status["armed_instance_count"] == 1
 

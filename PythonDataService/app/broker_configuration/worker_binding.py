@@ -626,6 +626,7 @@ def resolve_revision_context(
         live_envelope=(
             None if stored.live_envelope is None else stored.live_envelope.to_mapping()
         ),
+        default_exit_terms=stored.default_exit_terms,
         paper_xh_allowances=(
             None
             if stored.paper_xh_allowances is None

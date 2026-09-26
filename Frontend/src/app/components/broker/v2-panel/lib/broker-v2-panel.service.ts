@@ -163,8 +163,14 @@ export class BrokerV2PanelService {
   getDeployView(
     target: ResourceTarget,
     symbol?: string,
+    exitTerms?: DeployBotBody['exit_terms'],
   ): Promise<DeployBotView> {
-    const params = symbol ? new HttpParams().set('symbol', symbol) : undefined;
+    let params = new HttpParams();
+    if (symbol) params = params.set('symbol', symbol);
+    if (exitTerms) {
+      params = params.set('exit_allowance_bps', exitTerms.exit_allowance_bps)
+        .set('band_multiple', exitTerms.band_multiple).set('spread_cap_bps', exitTerms.spread_cap_bps);
+    }
     return firstValueFrom(
       this.http.get<DeployBotView>(operationUrl('bots_deploy_read', target), { params }),
     );

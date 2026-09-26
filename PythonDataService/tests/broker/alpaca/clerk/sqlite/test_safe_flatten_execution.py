@@ -62,6 +62,7 @@ from app.broker.contract.models import (
 )
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.broker_v2_panel.sqlite_panel_adapter import _recent_fill_view
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 
 ACCOUNT_ID = "PA-FLATTEN"
@@ -254,7 +255,7 @@ def crashed_with_exposure(tmp_path: Path):
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
-    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield repo, clock
     repo.close()
@@ -270,7 +271,7 @@ async def _reconciled_flatten_plan(repo: ClerkSqliteRepository):
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -374,7 +375,7 @@ async def test_execute_safe_flatten_presented_for_stopped_bot_with_exposure(
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -399,7 +400,7 @@ def _unfoldable_open_order() -> BrokerOrder:
 
 def _flatten_catalog(repo: ClerkSqliteRepository) -> dict[str, Any]:
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -528,7 +529,7 @@ async def test_execute_safe_flatten_blocked_while_a_run_is_active(
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -562,7 +563,7 @@ async def test_execute_recovery_action_dispatches_safe_flatten(
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
@@ -710,7 +711,7 @@ async def test_execute_safe_flatten_unavailable_for_account_scope(
         pricing=UNPRICEABLE_RECOVERY,
     )
     reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+        repo, clock=repo.clock
     )
     try:
         account_context = reader.recovery_context(strategy_instance_id=None)
@@ -814,7 +815,7 @@ async def test_the_flatten_drives_its_exit_with_the_pricing_seam_it_is_handed(
     result = await execute_safe_flatten_plan(
         repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
         pricing=RecoveryPricing(
-            policy_source=lambda: _XH_POLICY,
+            policy_for=lambda _sid: _XH_POLICY,
             quote_source=lambda _symbol, now_ms: _live_quote(now_ms),
         ),
     )
@@ -876,7 +877,7 @@ async def _stopped_facade_at(
 
     async def current_context() -> RecoveryPolicyContext:
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)
@@ -1307,3 +1308,16 @@ async def test_a_clerk_priced_quantity_change_folds_without_asking_the_operator(
     assert episode is not None
     assert episode["headline"] == "The flatten's quantity changed after the Clerk priced it"
     assert "No action needed" in episode["next_step"]
+
+
+async def test_outside_band_requires_explicit_override_and_records_it(crashed_with_exposure):
+    repo, _clock = crashed_with_exposure
+    facade, trade, current_context = await _stopped_facade_at(repo, _PRE_MARKET_MS)
+    result = await _execute(facade, current_context, confirmed_limit=ConfirmedRecoveryLimit(
+        limit_price=Decimal('99.59'), quote_observed_at_ms=_PRE_MARKET_MS, band_override=True,
+    ))
+    assert result.applied is True
+    assert trade.submitted_legs[0].limit_price == pytest.approx(99.59, abs=1e-9)
+    row = repo.last_strategy_transition(strategy_instance_id=SID, transition_kind='EXIT_ACCEPTED')
+    import json
+    assert json.loads(row['facts_json'])['band_override'] is True

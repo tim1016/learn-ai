@@ -37,7 +37,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionUnavailable,
     SqliteEconomicProjectionReader,
 )
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import MissingExitExecutionEvidence
 from app.broker.alpaca.clerk.sqlite.models import RunResource
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
@@ -73,6 +74,7 @@ SessionState = Literal[
     "sweep_opened_late",
     "run_not_covering",
     "twin_diverged",
+    "execution_evidence_missing",
     "not_evaluable",
 ]
 
@@ -85,6 +87,8 @@ class TwinFill:
     fill_price: Decimal
     filled_at_ms: int
     order_ref: str
+    decision_id: str | None = None
+    effect_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,7 @@ class TwinDayReconciliation:
     # the module docstring's "Not proven" — positional pairing cannot see it.
     max_fill_time_drift_ms: int | None
     fill_price_atol: Decimal
+    execution_evidence_missing: tuple[str, ...] = ()
 
     @property
     def gating(self) -> tuple[TwinDivergence, ...]:
@@ -131,7 +136,7 @@ class TwinDayReconciliation:
 
     @property
     def passed(self) -> bool:
-        return not self.gating
+        return not self.gating and not self.execution_evidence_missing
 
     def report_sha256(self) -> str:
         """A content hash of the whole comparison — what the receipt names.
@@ -247,6 +252,12 @@ class FillSource(Protocol):
         """
         ...
 
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[MissingExitExecutionEvidence, ...]:
+        """Canceled reducing orders whose execution window had no retained bars."""
+        ...
+
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         """Every run this authority recorded for one instance, oldest first."""
         ...
@@ -258,6 +269,7 @@ class EconomicFillSource:
     def __init__(self, reader: SqliteEconomicProjectionReader) -> None:
         self._reader = reader
         self._coverage_proven: set[str] = set()
+        self._missing_exit_evidence: dict[str, tuple[tuple[int, MissingExitExecutionEvidence], ...] | EconomicProjectionUnavailable] = {}
 
     @classmethod
     def from_database_path(cls, db_path: Path) -> EconomicFillSource:
@@ -290,6 +302,7 @@ class EconomicFillSource:
             raise EconomicProjectionUnavailable(
                 f"{strategy_instance_id} is unknown to this authority"
             )
+        decisions = self._reader.order_decisions(strategy_instance_id)
         return tuple(
             TwinFill(
                 symbol=record.symbol,
@@ -298,6 +311,8 @@ class EconomicFillSource:
                 fill_price=Decimal(str(record.fill_price)),
                 filled_at_ms=record.filled_at_ms,
                 order_ref=record.order_ref,
+                decision_id=decisions[record.order_ref].decision_id if record.order_ref in decisions else None,
+                effect_kind=decisions[record.order_ref].kind if record.order_ref in decisions else None,
             )
             for record in projection.fills
         )
@@ -329,6 +344,19 @@ class EconomicFillSource:
                 f"{strategy_instance_id}: execution coverage is {snapshot.execution_coverage}"
             )
         self._coverage_proven.add(strategy_instance_id)
+
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[MissingExitExecutionEvidence, ...]:
+        if strategy_instance_id not in self._missing_exit_evidence:
+            try:
+                self._missing_exit_evidence[strategy_instance_id] = self._reader.exit_execution_evidence(strategy_instance_id)
+            except EconomicProjectionUnavailable as exc:
+                self._missing_exit_evidence[strategy_instance_id] = exc
+        evidence = self._missing_exit_evidence[strategy_instance_id]
+        if isinstance(evidence, EconomicProjectionUnavailable):
+            raise evidence
+        return tuple(row for stamp, row in evidence if from_ms <= stamp < to_ms)
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         return self._reader.runs_for_strategy(strategy_instance_id)
@@ -572,6 +600,10 @@ def _judge_day(
             run_id=run.run_id,
         )
     try:
+        missing = shadow_source.missing_exit_execution_evidence(
+            strategy_instance_id=strategy_instance_id,
+            from_ms=et_midnight_ms(day), to_ms=et_day_end_ms(day),
+        )
         shadow_fills = read_twin_fills(
             shadow_source,
             strategy_instance_id=strategy_instance_id,
@@ -590,19 +622,41 @@ def _judge_day(
         # (an external fill, an unresolved coverage conflict) makes *every* day
         # unreadable, and the gate has to say so honestly rather than raise.
         return verdict("not_evaluable", str(exc), run_id=run.run_id)
+    # Only a proven shared program decision may explain one unavailable EXIT
+    # execution. Unrelated entries/exits and all observed drift still reconcile.
+    compared_twin = list(twin_fills)
+    for absent in missing:
+        key = absent.decision_id
+        if key is None or len(key) != 64 or any(ch not in "0123456789abcdef" for ch in key):
+            continue
+        matching = [fill for fill in compared_twin if fill.effect_kind == "EXIT" and fill.decision_id == key]
+        # One order may have many execution slices. Their exact decimal sum
+        # must cover the intended quantity; multiple order identities remain
+        # ambiguous even when their aggregate happens to match.
+        if len({fill.order_ref for fill in matching}) != 1:
+            continue
+        if all((fill.symbol, fill.side) == (absent.symbol, absent.side) for fill in matching) and (
+            sum((fill.quantity for fill in matching), Decimal("0")) == Decimal(str(absent.quantity))
+        ):
+            compared_twin = [fill for fill in compared_twin if fill not in matching]
     reconciliation = reconcile_twin_day(
-        session_open_ms=calendar_open_ms,
-        strategy_instance_id=strategy_instance_id,
+        session_open_ms=calendar_open_ms, strategy_instance_id=strategy_instance_id,
         twin_strategy_instance_id=twin_strategy_instance_id,
-        shadow_fills=shadow_fills,
-        twin_fills=twin_fills,
+        shadow_fills=shadow_fills, twin_fills=compared_twin,
     )
-    if not reconciliation.passed:
+    reconciliation = replace(
+        reconciliation, twin_fills=tuple(twin_fills),
+        execution_evidence_missing=tuple(absent.order_ref for absent in missing),
+    )
+    if reconciliation.gating:
         return verdict(
-            "twin_diverged",
-            "; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating),
-            run_id=run.run_id,
-            reconciliation=reconciliation,
+            "twin_diverged", "; ".join(f"{d.category}: {d.detail}" for d in reconciliation.gating),
+            run_id=run.run_id, reconciliation=reconciliation,
+        )
+    if missing:
+        return verdict(
+            "execution_evidence_missing", "No after-hours evidence for the shadow exit.",
+            run_id=run.run_id, reconciliation=reconciliation,
         )
     return verdict("counted", "", run_id=run.run_id, reconciliation=reconciliation)
 

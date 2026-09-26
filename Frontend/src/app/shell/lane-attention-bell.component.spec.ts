@@ -47,6 +47,16 @@ function bellButton(): HTMLElement {
 }
 
 describe('LaneAttentionBellComponent', () => {
+  it('offers the backend Flatten action for an unmanaged position', async () => {
+    await renderBell({ unknown: false, errorReason: null, items: [item({
+      kind: 'position_unmanaged', reason_code: 'POSITION_UNMANAGED', severity: 'warning',
+      headline: 'Bot is not managing this position', action_label: 'Flatten',
+    })] });
+    await fireEvent.click(bellButton());
+    expect(screen.getByText('Bot is not managing this position')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Flatten' })).toBeTruthy();
+  });
+
   it('renders nothing while the lane is quiet', async () => {
     await renderBell(QUIET_LANE_ATTENTION_STATE);
     expect(screen.queryByRole('button')).toBeNull();
@@ -105,11 +115,11 @@ describe('LaneAttentionBellComponent', () => {
       unknown: false,
       errorReason: null,
       items: [
-        item({ next_attempt_at_ms: nextAttemptAtMs }),
+        item({ recovery_status: { kind: 'allowed_from', reason_code: 'NO_SESSION_OPEN', explanation: 'No session is open.', allowed_from_ms: nextAttemptAtMs } }),
         item({
           condition_id: 'unc-2',
           strategy_instance_id: 'ema-2',
-          next_attempt_at_ms: nextAttemptAtMs,
+          recovery_status: { kind: 'allowed_from', reason_code: 'NO_SESSION_OPEN', explanation: 'No session is open.', allowed_from_ms: nextAttemptAtMs },
         }),
         item({ condition_id: 'unc-3', strategy_instance_id: 'ema-3', reason_code: 'ORDER_OUTCOME_UNKNOWN' }),
       ],
@@ -134,12 +144,12 @@ describe('LaneAttentionBellComponent', () => {
       unknown: false,
       errorReason: null,
       items: [
-        item({ next_attempt_at_ms: null, exit_working: true }),
+        item({  recovery_status: { kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' } }),
         item({
           condition_id: 'unc-2',
           strategy_instance_id: 'ema-2',
-          next_attempt_at_ms: null,
-          facts_unreadable: true,
+
+          recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." },
         }),
       ],
     });
@@ -147,10 +157,10 @@ describe('LaneAttentionBellComponent', () => {
     await fireEvent.click(bellButton());
 
     expect(
-      screen.getByText('An exit is in progress; no automatic attempt is due while it works.'),
+      screen.getByText('An exit is in progress.'),
     ).toBeTruthy();
     expect(
-      screen.getByText("Automatic retry: eligibility unknown; this notice's record could not be read."),
+      screen.getByText("Recovery status is unknown; this notice's record could not be read."),
     ).toBeTruthy();
   });
 

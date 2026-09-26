@@ -347,6 +347,26 @@
       "path_template": "/lane/stop-all-bots",
       "requires_account": false
     },
+    "live_arming_apply": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/{sid}/arming/apply",
+      "requires_account": true
+    },
+    "live_arming_disarm": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/{sid}/arming/disarm",
+      "requires_account": false
+    },
+    "live_arming_plan": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/{sid}/arming/plan",
+      "requires_account": true
+    },
+    "live_arming_status": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/arming",
+      "requires_account": true
+    },
     "live_graduation_apply": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/live-graduation/apply",

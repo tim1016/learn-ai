@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhase
 from app.engine.live.desired_state import DesiredState
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
@@ -50,13 +51,14 @@ from tests._helpers.bot_runner.custody import (
     admission_guard_for,
 )
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _current_run_json, _OrderingClerk
 
 
 @asynccontextmanager
 async def _fixed_start_guard(sid: str):
-    yield _flat_custody_snapshot(sid, observed_at_ms=_T0), ProgramLegPolicy.regular_only()
+    yield _flat_custody_snapshot(sid, observed_at_ms=_T0), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
 
 @pytest.mark.asyncio
@@ -69,7 +71,7 @@ async def test_restart_intensity_refuses_thresholdth_start(tmp_path: Path) -> No
     try:
         # Starts 1 and 2 pass (projected 1, 2 < 3); start 3 projects to the
         # threshold and is refused — mirrors project_restart_intensity_gate.
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
         await registry.stop("alpaca", _SID)
         await registry.resume_existing("alpaca", _SID)
         await registry.stop("alpaca", _SID)
@@ -96,7 +98,7 @@ async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) ->
     set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
 
     try:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
         await registry.stop("alpaca", _SID)
         with pytest.raises(RestartIntensityRefusedError):
             await registry.resume_existing("alpaca", _SID)
@@ -113,7 +115,7 @@ async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) ->
 async def test_list_bots_filters_by_broker_tag(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert [v.strategy_instance_id for v in registry.list_bots("alpaca")] == [_SID]
     assert registry.list_bots("ibkr") == []
@@ -131,7 +133,7 @@ async def test_runner_refuses_ibkr_binding_before_any_duty_artifact(tmp_path: Pa
 
     with pytest.raises(RunAdmissionRefusedError, match="Alpaca"):
         await registry.deploy(
-            broker="ibkr",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="ibkr",
             strategy_instance_id=_SID,
             symbol="SPY",
         )
@@ -145,7 +147,7 @@ async def test_version_one_alpaca_binding_is_read_without_rewriting_audit_artifa
 ) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await registry.stop("alpaca", _SID)
 
     binding_path = tmp_path / "live_state" / _SID / "broker_binding.json"
@@ -176,7 +178,7 @@ async def test_version_one_alpaca_binding_is_read_without_rewriting_audit_artifa
 async def test_status_for_wrong_broker_is_404(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     try:
         with pytest.raises(UnknownBotError):
             registry.status("ibkr", _SID)
@@ -191,7 +193,7 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     deployed = await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
         quantity=3,
@@ -237,7 +239,7 @@ async def test_resume_preserves_prior_outcome_before_current_pointer_advances(
 ) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     prior_run_id = registry.binding_for_control("alpaca", _SID).run_id
     await registry.stop("alpaca", _SID)
 
@@ -286,7 +288,7 @@ async def test_activation_failure_with_unproven_cleanup_keeps_raw_propagation(
         monkeypatch.setattr(registry._bindings, "record_launch", crash_after_launch)
 
         with pytest.raises(RuntimeError, match="injected crash"):
-            await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+            await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
         assert registry.any_running() is False
     finally:
@@ -312,7 +314,7 @@ async def test_activation_cancellation_is_never_reported_as_a_resolved_failure(
     monkeypatch.setattr(registry._bindings, "record_launch", cancel_after_launch)
 
     with pytest.raises(asyncio.CancelledError):
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert registry.any_running() is False
 
@@ -321,7 +323,7 @@ async def test_activation_cancellation_is_never_reported_as_a_resolved_failure(
 async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     binding = registry.binding_for_control("alpaca", _SID)
     managed = registry._bots[_SID]
     managed.finalized = True
@@ -365,7 +367,7 @@ async def test_superseded_terminal_projection_keeps_the_run_receipt(tmp_path: Pa
     clerk = _CustodyClerk(_custody_proof(exposure={}))
     set_alpaca_clerk(clerk)
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     binding = registry.binding_for_control("alpaca", _SID)
     clerk.active_runs[_SID] = "run-new"
     clerk.known_runs.add((_SID, "run-new"))
@@ -401,7 +403,7 @@ async def test_superseded_terminal_projection_keeps_the_run_receipt(tmp_path: Pa
 async def test_conflicting_terminal_outcome_does_not_mutate_lifecycle(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     binding = registry.binding_for_control("alpaca", _SID)
     managed = registry._bots[_SID]
     managed.finalized = True
@@ -444,7 +446,7 @@ async def test_run_history_pages_previous_runs_without_changing_current_target(
         now_ms=lambda: now_ms_utc() + next(ticks),
     )
     first = await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
     )
@@ -467,7 +469,7 @@ async def test_run_history_pages_previous_runs_without_changing_current_target(
     assert second_page.next_cursor is None
     assert registry.current_run("alpaca", _SID).run_id == third.active_run_id
     other_sid = "alpaca-skeleton-2"
-    await registry.deploy(broker="alpaca", strategy_instance_id=other_sid, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=other_sid, symbol="SPY")
     await registry.stop("alpaca", other_sid)
     await registry.resume_existing("alpaca", other_sid)
     await registry.stop("alpaca", other_sid)
@@ -485,7 +487,7 @@ async def test_run_history_pages_previous_runs_without_changing_current_target(
 async def test_pause_and_continue_keep_the_same_live_run_id(tmp_path: Path) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     deployed = await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
     )
@@ -507,7 +509,7 @@ async def test_pause_and_continue_keep_the_same_live_run_id(tmp_path: Path) -> N
 async def test_continue_refuses_a_live_run_that_is_not_paused(tmp_path: Path) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     deployed = await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
     )
@@ -529,7 +531,7 @@ async def test_carryover_rejects_a_new_deploy_without_an_enablement_switch(
     # Alpaca world, and the live one reaches this same refusal (slice 7).
     with pytest.raises(CarryoverPolicyRefusedError, match=r"globally disabled for Alpaca bots\."):
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
             carryover_policy="ALLOW",
@@ -542,7 +544,7 @@ async def test_carryover_rejects_a_new_deploy_without_an_enablement_switch(
 async def test_default_start_status_exposes_carryover_as_disabled(tmp_path: Path) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     deployed = await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
         mode="dry_run",
@@ -601,7 +603,7 @@ async def test_resume_admission_wiring_persists_legacy_migration_clone_lineage(
     # `ema_crossover_signal` param schema -- unreconstructible, forcing the
     # clone path rather than an ordinary append-a-seal Resume.
     prior = BrokerBotBinding(
-        strategy_instance_id=_SID,
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         broker="alpaca",
         symbol="SPY",

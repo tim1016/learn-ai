@@ -30,7 +30,6 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.live_arming import (
     LIVE_ARMING_REQUIRED,
     LIVE_ARMING_SEAL_CHANGED,
-    LIVE_ARMING_UNOBSERVED,
     LIVE_MODE_DISAGREEMENT,
     LiveArmingRecord,
 )
@@ -439,7 +438,7 @@ async def test_an_unreadable_activation_record_refuses_the_live_boot(
     assert broker.submissions == []
 
 
-async def test_before_the_first_tick_every_live_enter_is_unobserved(
+async def test_boot_refreshes_arming_before_recovery_and_refuses_unarmed_enter(
     live_runtime: tuple[ActiveClerkRuntime, _RecordingLiveBroker],
     registered_live_bot: tuple[RetainedSourceBar, str],
 ) -> None:
@@ -447,7 +446,7 @@ async def test_before_the_first_tick_every_live_enter_is_unobserved(
     bar, _seal = registered_live_bot
     receipt = await _enter(runtime, bar)
     assert receipt.state == "rejected"
-    assert receipt.explanation.startswith(f"{LIVE_ARMING_UNOBSERVED}:"), receipt.explanation
+    assert receipt.explanation.startswith("LIVE_ARMING_REQUIRED:"), receipt.explanation
     assert broker.submissions == []
 
 

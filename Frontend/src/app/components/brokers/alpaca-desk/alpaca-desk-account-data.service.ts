@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, resource } from '@angular/core';
+import { Injectable, computed, inject, resource, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
@@ -8,7 +8,7 @@ import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
 import { freezeLaneFence } from '../../../fleet/lane-fence';
 import { openLaneFence } from '../../../fleet/open-lane-fence';
-import { resourceTarget } from '../../../fleet/resource-target';
+import { resourceTarget, laneKey } from '../../../fleet/resource-target';
 import { accountWorkspaceLocation } from '../../../fleet/account-workspace';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 
@@ -77,11 +77,13 @@ export class AlpacaDeskAccountDataService {
       bindingGeneration: lane.effective_binding_generation ?? null,
       routingEpoch: lane.routing_epoch ?? null,
     });
-  });
+  }, { equal: (left, right) => left === right || (left !== null && right !== null
+    && laneKey(left.broker, left.clerkId, left.routingEpoch, left.bindingGeneration, left.accountId)
+      === laneKey(right.broker, right.clerkId, right.routingEpoch, right.bindingGeneration, right.accountId)) });
 
-  /** Route identity only — clerk + account. Passed as `openLaneFence`'s
-   * `source`: it is the one thing this desk's command fence should
-   * re-derive on. A directory refresh (#2068's mitigating
+  /** Route identity — clerk + account. Alongside explicit operator review,
+   * this is the only reason the desk's command fence may re-derive.
+   * A directory refresh (#2068's mitigating
    * `FleetDirectoryService.refresh()` on a stale-generation refusal, or an
    * unrelated background poll) must not silently re-derive — and therefore
    * un-freeze — the fence below (#2106). */
@@ -96,10 +98,17 @@ export class AlpacaDeskAccountDataService {
    * re-derive on its own, and eagerly materializes it as soon as the lane
    * renders (see that helper's doc). `target` above stays live/reactive for
    * reads — only command minting must consume `fence`. */
+  private readonly reviewedLane = signal(0);
+
   readonly fence = openLaneFence(
     () => freezeLaneFence(this.fleetDirectory.lane('alpaca', this.routeParams().get('clerkId') ?? '')),
-    () => this.routeIdentity(),
+    () => `${this.routeIdentity()}::${this.reviewedLane()}`,
   );
+
+  /** Explicit operator review opens a new command context; background reads never do. */
+  reviewCurrentLane(): void {
+    this.reviewedLane.update((revision) => revision + 1);
+  }
 
   /** `undefined`, not `null`, when there is no account to read: `resource()`
    * skips its loader only for `undefined` params, and a `null` would have run

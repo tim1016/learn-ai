@@ -3,65 +3,51 @@ import { describe, expect, it } from 'vitest';
 
 import { NextAttemptComponent, type NextAttemptFacts } from './next-attempt.component';
 
-// 2026-09-03 03:59:55 ET: the first send that lands in the pre-market open.
-const PRE_MARKET_TRY_MS = 1_788_422_395_000;
+// 2026-09-03 04:00 ET: the actual pre-market open.
+const PRE_MARKET_OPEN_MS = 1_788_422_400_000;
+type RecoveryStatus = NonNullable<NextAttemptFacts['recovery_status']>;
 
-/** Renders the component and returns its host element. */
-async function renderAttempt(facts: NextAttemptFacts): Promise<HTMLElement> {
-  const { fixture } = await render(NextAttemptComponent, { inputs: { facts } });
+async function renderStatus(status: RecoveryStatus): Promise<HTMLElement> {
+  const { fixture } = await render(NextAttemptComponent, { inputs: { facts: { recovery_status: status } } });
   return fixture.nativeElement as HTMLElement;
 }
 
-describe('NextAttemptComponent (#2440)', () => {
-  it('names the time of the next automatic attempt in ET', async () => {
-    await renderAttempt({ next_attempt_at_ms: PRE_MARKET_TRY_MS });
-
-    const line = screen.getByText(/Automatic retry/);
-    expect(line.textContent).toContain('03:59:55');
-    expect(line.textContent).toContain('ET');
-    expect(line.textContent).toContain('Automatic retry: allowed from');
-    expect(line.textContent).not.toContain('waiting');
-  });
-
-  it('shows past eligibility without inferring a waiting state', async () => {
-    await renderAttempt({ next_attempt_at_ms: PRE_MARKET_TRY_MS });
-
-    expect(screen.getByText(/Automatic retry/).textContent).toContain('Automatic retry: allowed from');
-    expect(screen.getByText(/Automatic retry/).textContent).not.toContain('waiting');
-  });
-
-  it('shows a working exit in place of retry eligibility', async () => {
-    // The backend drops the time while an exit works; even a stale one would
-    // not be shown while an exit is already working.
-    await renderAttempt({
-      next_attempt_at_ms: PRE_MARKET_TRY_MS,
-      exit_working: true,
+describe('NextAttemptComponent (#2504)', () => {
+  it('renders the backend eligibility instant in ET', async () => {
+    await renderStatus({
+      kind: 'allowed_from', reason_code: 'NO_SESSION_OPEN', explanation: 'No session is open.',
+      allowed_from_ms: PRE_MARKET_OPEN_MS,
     });
-
-    expect(
-      screen.getByText('An exit is in progress; no automatic attempt is due while it works.'),
-    ).toBeTruthy();
-    expect(screen.queryByText(/Automatic retry/)).toBeNull();
+    const line = screen.getByText(/Automatic retry/);
+    expect(line.textContent).toContain('04:00:00');
+    expect(line.textContent).toContain('ET');
   });
 
-  it('says the attempt is unknown when the record could not be read', async () => {
-    await renderAttempt({ next_attempt_at_ms: null, facts_unreadable: true });
+  it.each(['working', 'on_hold', 'allowed_now', 'broker_unreachable', 'stuck', 'unknown'] as const)(
+    'renders the evaluated %s status without inventing eligibility', async kind => {
+      await renderStatus({ kind, reason_code: 'EXIT_SYMBOL_HALTED', explanation: `Clerk says ${kind}.` });
+      expect(screen.getByText(`Clerk says ${kind}.`)).toBeTruthy();
+      expect(screen.queryByText(/Automatic retry/)).toBeNull();
+      expect(screen.queryByText('EXIT_SYMBOL_HALTED')).toBeNull();
+    },
+  );
 
-    expect(
-      screen.getByText("Automatic retry: eligibility unknown; this notice's record could not be read."),
-    ).toBeTruthy();
+  it('shows original exposure age separately from the latest check', async () => {
+    await renderStatus({
+      kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.',
+      stuck_since_ms: PRE_MARKET_OPEN_MS, last_checked_at_ms: PRE_MARKET_OPEN_MS + 60_000,
+    });
+    expect(screen.getByText(/Position still open since/)).toBeTruthy();
+    expect(screen.getByText(/Last checked/)).toBeTruthy();
   });
 
-  it('renders nothing, and takes no space, when nothing is scheduled', async () => {
-    const host = await renderAttempt({ next_attempt_at_ms: null });
-
-    expect(host.textContent?.trim()).toBe('');
-    expect(host.style.display).toBe('none');
+  it('shows an unreadable record as unknown', async () => {
+    await render(NextAttemptComponent, { inputs: { facts: { recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." } } } });
+    expect(screen.getByText(/Recovery status is unknown/)).toBeTruthy();
   });
 
-  it('takes its place when there is something to say', async () => {
-    const host = await renderAttempt({ exit_working: true });
-
-    expect(host.style.display).toBe('');
+  it('takes no space when no recovery is attached', async () => {
+    const { fixture } = await render(NextAttemptComponent, { inputs: { facts: {} } });
+    expect(fixture.nativeElement.style.display).toBe('none');
   });
 });

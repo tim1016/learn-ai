@@ -57,6 +57,8 @@ import {
   type ResourceTarget,
   withCommand,
 } from '../../../../fleet/resource-target';
+import { LiveArmingComponent } from '../../shared/live-arming/live-arming.component';
+import { AlpacaLiveVerdictService } from '../../../../services/alpaca-live-verdict.service';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
   fencedTarget,
@@ -149,6 +151,7 @@ function snapshotPrice(snapshot: StockTickerSnapshot | null): number | null {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ExtendedFlattenTicketComponent,
+    LiveArmingComponent,
     FlattenFillsComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
@@ -176,6 +179,13 @@ export class BotPanelShellComponent {
 
   // ── Services ──────────────────────────────────────────────────────────────
 
+  private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
+  protected readonly armingAvailable = computed(() => {
+    const verdict = this.liveVerdicts.stateFor(this.clerkId()).verdict;
+    return this.panel()?.mode !== 'dry_run' && verdict?.clerk_authority === 'sqlite'
+      && (verdict.final_verdict === 'live-armed' || verdict.final_verdict === 'live-unarmed');
+  });
+  protected refreshArming(): void { void this.liveStore.refresh(); }
   private readonly panelSvc = inject(BrokerV2PanelService);
   private readonly brokers = inject(BrokersService);
   private readonly marketData = inject(MarketDataService);
@@ -659,6 +669,7 @@ export class BotPanelShellComponent {
   protected async refreshFlattenQuote(
     retryOnStaleToken = true,
     proposedLimitPrice: number | null = null,
+    bandOverride = false,
   ): Promise<void> {
     const prepared = this.preparedFlatten();
     const prepare = this.presentedAction('prepare_safe_flatten');
@@ -680,6 +691,7 @@ export class BotPanelShellComponent {
             action_id: 'prepare_safe_flatten',
             concurrency_token: prepare.concurrency_token,
             ...(proposedLimitPrice === null ? {} : { proposed_limit_price: proposedLimitPrice }),
+            band_override: bandOverride,
           },
           prepared.sid,
         );
@@ -702,7 +714,7 @@ export class BotPanelShellComponent {
         if (rejection.reasonCode === 'stale_action_token' && retryOnStaleToken) {
           this.flattenQuoteInFlight = false;
           await this.liveStore.refresh();
-          await this.refreshFlattenQuote(false, proposedLimitPrice);
+          await this.refreshFlattenQuote(false, proposedLimitPrice, bandOverride);
           return;
         }
         this.preparedFlatten.set({ ...prepared, quoteError: rejection.message });
@@ -722,11 +734,11 @@ export class BotPanelShellComponent {
    * stands down while this runs, so the answer is not immediately replaced by
    * a quote carrying no reading.
    */
-  protected async priceExtendedFlatten(limitPrice: number): Promise<void> {
+  protected async priceExtendedFlatten(limitPrice: number, bandOverride = false): Promise<void> {
     this.flattenPriceCheck.set(limitPrice);
     try {
       await this.flattenQuoteRun;
-      await this.refreshFlattenQuote(true, limitPrice);
+      await this.refreshFlattenQuote(true, limitPrice, bandOverride);
     } finally {
       this.flattenPriceCheck.set(null);
     }

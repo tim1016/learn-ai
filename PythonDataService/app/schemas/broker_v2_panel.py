@@ -36,6 +36,7 @@ from app.schemas.account_authority import (
     AuthorityKind,
     account_authority_agrees,
 )
+from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -181,24 +182,6 @@ class BotCatalogView(BaseModel):
 
 
 # ── §7 Panel view (single bot control panel) ─────────────────────────────────
-
-
-class ExposureNoticeView(BaseModel):
-    """What a startup refusal left behind at the broker (#2410).
-
-    A refused run manages nothing, so the refusal says so whenever something
-    could still move money: ``position_unmanaged`` for a nonzero position the
-    Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
-    currently vouch for that position, and ``entry_order_working`` for an entry
-    order still working that can open one. Nothing is cancelled or flattened on
-    the operator's behalf.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["position_unmanaged", "position_unverified", "entry_order_working"]
-    label: str
-    explanation: str
 
 
 class DutyOutcomeView(BaseModel):
@@ -451,9 +434,7 @@ class MissionVerdictView(BaseModel):
     # Earliest session eligibility for automatic recovery (int64 ms UTC).
     # No time while an exit works or automatic recovery has stopped.
     # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    exit_working: bool = False
-    facts_unreadable: bool = False
+    recovery_status: RecoveryStatusResponse | None = None
 
 
 class ReadinessCheckView(BaseModel):
@@ -1187,6 +1168,7 @@ class LaneAttentionItem(BaseModel):
     condition_id: str
     reason_code: str
     kind: str = "uncertainty"
+    action_label: str = "Open bot"
     severity: str
     strategy_instance_id: str | None = None
     # From the episode's cause facts where the condition names one (an
@@ -1196,9 +1178,7 @@ class LaneAttentionItem(BaseModel):
     # Earliest session eligibility for automatic recovery (int64 ms UTC).
     # No time while an exit works or automatic recovery has stopped.
     # Eligibility alone does not establish that a retry can be sent.
-    next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    exit_working: bool = False
-    facts_unreadable: bool = False
+    recovery_status: RecoveryStatusResponse | None = None
 
 
 class LaneAttentionRead(BaseModel):

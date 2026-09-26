@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
 from app.schemas.run_admission import (
     RunProcessAdmissionFact,
@@ -133,7 +134,7 @@ def _admission(
 
     @asynccontextmanager
     async def custody_guard(binding: BrokerBotBinding):
-        yield _clerk(observed_at_ms=binding.created_at_ms, account_mode=account_mode), ProgramLegPolicy.regular_only()
+        yield _clerk(observed_at_ms=binding.created_at_ms, account_mode=account_mode), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
     def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
         return StrategyValidationAdmissionFact(

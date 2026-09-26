@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionUnavailable
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import MissingExitExecutionEvidence
 from app.broker.alpaca.clerk.sqlite.models import RunResource
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
@@ -185,6 +187,13 @@ class _Source:
         self._instance_id = instance_id
         self._fills, self._runs = tuple(fills), tuple(runs)
         self._unreadable = frozenset(et_midnight_ms(day) for day in unreadable)
+
+    missing_evidence: tuple[MissingExitExecutionEvidence, ...] = ()
+
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[MissingExitExecutionEvidence, ...]:
+        return self.missing_evidence
 
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
@@ -595,3 +604,93 @@ def test_a_non_clean_day_and_a_seal_mismatch_are_named(tmp_path: Path) -> None:
             window=ALPACA_EXTENDED_HOURS_WINDOW,
             now_ms=CLOSE + 1,
         )
+
+
+def test_no_execution_evidence_is_neither_a_pass_nor_a_divergence(tmp_path: Path) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    shadow.missing_evidence = (MissingExitExecutionEvidence("shadow:exit", "a" * 64, "SPY", "sell", 1),)
+    twin = _twin_source([_fill(600), replace(_fill(960, side="sell"), decision_id="a" * 64, effect_kind="EXIT")], COVERING_TWIN_RUN)
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
+    [verdict] = evaluation.sessions
+    assert verdict.state == "execution_evidence_missing"
+    assert evaluation.counted == () and not evaluation.satisfied
+    assert verdict.reconciliation.execution_evidence_missing == ("shadow:exit",)
+    assert not verdict.reconciliation.passed
+    assert verdict.reconciliation.divergences == ()
+
+
+@pytest.mark.parametrize("difference,category", [
+    ("entry_quantity", DivergenceCategory.QUANTITY_MISMATCH),
+    ("entry_price", DivergenceCategory.FILL_PRICE_DRIFT),
+    ("unrelated_exit", DivergenceCategory.DECISION_MISMATCH),
+])
+def test_missing_exit_evidence_preserves_other_divergences(tmp_path: Path, difference: str, category) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    shadow.missing_evidence = (MissingExitExecutionEvidence("shadow:exit", "a" * 64, "SPY", "sell", 1),)
+    entry = _fill(600, qty="2" if difference == "entry_quantity" else "1", price="101" if difference == "entry_price" else "100")
+    fills = [entry, replace(_fill(960, side="sell"), decision_id="a" * 64, effect_kind="EXIT")]
+    if difference == "unrelated_exit":
+        fills.append(replace(_fill(961, side="sell"), decision_id="b" * 64, effect_kind="EXIT"))
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=_twin_source(fills, COVERING_TWIN_RUN))
+    [verdict] = evaluation.sessions
+    assert not evaluation.satisfied
+    assert category in {item.category for item in verdict.reconciliation.divergences}
+    assert verdict.reconciliation.shadow_fills
+    assert len(verdict.reconciliation.twin_fills) == len(fills)
+    assert verdict.state == ("execution_evidence_missing" if difference == "entry_price" else "twin_diverged")
+
+
+@pytest.mark.parametrize("decision_id,quantity", [("a" * 64, "2"), ("legacy-exit", "1")])
+def test_missing_execution_does_not_hide_unproven_twin_match(
+    tmp_path: Path, decision_id: str, quantity: str,
+) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    shadow.missing_evidence = (MissingExitExecutionEvidence("shadow:exit", decision_id, "SPY", "sell", 1),)
+    twin_exit = replace(_fill(960, side="sell", qty=quantity), decision_id=decision_id, effect_kind="EXIT")
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=_twin_source([_fill(600), twin_exit], COVERING_TWIN_RUN))
+    [verdict] = evaluation.sessions
+    assert verdict.state == "twin_diverged"
+    assert verdict.reconciliation.gating
+    assert not evaluation.satisfied
+
+
+def test_missing_execution_cannot_bypass_unreadable_fills(tmp_path: Path) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([], [_run(OPEN - 1, None)], unreadable=[DAY])
+    shadow.missing_evidence = (MissingExitExecutionEvidence("shadow:exit", "a" * 64, "SPY", "sell", 1),)
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=_twin_source([], COVERING_TWIN_RUN))
+    [verdict] = evaluation.sessions
+    assert verdict.state == "not_evaluable"
+    assert UNREADABLE in verdict.detail
+    assert not evaluation.satisfied
+
+
+@pytest.mark.parametrize("same_order", [True, False])
+def test_missing_exit_execution_correlates_one_twin_order_with_split_fills(
+    tmp_path: Path, same_order: bool,
+) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    shadow.missing_evidence = (MissingExitExecutionEvidence("shadow:exit", "a" * 64, "SPY", "sell", 1),)
+    exits = [
+        replace(_fill(960, side="sell", qty="0.4", ref="exit"), decision_id="a" * 64, effect_kind="EXIT"),
+        replace(_fill(961, side="sell", qty="0.6", ref="exit" if same_order else "other-exit"), decision_id="a" * 64, effect_kind="EXIT"),
+    ]
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=_twin_source([_fill(600), *exits], COVERING_TWIN_RUN))
+    [verdict] = evaluation.sessions
+    assert not evaluation.satisfied
+    assert len(verdict.reconciliation.twin_fills) == 3
+    if same_order:
+        assert verdict.state == "execution_evidence_missing"
+        assert verdict.reconciliation.divergences == ()
+    else:
+        assert verdict.state == "twin_diverged"
+        assert verdict.reconciliation.gating

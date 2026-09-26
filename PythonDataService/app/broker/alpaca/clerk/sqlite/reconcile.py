@@ -12,10 +12,14 @@ from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS, pause_exit_recovery
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolReader,
     BrokerSymbolView,
+    RecoveryEvaluation,
+    commit_recovery_evaluations,
     redrive_or_escalate_stale_exits,
+    revalidate_recovery_evaluations,
 )
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -34,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
+from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
     fold_order_evidence,
@@ -551,6 +556,7 @@ def _sync_position_drift(
 
 
 def _raise_stale_snapshot_uncertainty(repo: ClerkSqliteRepository, why: str) -> None:
+    pause_exit_recovery(repo, reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE)
     raise_uncertainty(
         repo,
         strategy_instance_id=None,
@@ -569,6 +575,7 @@ def _raise_stale_snapshot_uncertainty(repo: ClerkSqliteRepository, why: str) -> 
 
 
 def _raise_incomplete_reconciliation_uncertainty(repo: ClerkSqliteRepository) -> None:
+    pause_exit_recovery(repo, reason_code=RECONCILIATION_INCOMPLETE_REASON_CODE)
     raise_uncertainty(
         repo,
         strategy_instance_id=None,
@@ -875,6 +882,7 @@ async def reconcile_account(
     intake: ReentrantAsyncLock | None = None,
     pricing: RecoveryPricing,
     run_ownership: RunOwnership | None = None,
+    recovery_interval_ms: int = DEFAULT_RECOVERY_INTERVAL_MS,
 ) -> AccountReconciliationResult:
     """Serialize snapshot-to-verdict passes for one live account authority.
 
@@ -912,15 +920,17 @@ async def reconcile_account(
 
         try:
             await _under_intake(intake, _begin)
+            pass_started_at_ms = repo.clock()
+            recovery_checks: list[RecoveryEvaluation] = []
             result = await _reconcile_account_serialized(
-                repo,
-                read=read,
-                trade=trade,
-                trigger=trigger,
-                intake=intake,
-                pricing=pricing,
-                run_ownership=run_ownership,
+                repo, read=read, trade=trade, trigger=trigger, intake=intake,
+                pricing=pricing, run_ownership=run_ownership, recovery_checks=recovery_checks,
             )
+            if result.verdict != "stale":
+                await _under_intake(
+                    intake, commit_recovery_evaluations, repo, recovery_checks,
+                    pass_started_at_ms=pass_started_at_ms, interval_ms=recovery_interval_ms,
+                )
         except asyncio.CancelledError:
             if began:
                 await asyncio.shield(
@@ -1019,6 +1029,7 @@ async def _reconcile_account_serialized(
     trigger: Trigger,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
+    recovery_checks: list[RecoveryEvaluation],
     run_ownership: RunOwnership | None = None,
 ) -> AccountReconciliationResult:
     """Fold fresh order truth, recover operations, then derive residual safety."""
@@ -1056,9 +1067,17 @@ async def _reconcile_account_serialized(
         pricing=pricing,
     )
 
+    # Cancellation can race a partial fill. An open replacement needs the
+    # broker's remaining position and working-order set after that proof.
+    if await _under_intake(intake, has_ready_replacement, repo):
+        snapshot = await _read_account_snapshot(repo, read, intake=intake)
+        if snapshot is None:
+            return AccountReconciliationResult(verdict="stale", resolved_count=resolved_count)
+        broker_orders, broker_positions = snapshot
+
     # The re-drive is sized from attribution, so it may only send what this
     # pass's broker snapshot agrees with, with nothing working on the symbol (#2343).
-    await redrive_or_escalate_stale_exits(
+    recovery_checks.extend(await redrive_or_escalate_stale_exits(
         repo,
         trade=trade,
         intake=intake,
@@ -1067,7 +1086,7 @@ async def _reconcile_account_serialized(
         ),
         pricing=pricing,
         off_loop=to_thread,
-    )
+    ))
 
     # A run whose in-process runner is gone is retired first (#2369), so the
     # step below also cancels the ENTERs of a runner that ended without
@@ -1118,6 +1137,10 @@ async def _reconcile_account_serialized(
             simulated_authority=simulated_authority,
         )
         if finalized is not None:
+            await _under_intake(
+                intake, revalidate_recovery_evaluations, repo, recovery_checks,
+                broker_symbol=broker_symbol_reader(repo, broker_orders=broker_orders, broker_positions=broker_positions),
+            )
             return finalized
         verdict_base_revision = await _under_intake(intake, _control_revision, repo)
 

@@ -39,6 +39,7 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrde
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.strategy_validation_manifest import strategy_registry_seeds
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
 class _Broker:
@@ -114,7 +115,7 @@ def _order(client_order_id: str, leg: BrokerOrderLeg) -> BrokerOrder:
 
 def _binding() -> BrokerBotBinding:
     return BrokerBotBinding(
-        strategy_instance_id="spy-bot",
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id="spy-bot",
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="SPY",

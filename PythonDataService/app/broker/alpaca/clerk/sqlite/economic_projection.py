@@ -59,6 +59,8 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     FillPage,
     FillWindowProjection,
     MarketMark,
+    MissingExitExecutionEvidence,
+    OrderDecisionIdentity,
     SessionEconomicProjection,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, RunResource
@@ -439,6 +441,47 @@ class SqliteEconomicProjectionReader:
                     key=lambda record: (record.filled_at_ms, record.ledger_sequence),
                 )
             )
+
+    def order_decisions(self, strategy_instance_id: str) -> dict[str, OrderDecisionIdentity]:
+        """Semantic program decisions shared by twins; never correlate opaque order ids."""
+        with self._read_transaction():
+            self._verify_identity()
+            rows = self._conn.execute(
+                "SELECT o.order_ref, e.kind, t.facts_json FROM orders o "
+                "JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
+                "JOIN custody_transitions t ON t.effect_operation_id=e.effect_operation_id "
+                "AND t.transition_kind IN ('ENTER_ACCEPTED', 'EXIT_ACCEPTED') "
+                "WHERE e.strategy_instance_id = ?", (strategy_instance_id,),
+            ).fetchall()
+        return {row["order_ref"]: OrderDecisionIdentity(row["kind"], json.loads(row["facts_json"])["decision_id"]) for row in rows}
+
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[MissingExitExecutionEvidence, ...]:
+        return tuple(evidence for stamp, evidence in self.exit_execution_evidence(strategy_instance_id)
+                     if from_ms <= stamp < to_ms)
+
+    def exit_execution_evidence(self, strategy_instance_id: str) -> tuple[tuple[int, MissingExitExecutionEvidence], ...]:
+        """One lifetime evidence read, reused across the days of one shadow evaluation."""
+        from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
+
+        decisions = self.order_decisions(strategy_instance_id)
+        if not decisions:
+            return ()
+        try:
+            latest = SynthesizedOrderLedger.read_latest_beside_database(account_id=self._account_id, db_path=self._db_path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise EconomicProjectionUnavailable(f"Shadow execution evidence is unreadable: {exc}") from exc
+        missing = [ref for ref, decision in decisions.items() if decision.kind == "EXIT" and ref not in latest]
+        if missing:
+            raise EconomicProjectionUnavailable("Shadow execution evidence is missing orders: " + ", ".join(sorted(missing)))
+        return tuple(
+            (row.anchor.decision_bar_end_ms, MissingExitExecutionEvidence(ref, decision.decision_id, row.order.symbol, str(row.order.side), row.order.quantity))
+            for ref, decision in sorted(decisions.items()) if decision.kind == "EXIT"
+            and (row := latest.get(ref)) is not None
+            and row.order.status == "canceled" and row.anchor is not None
+            and row.anchor.unfilled_reason == "no_evidence"
+        )
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         """Every run the authority recorded for one instance, oldest first."""

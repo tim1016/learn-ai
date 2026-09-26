@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, BrokerPosition
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
 class _ParkedQqqBroker:
@@ -103,7 +104,7 @@ class _QqqRuntime:
 
 def _binding(strategy_instance_id: str, *, run_id: str) -> BrokerBotBinding:
     return BrokerBotBinding(
-        strategy_instance_id=strategy_instance_id,
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=strategy_instance_id,
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="QQQ",

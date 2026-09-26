@@ -80,6 +80,7 @@ class SynthesizedAnchor(BaseModel):
     decision_bar_end_ms: int = Field(ge=0)
     cancel_at_ms: int | None = Field(default=None, ge=0)
     fill_bar_ref: str | None = None
+    unfilled_reason: Literal["untouched", "no_evidence"] | None = None
 
 
 class SynthesizedOrderRecord(BaseModel):
@@ -155,6 +156,21 @@ class SynthesizedOrderLedger:
             label=label,
             trusted_root=trusted_root,
         )
+
+    @classmethod
+    def read_latest_beside_database(cls, *, account_id: str, db_path: Path) -> dict[str, SynthesizedOrderRecord]:
+        """Read-only evidence access using the same confined WAL and identity fold."""
+        from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
+
+        artifacts_root = db_path.parent.parent.parent.parent
+        path = confined_account_file(artifacts_root, account_id, SYNTHESIZED_ORDER_LEDGER_FILENAME)
+        if path.parent.resolve() != db_path.parent.resolve():
+            raise SynthesizedBarBindingError("The order evidence path does not belong to this custody database.")
+        wal = JsonlWal(
+            path, record_model=SynthesizedOrderRecord, corrupt_error=_corrupt_order_ledger,
+            seq_of=lambda row: row.seq, label="synthesized_orders", trusted_root=db_path.parent,
+        )
+        return cls.latest_records_from(wal.read_all())
 
     @classmethod
     def beside_source_bars(

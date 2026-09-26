@@ -47,6 +47,7 @@ from app.broker.alpaca.paths import fsync_directory_chain
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.broker.ibkr.config import live_artifacts_root
+from app.broker_configuration.envelope import InvalidLiveEnvelope, require_whole_cent_loss_cap
 from app.config import fleet_settings, settings
 from app.schemas.alpaca_live_graduation import (
     LiveGraduationApplyOutcome,
@@ -191,6 +192,12 @@ class AlpacaLiveGraduationService:
                 "The effective Live profile has no complete risk envelope.",
                 "Repair and apply the Live profile before preparing graduation again.",
             )
+        try:
+            require_whole_cent_loss_cap(float(configured.live_loss_usd))
+        except InvalidLiveEnvelope as exc:
+            raise LiveGraduationRefused(
+                "live_envelope_invalid", str(exc), "Save and apply a loss cap in whole cents before graduation."
+            ) from exc
         return LiveGraduationPlanView(
             plan_id=plan.plan_id,
             confirmation_token=plan.confirmation_token,

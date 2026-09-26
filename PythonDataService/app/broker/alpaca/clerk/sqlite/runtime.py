@@ -13,6 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING, Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
@@ -23,7 +24,14 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
+from app.broker.alpaca.clerk.exit_terms import (
+    ExitTerms,
+    policy_with_exit_terms,
+    upgrade_exit_terms,
+)
+from app.broker.alpaca.clerk.live_arming import latest_arming
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
+from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
@@ -44,7 +52,6 @@ from app.broker.alpaca.clerk.program_leg import (
     ProgramLegPolicy,
     ProgramLegRefused,
     shape_program_leg,
-    with_deploy_recovery_pricing,
 )
 from app.broker.alpaca.clerk.recovery_reduction import (
     UNPRICEABLE_RECOVERY,
@@ -312,6 +319,11 @@ class SqliteAlpacaClerkFacade:
         # #2369: which in-process runner holds each ACTIVE run this facade
         # admitted. Read and written only under ``self._intake``.
         self._run_ownership = RunOwnership()
+        self._exit_terms = {
+            instance["strategy_instance_id"]: terms
+            for instance in self._repo.strategy_instances()
+            if (terms := self._repo.exit_terms(instance["strategy_instance_id"])) is not None
+        }
 
     @property
     def account_id(self) -> str:
@@ -369,57 +381,60 @@ class SqliteAlpacaClerkFacade:
         if self.authority_kind == "synthetic":
             return UNPRICEABLE_RECOVERY
         return RecoveryPricing(
-            policy_source=lambda: self.program_leg_policy,
             quote_source=self._quote_source,
+            liveness_source=market_liveness_fact,
+            policy_for=self.exit_policy_for_instance,
         )
 
     @property
     def program_leg_policy(self) -> ProgramLegPolicy:
-        """The policy this authority prices a leg from *right now*.
+        """The account's entry policy, refreshed from the current arming envelope.
 
-        The allowance is the envelope in force's (ADR 0059 D3): ``xh_entry_bps``
-        and ``xh_exit_bps`` are sealed at arming with every other envelope
-        value, so a staged environment edit reaches an entry or an exit only at
-        the next re-arm (owner decision 2026-09-10). ``in_force`` is the one
-        place that rule is written; this is the seam that applies it to a leg.
-
-        Resolved on read, not at composition, because the arming ledger is
-        re-read on the envelope sync's cadence -- which is what lets
-        ``ProgramLegPolicy`` stay a plain value and ``shape_program_leg`` a pure
-        function of it. It is resolved *here*, on the one accessor, rather than
-        at the pricing call, so admission cannot answer this policy's questions
-        off a different object than the one that prices.
-
-        An authority with no envelope (paper, synthetic) answers the composed
-        policy unchanged. So does a live account whose ledger holds no arming
-        record, or whose arming inputs the last observation could not read:
-        ``in_force`` falls back to the configured values, and **an EXIT is never
-        refused or delayed for want of a seal**. That fallback is deliberately
-        not granted to the loss judgement, which fails closed instead
-        (``live_envelope_sync.LiveEnvelopeSync._seal_unreadable``) -- an exit
-        leaves the account, so falling back can only help; admitting an entry on
-        a limit nothing vouches for takes new exposure.
-
-        Where an envelope exists it decides *both* allowances, so the
-        environment-derived pair the policy was composed with is not consulted:
-        both come from the same two ``ALPACA_LIVE_XH_*`` settings, and a live
-        envelope cannot exist without them (`AlpacaSettings` refuses the boot).
+        Exit allowance, band and spread cap come exclusively from the bot's
+        immutable custody seal through ``exit_policy_for_instance``.
         """
-        if self._live_envelope is None:
-            return self._program_leg_policy
-        values = self._live_envelope.in_force
-        return replace(
-            self._program_leg_policy,
-            allowance_refusal=None,
-            # The canonical deploy-knob stamp (#2229): the band edge and the
-            # spread cap ride beside the sealed pair on every resolution path
-            # alike, so a re-arm cannot silently change them.
-            allowances=with_deploy_recovery_pricing(
-                ExtendedHoursAllowances.from_bps(
-                    entry_bps=values.xh_entry_bps, exit_bps=values.xh_exit_bps
-                )
-            ),
+        policy = self._program_leg_policy
+        if self._live_envelope is not None:
+            values = self._live_envelope.in_force
+            return replace(policy, allowance_refusal=None, allowances=ExtendedHoursAllowances(
+                entry_bps=Decimal(str(values.xh_entry_bps)), exit_bps=None,
+            ))
+        return policy if policy.allowances is None else replace(
+            policy, allowances=replace(policy.allowances, exit_bps=None),
         )
+
+    def upgrade_legacy_exit_terms(self, arming_ledger: LiveArmingLedger | None = None) -> None:
+        """Seal each legacy bot from its own arming history, else the effective revision."""
+        if self._repo.exit_terms_upgrade_completed():
+            return
+        records = ()
+        if arming_ledger is not None:
+            try:
+                records = tuple(arming_ledger.records())
+            except (OSError, ValueError):
+                logger.error("Legacy exit terms cannot read arming history; the effective revision supplies the allowance",
+                             extra={"account_id": self.account_id, "action": "exit_terms_upgrade_arming_unreadable"}, exc_info=True)
+
+        def policy_for(sid: str) -> ProgramLegPolicy:
+            policy = self._program_leg_policy
+            own_seal = latest_arming(tuple(row for row in records if row.strategy_instance_id == sid))
+            values = own_seal.envelope if own_seal is not None else (
+                self._live_envelope.values if self._live_envelope is not None else None
+            )
+            if values is not None:
+                policy = replace(policy, allowance_refusal=None, allowances=ExtendedHoursAllowances.from_envelope(values))
+            return policy
+
+        upgrade_exit_terms(self._repo, policy_for)
+        self._exit_terms = {instance["strategy_instance_id"]: self._repo.exit_terms(instance["strategy_instance_id"])
+                            for instance in self._repo.strategy_instances()}
+
+    def exit_terms_for_instance(self, sid: str) -> ExitTerms | None:
+        return self._exit_terms.get(sid)
+
+    def exit_policy_for_instance(self, sid: str) -> ProgramLegPolicy:
+        """Use cached immutable custody terms; never read files or SQLite on a price tick."""
+        return policy_with_exit_terms(self.program_leg_policy, self._exit_terms.get(sid))
 
     @property
     def binds_decision_bar(self) -> bool:
@@ -626,6 +641,8 @@ class SqliteAlpacaClerkFacade:
             display_name = _strategy_display_name(binding.strategy_key)
             existing = self._repo.strategy_instance(binding.strategy_instance_id)
             if existing is None:
+                if binding.exit_terms is None or binding.exit_terms.provenance != "deployed":
+                    raise StrategyRegistrationConflictError("Explicit exit terms are required for a new Start.")
                 self._repo.register_strategy_instance(
                     strategy_instance_id=binding.strategy_instance_id,
                     symbol=binding.symbol,
@@ -633,6 +650,7 @@ class SqliteAlpacaClerkFacade:
                     strategy_key=binding.strategy_key,
                     display_name=display_name,
                     config_json=config_json,
+                    exit_terms=binding.exit_terms,
                 )
             elif existing["symbol"].upper() != binding.symbol.upper() or existing["config_hash"] != config_hash:
                 raise StrategyRegistrationConflictError(
@@ -653,6 +671,10 @@ class SqliteAlpacaClerkFacade:
                         "its SQLite authority configuration"
                     )
 
+            terms = self._repo.exit_terms(binding.strategy_instance_id)
+            if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
+                raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
+            self._exit_terms[binding.strategy_instance_id] = terms
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
@@ -744,7 +766,7 @@ class SqliteAlpacaClerkFacade:
             return price_recovery_reduction(
                 side=OrderSide(leg.side),
                 now_ms=now_ms,
-                policy=self.program_leg_policy,
+                policy=self.exit_policy_for_instance(leg.strategy_instance_id),
                 quote=self._quote_source(leg.symbol, now_ms),
             )
         except ProgramLegRefused as exc:
@@ -807,7 +829,7 @@ class SqliteAlpacaClerkFacade:
                 symbol=leg.symbol,
                 quantity=leg.quantity,
                 now_ms=now_ms,
-                policy=self.program_leg_policy,
+                policy=self.exit_policy_for_instance(leg.strategy_instance_id),
                 confirmed=confirmed_limit,
                 # Read at send, never taken from the client: the band and the
                 # quote's freshness are judged against what the Clerk sees now.
@@ -991,7 +1013,8 @@ class SqliteAlpacaClerkFacade:
                     purpose=purpose,
                     use_rth=use_rth,
                     decision_bar=retained_source_bar,
-                    policy=self.program_leg_policy,
+                    policy=(self.exit_policy_for_instance(strategy_instance_id)
+                            if purpose is EffectPurpose.EXIT else self.program_leg_policy),
                 )
             except ProgramLegRefused as exc:
                 return rejected(

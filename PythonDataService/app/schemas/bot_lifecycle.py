@@ -15,4 +15,6 @@ BotDutyOutcomeKind = Literal[
 ]
 
 
-__all__ = ["BotDutyOutcomeKind"]
+UNCLEAN_DUTY_OUTCOMES = frozenset({"CRASHED", "EXITED_UNVERIFIED"})
+
+__all__ = ["UNCLEAN_DUTY_OUTCOMES", "BotDutyOutcomeKind"]

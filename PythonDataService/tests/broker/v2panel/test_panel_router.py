@@ -145,7 +145,7 @@ class _FakeRegistry:
 
         async with default_start_custody_projection(
             self.binding_for_control(broker, sid)
-        ) as (snapshot, _policy):
+        ) as (snapshot, _policy, _terms):
             self.custody_projections.append((sid, snapshot.reconciliation_state))
         raise BotRunnerError("resume admission policy is not modelled in this harness")
 
@@ -184,6 +184,7 @@ class _FakeRegistry:
             use_rth=True,
             strategy_key="deployment_validation",
             sealed_program=None,
+            exit_terms=None,
             mode="trade",
         )
 

@@ -461,3 +461,42 @@ def test_the_event_log_pages_backwards(service: BrokerConfigurationService) -> N
     assert len(newest) == 1
     assert len(older) == 2
     assert newest[0].event_id not in {event.event_id for event in older}
+
+
+@pytest.mark.parametrize("loss_usd", [12.34, 12.34 + 1e-15])
+def test_new_loss_caps_accept_binary_noise(service: BrokerConfigurationService, loss_usd: float) -> None:
+    saved = service.create_profile(
+        display_name="Cents", credential_slot="alpaca_live_primary", endpoint_mode="live",
+        live_envelope=ValidatedLiveEnvelope.from_mapping({**LIVE_ENVELOPE_PAYLOAD, "loss_usd": loss_usd}),
+    )
+    assert saved.latest_revision.live_envelope.loss_usd == loss_usd
+
+
+def test_new_loss_caps_refuse_sub_cent_but_historical_values_remain_readable(
+    service: BrokerConfigurationService,
+) -> None:
+    from app.broker_configuration.errors import InvalidLiveEnvelope
+
+    historical = ValidatedLiveEnvelope.from_mapping({**LIVE_ENVELOPE_PAYLOAD, "loss_usd": 12.345})
+    assert historical.to_mapping()["loss_usd"] == 12.345
+    with pytest.raises(InvalidLiveEnvelope, match="whole cents"):
+        service.create_profile(
+            display_name="Sub cents", credential_slot="alpaca_live_primary", endpoint_mode="live",
+            live_envelope=historical,
+        )
+
+
+def test_exit_defaults_round_trip_without_changing_an_older_revision(service: BrokerConfigurationService) -> None:
+    from app.schemas.exit_terms import ExitTermsInput
+
+    created = paper_profile(service)
+    original = created.latest_revision
+    terms = ExitTermsInput(exit_allowance_bps=23, band_multiple=3, spread_cap_bps=60)
+    revision = service.create_revision(
+        created.profile.profile_id, expected_revision=1,
+        credential_slot=original.credential_slot, endpoint_mode='paper', live_envelope=None,
+        default_exit_terms=terms,
+    )
+    assert revision.default_exit_terms == terms
+    assert service.read_revision(created.profile.profile_id, 1) == original
+    assert service.read_revision(created.profile.profile_id, 2).default_exit_terms == terms

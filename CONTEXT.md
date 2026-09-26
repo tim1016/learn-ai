@@ -2063,7 +2063,11 @@ proves its running build at Start/Resume.
 - **Recovery EXIT** — a reduction-only EXIT captured without the active-run fence, anchored to the run recorded on the targeted entry's effect operation. Admitted only by the safe-flatten gates or the stuck-EXIT watchdog policy, and always subject to the REDUCE capability's movement-toward-zero check.
 - **Safe flatten** — the two-step operator capability over a prepared `SafeFlattenPlan`: `prepare_safe_flatten` (view) builds the versioned exact-close plan; `execute_safe_flatten` (mutation) submits it as recovery EXITs, re-deriving quantities from durable attributed positions and re-asserting no-active-run inside the capture transaction. Execution is gated to a single strategy-owned leg; account-wide and manual custody stay prepare-only.
 - **Retry eligibility** — the earliest time session and retry-age policy permit an automatic reduction attempt. Custody proof and a recovery pass are still required. A usable quote is required only outside the regular session; a regular-session market retry reads no quote. Eligibility is not a scheduled submission or proof that a sell failed.
-- **Redrive** — the watchdog's bounded automatic re-submission of a reduction for a stale `EXIT_NOT_FLAT` episode; identity `exit-redrive-<episode-hex12>-<attempt>`, at most 3 per episode, counted by the command namespace (not a mutable timestamp).
+- **Exit hold** — an exit waiting for a permitted session, usable pricing, trading to resume, or its own working reduction. Waiting is not an execution failure and does not spend the failure-time budget.
+- **Exit failure-time budget** — accumulated regular-session time during which the Clerk observes a failure preventing an exit. Holds, broker outages and Clerk downtime pause it; a restart preserves the amount already spent.
+- **Open replacement** — cancellation of a Clerk-priced extended-hours exit at regular open, followed by a new market exit for the remaining attributed position after exact cancellation proof. An operator-confirmed limit is excluded.
+- **Recovery status** — the Clerk's last observed answer to whether an exit is working, held, eligible, unreachable, stuck, or not yet verified. Its check time is separate from the original unresolved-exit time.
+- **Redrive** — a new automatic reduction attempt for an unresolved exit. Only failed regular-session market attempts consume its bounded attempt count; ordinary holds pause recovery without spending that count.
 - **`EXIT_STUCK`** — the durable custody-subject escalation raised when redrives exhaust; blocks new exposure, allows reduction toward zero, and clears on the same attributed-flat proof that clears `EXIT_NOT_FLAT`.
 - **`FAILED_ENTER_FILLED`** — the custody-subject fence raised when a fill is recorded on an ENTER the Clerk already folded `failed`/`rejected` (#2348). The Clerk keeps the real position; the fence names the order and its fill quantity, blocks new exposure, and allows reduction toward zero of the named symbols only. Every reconciliation pass re-derives it from durable facts (a crash between the fill and the fence heals on the next pass). The account verdict stays `clean` — broker and journal agree — while the fenced bot's custody proof carries a freeze that refuses its Start/Resume; it clears only on attributed-flat proof from a pass whose broker snapshot agrees, and re-raises only if the order fills further.
 
@@ -2179,3 +2183,11 @@ How an operator moves around one broker account's pages. The account, not the pa
 - **Market-data readiness** — current evidence that the symbol's live data is usable for a trading decision. It is distinct from connection health and the venue's reported halt status.
 - **Reported halt status** — the data provider's explicit halted, not-halted, or unavailable report for one instrument; an absent initial report remains absent.
 - **Decision-data freshness** — whether the price evidence used for a decision is within that decision's allowed age. Observing it again does not make it younger.
+
+
+- **Exit terms** — the immutable per-instance exit allowance (bps), band multiple,
+  spread cap (bps) and `deployed`/`backfilled` provenance. Separate from signal
+  identity; all EXIT pricing reads this registration seal. Profile defaults
+  prefill future deployments and never modify an existing bot. An acknowledged
+  manual band override is an audited exception for one EXIT, not a terms edit.
+  [Decision](docs/architecture/adrs/0045-exposure-lifecycle-closure.md#immutable-exit-terms-deployment-and-arming-2026-09-25-prd-2504).

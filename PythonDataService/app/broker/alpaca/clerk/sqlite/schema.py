@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_un
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 18
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -710,6 +710,26 @@ SCHEMA_V16_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_uncertainties_reason_code ON uncertainties(reason_code)",
 )
 SCHEMA_V16_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V16_STATEMENTS)
+# Recovery heartbeats are replaceable operational evidence. Changes to the
+# recovery decision and failure budget remain in the custody hash chain.
+SCHEMA_V17_STATEMENTS: tuple[str, ...] = (
+    "CREATE TABLE IF NOT EXISTS exit_recovery_checks ("
+    "strategy_instance_id TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id), "
+    "uncertainty_id TEXT NOT NULL, lease_owner TEXT NOT NULL, last_checked_at_ms INTEGER, "
+    "completed_at_ms INTEGER NOT NULL, interval_ms INTEGER NOT NULL)",
+)
+SCHEMA_V17_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V17_STATEMENTS)
+SCHEMA_V18_STATEMENTS: tuple[str, ...] = (
+    "CREATE TABLE IF NOT EXISTS strategy_exit_terms ("
+    "strategy_instance_id TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id), "
+    "terms_json TEXT NOT NULL)",
+    "INSERT OR IGNORE INTO strategy_exit_terms (strategy_instance_id, terms_json) "
+    "SELECT strategy_instance_id, CASE transition_kind WHEN 'EXIT_TERMS_SEALED' THEN facts_json "
+    "ELSE json_extract(facts_json, '$.exit_terms') END FROM custody_transitions "
+    "WHERE transition_kind = 'EXIT_TERMS_SEALED' OR (transition_kind = 'STRATEGY_INSTANCE_REGISTERED' "
+    "AND json_extract(facts_json, '$.exit_terms') IS NOT NULL) ORDER BY sequence",
+)
+SCHEMA_V18_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V18_STATEMENTS)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -726,6 +746,10 @@ SCHEMA_DDL = (
     + SCHEMA_V15_DDL
     + "\n\n"
     + SCHEMA_V16_DDL
+    + "\n\n"
+    + SCHEMA_V17_DDL
+    + "\n\n"
+    + SCHEMA_V18_DDL
 ).rstrip("\n")
 
 
@@ -950,6 +974,8 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     14: SCHEMA_V15_STATEMENTS,
     # v15 -> v16: index-only; same statements as the fresh v16 block above.
     15: SCHEMA_V16_STATEMENTS,
+    16: SCHEMA_V17_STATEMENTS,
+    17: SCHEMA_V18_STATEMENTS,
 }
 
 

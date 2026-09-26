@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import math
 from pathlib import Path
 
@@ -38,9 +37,7 @@ from app.services.canary_admission import apply_canary_activation, plan_canary_a
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import (
     CORPUS_UNCOVERED_ADMITTED_NOTE,
-    EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE,
     evaluate_run_admission,
-    log_resume_admitted_without_exit_allowance,
 )
 
 _NOW = 1_700_000_010_000
@@ -453,88 +450,24 @@ def test_flat_resume_of_a_regular_hours_run_without_an_exit_allowance_is_refused
 
 
 @pytest.mark.parametrize("mode", ["trade", "dry_run"])
-def test_holding_resume_of_a_regular_hours_run_without_an_exit_allowance_resumes(mode: str) -> None:
-    """#2440 owner decision 2026-09-25: a run still holding a position always resumes.
-
-    An exit is never blocked by a configuration error (ADR 0060). The admitted
-    decision's explanation states what the missing allowance still costs.
-    """
+def test_holding_resume_without_allowance_requires_flatten(mode: str) -> None:
     clerk, checkpoint = _carried_spy()
+    bot = _resume_bot(mode=mode, checkpoint=checkpoint, extended_hours_state="EXIT_ALLOWANCE_UNSET")
+    bot = bot.model_copy(update={"exposure_carryover_supported": False})
+    decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
+    assert decision.allowed is False
+    assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
+    assert "Flatten" in decision.next_step
 
+
+@pytest.mark.parametrize("mode", ["trade", "dry_run"])
+def test_unknown_exposure_does_not_bypass_missing_allowance(mode: str) -> None:
     decision = evaluate_run_admission(
-        _resume_bot(mode=mode, checkpoint=checkpoint, extended_hours_state="EXIT_ALLOWANCE_UNSET"),
-        clerk,
-        evaluated_at_ms=_NOW,
+        _resume_bot(mode=mode, extended_hours_state="EXIT_ALLOWANCE_UNSET"),
+        _clerk(exposure_state="unknown"), evaluated_at_ms=_NOW,
     )
-
-    assert decision.allowed is True
-    assert decision.reason_code == "RESUME_ADMITTED"
-    if mode == "dry_run":
-        assert "late exit folds for operator recovery" in decision.explanation
-        assert "does not retry from a live quote" in decision.explanation
-    else:
-        assert decision.explanation.endswith(EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE)
-
-
-def _admitted_without_allowance_logs(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [r for r in caplog.records if r.__dict__.get("action") == "resume_admitted_without_exit_allowance"]
-
-
-def test_only_a_mutating_resume_that_was_admitted_logs_the_missing_exit_allowance(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """#2440 review: evaluating a Resume logs nothing; the Resume itself logs only an admitted one.
-
-    The panel previews Resume every 5 s and each gallery snapshot previews it
-    again, so a warning raised by the evaluation fired on every poll — and
-    called "admitted" a trade Resume that ``CLERK_EXPOSURE_UNKNOWN`` refused.
-    """
-    held_clerk, checkpoint = _carried_spy()
-    held = _resume_bot(checkpoint=checkpoint, extended_hours_state="EXIT_ALLOWANCE_UNSET")
-    unknown_clerk = _clerk(exposure_state="unknown")
-    unknown = _resume_bot(mode="trade", extended_hours_state="EXIT_ALLOWANCE_UNSET")
-
-    with caplog.at_level("WARNING", logger="app.services.run_admission"):
-        admitted = evaluate_run_admission(held, held_clerk, evaluated_at_ms=_NOW)
-        refused = evaluate_run_admission(unknown, unknown_clerk, evaluated_at_ms=_NOW)
-        assert _admitted_without_allowance_logs(caplog) == [], "a preview logged a Resume"
-
-        log_resume_admitted_without_exit_allowance(unknown, unknown_clerk, refused)
-        assert _admitted_without_allowance_logs(caplog) == [], "a refused Resume was logged as admitted"
-
-        log_resume_admitted_without_exit_allowance(held, held_clerk, admitted)
-
-    [record] = _admitted_without_allowance_logs(caplog)
-    assert record.__dict__["exposure_state"] == "non_zero"
-    assert record.__dict__["strategy_instance_id"] == _SID
-
-
-def test_unknown_exposure_counts_as_holding_for_the_exit_allowance_outside_dry_run() -> None:
-    """A trade Resume with unknown exposure is refused by ``CLERK_EXPOSURE_UNKNOWN``, never by the allowance.
-
-    A Dry Run skips the custody gates, and its synthetic Clerk reads unknown
-    until it publishes a verdict — for a flat bot too. Counting that as
-    holding admitted the preview, and the click then reconciled to zero and
-    refused (#2440 review). A Dry Run holds for this rule only when its
-    position is proven (see the holding test above).
-    """
-    clerk = _clerk(exposure_state="unknown")
-
-    dry_run = evaluate_run_admission(
-        _resume_bot(mode="dry_run", extended_hours_state="EXIT_ALLOWANCE_UNSET"),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-    trade = evaluate_run_admission(
-        _resume_bot(mode="trade", extended_hours_state="EXIT_ALLOWANCE_UNSET"),
-        clerk,
-        evaluated_at_ms=_NOW,
-    )
-
-    assert dry_run.allowed is False
-    assert dry_run.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-    assert trade.allowed is False
-    assert trade.reason_code == "CLERK_EXPOSURE_UNKNOWN"
+    assert decision.allowed is False
+    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 def test_holding_resume_of_an_extended_run_without_allowances_is_still_refused() -> None:
@@ -562,7 +495,7 @@ def test_holding_resume_with_a_configured_exit_allowance_carries_no_note() -> No
     )
 
     assert decision.allowed is True
-    assert EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE not in decision.explanation
+    assert "allowance" not in decision.explanation
 
 
 def test_start_admission_keeps_unprovable_custody_unknown() -> None:
@@ -595,7 +528,7 @@ def test_start_admission_refuses_existing_attributed_exposure() -> None:
 
     assert decision.allowed is False
     assert decision.reason_code == "START_REQUIRES_FLAT_CUSTODY"
-    assert decision.next_step == "Use Resume for approved carryover, or flatten through the Clerk."
+    assert decision.next_step == "Flatten the exact Clerk-attributed exposure before starting another run."
 
 
 def test_start_admission_refuses_future_dated_authority_facts() -> None:
@@ -927,7 +860,7 @@ def test_unset_extended_allowance_denies_every_mode(mode: str) -> None:
     assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
-def test_dry_run_resume_admitted_despite_unapproved_carryover_exposure() -> None:
+def test_dry_run_resume_cannot_restore_unsupported_held_exposure() -> None:
     """Defense-in-depth: the request schema already forbids
     ``carryover_policy=="ALLOW"`` for dry_run, so this block is moot in
     practice — but the guard covers it explicitly to match the gate table's
@@ -941,8 +874,8 @@ def test_dry_run_resume_admitted_despite_unapproved_carryover_exposure() -> None
 
     decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
 
-    assert decision.allowed is True
-    assert decision.reason_code == "RESUME_ADMITTED"
+    assert decision.allowed is False
+    assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
 
 
 def test_dry_run_still_denied_for_stale_authority_facts_and_process_conflicts() -> None:

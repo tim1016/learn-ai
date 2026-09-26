@@ -6,9 +6,9 @@ the confirmation window, re-observes every input, refuses any drift, and only
 then appends the sealed record. ``disarm`` is the closed direction and takes no
 plan at all.
 
-Nothing here contacts a broker. The four inputs (design R8) are settings, the
-shadow activation proof, and the instance's sealed binding; a current shadow
-receipt is recorded when one exists -- all durable evidence already on disk.
+Nothing here contacts a broker. The inputs are settings, the activation proof,
+the instance's sealed binding and immutable exit terms; a current shadow receipt
+is recorded when one exists -- all durable evidence already on disk.
 Mode agreement against the broker stays the runtime's job at boot, and (slice 7)
 at admission.
 
@@ -55,11 +55,12 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveDisarmRecord,
     RehearsalPredecessor,
     arming_status,
+    arming_version_payload,
     instance_ids,
     latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_envelope import ENVELOPE_SETTINGS_FIELDS, LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid, ShadowActivationStore
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid, ShadowReceiptStore
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid, ActivationStore
@@ -77,6 +78,7 @@ from app.utils.timestamps import Clock, now_ms_utc
 logger = logging.getLogger(__name__)
 
 _LABEL = "live arming"
+_ENVELOPE_FIELD_ORDER = tuple(field for field, _ in ENVELOPE_SETTINGS_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ class ArmingInputs:
     envelope: LiveEnvelopeValues
     max_sessions: int
     predecessor: RehearsalPredecessor | None = None
+    exit_terms: dict[str, Any] | None = None
 
 
 type ArmingObserver = Callable[..., ArmingInputs]
@@ -122,6 +125,7 @@ class LiveArmingPlan:
     envelope_sha256: str
     max_sessions: int
     predecessor: RehearsalPredecessor | None = None
+    exit_terms: dict[str, Any] | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> LiveArmingPlan:
@@ -245,7 +249,7 @@ def live_account_activation_is_verified(
 
 def live_account_id_for_status(
     *,
-    strategy_instance_id: str | None,
+    strategy_instance_id: str,
     artifacts_root: Path,
     live_state_root: Path,
 ) -> str:
@@ -257,90 +261,58 @@ def live_account_id_for_status(
     report the recorded state; a never-armed instance still refuses instead of
     inheriting another account.
 
-    List status retains the Shadow activation fence when present. A directly
-    graduated account has no such fence, so its durable Live activation is the
-    account evidence instead. Multiple candidates remain ambiguous and refuse.
     """
-    if strategy_instance_id is not None:
-        binding = live_state_binding_repository(live_state_root).read(strategy_instance_id)
-        shadow_resolution_failure: LiveArmingRefused | ShadowActivationInvalid | None = None
-        if (
-            binding is not None
-            and binding.sealed_program is not None
-            and binding.sealed_account_id is not None
-        ):
-            try:
-                return live_account_id_for_instance(
-                    strategy_instance_id=strategy_instance_id,
-                    artifacts_root=artifacts_root,
-                    live_state_root=live_state_root,
-                )
-            except LiveArmingRefused as exc:
-                if (
-                    not is_shadow_account_id(binding.sealed_account_id)
-                    or exc.reason_code != LIVE_ARMING_INSTANCE_UNSEALED
-                ):
-                    raise
-                shadow_resolution_failure = exc
-            except ShadowActivationInvalid as exc:
-                if not is_shadow_account_id(binding.sealed_account_id):
-                    raise
-                shadow_resolution_failure = exc
+    binding = live_state_binding_repository(live_state_root).read(strategy_instance_id)
+    shadow_resolution_failure: LiveArmingRefused | ShadowActivationInvalid | None = None
+    if (
+        binding is not None
+        and binding.sealed_program is not None
+        and binding.sealed_account_id is not None
+    ):
         try:
-            discovered = LiveArmingLedger.discover(
-                artifacts_root,
+            return live_account_id_for_instance(
                 strategy_instance_id=strategy_instance_id,
+                artifacts_root=artifacts_root,
+                live_state_root=live_state_root,
             )
-        except LiveArmingRefused:
-            raise
-        except ValueError as exc:
-            raise LiveArmingRefused(
-                LIVE_ARMING_INSTANCE_UNSEALED,
-                f"the arming ledger cannot be discovered safely: {exc}",
-            ) from exc
-        if discovered is not None:
-            return discovered.live_account_id
-        if isinstance(shadow_resolution_failure, LiveArmingRefused):
-            raise shadow_resolution_failure
-        if shadow_resolution_failure is not None:
-            raise LiveArmingRefused(
-                LIVE_ARMING_INSTANCE_UNSEALED,
-                f"{strategy_instance_id}'s Shadow activation proof cannot be verified: "
-                f"{shadow_resolution_failure}",
-            ) from shadow_resolution_failure
-        raise LiveArmingRefused(
-            LIVE_ARMING_INSTANCE_UNSEALED,
-            f"{strategy_instance_id} has no sealed alpaca binding",
-        )
-
-    shadow_ids = ShadowActivationStore(artifacts_root).account_ids()
+        except LiveArmingRefused as exc:
+            if (
+                not is_shadow_account_id(binding.sealed_account_id)
+                or exc.reason_code != LIVE_ARMING_INSTANCE_UNSEALED
+            ):
+                raise
+            shadow_resolution_failure = exc
+        except ShadowActivationInvalid as exc:
+            if not is_shadow_account_id(binding.sealed_account_id):
+                raise
+            shadow_resolution_failure = exc
     try:
-        live_ids = ActivationStore(artifacts_root / "accounts" / "alpaca").account_ids()
-    except ActivationRecordInvalid as exc:
+        discovered = LiveArmingLedger.discover(
+            artifacts_root,
+            strategy_instance_id=strategy_instance_id,
+        )
+    except LiveArmingRefused:
+        raise
+    except ValueError as exc:
         raise LiveArmingRefused(
             LIVE_ARMING_INSTANCE_UNSEALED,
-            f"the Live activation ledger cannot be verified: {exc}",
+            f"the arming ledger cannot be discovered safely: {exc}",
         ) from exc
-    shadow_live_ids = tuple(live_account_id_for_shadow_account(account_id) for account_id in shadow_ids)
-    candidates = tuple(dict.fromkeys((*shadow_live_ids, *live_ids)))
-    if not candidates:
+    if discovered is not None:
+        return discovered.live_account_id
+    if isinstance(shadow_resolution_failure, LiveArmingRefused):
+        raise shadow_resolution_failure
+    if shadow_resolution_failure is not None:
         raise LiveArmingRefused(
             LIVE_ARMING_INSTANCE_UNSEALED,
-            f"no Shadow or Live activation proof under {artifacts_root}",
-        )
-    if len(candidates) > 1:
-        raise LiveArmingRefused(
-            LIVE_ARMING_INSTANCE_UNSEALED,
-            "the Shadow and Live activation evidence names more than one account "
-            f"({', '.join(sorted(candidates))}); status cannot choose between them",
-        )
-    if not live_ids:
-        return live_account_id_for(artifacts_root)
-    return _verified_live_account_id(
-        account_id=candidates[0],
-        artifacts_root=artifacts_root,
-        failure_detail="the Live activation is not verified",
+            f"{strategy_instance_id}'s Shadow activation proof cannot be verified: "
+            f"{shadow_resolution_failure}",
+        ) from shadow_resolution_failure
+    raise LiveArmingRefused(
+        LIVE_ARMING_INSTANCE_UNSEALED,
+        f"{strategy_instance_id} has no sealed alpaca binding",
     )
+
 
 
 def instance_seal_hashes(
@@ -361,8 +333,8 @@ def instance_seal_hashes(
     bindings stay on disk (design R15) and their slice-6 arming records stay
     in the same account-rooted ledger, so a reader that counts them would
     report instances the live authority does not custody -- and refuses on
-    every Start -- as armed under it. ``None`` (the ceremony, the operator
-    CLI) keeps both ids: arming a shadow-sealed instance under a graduated
+    every Start -- as armed under it. UI and CLI status pass the active world.
+    ``None`` (the plan ceremony) keeps both ids: arming a shadow-sealed instance under a graduated
     account grants nothing and is refused at Start anyway.
     """
     # The world-to-custody-id rule is ``custody_account_id_for``'s, so naming a
@@ -413,7 +385,7 @@ def observe_arming_inputs(
     settings: AlpacaSettings,
     predecessor_strategy_instance_id: str | None = None,
 ) -> ArmingInputs:
-    """Read the four inputs R8 names, refusing by code when any one is absent."""
+    """Read the ceremony evidence and instance terms, refusing when required evidence is absent."""
     envelope = configured_envelope(settings)
     live_account_id = live_account_id_for_instance(
         strategy_instance_id=strategy_instance_id,
@@ -450,7 +422,16 @@ def observe_arming_inputs(
         live_state_root=live_state_root,
         required_sessions=envelope.shadow_sessions,
     )
+    from app.broker.alpaca.clerk.exit_terms import registered_exit_terms_at
+
+    binding = live_state_binding_repository(live_state_root).read(strategy_instance_id)
+    terms = registered_exit_terms_at(
+        confined_account_file(artifacts_root, binding.sealed_account_id, DB_FILENAME), strategy_instance_id,
+    )
+    if terms is None or terms.exit_allowance_bps is None:
+        raise LiveArmingRefused(LIVE_ARMING_INSTANCE_UNSEALED, "This instance has no configured exit terms; deploy a bot with explicit exit terms.")
     return ArmingInputs(
+        exit_terms=terms.model_dump(),
         live_account_id=live_account_id,
         strategy_instance_id=strategy_instance_id,
         seal_hash=seal.seal_hash,
@@ -536,14 +517,15 @@ def _predecessor_for(
 
 
 def _plan_payload(plan: LiveArmingPlan) -> dict[str, Any]:
-    if plan.schema_version not in (1, 2):
+    if plan.schema_version not in (1, 2, 3):
         raise LiveArmingRefused(LIVE_ARMING_TOKEN_INVALID, f"{_LABEL} plan content hash does not verify")
-    return plan_payload(
+    payload = plan_payload(
         plan,
         schema_version=plan.schema_version,
         refused=_refused(LIVE_ARMING_TOKEN_INVALID),
         label=_LABEL,
     )
+    return arming_version_payload(payload, plan.schema_version)
 
 
 def plan_arming(
@@ -568,7 +550,8 @@ def plan_arming(
         predecessor_strategy_instance_id=predecessor_strategy_instance_id,
     )
     draft = LiveArmingPlan(
-        schema_version=2 if inputs.predecessor is not None else 1,
+        schema_version=3 if inputs.exit_terms is not None else (2 if inputs.predecessor is not None else 1),
+        exit_terms=inputs.exit_terms,
         plan_id="",
         confirmation_token="",
         created_at_ms=now,
@@ -656,7 +639,8 @@ def apply_arming(
         armed_at_ms=now,
         max_sessions=current.max_sessions,
         predecessor=current.predecessor,
-        originating_plan_id=plan.plan_id if current.predecessor is not None else None,
+        originating_plan_id=plan.plan_id if current.predecessor is not None or current.exit_terms is not None else None,
+        exit_terms=current.exit_terms,
     )
     record = LiveArmingLedger(artifacts_root, live_account_id=record.live_account_id).append_once_for_plan(record)
     logger.warning(
@@ -714,6 +698,7 @@ def disarm(
     strategy_instance_id: str,
     artifacts_root: Path,
     clock: Clock = now_ms_utc,
+    live_account_id: str | None = None,
 ) -> LiveDisarmRecord:
     """Revoke one instance's arming: one append, no plan, no confirmation (R4).
 
@@ -722,7 +707,8 @@ def disarm(
     proof either: an operator must be able to revoke an arming whose evidence
     has already gone. It needs only the ledger holding the record it revokes.
     """
-    ledger = _disarm_ledger(strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root)
+    ledger = (LiveArmingLedger(artifacts_root, live_account_id=live_account_id) if live_account_id is not None
+              else _disarm_ledger(strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root))
     # The ledger owns the read-and-revoke transaction: what is being revoked
     # and the row that revokes it are decided under one lock acquisition, so a
     # concurrent re-arm cannot make ``revokes_record_sha256`` name a stale
@@ -840,3 +826,128 @@ __all__ = [
     "observe_arming_inputs",
     "plan_arming",
 ]
+
+
+def normalize_ceremony_root(root: Path) -> Path:
+    """Explicit and configured ceremony roots use the same user/symlink resolution."""
+    return root.expanduser().resolve()
+
+
+def arming_accounts(*, artifacts_root: Path, live_state_root: Path) -> dict[str, set[str]]:
+    """All durable instance identities grouped by their real account, including unarmed bots."""
+    accounts: dict[str, set[str]] = {}
+    for shadow_id in ShadowActivationStore(artifacts_root).account_ids():
+        accounts.setdefault(live_account_id_for_shadow_account(shadow_id), set())
+    try:
+        live_ids = ActivationStore(artifacts_root / "accounts" / "alpaca").account_ids()
+    except ActivationRecordInvalid as exc:
+        raise LiveArmingRefused(
+            LIVE_ARMING_INSTANCE_UNSEALED,
+            f"the Live activation ledger cannot be verified: {exc}",
+        ) from exc
+    for account_id in live_ids:
+        _verified_live_account_id(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            failure_detail="the Live activation is not verified",
+        )
+        accounts.setdefault(account_id, set())
+    for binding in live_state_binding_repository(live_state_root).list_for_broker("alpaca", strict=True):
+        account_id = binding.sealed_account_id
+        if account_id is None or account_id.startswith("sim:"):
+            continue
+        if is_shadow_account_id(account_id):
+            account_id = live_account_id_for_shadow_account(account_id)
+        accounts.setdefault(account_id, set()).add(binding.strategy_instance_id)
+    for account_id, records in LiveArmingLedger.discover_records(artifacts_root).items():
+        accounts.setdefault(account_id, set()).update(row.strategy_instance_id for row in records)
+    return accounts
+
+
+def envelope_change(plan: LiveArmingPlan, *, artifacts_root: Path) -> dict[str, Any]:
+    """What applying this plan does to the envelope sealed on this account.
+
+    The operator's last look before a real-money limit changes, so the answer is
+    stated twice: one ``summary`` sentence naming every value that moves, and a
+    machine-readable ``changes`` list of before→after pairs. Values are rendered
+    with ``repr`` on purpose -- ``5000`` and ``5000.0`` are different documents
+    to the envelope sha, so a diff that hid the difference would hide a real
+    change.
+
+    "The currently sealed envelope" is an *account-level* fact: the newest
+    arming record on the account, which is the same record ``status`` reports as
+    ``envelope_state`` (R11), not this instance's own last arming. ``sealed_by``
+    names it so there is no ambiguity about what the comparison was against.
+    """
+    records = LiveArmingLedger(artifacts_root, live_account_id=plan.live_account_id).records()
+    sealed = latest_arming(records)
+    instance = latest_arming(tuple(row for row in records if row.strategy_instance_id == plan.strategy_instance_id))
+    prior_terms = {} if instance is None else (instance.exit_terms or {})
+    exit_changes = [
+        {"field": field, "before": prior_terms.get(field), "after": value}
+        for field, value in (plan.exit_terms or {}).items()
+        if (type(prior_terms.get(field)), repr(prior_terms.get(field))) != (type(value), repr(value))
+    ]
+    after = plan.envelope_values
+    if sealed is None:
+        return {
+            "changed": True,
+            "sealed_by": None,
+            "exit_terms_changes": exit_changes,
+            "changes": [
+                {"field": field, "before": None, "after": after[field]}
+                for field in _ENVELOPE_FIELD_ORDER
+            ],
+            "summary": (
+                "FIRST SEAL: no arming record has sealed this account's envelope yet, so this "
+                "plan seals all six live envelope values: "
+                + "; ".join(f"{field} = {after[field]!r}" for field in _ENVELOPE_FIELD_ORDER)
+                + "."
+            ),
+        }
+
+    before = sealed.envelope.to_mapping()
+    # Compared by (type, value), not by ``!=``. ``5000 == 5000.0`` and
+    # ``0.0 == -0.0`` in Python, but each pair is a *different* envelope
+    # document to the sha every arming record is sealed over — so a plain
+    # inequality would print "NO CHANGE" on the operator's last look before a
+    # real-money limit changes, and then the seal would produce a
+    # LIVE_ENVELOPE_DISAGREEMENT at runtime. Reachable because a sealed record
+    # whose JSON carries ``"loss_usd": 5000`` verifies against its own sha and
+    # round-trips as an ``int``: only the two count fields are type-checked.
+    changes = [
+        {"field": field, "before": before[field], "after": after[field]}
+        for field in _ENVELOPE_FIELD_ORDER
+        if (type(before[field]), repr(before[field])) != (type(after[field]), repr(after[field]))
+    ]
+    sealed_by = {
+        "strategy_instance_id": sealed.strategy_instance_id,
+        "armed_at_ms": sealed.armed_at_ms,
+        "envelope_sha256": sealed.envelope_sha256,
+    }
+    if not changes:
+        return {
+            "changed": False,
+            "sealed_by": sealed_by,
+            "exit_terms_changes": exit_changes,
+            "changes": [],
+            "summary": (
+                "NO CHANGE: all six live envelope values are exactly the ones already sealed on "
+                f"this account by {sealed.strategy_instance_id} (envelope {sealed.envelope_sha256})."
+            ),
+        }
+    return {
+        "changed": True,
+        "sealed_by": sealed_by,
+        "exit_terms_changes": exit_changes,
+        "changes": changes,
+        "summary": (
+            f"CHANGED: {len(changes)} of the 6 live envelope values differ from the envelope "
+            f"sealed on this account by {sealed.strategy_instance_id}: "
+            + "; ".join(
+                f"{change['field']} {change['before']!r} -> {change['after']!r}"
+                for change in changes
+            )
+            + "."
+        ),
+    }

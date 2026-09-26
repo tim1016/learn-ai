@@ -34,8 +34,9 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.services.session_authority import session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
-from app.utils.timestamps import now_ms_utc
+from app.utils.timestamps import Clock, now_ms_utc
 
 SYNTHETIC_BROKER_ID = "synthetic"
 SYNTHETIC_CAPABILITIES = BrokerCapabilities(
@@ -74,8 +75,9 @@ class SyntheticBroker:
 
     broker_id = SYNTHETIC_BROKER_ID
 
-    def __init__(self, *, account_id: str, source_bars: SourceBarLedger | None = None) -> None:
+    def __init__(self, *, account_id: str, source_bars: SourceBarLedger | None = None, clock: Clock = now_ms_utc) -> None:
         self._account_id = require_synthetic_account_id(account_id)
+        self._clock = clock
         self._source_bars = source_bars
         self._ledger: SynthesizedOrderLedger | None = (
             None
@@ -89,7 +91,7 @@ class SyntheticBroker:
         return SYNTHETIC_CAPABILITIES
 
     async def get_account(self) -> BrokerAccountSnapshot:
-        observed_at_ms = now_ms_utc()
+        observed_at_ms = self._clock()
         return BrokerAccountSnapshot(
             broker=self.broker_id,
             account_id=self._account_id,
@@ -110,7 +112,7 @@ class SyntheticBroker:
         )
 
     async def list_positions(self) -> list[BrokerPosition]:
-        return synthesized_positions(self.broker_id, self._latest_orders())
+        return synthesized_positions(self.broker_id, self._latest_orders(), observed_at_ms=self._clock())
 
     async def list_orders(
         self,
@@ -144,13 +146,14 @@ class SyntheticBroker:
         return None
 
     async def get_clock_evidence(self) -> BrokerClockEvidence:
-        observed_at_ms = now_ms_utc()
+        observed_at_ms = self._clock()
+        session = session_state_at_ms(now_ms=observed_at_ms)
         return BrokerClockEvidence(
             broker=self.broker_id,
-            is_open=False,
+            is_open=session.phase == "RTH",
             vendor_timestamp_ms=observed_at_ms,
-            next_open_ms=None,
-            next_close_ms=None,
+            next_open_ms=session.next_transition_ms if session.phase != "RTH" else None,
+            next_close_ms=session.next_transition_ms if session.phase == "RTH" else None,
             observed_at_ms=observed_at_ms,
         )
 
@@ -223,7 +226,7 @@ class SyntheticBroker:
             )
             if record is None or record.order.status == "filled":
                 return
-            now = now_ms_utc()
+            now = self._clock()
             self._ledger.append_locked(
                 records,
                 order=record.order.model_copy(
@@ -272,7 +275,7 @@ class SyntheticBroker:
             bar=bar,
             broker_id=self.broker_id,
             id_prefix="sim",
-            observed_at_ms=now_ms_utc(),
+            observed_at_ms=self._clock(),
         )
 
 
@@ -334,10 +337,12 @@ def shape_immediate_order(
     )
 
 
-def synthesized_positions(broker_id: str, orders: list[BrokerOrder]) -> list[BrokerPosition]:
+def synthesized_positions(
+    broker_id: str, orders: list[BrokerOrder], *, observed_at_ms: int | None = None,
+) -> list[BrokerPosition]:
     """Shape the canonical projection as broker positions (shared with the shadow read port)."""
     quantities = project_positions(orders)
-    observed_at_ms = now_ms_utc()
+    observed_at_ms = now_ms_utc() if observed_at_ms is None else observed_at_ms
     return [
         BrokerPosition(
             broker=broker_id,

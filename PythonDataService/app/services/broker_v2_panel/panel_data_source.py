@@ -488,7 +488,7 @@ async def _get_panel_with_entries_from_authority(
         economics=economics,
         repository=facade.repository,
         flatten_verdict=facade.flatten_send_verdict(),
-        startup_join=None if source_evidence is None else source_evidence.startup_join,
+
     )
     return panel, entries, session_fills
 

@@ -64,20 +64,20 @@ from app.broker.alpaca.clerk.live_arming import (
     ArmingStatus,
     LiveArmingInvalid,
     LiveArmingRefused,
-    latest_arming,
 )
 from app.broker.alpaca.clerk.live_arming_ceremony import (
     LiveArmingPlan,
     account_arming,
     apply_arming,
+    arming_accounts,
     configured_envelope,
     disarm,
+    envelope_change,
     live_account_activation_is_verified,
     live_account_id_for_status,
+    normalize_ceremony_root,
     plan_arming,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
-from app.broker.alpaca.clerk.live_envelope import ENVELOPE_SETTINGS_FIELDS
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationInvalid
 from app.broker.alpaca.clerk.shadow_receipt import ShadowReceiptInvalid
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
@@ -92,9 +92,10 @@ from app.broker_configuration.cli_binding import (
     arming_configuration_handover,
     effective_broker,
 )
+from app.broker_configuration.cli_binding import (
+    require_arming_the_effective_revision as _require_arming_the_effective_revision,
+)
 from app.broker_configuration.errors import BrokerConfigurationError
-from app.broker_configuration.records import InstallationSelection
-from app.broker_configuration.selection import reference as revision_reference
 from app.utils.timestamps import Clock, now_ms_utc
 from scripts._operator_cli import timestamp_ms
 
@@ -129,7 +130,6 @@ LIVE_ARMING_REVISION_STAGED = "LIVE_ARMING_REVISION_STAGED"
 # The six envelope fields, in the canonical order ``LiveEnvelopeValues``
 # declares them -- taken from the same pairing the sha is built over rather
 # than hand-listed, so a seventh value cannot go unreported in a diff.
-_ENVELOPE_FIELD_ORDER: tuple[str, ...] = tuple(field for field, _ in ENVELOPE_SETTINGS_FIELDS)
 
 # Keys ``_write`` adds to a printed payload that are *reports about* the plan
 # rather than part of it. ``_read_plan`` strips them so a plan an operator
@@ -301,117 +301,7 @@ def _resolved_broker(supplied: AlpacaSettings | None) -> EffectiveBroker:
         ) from exc
 
 
-def _require_arming_the_effective_revision(selection: InstallationSelection | None) -> None:
-    """Arm the effective revision only, never a merely staged one (D3, D5).
 
-    A staged revision governs nothing until the operator presses Apply and the
-    worker binds it. Sealing one anyway would put the arming record in
-    ``LIVE_ENVELOPE_DISAGREEMENT`` against the envelope the running worker is
-    actually enforcing -- and would look armed until it did. The refusal names
-    both revisions, because the operator's next question is always which of the
-    two they were looking at.
-
-    ``status`` and ``disarm`` are deliberately not gated: reading the state and
-    revoking a permission are exactly what an operator needs while a change is
-    pending, and neither seals anything.
-    """
-    if selection is None:
-        return
-    # Both halves, the same guard ``binding_decision.decide`` applies: a row
-    # naming no exact revision is not a staged revision to disagree with.
-    if selection.staged_profile_id is None or selection.staged_revision is None:
-        return
-    staged = (selection.staged_profile_id, selection.staged_revision)
-    effective = (selection.effective_profile_id, selection.effective_revision)
-    if staged == effective:
-        return
-    raise LiveArmingRefused(
-        LIVE_ARMING_REVISION_STAGED,
-        f"broker configuration {revision_reference(*staged)} is staged but "
-        f"{revision_reference(*effective)} is effective; this ceremony arms the effective "
-        "revision only. Apply the staged revision and restart the service, or stage the "
-        "effective one again, then plan.",
-    )
-
-
-def _envelope_change(plan: LiveArmingPlan, *, artifacts_root: Path) -> dict[str, Any]:
-    """What applying this plan does to the envelope sealed on this account.
-
-    The operator's last look before a real-money limit changes, so the answer is
-    stated twice: one ``summary`` sentence naming every value that moves, and a
-    machine-readable ``changes`` list of before→after pairs. Values are rendered
-    with ``repr`` on purpose -- ``5000`` and ``5000.0`` are different documents
-    to the envelope sha, so a diff that hid the difference would hide a real
-    change.
-
-    "The currently sealed envelope" is an *account-level* fact: the newest
-    arming record on the account, which is the same record ``status`` reports as
-    ``envelope_state`` (R11), not this instance's own last arming. ``sealed_by``
-    names it so there is no ambiguity about what the comparison was against.
-    """
-    sealed = latest_arming(
-        LiveArmingLedger(artifacts_root, live_account_id=plan.live_account_id).records()
-    )
-    after = plan.envelope_values
-    if sealed is None:
-        return {
-            "changed": True,
-            "sealed_by": None,
-            "changes": [
-                {"field": field, "before": None, "after": after[field]}
-                for field in _ENVELOPE_FIELD_ORDER
-            ],
-            "summary": (
-                "FIRST SEAL: no arming record has sealed this account's envelope yet, so this "
-                "plan seals all six live envelope values: "
-                + "; ".join(f"{field} = {after[field]!r}" for field in _ENVELOPE_FIELD_ORDER)
-                + "."
-            ),
-        }
-
-    before = sealed.envelope.to_mapping()
-    # Compared by (type, value), not by ``!=``. ``5000 == 5000.0`` and
-    # ``0.0 == -0.0`` in Python, but each pair is a *different* envelope
-    # document to the sha every arming record is sealed over — so a plain
-    # inequality would print "NO CHANGE" on the operator's last look before a
-    # real-money limit changes, and then the seal would produce a
-    # LIVE_ENVELOPE_DISAGREEMENT at runtime. Reachable because a sealed record
-    # whose JSON carries ``"loss_usd": 5000`` verifies against its own sha and
-    # round-trips as an ``int``: only the two count fields are type-checked.
-    changes = [
-        {"field": field, "before": before[field], "after": after[field]}
-        for field in _ENVELOPE_FIELD_ORDER
-        if (type(before[field]), before[field]) != (type(after[field]), after[field])
-    ]
-    sealed_by = {
-        "strategy_instance_id": sealed.strategy_instance_id,
-        "armed_at_ms": sealed.armed_at_ms,
-        "envelope_sha256": sealed.envelope_sha256,
-    }
-    if not changes:
-        return {
-            "changed": False,
-            "sealed_by": sealed_by,
-            "changes": [],
-            "summary": (
-                "NO CHANGE: all six live envelope values are exactly the ones already sealed on "
-                f"this account by {sealed.strategy_instance_id} (envelope {sealed.envelope_sha256})."
-            ),
-        }
-    return {
-        "changed": True,
-        "sealed_by": sealed_by,
-        "changes": changes,
-        "summary": (
-            f"CHANGED: {len(changes)} of the 6 live envelope values differ from the envelope "
-            f"sealed on this account by {sealed.strategy_instance_id}: "
-            + "; ".join(
-                f"{change['field']} {change['before']!r} -> {change['after']!r}"
-                for change in changes
-            )
-            + "."
-        ),
-    }
 
 
 def _read_plan(path: Path) -> LiveArmingPlan:
@@ -458,35 +348,31 @@ def _status(
     args: argparse.Namespace, *, artifacts_root: Path, live_state_root: Path, settings: AlpacaSettings
 ) -> int:
     now_ms = now_ms_utc() if args.now_ms is None else args.now_ms
-    live_account_id = live_account_id_for_status(
-        strategy_instance_id=args.strategy_instance_id,
-        artifacts_root=artifacts_root,
-        live_state_root=live_state_root,
-    )
-    arming = account_arming(
-        live_account_id=live_account_id,
-        artifacts_root=artifacts_root,
-        live_state_root=live_state_root,
-        configured_envelope=configured_envelope(settings),
-        now_ms=now_ms,
-        strategy_instance_ids=(
-            None if args.strategy_instance_id is None else [args.strategy_instance_id]
-        ),
-    )
-    _write(
-        {
-            "now_ms": now_ms,
-            "live_account_id": live_account_id,
-            "envelope_state": arming.envelope_state,
+    if args.strategy_instance_id is None:
+        accounts = arming_accounts(artifacts_root=artifacts_root, live_state_root=live_state_root)
+    else:
+        account_id = live_account_id_for_status(
+            strategy_instance_id=args.strategy_instance_id, artifacts_root=artifacts_root,
+            live_state_root=live_state_root,
+        )
+        accounts = {account_id: {args.strategy_instance_id}}
+    reports = []
+    for account_id, sids in sorted(accounts.items()):
+        admitted, note = _submission_admitted(artifacts_root, account_id)
+        arming = account_arming(
+            live_account_id=account_id, artifacts_root=artifacts_root, live_state_root=live_state_root,
+            configured_envelope=configured_envelope(settings), now_ms=now_ms,
+            strategy_instance_ids=sorted(sids),
+            custody_world="real_live" if admitted else None,
+        )
+        reports.append({
+            "submission_admitted": admitted, "note": note,
+            "live_account_id": account_id, "envelope_state": arming.envelope_state,
             "armed_instance_count": arming.armed_instance_count,
-            "instances": [
-                _instance_payload(status, strategy_instance_id=sid)
-                for sid, status in sorted(arming.statuses.items())
-            ],
-        },
-        artifacts_root=artifacts_root,
-        live_account_id=live_account_id,
-    )
+            "instances": [_instance_payload(status, strategy_instance_id=sid) for sid, status in sorted(arming.statuses.items())],
+        })
+    sys.stdout.write(json.dumps({"now_ms": now_ms, "accounts": reports}, sort_keys=True) + "\n")
+
     return 0
 
 
@@ -516,7 +402,7 @@ def _plan(
     # never written into ``--plan-out``: the plan's confirmation token is its
     # own content hash, and a plan file carrying an extra key would not be one.
     _write(
-        {**asdict(plan), "envelope_change": _envelope_change(plan, artifacts_root=artifacts_root)},
+        {**asdict(plan), "envelope_change": envelope_change(plan, artifacts_root=artifacts_root)},
         artifacts_root=artifacts_root,
         live_account_id=plan.live_account_id,
     )
@@ -560,7 +446,7 @@ def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = Non
         if args.operation == "disarm":
             return _disarm(
                 args,
-                artifacts_root=args.artifacts_root or _resolved_broker(settings).settings.clerk_dir,
+                artifacts_root=normalize_ceremony_root(args.artifacts_root or _resolved_broker(settings).settings.clerk_dir),
             )
         handover = (
             arming_configuration_handover()
@@ -569,8 +455,8 @@ def main(argv: list[str] | None = None, *, settings: AlpacaSettings | None = Non
         )
         with handover:
             resolved = _resolved_broker(settings)
-            artifacts_root = args.artifacts_root or resolved.settings.clerk_dir
-            live_state_root = args.live_state_root or live_artifacts_root()
+            artifacts_root = normalize_ceremony_root(args.artifacts_root or resolved.settings.clerk_dir)
+            live_state_root = normalize_ceremony_root(args.live_state_root or live_artifacts_root())
             if args.operation == "status":
                 return _status(
                     args,

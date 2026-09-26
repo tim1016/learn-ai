@@ -1253,7 +1253,7 @@ describe('BotPanelShellComponent', () => {
     it('takes the execute token from a live panel read while the live projection is stalled (#2353)', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValue(EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       const fixture = await prepareFlatten();
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
@@ -1300,7 +1300,7 @@ describe('BotPanelShellComponent', () => {
       // outage itself (Codex review 2026-09-19).
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValue(EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       mockService.executeExtendedSafeFlatten.mockResolvedValueOnce({
         action_id: 'execute_safe_flatten',
         outcome: 'success',

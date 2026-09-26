@@ -25,11 +25,11 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOrder,
     RecoveryCapability,
 )
-from app.broker.alpaca.clerk.sqlite.recovery_policy import UNCONDITIONAL_RECOVERY_ACTION_IDS
+from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.vocabulary import copy_for
-from app.marketdata.feed import FEED_REFUSAL_REASON_CODES
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS
+from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -60,7 +60,6 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
 from app.services.session_authority import SessionAuthorityState
-from app.services.source_bar_ledger import RetainedStartupJoin
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -90,7 +89,6 @@ def adapt_sqlite_panel(
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
-    startup_join: RetainedStartupJoin | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -110,10 +108,6 @@ def adapt_sqlite_panel(
     session the generic Execute safe flatten button is not the way to flatten
     (#2007): see ``_flatten_session_blocker``.
 
-    ``startup_join`` is the run's retained startup-join record, when the read
-    produced one.  The projected panel view drops the join for a stopped run,
-    so the startup-refusal exposure notices key their phase on this record
-    instead (#2444).
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -141,7 +135,7 @@ def adapt_sqlite_panel(
     )
     return panel.model_copy(
         update={
-            "health": _with_startup_refusal_notices(panel, projection, startup_join),
+            "health": _with_terminal_exposure_notices(panel, projection),
             "updated_at_ms": projection.generated_at_ms,
             "revision": projection.control_revision,
             "mission_verdict": _mission_verdict(panel, projection),
@@ -355,7 +349,8 @@ def build_sqlite_catalog(
         )
         for status in statuses
     ]
-    return adapt_sqlite_catalog(rows, projections, economic_rollups)
+    rows = adapt_sqlite_catalog(rows, projections, economic_rollups)
+    return rows
 
 
 def _require_one_catalog_economic_revision(
@@ -669,9 +664,7 @@ def _mission_verdict(
         explanation=guidance.explanation,
         next_action=guidance.next_step,
         evaluated_at_ms=projection.generated_at_ms,
-        next_attempt_at_ms=guidance.next_attempt_at_ms,
-        exit_working=guidance.exit_working,
-        facts_unreadable=guidance.facts_unreadable,
+        recovery_status=guidance.recovery_status,
     )
 
 
@@ -687,7 +680,13 @@ def _clerk_vouches_for_positions(projection: ClerkProjection) -> bool:
     leaves what is held known, while an unhealthy authority or an open
     uncertainty means the attribution itself may be wrong.
     """
-    return projection.authority_health == "healthy" and not projection.uncertainties
+    reconciliation = projection.latest_reconciliation
+    return (
+        projection.authority_health == "healthy" and not projection.uncertainties
+        and reconciliation is not None and reconciliation.outcome == "RESOLVED_SUCCESS"
+        and reconciliation.effect_operation_id is None and reconciliation.order_ref is None
+        and 0 <= projection.generated_at_ms - reconciliation.attempted_at_ms <= FRESH_EVIDENCE_MAX_AGE_MS
+    )
 
 
 def _is_working(order: ProjectedOrder) -> bool:
@@ -708,53 +707,24 @@ def _may_still_fill(order: ProjectedOrder) -> bool:
     return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
 
 
-def _startup_join_reached_ready(
-    panel: BotPanelView, startup_join: RetainedStartupJoin | None
-) -> bool:
-    """Whether this run's startup join completed before it stopped (#2444).
-
-    The feed-refusal codes span two phases: a warmup code can only be raised
-    before the run decides, but ``IMPOSSIBLE_SOURCE_BAR`` can also end a run
-    that had been deciding for hours. The notices below speak of a run that
-    never managed anything, so they key on the startup phase, not on the
-    reason code alone. The projected view drops the join once the run stops
-    (its preparation is history), so the phase is derived from the retained
-    join record, whose ``ready_at_ms`` outlives the run; without one, the
-    projected view still answers for a live run, and a missing view proves
-    nothing either way -- the conservative answer (not ready) keeps the
-    notices on.
-    """
-    if startup_join is not None:
-        return startup_join.ready_at_ms is not None
-    join = panel.startup_join
-    return join is not None and join.state == "ready"
-
-
-def _with_startup_refusal_notices(
-    panel: BotPanelView,
-    projection: ClerkProjection,
-    startup_join: RetainedStartupJoin | None,
-) -> BotHealthCard:
-    """Say what a startup refusal left at the broker, from this SQLite cut (#2410).
-
-    A run refused while it prepared never managed anything. The owner's rule:
-    say so whenever money can still move. The Clerk's attributed position is
-    trusted only when it can vouch for it (``_clerk_vouches_for_positions``);
-    otherwise the position is reported unverified rather than guessed. A
-    working entry order is reported separately, because a flat bot can still
-    be filled into a position nobody manages. Nothing is cancelled or
-    flattened here.
-    """
+def _with_terminal_exposure_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:
     health = panel.health
     outcome = health.duty_outcome
-    if (
-        health.running
-        or outcome is None
-        or outcome.reason_code not in FEED_REFUSAL_REASON_CODES
-        or _startup_join_reached_ready(panel, startup_join)
-    ):
+    if outcome is None:
         return health
-    sid = panel.strategy_instance_id
+    notices = terminal_exposure_notices(
+        projection, sid=panel.strategy_instance_id, symbol=panel.symbol,
+        kind=outcome.kind, reason_code=outcome.reason_code, running=health.running,
+    )
+    return health.model_copy(update={"duty_outcome": outcome.model_copy(update={"exposure_notices": notices})})
+
+
+def terminal_exposure_notices(
+    projection: ClerkProjection, *, sid: str, symbol: str, kind: str, reason_code: str, running: bool,
+) -> list[ExposureNoticeView]:
+    """One backend-authored warning set shared by panel, account desk and bell."""
+    if running or kind not in UNCLEAN_DUTY_OUTCOMES:
+        return []
     notices: list[ExposureNoticeView] = []
     if not _clerk_vouches_for_positions(projection):
         notices.append(_POSITION_UNVERIFIED)
@@ -771,9 +741,9 @@ def _with_startup_refusal_notices(
                     kind="position_unmanaged",
                     label="Bot is not managing this position",
                     explanation=(
-                        f"The Clerk attributes {positions} to this bot. The refused run placed no "
-                        "exit and will not place one: manage or close the position from the "
-                        "broker, or resume once the refusal's cause is fixed."
+                        f"The Clerk attributes {positions} to this bot. The run has ended and "
+                        "will not make further decisions. Use Flatten to close this position "
+                        "before starting another run."
                     ),
                 )
             )
@@ -784,11 +754,10 @@ def _with_startup_refusal_notices(
         for order in operation.orders
     ):
         notices.append(_ENTRY_ORDER_WORKING)
-    if not notices:
-        return health
-    return health.model_copy(
-        update={"duty_outcome": outcome.model_copy(update={"exposure_notices": notices})}
-    )
+    return [notice.model_copy(update={
+        "strategy_instance_id": sid, "symbol": symbol,
+        "action_label": "Flatten" if notice.kind == "position_unmanaged" else "Open bot",
+    }) for notice in notices]
 
 
 _POSITION_UNVERIFIED = ExposureNoticeView(
@@ -796,7 +765,7 @@ _POSITION_UNVERIFIED = ExposureNoticeView(
     label="Position could not be verified; check the broker",
     explanation=(
         "The Clerk cannot currently vouch for what this bot holds -- its authority is not "
-        "healthy or an account or order state is uncertain. The refused run manages nothing, "
+        "healthy or an account or order state is uncertain. The ended run manages nothing, "
         "so check the position and any working orders at the broker."
     ),
 )
@@ -805,7 +774,7 @@ _ENTRY_ORDER_WORKING = ExposureNoticeView(
     label="An entry order is still working",
     explanation=(
         "An entry order this bot placed is still working at the broker. If it fills, the "
-        "refused bot will not manage the position it opens. Cancel it if you do not want it."
+        "ended run will not manage the position it opens. Cancel it if you do not want it."
     ),
 )
 

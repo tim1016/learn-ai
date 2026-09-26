@@ -19,7 +19,139 @@ When a bot crashed or was stopped while holding a position, the operator had no 
 5. **Deferred (with reasons):** the third sweep comparison of strategy intent vs journal exposure (RQ4) — it needs a `SignalSession` read-back seam that Direction 2's replay work will also want, so deferring avoids designing it twice; the concrete harm it cited (a strategy that believes it is flat stops trying to exit) is removed by the stuck-EXIT watchdog, which re-drives regardless of strategy belief. Also deferred: enabling exposure carryover on Resume (the allowlist stays empty), manual order-ticket qualification, account-wide/manual-custody flatten execution, persisting operator provenance in the recovery-EXIT facts (the recovery EXIT uses the generic `strategy_decision` facts; carrying operator action/reason into the durable capture transition is a follow-up audit improvement), and IBKR-stack surfaces.
 6. **ADR 0010's `FLATTEN_NOW` / durable-desired-state vocabulary** was retired with the IBKR control plane (evaluator control plane #1678, legacy broker control #1679); the Alpaca/SQLite plane's operator flatten contract is this ADR.
 
-**Clarified 2026-09-25 (PR #2495 follow-up, #2493):** `next_attempt_at_ms` means the earliest session-eligible retry after the episode's age gate. Proven custody and a sweep pass are still required. A usable quote is required only outside the regular session; regular-session retries are market orders and read no quote. Closed sessions project to the next permitted opening; on reopening the displayed timestamp is anchored to that trading day's eligibility, never yesterday's expired time. Until #2501 records actual retry reasons, the UI says only `Automatic retry: allowed from <time ET>`. No timer infers a waiting status. Working EXITs and stopped automatic retries keep their existing precedence. Projection readers must explicitly carry the same recovery-pricing policy as the authority they describe.
+**Superseded by the PRD #2504 recovery-status amendment below — clarification from 2026-09-25 (PR #2495 follow-up, #2493):** `next_attempt_at_ms` means the earliest session-eligible retry after the episode's age gate. Proven custody and a sweep pass are still required. A usable quote is required only outside the regular session; regular-session retries are market orders and read no quote. Closed sessions project to the next permitted opening; on reopening the displayed timestamp is anchored to that trading day's eligibility, never yesterday's expired time. Until #2501 records actual retry reasons, the UI says only `Automatic retry: allowed from <time ET>`. No timer infers a waiting status. Working EXITs and stopped automatic retries keep their existing precedence. Projection readers must explicitly carry the same recovery-pricing policy as the authority they describe.
+
+### Exit obligation lifecycle amendment (2026-09-25, PRD #2504)
+
+The owner approved persisting **accumulated regular-session failure time**,
+rather than measuring eight minutes from a first-refusal timestamp. Holds,
+broker outages and Clerk downtime pause the budget without erasing time
+already spent. The original first-failure time remains audit evidence, not
+the clock that drives escalation. A submitted recovery order clears that refusal budget while its outcome
+is pending; an unsent hold does not reset it; a resolved episode cannot lend its budget to a later episode.
+
+Recovery observations belong in separate custody transitions. They must not
+refresh `EXIT_NOT_FLAT` itself, change its original raise time, or continually
+restart its retry-age gate. A restart requires a fresh observation before any
+additional time can accrue. Only intervals bounded by consecutive, current
+regular-session failure observations may count; no process may infer that a
+failure continued throughout an unobserved gap.
+
+The continuity bound is 30 seconds (two normal reconciliation intervals).
+A longer gap adds no time, even if the same writer returns with the same
+failure. Both observations must be inside the same canonical regular session;
+the calendar therefore handles early closes, weekends and holidays. The
+separate `EXIT_RECOVERY_EVALUATED` facts retain the episode identity, writer,
+outcome, reason, check time, first-failure time and accumulated duration.
+They replay from the mirror without changing the original uncertainty.
+
+This amendment supersedes the earlier 2026-09-25 projection-only retry
+clarification above. `RecoveryStatus` is the last actual Clerk evaluation:
+`working`, `on_hold`, `allowed_now`, `allowed_from`, `broker_unreachable`,
+`stuck`, or `unknown`. It includes the reason and explanation, the last check,
+the original `EXIT_NOT_FLAT` raise time, and a future session eligibility time
+when one is known. Reads never infer broker failure from elapsed time. A
+restart starts at unknown until a fresh check; incomplete or stale sweeps do
+not advance the last successful check or spend failure time. Recovery-only
+observations commit after the pass's final broker snapshot succeeds.
+
+The canonical calendar owns actual session opens and early closes. The
+five-second transport guard protects closes only: it never authorizes a
+03:59:55 pre-market send or a 09:29:55 market send. Every reducing create and
+resubmit checks live market evidence on the event loop. A retained positive
+IBKR halt continues to hold an Alpaca exit until explicitly cleared (ADR
+0067), even if the surrounding liveness fact is unknown. A fresh emergency
+market close during scheduled RTH also holds; unknown or stale evidence
+without a positive halt otherwise falls back to the calendar. Synthetic
+execution uses the same calendar with the runner's injected clock.
+
+A Clerk-priced extended-hours DAY limit still working at regular open is
+canceled by its existing EXIT. Only exact terminal evidence releases its
+custody. The Clerk reads the broker's remaining position after cancellation,
+then accepts a new market EXIT with a new episode-derived identity. Partial
+fills reduce its quantity; a full fill racing cancellation suppresses it;
+an uncertain cancellation cannot create a second live order. An operator's
+confirmed safe-flatten limit is never replaced automatically. No automatic
+limit is chased repeatedly within its extended session.
+
+An own working EXIT is a hold. Only submitted, terminal, non-flat regular
+market redrives consume the three-attempt budget. Extended-session attempts,
+closed sessions, missing or unusable pricing, halts, and outages do not
+consume that count. The independent eight-minute refusal budget counts only
+observed regular-session failures and the escalation names the actual cause.
+
+### Immutable exit terms, deployment and arming (2026-09-25, PRD #2504)
+
+An **exit obligation** begins with the program's proposal. A proposal is not
+an order: the Clerk accepts a **created order**, the broker establishes a
+**working order**, and a **recovery attempt** addresses any remaining
+attributed position. **Permitted repricing** is limited to the initial send,
+a fresh recovery attempt, and the regular-open replacement above. The
+**price authority** for each is the bot's immutable exit terms, applied by
+Python to a retained decision close or a fresh IBKR bid/ask; Alpaca executes.
+
+Every new deployment explicitly chooses an exit allowance, band multiple and
+spread cap. These `ExitTerms` are recorded atomically with registration,
+separate from signal configuration and its hash. Resume cannot change them.
+Every exit pricing path, including the operator's ticket and synthetic
+execution, resolves that instance's seal. Profile edits affect future deploys.
+Existing registrations receive a one-time `backfilled` seal: their own latest
+armed envelope, otherwise the effective revision, plus the old band/spread
+settings (or 2 / 50). An unavailable allowance is recorded as unset; extended
+exits hold while the regular-open market reduction remains possible.
+
+Profiles schema v4 adds optional defaults for both Paper and Live. Absent
+defaults are omitted from content hashes, preserving existing history. The
+live envelope's exit allowance supplies the new-deploy default; entry pricing
+is unchanged. The former band/spread environment knobs are upgrade inputs
+only, never a registered bot's runtime price authority.
+
+**Superseded 2026-09-25:** the 2026-09-19 hard band refusal now permits an
+operator override. The check displays Python's distance through the bid/ask
+and the bot's cap. An explicit acknowledgement obtains a fresh check, followed
+by a separate Send confirmation. Execution rechecks the quote, terms and
+acknowledgement, and records `band_override` with the accepted EXIT.
+
+Regular-hours Start and Resume share the deploy view's canonical calendar
+window: pre-market open through regular close, including early closes.
+After-hours, overnight, holidays and weekends refuse with the next pre-market
+open. Dry Run is exempt. The backend authors dated exit steps; the UI retains
+its ticket through account refreshes and displays refusals at the button.
+USD loss caps use one whole-cent rule on new writes, with four-ULP float noise
+tolerance; historical revisions continue to load with unchanged hashes.
+
+Live arming is available on the deploy receipt and bot page. HTTP plan/apply
+wrap the CLI ceremony, reobserve drift, require the typed content token and
+append the envelope plus instance exit terms. Plans last 120 seconds (maximum
+300). Every dialog opening reads a fresh plan. Disarm revokes directly from
+the selected account's verified ledger even when configuration or binding
+reads fail. Status and the lane header use the same custody-world filter.
+CLI status lists instances by account and normalizes explicit roots like
+defaults. Neither deployment nor a plan alone authorizes live entry orders.
+
+### Abnormal run endings and shadow evidence (PRD #2504)
+
+Every abnormal terminal run outcome, including feed loss, missed decision bars,
+startup refusal and crash, now projects reconciled exposure independently of the
+startup phase. A nonzero position reads “Bot is not managing this position”; a
+missing or stale reconciliation reads “Position could not be verified; check the
+broker”. A working entry has its own warning. These facts reach the bot panel,
+account desk and lane attention bell; Flatten opens the existing guarded recovery
+flow. An operator Stop retains its own explanation.
+
+The 2026-09-25 holding-Resume allowance bypass is superseded. Carry-over remains
+disabled; a held position requires Flatten before Resume. There is no automatic
+exit on run death, no broker-side protective stop (the contract supports market
+and limit orders only; stops do not trade in extended hours), and no carry-over
+without a per-strategy replay-equivalence proof.
+
+Shadow cancellation records `untouched` when eligible later bars existed and
+`no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
+order to `execution_evidence_missing`, counting neither a pass nor a divergence.
+The report names the affected orders. Expiry uses the canonical after-hours close,
+including early closes. Recovery binds only a retained bar from its send session;
+otherwise it refuses cleanly. The completed decision bar never fills a resting
+extended-hours limit.
 
 ## Consequences
 
@@ -27,3 +159,5 @@ When a bot crashed or was stopped while holding a position, the operator had no 
 - A retryable refusal on an accepted EXIT leaves it in Clerk custody for reconciliation instead of requiring another decision bar. The final-bar stale-snapshot regression proves the sweep submits the retained after-hours limit once evidence recovers, with no further strategy bar.
 - A stuck exit is bounded-re-driven and then becomes a durable operator decision instead of a silent permanent state.
 - The recovery surface's promise holds: an enabled `execute_safe_flatten` is a promise, not a lie — it is presented only where the executor can deliver, and reports honest per-leg outcomes.
+
+Recovery observation persistence (PR #2505 review correction): repeated successful checks of an unchanged hold update the per-bot `exit_recovery_checks` operational row. Outcome, reason, allowed-from time and failure-budget changes remain immutable custody transitions. Reconciliation collects explicit results and commits them only after its final broker verdict; no implicit buffering mode or queued escalation exists. The sweep's configured cadence and observed pass boundaries distinguish slow work from downtime. This operational row is not custody authority: after restart or mirror rebuild, the new lease owner must complete a check before status is current.

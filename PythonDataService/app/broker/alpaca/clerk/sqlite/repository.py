@@ -100,6 +100,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictCause,
     ExecutionPriceConflictOrder,
 )
+from app.schemas.exit_terms import ExitTerms
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -394,6 +395,36 @@ class ClerkSqliteRepository(
         """
         with self._write_lock:
             self._renew_execution_lease()
+
+    def record_recovery_check(
+        self, *, strategy_instance_id: str, uncertainty_id: str, last_checked_at_ms: int | None,
+        completed_at_ms: int, interval_ms: int,
+    ) -> None:
+        """Replace the last successful check without appending a custody event.
+
+        Like the lease heartbeat, this is operational freshness, not custody.
+        A changed recovery decision/budget is appended before this checkpoint.
+        """
+        with self._write_lock:
+            self._renew_execution_lease()
+            self._conn.execute(
+                "INSERT INTO exit_recovery_checks VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(strategy_instance_id) DO UPDATE SET "
+                "uncertainty_id=excluded.uncertainty_id, lease_owner=excluded.lease_owner, "
+                "last_checked_at_ms=excluded.last_checked_at_ms, completed_at_ms=excluded.completed_at_ms, "
+                "interval_ms=excluded.interval_ms",
+                (strategy_instance_id, uncertainty_id, self._lease_owner, last_checked_at_ms, completed_at_ms, interval_ms),
+            )
+            self._conn.commit()
+
+    def recovery_check(self, strategy_instance_id: str) -> dict | None:
+        """One bot's replaceable successful-pass evidence, never a journal scan."""
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT * FROM exit_recovery_checks WHERE strategy_instance_id = ?",
+                (strategy_instance_id,),
+            ).fetchone()
+            return None if row is None else dict(row)
 
     def revive_execution_lease(self) -> None:
         """Revive this handle's expired lease iff nobody else ever took it.
@@ -1219,6 +1250,18 @@ class ClerkSqliteRepository(
     # Concrete business use of the spine this slice owns
     # ------------------------------------------------------------------
 
+    def exit_terms(self, strategy_instance_id: str) -> ExitTerms | None:
+        from app.broker.alpaca.clerk.exit_terms import read_exit_terms
+
+        with self._write_lock:
+            return read_exit_terms(self._conn, strategy_instance_id)
+
+    def exit_terms_upgrade_completed(self) -> bool:
+        with self._write_lock:
+            return self._conn.execute(
+                "SELECT 1 FROM custody_transitions WHERE transition_kind = 'EXIT_TERMS_UPGRADE_COMPLETED' LIMIT 1"
+            ).fetchone() is not None
+
     def register_strategy_instance(
         self,
         *,
@@ -1228,6 +1271,7 @@ class ClerkSqliteRepository(
         strategy_key: str = "repository_direct_registration",
         display_name: str = "Repository direct registration",
         config_json: str | None = None,
+        exit_terms: ExitTerms | None = None,
     ) -> CommittedTransition:
         """Insert-once bot registration — needs no command/effect lifecycle.
 
@@ -1262,6 +1306,7 @@ class ClerkSqliteRepository(
                     "strategy_key": strategy_key,
                     "display_name": display_name,
                     "config_json": config_json,
+                    **({"exit_terms": exit_terms.model_dump()} if exit_terms is not None else {}),
                 }
             ),
         )

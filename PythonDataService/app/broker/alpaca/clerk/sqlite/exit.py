@@ -184,6 +184,7 @@ def _accept_exit_capture(
             # Clerk computed it for an automatic re-drive. The quantity-guard
             # and expiry copy select their words from this.
             priced_by=None if confirmed_shape is None else confirmed_shape.priced_by,
+            band_override=confirmed_shape is not None and confirmed_shape.band_override,
         )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,

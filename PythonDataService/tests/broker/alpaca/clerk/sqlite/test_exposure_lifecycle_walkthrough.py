@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock, SqliteAlp
 from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrderEvent
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
     _AssertingNoReconciler,
@@ -52,7 +53,7 @@ async def test_crashed_exposure_walks_to_flat_and_readmits_resume(tmp_path: Path
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
-    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     await _make_held_position(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, run_id=RUN_ID
@@ -77,7 +78,7 @@ async def test_crashed_exposure_walks_to_flat_and_readmits_resume(tmp_path: Path
 
     async def current_context():
         reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock, pricing=UNPRICEABLE_RECOVERY
+            repo, clock=repo.clock
         )
         try:
             context = reader.recovery_context(strategy_instance_id=SID)

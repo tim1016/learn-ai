@@ -167,6 +167,36 @@ async function renderCustody(
 }
 
 describe('AlpacaSqliteCustodyComponent', () => {
+  it('shows an unmanaged position and its Flatten link from the backend', async () => {
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        exposure_notices: [{
+          kind: 'position_unmanaged', strategy_instance_id: 'dead-bot', symbol: 'SPY',
+          label: 'Bot is not managing this position',
+          explanation: 'The run ended. Flatten before starting another run.', action_label: 'Flatten',
+        }],
+      }),
+    });
+    expect(await screen.findByText('Bot is not managing this position')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Flatten' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/accounts/PA1/bots/dead-bot?lens=operator');
+  });
+
+  it('keeps an account notice visible without linking to a null bot', async () => {
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        exposure_notices: [{
+          kind: 'position_unverified', strategy_instance_id: null, symbol: 'SPY',
+          label: 'Position could not be verified', explanation: 'Check the broker.', action_label: 'Open bot',
+        }],
+      }),
+    });
+    expect(await screen.findByText('Position could not be verified')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Open bot' })).toBeNull();
+  });
+
   it('fails closed when the SQLite authority is unavailable', async () => {
     const getSqliteClerkProjection = vi.fn().mockRejectedValue(
       new HttpErrorResponse({ status: 409 }),
@@ -262,7 +292,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
           observed_at_ms: NOW,
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
-          next_attempt_at_ms: nextAttemptAtMs,
+          recovery_status: { kind: 'allowed_from', reason_code: 'NO_SESSION_OPEN', explanation: 'No session is open.', allowed_from_ms: nextAttemptAtMs },
         }],
       }),
     });
@@ -294,15 +324,13 @@ describe('AlpacaSqliteCustodyComponent', () => {
           observed_at_ms: NOW,
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
-          next_attempt_at_ms: 1_788_422_400_000,
+          recovery_status: { kind: 'allowed_now', reason_code: 'RECOVERY_ALLOWED_NOW', explanation: 'Recovery is allowed now.' },
         }],
       }),
     });
 
-    const attempt = await screen.findByText(/Automatic retry/);
-    expect(attempt.textContent).toContain('Automatic retry: allowed from');
-    expect(attempt.textContent).not.toContain('waiting');
-    expect(attempt.textContent).toContain('04:00');
+    expect(await screen.findByText('Recovery is allowed now.')).toBeTruthy();
+    expect(screen.queryByText(/Automatic retry/)).toBeNull();
   });
 
   it('says the next attempt is unknown when the notice record cannot be read (#2440 review)', async () => {
@@ -325,14 +353,14 @@ describe('AlpacaSqliteCustodyComponent', () => {
           observed_at_ms: NOW,
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
-          next_attempt_at_ms: null,
-          facts_unreadable: true,
+
+          recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." },
         }],
       }),
     });
 
     expect(await screen.findByText(
-      "Automatic retry: eligibility unknown; this notice's record could not be read.",
+      "Recovery status is unknown; this notice's record could not be read.",
     )).toBeTruthy();
   });
 
@@ -356,14 +384,14 @@ describe('AlpacaSqliteCustodyComponent', () => {
           observed_at_ms: NOW,
           evidence_age_ms: 0,
           evidence_refs: ['order:1'],
-          next_attempt_at_ms: null,
-          exit_working: true,
+
+          recovery_status: { kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' },
         }],
       }),
     });
 
     expect(await screen.findByText(
-      'An exit is in progress; no automatic attempt is due while it works.',
+      'An exit is in progress.',
     )).toBeTruthy();
     expect(screen.queryByText(/waiting/)).toBeNull();
   });

@@ -95,6 +95,8 @@ def test_schema_creates_all_twenty_two_pinned_tables() -> None:
         "reconciliations",
         "receipts",
         "custody_transitions",
+        "exit_recovery_checks",
+        "strategy_exit_terms",
         "mirror_fence",
     }
 

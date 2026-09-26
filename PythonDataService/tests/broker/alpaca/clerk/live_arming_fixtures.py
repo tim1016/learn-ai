@@ -162,6 +162,7 @@ def record_sealed_binding(
     strategy_instance_id: str = ARMING_SID,
     sealed_account_id: str = SHADOW_ACCT,
     quantity: int = 1,
+    artifacts_root: Path | None = None,
 ) -> SealedBotProgram:
     """Put one readable, sealed runner binding on disk and return its seal.
 
@@ -173,6 +174,8 @@ def record_sealed_binding(
         sealed_account_id=sealed_account_id,
         quantity=quantity,
     )
+    from app.schemas.exit_terms import ExitTermsInput
+
     live_state_binding_repository(live_state_root).record_launch(
         BrokerBotBinding(
             strategy_instance_id=strategy_instance_id,
@@ -182,12 +185,27 @@ def record_sealed_binding(
             quantity=quantity,
             action_plan=alpaca_v1_action_plan("SPY"),
             sealed_program=seal,
+            exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal(),
             sealed_account_id=sealed_account_id,
             run_id=f"{strategy_instance_id}-run-1",
             created_at_ms=1_757_000_000_000,
         ),
         launch_reason="deploy",
     )
+    if artifacts_root is not None:
+        from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, ClerkSqliteRepository
+        from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
+        from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+
+        binding = live_state_binding_repository(live_state_root).read(strategy_instance_id)
+        account_id = binding.sealed_account_id
+        open_repo = ClerkSqliteRepository.open if confined_account_file(artifacts_root, account_id, DB_FILENAME).is_file() else ClerkSqliteRepository.initialize
+        repo = open_repo(account_id=account_id, artifacts_root=artifacts_root, clock=lambda: ARMED_AT_MS)
+        try:
+            if repo.strategy_instance(strategy_instance_id) is None:
+                repo.register_strategy_instance(strategy_instance_id=strategy_instance_id, symbol="SPY", config_hash="arming-fixture", exit_terms=DEPLOY_EXIT_TERMS)
+        finally:
+            repo.close()
     return seal
 
 
@@ -233,7 +251,7 @@ def arming_ready(
     """Every input ``observe_arming_inputs`` needs, on disk, for one instance."""
     if not ShadowActivationStore(artifacts_root).account_ids():
         activate_shadow_fence(artifacts_root)
-    seal = record_sealed_binding(live_state_root, strategy_instance_id=strategy_instance_id)
+    seal = record_sealed_binding(live_state_root, strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root)
     seal_receipt(
         artifacts_root,
         configured_signal_hash=seal.configured_signal_hash,

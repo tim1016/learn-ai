@@ -215,3 +215,38 @@ __all__ = [
     "effective_alpaca_settings",
     "effective_broker",
 ]
+
+
+def require_arming_the_effective_revision(selection: InstallationSelection | None) -> None:
+    """Arm the effective revision only, never a merely staged one (D3, D5).
+
+    A staged revision governs nothing until the operator presses Apply and the
+    worker binds it. Sealing one anyway would put the arming record in
+    ``LIVE_ENVELOPE_DISAGREEMENT`` against the envelope the running worker is
+    actually enforcing -- and would look armed until it did. The refusal names
+    both revisions, because the operator's next question is always which of the
+    two they were looking at.
+
+    ``status`` and ``disarm`` are deliberately not gated: reading the state and
+    revoking a permission are exactly what an operator needs while a change is
+    pending, and neither seals anything.
+    """
+    from app.broker.alpaca.clerk.live_arming import LiveArmingRefused
+
+    if selection is None:
+        return
+    # Both halves, the same guard ``binding_decision.decide`` applies: a row
+    # naming no exact revision is not a staged revision to disagree with.
+    if selection.staged_profile_id is None or selection.staged_revision is None:
+        return
+    staged = (selection.staged_profile_id, selection.staged_revision)
+    effective = (selection.effective_profile_id, selection.effective_revision)
+    if staged == effective:
+        return
+    raise LiveArmingRefused(
+        "LIVE_ARMING_REVISION_STAGED",
+        f"broker configuration {revision_reference(*staged)} is staged but "
+        f"{revision_reference(*effective)} is effective; this ceremony arms the effective "
+        "revision only. Apply the staged revision and restart the service, or stage the "
+        "effective one again, then plan.",
+    )

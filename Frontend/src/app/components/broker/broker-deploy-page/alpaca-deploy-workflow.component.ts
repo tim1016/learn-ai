@@ -12,6 +12,7 @@ import {
   untracked,
 } from '@angular/core';
 import {
+  FormField,
   form,
   max,
   min,
@@ -34,10 +35,12 @@ import {
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
 import {
-  LANE_FENCE_CONFLICT_MESSAGE,
   LANE_FENCE_UNENFORCEABLE_MESSAGE,
   laneFenceIsEnforceable,
+  fencedTarget,
+  type LaneFence,
 } from '../../../fleet/lane-fence';
+import { LiveArmingComponent } from '../shared/live-arming/live-arming.component';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployExecutionSectionComponent,
@@ -51,7 +54,10 @@ import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component'
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
+import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+
+import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
@@ -73,6 +79,9 @@ function sameParameterValues(
 }
 
 interface AlpacaDeployTicket {
+  exitAllowanceBps: number | null;
+  bandMultiple: number | null;
+  spreadCapBps: number | null;
   instanceId: string;
   strategyKey: DeployBotStrategy['strategy_key'] | '';
   symbol: string;
@@ -136,22 +145,27 @@ interface FrozenDeployCommand {
     DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
+    LiveArmingComponent,
     DeployPaperAccessComponent,
     DeployParametersSectionComponent,
     TimestampDisplayComponent,
+    FormField,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
 })
 export class AlpacaDeployWorkflowComponent {
-  /** Frozen lane context for deploy reads and commands; the deploy drawer is
-   * frozen-dialog state — its target survives navigation (FR-094). */
-  protected readonly deployTarget = (accountId: string) => withAccount(this.target(), accountId);
+  /** Reads follow the current account; each submitted command freezes its own target. */
+  protected readonly deployTarget = (accountId: string) => withAccount(fencedTarget(this.target(), this.fence()), accountId);
 
   readonly accountId = input.required<string>();
-  /** Frozen when the drawer opens; never reconstructed from the directory. */
+  /** Current page account; each submitted attempt freezes its own target. */
   readonly target = input.required<ResourceTarget>();
+  readonly fence = input.required<LaneFence>();
+  readonly laneReviewRequired = input(false);
 
+  private readonly fleetDirectory = inject(FleetDirectoryService);
+  private termsSeeded = false;
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
@@ -168,25 +182,13 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   /** Retained only while the exact deploy intent has no terminal receipt. */
   private readonly frozenCommand = signal<FrozenDeployCommand | null>(null);
-  /** Set when the account moves under a frozen preview/apply command. Blocks
-   * `canSubmit` — not just the banner — until this workflow instance is
-   * replaced by reopening the deploy drawer (#2068, decision 10): resetting
-   * it on any lesser event would let a second click carry a fresh durable
-   * identity into the same silent re-adoption this task closes. */
+  /** Submission stays blocked until the changed account has been refreshed. */
   protected readonly laneConflict = signal(false);
-  /** Whether the fence this drawer was opened with can be enforced by the
-   * coordinator at all. `target` is frozen once, by the drawer wrapper, for
-   * this component's entire lifetime (it exists only inside the drawer's
-   * `@if (visible())`, so a reopen mounts a fresh instance) — a cold
-   * directory at that moment yields a null generation, which the coordinator
-   * cannot check (`service.py`/`routing.py` are `is not None`-gated). Refuse
-   * rather than dispatch unfenced (#2068, decision 15). */
+  /** A cold directory has no generation the coordinator can enforce.
+   * Refuse submission until both current lane fences are known (#2068). */
   protected readonly laneUnenforceable = computed(
     () =>
-      !laneFenceIsEnforceable({
-        bindingGeneration: this.target().bindingGeneration,
-        routingEpoch: this.target().routingEpoch,
-      }),
+      !laneFenceIsEnforceable(this.fence()),
   );
 
   /**
@@ -213,6 +215,7 @@ export class AlpacaDeployWorkflowComponent {
       const view = await this.panelService.getDeployView(
         this.deployTarget(params),
         symbol ?? undefined,
+        untracked(() => this.exitTerms() ?? undefined),
       );
       // `getDeployView` wraps `firstValueFrom(http.get)`, which no `reload()`
       // can cancel, so a superseded request still answers — and, being
@@ -283,6 +286,7 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   protected readonly ticket = signal<AlpacaDeployTicket>({
+    exitAllowanceBps: null, bandMultiple: null, spreadCapBps: null,
     instanceId: '',
     strategyKey: '',
     symbol: '',
@@ -304,6 +308,15 @@ export class AlpacaDeployWorkflowComponent {
     pattern(ticket.instanceId, INSTANCE_ID_RE, {
       message: 'Use letters, numbers, periods, underscores, or hyphens.',
     });
+    required(ticket.exitAllowanceBps);
+    min(ticket.exitAllowanceBps, 0);
+    max(ticket.exitAllowanceBps, 9999.999);
+    required(ticket.bandMultiple);
+    min(ticket.bandMultiple, 1);
+    max(ticket.bandMultiple, 10);
+    required(ticket.spreadCapBps);
+    min(ticket.spreadCapBps, 1);
+    max(ticket.spreadCapBps, 1000);
     required(ticket.strategyKey, { message: 'Choose a deployment strategy.' });
     required(ticket.symbol, { message: 'Enter the strategy signal symbol.' });
     pattern(ticket.symbol, SYMBOL_RE, { message: 'Enter a valid stock symbol.' });
@@ -315,6 +328,20 @@ export class AlpacaDeployWorkflowComponent {
         : { kind: 'whole-share-quantity', message: 'Quantity must be a whole number.' },
     );
   });
+
+  private exitTerms(): DeployBotBody['exit_terms'] | null {
+    const ticket = this.ticket();
+    if (ticket.exitAllowanceBps === null || ticket.bandMultiple === null || ticket.spreadCapBps === null
+      || this.ticketForm.exitAllowanceBps().invalid() || this.ticketForm.bandMultiple().invalid()
+      || this.ticketForm.spreadCapBps().invalid()) return null;
+    return { exit_allowance_bps: ticket.exitAllowanceBps, band_multiple: ticket.bandMultiple,
+      spread_cap_bps: ticket.spreadCapBps };
+  }
+
+  protected refreshExitTerms(): void {
+    this.admissionDecision.set(null);
+    if (this.exitTerms() !== null) this.deployView.reload();
+  }
 
   protected readonly selectedStrategy = computed(() => {
     const strategyKey = this.ticket().strategyKey;
@@ -432,7 +459,7 @@ export class AlpacaDeployWorkflowComponent {
     const checks = view.readiness_checks;
     const ready = checks.filter((check) => check.ready).length;
     return {
-      label: view.eligibility.eligible ? 'Ready' : 'Blocked',
+      label: this.submissionReadiness().canSubmit ? 'Ready' : 'Blocked',
       counts: `${ready} of ${checks.length}`,
     };
   });
@@ -462,13 +489,19 @@ export class AlpacaDeployWorkflowComponent {
     if (!view) {
       return { canSubmit: false, guidance: 'Loading deployment readiness…' };
     }
+    if (!sameAlpacaAccount(view.account_id, this.accountId()) || !sameAlpacaAccount(this.target().accountId ?? '', this.accountId())) {
+      return { canSubmit: false, guidance: 'Refreshing the selected account before deployment.' };
+    }
     if (this.laneUnenforceable()) {
       return { canSubmit: false, guidance: LANE_FENCE_UNENFORCEABLE_MESSAGE };
     }
-    if (this.laneConflict()) {
+    if (this.exitTerms() === null) {
+      return { canSubmit: false, guidance: "Set this bot’s exit allowance, band multiple and spread cap." };
+    }
+    if (this.laneConflict() || this.laneReviewRequired()) {
       return {
         canSubmit: false,
-        guidance: 'Reopen this deployment: the account changed while it was open.',
+        guidance: 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
       };
     }
     if (this.admissionIsStale()) {
@@ -477,14 +510,18 @@ export class AlpacaDeployWorkflowComponent {
         guidance: 'Refresh deployment readiness before launch.',
       };
     }
-    if (!view.eligibility.eligible || !view.allowed_actions.includes('deploy')) {
+    const eligibility = this.brokerModeSelected() ? view.eligibility : (view.dry_run_eligibility ?? view.eligibility);
+    if (!eligibility.eligible) {
       return {
         canSubmit: false,
-        guidance: view.eligibility.next_action || 'Resolve the current blocker before launch.',
+        guidance: eligibility.next_action || 'Resolve the current blocker before launch.',
       };
     }
     if (this.submitting()) {
       return { canSubmit: false, guidance: 'Deployment is in progress.' };
+    }
+    if (this.admissionDecision()?.allowed === false) {
+      return { canSubmit: false, guidance: this.admissionDecision()?.next_step ?? this.submitError()?.message ?? 'Refresh deployment readiness before launch.' };
     }
     if (this.ticketForm.instanceId().invalid()) {
       return { canSubmit: false, guidance: 'Fix the bot name before deployment.' };
@@ -553,6 +590,12 @@ export class AlpacaDeployWorkflowComponent {
 
     effect(() => {
       const view = this.currentView();
+      if (view && !this.termsSeeded) {
+        this.termsSeeded = true;
+        const terms = view.default_exit_terms;
+        if (terms) this.ticket.update(ticket => ({ ...ticket, exitAllowanceBps: terms.exit_allowance_bps,
+          bandMultiple: terms.band_multiple, spreadCapBps: terms.spread_cap_bps }));
+      }
       // The ticket opens on 'paper' because most accounts are paper; the
       // loaded view is what says which broker world this account actually
       // has. Seeding here rather than at construction keeps the default a
@@ -618,31 +661,30 @@ export class AlpacaDeployWorkflowComponent {
     });
 
     effect(() => this.syncFrozenCommandDrift());
+    effect(() => {
+      this.fence();
+      untracked(() => {
+        this.frozenCommand.set(null);
+        this.admissionDecision.set(null);
+        this.laneConflict.set(false);
+        this.submitError.set(null);
+      });
+    });
   }
 
-  /**
-   * Abandon the frozen preview/apply command when it no longer matches what
-   * would be sent now — a legitimate ticket edit silently invalidates it (a
-   * fresh preview is expected), but a route-key change is the account moving
-   * under a frozen preview, never the directory: the deploy drawer's own
-   * `target` is captured once, on the false→true visibility edge
-   * (`alpaca-deploy-drawer.component.ts:96-102`), and never recomputed while
-   * this workflow stays open. Silently discarding the frozen command there
-   * let the next submit mint a new durable identity against an account the
-   * operator never saw change out from under them (#2068, decision 10) —
-   * surface the conflict instead of re-adopting it.
-   */
+  /** A changed account abandons the attempt and refreshes the page context. */
   private syncFrozenCommandDrift(): void {
     const frozen = this.frozenCommand();
     if (frozen === null) return;
-    const routeKey = this.commandRouteKey(this.target(), this.accountId().trim());
-    if (frozen.routeKey !== routeKey) {
+    const routeKey = this.commandRouteKey(this.target());
+    if (frozen.routeKey !== routeKey || !sameAlpacaAccount(frozen.target.accountId ?? '', this.accountId())) {
       this.frozenCommand.set(null);
       this.laneConflict.set(true);
+      void this.refreshAfterRebind();
       this.submitError.set({
         outcome: 'conflict',
         title: this.errorTitle('conflict'),
-        message: LANE_FENCE_CONFLICT_MESSAGE,
+        message: 'The account changed. Nothing was sent; the page refreshed. Review the current account before deploying.',
         explanation: null,
         nextAction: null,
         receiptId: null,
@@ -650,6 +692,19 @@ export class AlpacaDeployWorkflowComponent {
       });
     } else if (frozen.ticketKey !== this.ticketKey(this.ticket())) {
       this.frozenCommand.set(null);
+    }
+  }
+
+  private async refreshAfterRebind(): Promise<void> {
+    try {
+      await this.fleetDirectory.refresh();
+      this.frozenCommand.set(null);
+      this.admissionDecision.set(null);
+      this.deployView.reload();
+    } catch {
+      this.submitError.set({ outcome: 'blocked', title: 'Account refresh failed',
+        message: 'Nothing was sent. Refresh the account before trying again.', explanation: null,
+        nextAction: 'Refresh the page.', receiptId: null, recordedAtMs: null });
     }
   }
 
@@ -844,6 +899,12 @@ export class AlpacaDeployWorkflowComponent {
       const decision = this.admissionFromError(error);
       if (decision) this.admissionDecision.set(decision);
       this.submitError.set(this.toDeployError(error));
+      if (error instanceof HttpErrorResponse && error.status === 409
+        && ['clerk_binding_generation_conflict', 'clerk_routing_epoch_conflict'].includes(error.error?.detail?.reason ?? error.error?.detail?.reason_code)) {
+        this.frozenCommand.set(null);
+        this.laneConflict.set(true);
+        await this.refreshAfterRebind();
+      }
     } finally {
       this.submitting.set(false);
     }
@@ -853,7 +914,10 @@ export class AlpacaDeployWorkflowComponent {
     ticket: AlpacaDeployTicket,
     strategy: DeployBotStrategy,
   ): DeployBotBody {
+    const exitTerms = this.exitTerms();
+    if (exitTerms === null) throw new Error("Exit terms are required before deployment.");
     const body: DeployBotBody = {
+      exit_terms: exitTerms,
       strategy_instance_id: ticket.instanceId.trim(),
       strategy_key: strategy.strategy_key,
       symbol: ticket.symbol.trim().toUpperCase(),
@@ -890,7 +954,7 @@ export class AlpacaDeployWorkflowComponent {
    * explicitly abandons the prior key before minting another.
    */
   private commandTargetFor(body: DeployBotBody, accountId: string): ResourceTarget {
-    const lane = this.target();
+    const lane = fencedTarget(this.target(), this.fence());
     const context = JSON.stringify({
       broker: lane.broker,
       clerkId: lane.clerkId,
@@ -907,7 +971,7 @@ export class AlpacaDeployWorkflowComponent {
       context,
       target,
       ticketKey: this.ticketKey(this.ticket()),
-      routeKey: this.commandRouteKey(lane, accountId),
+      routeKey: this.commandRouteKey(lane),
     });
     return target;
   }
@@ -916,13 +980,12 @@ export class AlpacaDeployWorkflowComponent {
     return JSON.stringify(ticket);
   }
 
-  private commandRouteKey(target: ResourceTarget, accountId: string): string {
+  private commandRouteKey(target: ResourceTarget): string {
     return laneKey(
       target.broker,
       target.clerkId,
       target.routingEpoch,
       target.bindingGeneration,
-      accountId,
     );
   }
 

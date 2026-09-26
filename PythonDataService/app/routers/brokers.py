@@ -42,7 +42,7 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 )
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
-from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader, project_uncertainties
+from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import (
     BrokerAccountModeDisagreement,
@@ -116,6 +116,7 @@ from app.services.alpaca_live_verdict import (
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
+from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.go_live_hold import GoLiveHoldUnreadableError, GoLiveReleaseFailedError
 from app.services.lane_go_live import (
@@ -780,18 +781,15 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
     # Read eligibility from the selected facade, exactly as the desk and
     # panel do. A repository without its policy authority cannot name a time.
     clerk = runtime.clerk
+    notices = []
     if isinstance(clerk, SqliteAlpacaClerkFacade):
-        reader = SqliteClerkProjectionReader.from_facade(clerk)
-        try:
-            uncertainties = reader.account_snapshot().uncertainties
-        finally:
-            reader.close()
+        projection, notices = await read_account_custody(clerk)
+        uncertainties = projection.uncertainties
     else:
         uncertainties = project_uncertainties(
             repository.active_uncertainties(),
             now_ms=repository.clock(),
             exits_in_progress=repository.strategies_with_active_exit,
-            redrive_policy=None,
         )
     items = [
         LaneAttentionItem(
@@ -801,12 +799,17 @@ async def get_lane_attention(broker: str) -> LaneAttentionRead:
             strategy_instance_id=uncertainty.strategy_instance_id,
             symbol=uncertainty.symbol,
             headline=uncertainty.headline,
-            next_attempt_at_ms=uncertainty.next_attempt_at_ms,
-            exit_working=uncertainty.exit_working,
-            facts_unreadable=uncertainty.facts_unreadable,
+            recovery_status=uncertainty.recovery_status,
         )
         for uncertainty in uncertainties
     ]
+    if isinstance(clerk, SqliteAlpacaClerkFacade):
+        items.extend(LaneAttentionItem(
+            condition_id=f"terminal-exposure:{notice.strategy_instance_id}:{notice.kind}",
+            reason_code=notice.kind.upper(), kind=notice.kind, severity="warning",
+            strategy_instance_id=notice.strategy_instance_id, symbol=notice.symbol,
+            headline=notice.label, action_label=notice.action_label,
+        ) for notice in notices)
     return LaneAttentionRead(account_id=repository.account_id, items=items)
 
 

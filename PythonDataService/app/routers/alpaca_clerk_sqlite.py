@@ -85,6 +85,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     TimelinePageResponse,
     safe_flatten_pricing_response,
 )
+from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
@@ -313,14 +314,10 @@ async def get_account_snapshot(account_id: str) -> ClerkProjectionResponse:
         return ClerkProjectionResponse.from_projection(failed)
     facade = _active_sqlite_facade(account_id)
     try:
-        projection = await asyncio.to_thread(
-            _read_projection,
-            facade,
-            lambda reader: reader.account_snapshot(),
-        )
+        projection, notices = await read_account_custody(facade)
     except ProjectionReadError as exc:
         raise _projection_read_error(exc) from exc
-    return ClerkProjectionResponse.from_projection(projection)
+    return ClerkProjectionResponse.from_projection(projection).model_copy(update={"exposure_notices": notices})
 
 
 @router.get(
@@ -519,6 +516,7 @@ async def _check_recovery_action(
         reduction_pricing=safe_flatten_pricing_response(
             facade.price_safe_flatten(plan),
             proposed_limit_price=body.proposed_limit_price,
+            band_override=body.band_override,
             quantity=plan.legs[0].quantity if len(plan.legs) == 1 else 0.0,
         ),
     )

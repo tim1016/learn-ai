@@ -235,6 +235,7 @@ async def create_profile(service: ServiceDep, body: ProfileCreateRequest) -> Pro
         endpoint_mode=body.endpoint_mode,
         live_envelope=_envelope(body),
         paper_xh_allowances=_paper_allowances(body),
+        default_exit_terms=body.default_exit_terms,
     )
     return _detail(created)
 
@@ -314,6 +315,7 @@ async def create_revision(
         endpoint_mode=body.endpoint_mode,
         live_envelope=_envelope(body),
         paper_xh_allowances=_paper_allowances(body),
+        default_exit_terms=body.default_exit_terms,
     )
     return RevisionResponse.from_record(revision)
 

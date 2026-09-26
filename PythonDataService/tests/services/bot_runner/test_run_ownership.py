@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.services.bot_runner import BotTaskRegistry
 from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.services.test_bot_runner_ema_resume import (
     _STRATEGY_INSTANCE_ID,
     _first_resumed_bar,
@@ -51,7 +52,7 @@ def _compose(
 
 async def _deploy(registry: BotTaskRegistry) -> None:
     await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_STRATEGY_INSTANCE_ID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",

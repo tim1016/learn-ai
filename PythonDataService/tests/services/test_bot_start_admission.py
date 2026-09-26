@@ -46,6 +46,7 @@ from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedHealth
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
@@ -76,6 +77,7 @@ from app.services.bot_start_admission import (
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
 from app.utils.timestamps import to_ms_utc
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests._helpers.ibkr_feed_adversarial import (
     NeverFirstBarFeedFixture,
     OnePrintThenSilenceFeedFixture,
@@ -117,7 +119,7 @@ class _RaisingFeed:
 def test_dry_run_keeps_its_deterministic_seal_when_a_custody_guard_disagrees() -> None:
     binding = new_run_binding(
         StartRequest(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -679,7 +681,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
     @asynccontextmanager
     async def custody_guard(strategy_instance_id: str):
         del strategy_instance_id
-        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only()
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")
@@ -728,7 +730,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
         market_liveness=market_liveness,
     )
     request = StartRequest(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="deployment_validation",
         symbol="SPY",

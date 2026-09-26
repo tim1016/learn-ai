@@ -204,8 +204,9 @@ def test_sqlite_roster_projects_the_durable_duty_outcome(
     assert statuses[1].duty_outcome is None
 
 
+@pytest.mark.parametrize("stale_active", [False, True])
 def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stale_active: bool,
 ) -> None:
     """A proven crash must surface even when its projection never landed.
 
@@ -217,15 +218,17 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
     """
 
     class _StoppedRepository(_Repository):
+        account_id = "paper-account"
+
         def active_run(self, strategy_instance_id: str):
-            return None
+            return self.latest_run(strategy_instance_id) if stale_active else None
 
         def latest_run(self, strategy_instance_id: str):
             if strategy_instance_id != "active-spy":
                 return None
             return SimpleNamespace(
                 lifecycle_run_id="run-crashed",
-                state="STOPPED",
+                state="ACTIVE" if stale_active else "STOPPED",
                 started_at_ms=1_720_000_000_000,
                 stopped_at_ms=1_720_000_100_000,
             )
@@ -268,6 +271,7 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
 
     assert statuses is not None
     crashed = statuses[0]
+    assert crashed.running is False
     assert crashed.duty_outcome is not None
     assert crashed.duty_outcome.kind == "CRASHED"
     assert crashed.duty_outcome.reason_code == "STRATEGY_TASK_FAILED"
@@ -275,6 +279,16 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
     assert status_label_for(crashed) == "Crashed"
     # The legacy row has no SQLite run history, so no receipt is looked for.
     assert statuses[1].duty_outcome is None
+
+
+    # Missing per-bot custody is an explicit warning, including a crash whose
+    # RUN_STOPPED fold failed. It must not disappear from the desk or bell.
+    notices = sqlite_panel_source._terminal_exposure_notices(
+        facade, SimpleNamespace(bot_snapshot=lambda _sid: None),
+    )
+    assert [(notice.strategy_instance_id, notice.kind) for notice in notices] == [
+        ("active-spy", "position_unverified"),
+    ]
 
 
 def test_sqlite_roster_prefers_the_projection_where_no_receipt_exists(

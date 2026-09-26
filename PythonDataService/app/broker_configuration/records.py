@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
+from app.schemas.exit_terms import ExitTermsInput
 
 EndpointMode = Literal["paper", "live"]
 ApplyOutcome = Literal["applied", "refused"]
@@ -99,6 +100,8 @@ class ProfileRevision:
     complete: bool
     author_owner_id: str
     created_at_ms: int
+
+    default_exit_terms: ExitTermsInput | None = None
 
 
 @dataclass(frozen=True)

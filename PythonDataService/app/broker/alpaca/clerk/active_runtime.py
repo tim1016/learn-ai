@@ -58,7 +58,7 @@ from app.broker.alpaca.clerk.synthetic_activation import (
 from app.broker.alpaca.clerk.trade_evidence import TradeUpdateEvidenceSink
 from app.broker.alpaca.symbol_validity import SymbolValidityProbe, SymbolValidityStore
 from app.broker.contract.ports import BrokerReadPort
-from app.utils.timestamps import now_ms_utc
+from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
     # Type-only, and load-bearing: ``live_envelope`` and ``clerk/sqlite`` are
@@ -403,6 +403,9 @@ async def compose_repository_runtime(
                 instance_seals=instance_seals,
             )
         )
+        if envelope_sync is not None:
+            await asyncio.to_thread(envelope_sync.refresh_arming)
+        await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,
@@ -523,12 +526,14 @@ async def activate_isolated_authority(
     account_id: str,
     artifacts_root: Path,
     store: IsolatedActivationStore,
+    clock: Clock = now_ms_utc,
 ) -> IsolatedActivationRecord:
     """Initialize (or reopen) one isolated repository and durably activate it exactly once."""
     try:
         repository = ClerkSqliteRepository.initialize(
             account_id=account_id,
             artifacts_root=artifacts_root,
+            clock=clock,
         )
     except AlreadyInitialized:
         # A process can crash after durable repository initialization but before
@@ -537,6 +542,7 @@ async def activate_isolated_authority(
         repository = ClerkSqliteRepository.open(
             account_id=account_id,
             artifacts_root=artifacts_root,
+            clock=clock,
         )
     try:
         meta = repository.control_meta_snapshot()
@@ -558,7 +564,7 @@ async def activate_isolated_authority(
             account_id=account_id,
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
-            activated_at_ms=now_ms_utc(),
+            activated_at_ms=clock(),
         )
         store.append(record)
         return record

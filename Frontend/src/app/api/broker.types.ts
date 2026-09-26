@@ -861,6 +861,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Arming Status */
+        get: operations["arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Arming Apply */
+        post: operations["arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/disarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Arming Disarm */
+        post: operations["arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Arming Plan */
+        post: operations["arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/alpaca/accounts/{account_id}/live-graduation": {
         parameters: {
             query?: never;
@@ -2245,6 +2313,86 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/actions/quiesce (bot_action).
          */
         post: operations["fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Live Arming Status
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/arming (custody_read).
+         */
+        get: operations["fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Live Arming Apply
+         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/apply (custody_command).
+         */
+        post: operations["fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/disarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Live Arming Disarm
+         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/disarm (custody_command).
+         */
+        post: operations["fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Live Arming Plan
+         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/plan (custody_command).
+         */
+        post: operations["fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8022,6 +8170,7 @@ export interface components {
              * @enum {string}
              */
             execution_mode?: "paper" | "dry_run" | "shadow" | "live";
+            exit_terms: components["schemas"]["ExitTermsInput"];
             /** Parameters */
             parameters?: Record<string, never>;
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
@@ -8123,12 +8272,20 @@ export interface components {
             carryover_explanation: string;
             /** Carryover Label */
             carryover_label: string;
+            default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             dry_run_eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             /** Evaluated At Ms */
             evaluated_at_ms: number;
             /** Execution Modes */
             execution_modes: components["schemas"]["AlpacaPaperExecutionMode"][];
+            /**
+             * Exit Steps Summary
+             * @default Set exit terms to review this bot’s exit steps.
+             */
+            exit_steps_summary?: string;
+            /** Next Deploy Open Ms */
+            next_deploy_open_ms?: number | null;
             /** Readiness Checks */
             readiness_checks: components["schemas"]["AlpacaPaperDeployReadinessCheck"][];
             /** Sizing Options */
@@ -8302,6 +8459,54 @@ export interface components {
              * @description Details of worst violations
              */
             worst_slices?: Record<string, never>[];
+        };
+        /** ArmingApplyRequest */
+        ArmingApplyRequest: {
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Plan Id */
+            plan_id: string;
+        };
+        /** ArmingPlanView */
+        ArmingPlanView: {
+            /** Account Id */
+            account_id: string;
+            /** Changes */
+            changes: string[];
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            envelope: components["schemas"]["LiveEnvelopePayload"];
+            exit_terms: components["schemas"]["ExitTerms"];
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Plan Id */
+            plan_id: string;
+            /** Shadow Receipt Sha256 */
+            shadow_receipt_sha256: string | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /** ArmingStatusView */
+        ArmingStatusView: {
+            /** Account Id */
+            account_id: string;
+            /** Armed Instance Count */
+            armed_instance_count: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Sessions Remaining */
+            sessions_remaining: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "unarmed" | "armed" | "disarmed" | "lapsed";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
         };
         /**
          * ArtifactDetail
@@ -11083,6 +11288,8 @@ export interface components {
             custody_owner: string;
             /** Db Identity Token */
             db_identity_token: string;
+            /** Exposure Notices */
+            exposure_notices?: components["schemas"]["ExposureNoticeView"][];
             /** Generated At Ms */
             generated_at_ms: number;
             guidance: components["schemas"]["ProjectionGuidanceResponse"];
@@ -14224,10 +14431,39 @@ export interface components {
             rule?: "fixed_bar_count_countdown" | "level_true";
         };
         /**
+         * ExitTerms
+         * @description Immutable stored terms; an upgraded registration may retain an unset allowance.
+         */
+        ExitTerms: {
+            /** Band Multiple */
+            band_multiple: number;
+            /** Exit Allowance Bps */
+            exit_allowance_bps: number | null;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "deployed" | "backfilled";
+            /** Spread Cap Bps */
+            spread_cap_bps: number;
+        };
+        /**
+         * ExitTermsInput
+         * @description Explicit complete terms required for a new deployment.
+         */
+        ExitTermsInput: {
+            /** Band Multiple */
+            band_multiple: number;
+            /** Exit Allowance Bps */
+            exit_allowance_bps: number;
+            /** Spread Cap Bps */
+            spread_cap_bps: number;
+        };
+        /**
          * ExposureNoticeView
-         * @description What a startup refusal left behind at the broker (#2410).
+         * @description What an abnormal run end left behind at the broker (#2410).
          *
-         *     A refused run manages nothing, so the refusal says so whenever something
+         *     An ended run manages nothing, so the refusal says so whenever something
          *     could still move money: ``position_unmanaged`` for a nonzero position the
          *     Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
          *     currently vouch for that position, and ``entry_order_working`` for an entry
@@ -14235,6 +14471,11 @@ export interface components {
          *     the operator's behalf.
          */
         ExposureNoticeView: {
+            /**
+             * Action Label
+             * @default Open bot
+             */
+            action_label?: string;
             /** Explanation */
             explanation: string;
             /**
@@ -14244,6 +14485,10 @@ export interface components {
             kind: "position_unmanaged" | "position_unverified" | "entry_order_working";
             /** Label */
             label: string;
+            /** Strategy Instance Id */
+            strategy_instance_id?: string | null;
+            /** Symbol */
+            symbol?: string | null;
         };
         /**
          * ExposureSlice
@@ -14267,6 +14512,11 @@ export interface components {
          *     the leg the Clerk would submit, not restated here.
          */
         ExtendedLimitConfirmationRequest: {
+            /**
+             * Band Override
+             * @default false
+             */
+            band_override?: boolean;
             /** Limit Price */
             limit_price: number;
             /** Quote Observed At Ms */
@@ -16983,18 +17233,13 @@ export interface components {
          *     ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
          */
         LaneAttentionItem: {
+            /**
+             * Action Label
+             * @default Open bot
+             */
+            action_label?: string;
             /** Condition Id */
             condition_id: string;
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /**
@@ -17002,10 +17247,9 @@ export interface components {
              * @default uncertainty
              */
             kind?: string;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             /** Reason Code */
             reason_code: string;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /** Severity */
             severity: string;
             /** Strategy Instance Id */
@@ -18552,24 +18796,13 @@ export interface components {
         MissionVerdictView: {
             /** Evaluated At Ms */
             evaluated_at_ms: number;
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
             /** Explanation */
             explanation: string;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Label */
             label: string;
             /** Next Action */
             next_action: string | null;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * State
              * @enum {string}
@@ -19909,8 +20142,8 @@ export interface components {
          *     regular-hours run's EXIT on the day's last bar goes out after the close
          *     as such a limit, so Start of a regular-hours run refuses
          *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
-         *     Resume of a flat run; a run still holding a position always resumes
-         *     (#2440, owner decisions 2026-09-25).
+         *     Resume. A held position must pass the carry-over and checkpoint gates;
+         *     unsupported carry-over requires Flatten before Resume (#2504).
          *
          *     Paper only, and only the two: a live revision carries its pair inside
          *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
@@ -20318,6 +20551,7 @@ export interface components {
         ProfileCreateRequest: {
             /** Credential Slot */
             credential_slot: string;
+            default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             /** Display Name */
             display_name: string;
             /**
@@ -20592,22 +20826,10 @@ export interface components {
             evidence_age_ms: number;
             /** Evidence Refs */
             evidence_refs: string[];
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
             /** Explanation */
             explanation: string;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             /** Next Step */
             next_step: string;
             /** Observed At Ms */
@@ -20616,6 +20838,7 @@ export interface components {
             operator_impact: string;
             /** Reason Code */
             reason_code: string;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * Scope
              * @enum {string}
@@ -20636,28 +20859,17 @@ export interface components {
             available_safety_actions: string[];
             /** Custody Owner */
             custody_owner: string;
-            /**
-             * Exit Working
-             * @default false
-             */
-            exit_working?: boolean;
             /** Explanation */
             explanation: string;
-            /**
-             * Facts Unreadable
-             * @default false
-             */
-            facts_unreadable?: boolean;
             /** Headline */
             headline: string;
             /** Impact */
             impact: string;
             /** May Create Exposure */
             may_create_exposure: boolean;
-            /** Next Attempt At Ms */
-            next_attempt_at_ms?: number | null;
             /** Next Step */
             next_step: string;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * Scope
              * @enum {string}
@@ -20673,10 +20885,17 @@ export interface components {
          *     owns all math").
          */
         ProposedLimitEvaluationResponse: {
+            /** Band Cap Bps */
+            band_cap_bps?: number | null;
             /** Limit Price */
             limit_price: number;
             /** Outside Band */
             outside_band: boolean;
+            /**
+             * Override Acknowledged
+             * @default false
+             */
+            override_acknowledged?: boolean;
             /** Resting */
             resting: boolean;
             /** Thin Book */
@@ -21257,6 +21476,11 @@ export interface components {
              * @enum {string}
              */
             action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            /**
+             * Band Override
+             * @default false
+             */
+            band_override?: boolean;
             /** Concurrency Token */
             concurrency_token: string;
             /** Proposed Limit Price */
@@ -21376,6 +21600,24 @@ export interface components {
             observed_at_ms: number | null;
             /** Reference */
             reference: string;
+        };
+        /** RecoveryStatusResponse */
+        RecoveryStatusResponse: {
+            /** Allowed From Ms */
+            allowed_from_ms?: number | null;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "working" | "on_hold" | "allowed_now" | "allowed_from" | "broker_unreachable" | "stuck" | "unknown";
+            /** Last Checked At Ms */
+            last_checked_at_ms?: number | null;
+            /** Reason Code */
+            reason_code: string;
+            /** Stuck Since Ms */
+            stuck_since_ms?: number | null;
         };
         /**
          * RefusedFlattenPricing
@@ -21760,6 +22002,7 @@ export interface components {
         RevisionCreateRequest: {
             /** Credential Slot */
             credential_slot: string;
+            default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             /**
              * Endpoint Mode
              * @enum {string}
@@ -21791,6 +22034,7 @@ export interface components {
             created_at_ms: number;
             /** Credential Slot */
             credential_slot: string;
+            default_exit_terms?: components["schemas"]["ExitTermsInput"] | null;
             /**
              * Endpoint Mode
              * @enum {string}
@@ -25774,7 +26018,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -28742,6 +28986,146 @@ export interface operations {
             };
         };
     };
+    arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArmingStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArmingApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArmingStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArmingStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArmingPlanView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get: {
         parameters: {
             query?: never;
@@ -30106,6 +30490,9 @@ export interface operations {
             query?: {
                 /** @description Scope the channel-health verdict to one symbol. Omitted, the view reports account-level channel presence and connectivity only. */
                 symbol?: string | null;
+                exit_allowance_bps?: number | null;
+                band_multiple?: number | null;
+                spread_cap_bps?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -31768,6 +32155,162 @@ export interface operations {
         };
     };
     fleet_bot_panel_quiesce_action_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__actions_quiesce_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post: {
         parameters: {
             query?: never;
             header?: {

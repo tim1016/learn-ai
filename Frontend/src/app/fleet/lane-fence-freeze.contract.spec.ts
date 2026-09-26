@@ -100,26 +100,14 @@ describe('the lane fence is frozen, never read at command time', () => {
  * that reaches `withCommand(`, and a second, genuinely-unfenced target built
  * alongside a correctly-fenced one would still pass) plus a third of its
  * own: it cannot see whether the *provider* on the other end of the `input()`
- * already froze the whole target before handing it down. A provider that
- * does — the deploy drawer freezes an entire `ResourceTarget` once when it
- * opens and never re-derives it while open, the same "computed() frozen
- * once at action-open" pattern as `CohortDrawerPresentation` above — makes
- * `fencedTarget(`/`freezeLaneFence(` in the *consumer* unnecessary. Those
+ * already fenced the whole target before handing it down. The deploy
+ * workflow passes its fenced target to Paper Access, making another
+ * `fencedTarget(`/`freezeLaneFence(` in that consumer unnecessary. Those
  * consumers are named in `INPUT_ALLOWED` with the one-line proof this spec
  * demands; a future entry needs the same proof, not a bare addition.
  */
 const INPUT_ALLOWED = new Set<string>([
-  // `AlpacaDeployWorkflowComponent.target` is frozen once by
-  // `AlpacaDeployDrawerComponent` when the drawer opens (`frozenTarget`,
-  // guarded by `wasVisible`) and never re-derived from a live directory read
-  // while the drawer stays open — proven by
-  // `alpaca-deploy-drawer.component.spec.ts`'s "freezes the target at open
-  // and does not re-derive it from a later input change".
-  join('components', 'broker', 'broker-deploy-page', 'alpaca-deploy-workflow.component.ts'),
-  // `DeployPaperAccessComponent.target` is the same already-frozen target,
-  // one hop further down (`alpaca-deploy-workflow.component.html` passes
-  // `deployTarget(view.account_id)`, a re-stamp of the frozen `target`, not a
-  // fresh directory read).
+  // Workflow passes deployTarget(), stamped with the desk's frozen fence.
   join('components', 'broker', 'broker-deploy-page', 'deploy-paper-access.component.ts'),
 ]);
 
