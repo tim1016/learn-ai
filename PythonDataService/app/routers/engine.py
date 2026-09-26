@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.engine.data.availability import (
     AvailabilityReport,
     check_availability,
@@ -239,13 +240,18 @@ def get_data_availability(
         )
 
     roots = _resolve_lean_data_roots(adjusted=adjusted)
-    report: AvailabilityReport = check_availability(
-        roots=roots,
-        symbol=symbol,
-        start=start_date,
-        end=end_date,
-        resolution=resolution,
-    )
+    try:
+        report: AvailabilityReport = check_availability(
+            roots=roots,
+            symbol=symbol,
+            start=start_date,
+            end=end_date,
+            resolution=resolution,
+        )
+    except CatalogUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="The lake catalog is unavailable; retry when it is reachable.") from exc
+
     return AvailabilityResponse.from_report(report)
 
 

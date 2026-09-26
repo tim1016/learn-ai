@@ -51,12 +51,15 @@ from app.lean_sidecar.staging import stage_minute_zips_from_store
 from app.lean_sidecar.workspace import SymbolValidationError, resolve_workspace
 from tests._helpers.lake_fixture import (
     seed_lake_daily,
+    seed_lake_interest_rate,
     seed_lake_metadata,
     seed_lake_minute_day,
     seed_lake_window,
     to_lake_bars,
 )
 from tests._helpers.lean_store import make_minute_bars, seed_store_day
+
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
 
 DUMMY_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000003"
 DAY_ONE = date(2026, 1, 5)
@@ -342,30 +345,15 @@ class TestSameBytesAsThePythonReaders:
     ``iter_dates`` predicate, so such a test cannot fail.
     """
 
-    def test_resolution_does_not_decode_the_minute_artifacts(self, tmp_path: Path) -> None:
-        """Resolution stays O(1) unzips, not O(window).
-
-        Proven by corrupting every *minute* zip: a resolver that decoded
-        them would raise ``BadZipFile``, and this one does not care,
-        because LEAN decodes from the mount and the run has no use for
-        the bars. The daily artifact is the deliberate exception — one
-        file per symbol, and its date range is the only way to catch a
-        zip that predates a window extension — so it is left intact
-        here and covered by ``test_stale_daily_artifact_is_refused``.
-        """
+    def test_resolution_refuses_unreceipted_minute_replacements(self, tmp_path: Path) -> None:
+        """#2456: file existence cannot vouch for a replacement's publication."""
         lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW)
-        for corrupt in lake_root.rglob("*/minute/*/*.zip"):
-            corrupt.write_bytes(b"not a zip at all")
+        for replaced in lake_root.rglob("*/minute/*/*.zip"):
+            replaced.write_bytes(b"uncommitted replacement")
 
-        artifacts = resolve_lake_artifacts(
-            lake_root=lake_root,
-            symbol="SPY",
-            start=DAY_ONE,
-            end=DAY_TWO,
-        )
-
-        assert artifacts.trading_dates == (DAY_ONE, DAY_TWO)
+        with pytest.raises(LakeMountError, match="lake_artifact_not_committed"):
+            resolve_lake_artifacts(lake_root=lake_root, symbol="SPY", start=DAY_ONE, end=DAY_TWO)
 
     def test_lake_mode_and_staging_mode_yield_identical_bars(self, tmp_path: Path) -> None:
         # Staging mode: engine writer -> bar store -> byte-copy into a workspace.
@@ -695,10 +683,7 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
         # The canonical CSV itself, not just its parent directory — an
         # empty alternative/interest-rate/ must still warn (see the sibling
         # test below).
-        (fixture_lake / "alternative" / "interest-rate" / "usa").mkdir(parents=True)
-        (fixture_lake / "alternative" / "interest-rate" / "usa" / "interest-rate.csv").write_text(
-            "date,rate\n", encoding="utf-8"
-        )
+        seed_lake_interest_rate(fixture_lake, rows="date,rate\n")
 
         with caplog.at_level(logging.WARNING):
             resolve_lake_artifacts(

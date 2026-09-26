@@ -141,6 +141,30 @@ def _resolve_data_root_id(data_root_id: UUID | None) -> UUID:
     return data_root_id if data_root_id is not None else root_identity.active_root_id()
 
 
+async def has_committed_file_receipt(
+    data_root_id: UUID, price_adjustment_mode: str, file_path: str,
+    file_sha256: str, file_size_bytes: int,
+) -> bool:
+    """Admit exact bytes only when their physical file has a committed receipt.
+
+    A normal MVCC SELECT never sees the publisher's uncommitted completion.
+    Include the digest: an older complete metadata row must not vouch for a
+    replacement promoted by a transaction that subsequently rolled back.
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            '''
+            SELECT "Id" FROM "DataLakeArtifacts"
+             WHERE "DataRootId" = $1 AND "PriceAdjustmentMode" = $2
+               AND "FilePath" = $3 AND "Status" = 'complete'
+               AND "FileSha256" = $4 AND "FileSizeBytes" = $5
+             LIMIT 1
+            ''',
+            data_root_id, price_adjustment_mode, file_path, file_sha256, file_size_bytes,
+        )
+    return row is not None
+
+
 async def select_complete_metadata_artifact(
     data_contract_hash: str,
     data_root_id: UUID | None = None,
@@ -915,9 +939,10 @@ async def publish_under_lease(
 
     Crash safety: if the publisher dies after the rename but before the
     commit, the transaction rolls back and the row stays non-complete with
-    its old receipt. Readers that trust the catalog therefore never accept
-    the half-published file, and the next writer to win the lease overwrites
-    it. The reverse (a committed receipt describing bytes that were never
+    its old receipt. ``admission.read_committed_bytes`` refuses those bytes
+    until a matching complete receipt is committed. After lease expiry the
+    next capture reclaims the row and overwrites the orphan under its new
+    generation. The reverse (a committed receipt describing bytes that were never
     renamed) cannot happen, because the rename precedes the commit.
 
     ``promote`` must be synchronous, fast, and side-effecting only on the

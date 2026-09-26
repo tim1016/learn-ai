@@ -412,6 +412,7 @@ def test_failed_data_source_produces_failed_ledger():
     assert result.warnings == [ledger.failure_reason]
 
 
+@pytest.mark.usefixtures("seeded_lake_catalog")
 def test_a_window_the_lake_does_not_cover_fails_the_ledger_naming_the_gap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -440,6 +441,7 @@ def test_a_window_the_lake_does_not_cover_fails_the_ledger_naming_the_gap(
     assert result.trades == []
 
 
+@pytest.mark.usefixtures("seeded_lake_catalog")
 def test_lake_backed_research_run_records_admitted_fingerprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

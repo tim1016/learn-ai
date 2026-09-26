@@ -14,9 +14,11 @@ drive the same pipeline the daily-only materialization suite does.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import httpx
@@ -120,6 +122,16 @@ class FakeCatalog:
         return ArtifactRecord(**{k: v for k, v in row.items() if k not in cls._BOOKKEEPING_KEYS})
 
     # -- catalog_client surface --------------------------------------------
+
+    async def has_committed_file_receipt(self, data_root_id, price_adjustment_mode,
+                                         file_path, file_sha256, file_size_bytes) -> bool:
+        return any(row["status"] == "complete"
+                   and row["data_root_id"] == data_root_id
+                   and row["price_adjustment_mode"] == price_adjustment_mode
+                   and row["file_path"] == file_path
+                   and row["file_sha256"] == file_sha256
+                   and row.get("file_size_bytes") == file_size_bytes
+                   for row in self.rows.values())
 
     async def init_pool(self) -> None:
         return None
@@ -377,6 +389,7 @@ class FakeCatalog:
             return False
         row.update(
             status="complete",
+            file_size_bytes=file_size_bytes,
             row_count=row_count,
             first_bar_start_ms=first_bar_start_ms,
             last_bar_start_ms=last_bar_start_ms,
@@ -509,6 +522,7 @@ def mock_launcher(*, latency_s: float = 0.0):
 
 #: Every ``catalog_client`` function :class:`FakeCatalog` stands in for.
 FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
+    "has_committed_file_receipt",
     "init_pool",
     "claim_metadata_artifact",
     "select_complete_metadata_artifact",
@@ -550,7 +564,9 @@ def point_lake_writer_at_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     path. Returns the writer root.
     """
     write_root = tmp_path / "writer-root"
-    (write_root / "lake").mkdir(parents=True)
+    from app.data_lake.root_identity import active_root_id, init_empty_root
+
+    init_empty_root(write_root, active_root_id())
     (write_root / "staging").mkdir(parents=True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
@@ -561,3 +577,49 @@ def point_lake_writer_at_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     artifacts_root.mkdir(parents=True)
     monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
     return write_root
+
+
+_fixture_publications: ContextVar[dict | None] = ContextVar("fixture_lake_publications", default=None)
+
+
+def record_fixture_publication(path: Path) -> None:
+    """Commit a seed's receipt, only inside the opted-in fixture catalog.
+
+    Recording occurs at seed time, never read time, so later replacements
+    and unseeded files remain uncommitted and exercise the real gate.
+    """
+    from app.data_lake.path_policy import lake_root_for
+    from app.data_lake.root_identity import LEGACY_ROOT_ID, read_marker, stamp_existing_root
+
+    receipts = _fixture_publications.get()
+    root = lake_root_for(path)
+    if receipts is None or root is None:
+        return
+    marker = read_marker(root.parent.parent)
+    if marker is None:
+        stamp_existing_root(root.parent.parent, LEGACY_ROOT_ID, force=True)
+        marker = read_marker(root.parent.parent)
+    payload = path.read_bytes()
+    receipts[(marker.data_root_id, root.name, path.relative_to(root).as_posix())] = (
+        hashlib.sha256(payload).hexdigest(), len(payload),
+    )
+
+
+@pytest.fixture
+def seeded_lake_catalog(monkeypatch):
+    """A committed catalog for explicit file seeds, not an admission bypass."""
+    receipts = {}
+    token = _fixture_publications.set(receipts)
+
+    async def init_pool():
+        return None
+
+    async def has_receipt(root_id, mode, relative, digest, size):
+        return receipts.get((root_id, mode, relative)) == (digest, size)
+
+    monkeypatch.setattr(catalog_client, "init_pool", init_pool)
+    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", has_receipt)
+    try:
+        yield receipts
+    finally:
+        _fixture_publications.reset(token)

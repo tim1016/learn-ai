@@ -29,6 +29,8 @@ from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITIES, LaunchReques
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from tests._helpers.lake_fixture import seed_lake_corporate_actions, seed_lake_interest_rate, seed_lake_window
 
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 DAY_ONE = date(2026, 1, 5)
 DAY_TWO = date(2026, 1, 6)
 WINDOW = [DAY_ONE, DAY_TWO]

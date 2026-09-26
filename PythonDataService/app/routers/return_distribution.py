@@ -17,6 +17,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.models.return_distribution_models import (
     AdjustmentNotCoveredResponse,
     CaptureReceiptModel,
@@ -79,6 +80,9 @@ async def run_return_distribution(
             bin_width_pct=request.bin_width_pct,
             span_pct=request.span_pct,
         )
+    except CatalogUnavailableError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="The lake catalog is unavailable; retry when it is reachable.") from e
     except SymbolNotCapturedError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -168,6 +172,9 @@ async def run_day_candles(request: DayCandlesRequest) -> DayCandlesResponse:
             symbol=request.symbol,
             session_open_ms_utc=request.session_open_ms_utc,
         )
+    except CatalogUnavailableError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="The lake catalog is unavailable; retry when it is reachable.") from e
     except SymbolNotCapturedError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -47,6 +47,7 @@ from functools import partial
 from pathlib import Path
 from typing import Literal
 
+from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.factor_files import FactorFileNotCoveringError, read_covering_factor_rows
 from app.data_lake.path_policy import minute_bar_market_root, resolve_lake_root
 from app.data_lake.run_materialization import materialize_symbol_history
@@ -267,7 +268,7 @@ def _probe_lake_sessions(
         return _SessionProbe(capture_span=None, sessions_missing=False)
     capture_start, capture_end = completed[0].session_date, completed[-1].session_date
     reader = LeanMinuteDataReader([lake_root], session="extended")
-    lake_dates = set(reader.iter_dates(symbol, read_start, to_date))
+    lake_dates = set(reader.iter_committed_dates(symbol, read_start, to_date))
     return _SessionProbe(
         capture_span=(capture_start, capture_end),
         sessions_missing=any(d not in lake_dates for d in expected_sessions(capture_start, capture_end)),
@@ -286,7 +287,7 @@ def _read_study_window(*, symbol: str, from_date: date, to_date: date, lake_root
     """
     read_start = from_date - timedelta(days=_READ_LEAD_IN_DAYS)
     reader = LeanMinuteDataReader([lake_root], session="extended")
-    lake_dates = list(reader.iter_dates(symbol, read_start, to_date))
+    lake_dates = list(reader.iter_committed_dates(symbol, read_start, to_date))
     windows = {
         w.session_date: (w.open_ms_utc, w.close_ms_utc)
         for w in session_windows_ms_utc(read_start, to_date)
@@ -534,7 +535,10 @@ def _day_candles_sync(
     # ET calendar date is unambiguous across DST.
     trading_date = et_date_at_ms(session_open_ms_utc)
     reader = LeanMinuteDataReader([lake_root], session="extended")
-    bars = list(reader.read_day(symbol, trading_date))
+    try:
+        bars = list(reader.read_day(symbol, trading_date))
+    except LakeAdmissionError as exc:
+        raise DayNotCapturedError(symbol, trading_date) from exc
     if not bars:
         raise DayNotCapturedError(symbol, trading_date)
 

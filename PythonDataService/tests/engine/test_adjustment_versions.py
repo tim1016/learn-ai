@@ -14,6 +14,7 @@ import pytest
 
 from app.data_lake import ensure_data as pipeline
 from app.data_lake.adjustment_versions import AdjustmentVersionError, CorporateActionSnapshot, companion_path
+from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
 from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError
 from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
@@ -28,6 +29,10 @@ AFTER = date(2024, 6, 10)
 @pytest.fixture
 def capture(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Keep the real writer/derivation/readers; replace only DB and provider I/O."""
+    from app.config import settings
+    from app.data_lake.root_identity import active_root_id, init_empty_root
+
+    init_empty_root(Path(settings.LEAN_DATA_WRITE_ROOT), active_root_id())
     install_fake_catalog(monkeypatch)
     state = SimpleNamespace(split=False, dividend=False, unavailable=False, change_during_fetch=False, fetches=[])
 
@@ -72,15 +77,15 @@ def spec(day: date, *, adjusted: bool = True) -> DataRunSpec:
 async def test_split_between_captures_does_not_create_a_false_price_gap(capture: SimpleNamespace) -> None:
     first = await pipeline.ensure_data(spec(BEFORE))
     root = Path(first.lean_data_root_path)
-    assert LeanMinuteDataReader(root).read_day("NVDA", BEFORE)[0].close == 100
+    assert (await asyncio.to_thread(lambda: LeanMinuteDataReader(root).read_day("NVDA", BEFORE)))[0].close == 100
     capture.split = True
 
     latest = await pipeline.ensure_data(spec(AFTER))
     assert latest.corporate_action_versions != first.corporate_action_versions
     assert all(r.corporate_action_version == latest.corporate_action_versions["NVDA"] for r in latest.artifacts)
 
-    minute = list(LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER))
-    daily = list(LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, AFTER))
+    minute = list(await asyncio.to_thread(lambda: list(LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))
+    daily = list(await asyncio.to_thread(lambda: list(LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))
     assert [bar.close for bar in minute] == [10, 10], "a split must rebuild older adjusted days"
     assert [bar.close for bar in daily] == [10, 10], "daily rollups must use one adjustment version"
 
@@ -97,7 +102,7 @@ async def test_raw_history_and_receipts_do_not_change_when_actions_arrive(captur
     assert {r.file_path: (root / r.file_path).read_bytes() for r in same.artifacts} == original
     assert capture.fetches == [(BEFORE, False)]
     await pipeline.ensure_data(spec(AFTER, adjusted=False))
-    assert [b.close for b in LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER)] == [100, 10]
+    assert [b.close for b in (await asyncio.to_thread(lambda: list(LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))] == [100, 10]
 
 
 @pytest.mark.asyncio
@@ -125,8 +130,8 @@ async def test_failed_rebuild_invalidates_both_old_minute_and_daily_data(capture
     assert any(f.reason == "corp_action_revision_mismatch" for f in latest.failures)
     assert not any(r.resolution == "daily" for r in latest.artifacts)
     for reader in (LeanMinuteDataReader(root), LeanDailyDataReader(root)):
-        with pytest.raises(AdjustmentVersionError, match="corporate-action version"):
-            list(reader.iter_bars("NVDA", BEFORE, AFTER))
+        with pytest.raises((LakeAdmissionError, AdjustmentVersionError), match=r"committed|corporate-action version"):
+            list(await asyncio.to_thread(lambda reader=reader: list(reader.iter_bars("NVDA", BEFORE, AFTER))))
 
 
 @pytest.mark.asyncio
@@ -141,19 +146,19 @@ async def test_retry_rebuilds_previously_published_days_after_a_failed_refresh(c
     repaired = await pipeline.ensure_data(spec(AFTER))
 
     assert not any(f.reason == "corp_action_revision_mismatch" for f in repaired.failures)
-    assert [b.close for b in LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, AFTER)] == [10, 10]
-    assert [b.close for b in LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER)] == [10, 10]
+    assert [b.close for b in (await asyncio.to_thread(lambda: list(LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))] == [10, 10]
+    assert [b.close for b in (await asyncio.to_thread(lambda: list(LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))] == [10, 10]
 
 
 @pytest.mark.asyncio
 async def test_reader_never_switches_version_mid_run(capture: SimpleNamespace) -> None:
     first = await pipeline.ensure_data(spec(BEFORE))
     reader = LeanMinuteDataReader(Path(first.lean_data_root_path))
-    assert reader.read_day("NVDA", BEFORE)[0].close == 100
+    assert (await asyncio.to_thread(lambda: reader.read_day("NVDA", BEFORE)))[0].close == 100
     capture.split = True
     await pipeline.ensure_data(spec(AFTER))
     with pytest.raises(AdjustmentVersionError, match="mixed corporate-action versions"):
-        reader.read_day("NVDA", AFTER)
+        (await asyncio.to_thread(lambda: reader.read_day("NVDA", AFTER)))
 
 
 @pytest.mark.asyncio
@@ -163,11 +168,11 @@ async def test_actions_changing_during_capture_refuse_and_invalidate_that_captur
     assert result.overall_status == "failed"
     assert result.failures[0].reason == "corp_action_revision_mismatch"
     assert "changed during capture" in result.failures[0].detail
-    with pytest.raises(AdjustmentVersionError, match="corporate-action version"):
-        LeanMinuteDataReader(Path(result.lean_data_root_path)).read_day("NVDA", BEFORE)
+    with pytest.raises((LakeAdmissionError, AdjustmentVersionError), match=r"committed|corporate-action version"):
+        (await asyncio.to_thread(lambda: LeanMinuteDataReader(Path(result.lean_data_root_path)).read_day("NVDA", BEFORE)))
     capture.change_during_fetch = False
     repaired = await pipeline.ensure_data(spec(BEFORE))
-    assert LeanMinuteDataReader(Path(repaired.lean_data_root_path)).read_day("NVDA", BEFORE)[0].close == 10
+    assert (await asyncio.to_thread(lambda: LeanMinuteDataReader(Path(repaired.lean_data_root_path)).read_day("NVDA", BEFORE)))[0].close == 10
 
 
 @pytest.mark.parametrize("damage", ["absent", "wrong_hash"])
@@ -184,11 +189,11 @@ async def test_unversioned_or_torn_cache_is_refused_then_rebuilt(capture: Simple
             payload["file_sha256"] = "0" * 64
             path.write_text(json.dumps(payload))
     with pytest.raises(AdjustmentVersionError, match="corporate-action version"):
-        LeanMinuteDataReader(root).read_day("NVDA", BEFORE)
+        (await asyncio.to_thread(lambda: LeanMinuteDataReader(root).read_day("NVDA", BEFORE)))
     repaired = await pipeline.ensure_data(spec(BEFORE))
     assert repaired.corporate_action_versions == result.corporate_action_versions
-    assert LeanMinuteDataReader(root).read_day("NVDA", BEFORE)[0].close == 100
-    assert len(list(LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, BEFORE))) == 1
+    assert (await asyncio.to_thread(lambda: LeanMinuteDataReader(root).read_day("NVDA", BEFORE)))[0].close == 100
+    assert len(list(await asyncio.to_thread(lambda: list(LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, BEFORE))))) == 1
     assert len(capture.fetches) == 2
 
 
@@ -223,14 +228,14 @@ async def test_sweep_receipt_pins_versions_even_if_a_dividend_leaves_prices_iden
 
     result = await pipeline.ensure_data(spec(BEFORE))
     root = Path(result.lean_data_root_path)
-    snapshot = capture_data_snapshot(roots=[root], symbol="NVDA", resolution="minute", data_start=BEFORE, data_end=BEFORE)
+    snapshot = (await asyncio.to_thread(lambda: capture_data_snapshot(roots=[root], symbol="NVDA", resolution="minute", data_start=BEFORE, data_end=BEFORE)))
     assert snapshot.corporate_action_versions == result.corporate_action_versions
     assert DataSnapshot.from_dict(snapshot.as_dict()) == snapshot
     capture.dividend = True
     await pipeline.ensure_data(spec(BEFORE))
     reader = ManifestBoundMinuteReader(root, snapshot.artifacts)
     with pytest.raises(DataSnapshotMismatchError, match="changed since the snapshot"):
-        reader.read_day("NVDA", BEFORE)
+        (await asyncio.to_thread(lambda: reader.read_day("NVDA", BEFORE)))
 
 
 def test_snapshot_version_is_order_independent_and_changes_when_announced_action_becomes_effective() -> None:
@@ -283,14 +288,14 @@ async def test_availability_does_not_reuse_a_verdict_after_version_invalidation(
 
     result = await pipeline.ensure_data(spec(BEFORE))
     root = Path(result.lean_data_root_path)
-    assert check_availability([root], "NVDA", BEFORE, BEFORE).is_complete
+    assert (await asyncio.to_thread(lambda: check_availability([root], "NVDA", BEFORE, BEFORE))).is_complete
     capture.split = True
     capture.unavailable = True
     await pipeline.ensure_data(spec(AFTER))
-    report = check_availability([root], "NVDA", BEFORE, BEFORE)
+    report = (await asyncio.to_thread(lambda: check_availability([root], "NVDA", BEFORE, BEFORE)))
     assert not report.is_complete
     assert report.unreadable_days == [BEFORE]
-    assert "corporate-action version" in report.unreadable_files[0].reason
+    assert "committed" in report.unreadable_files[0].reason
 
 
 @pytest.mark.asyncio

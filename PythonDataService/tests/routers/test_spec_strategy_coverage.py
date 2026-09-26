@@ -44,7 +44,10 @@ from app.main import app
 from app.routers.spec_strategy import _FIXTURES_DIR, get_data_source_factory
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service
+from tests._helpers.fake_lake_catalog import record_fixture_publication
 from tests._helpers.lean_store import record_fixture_adjustment, seed_pre_market_day, seed_store_day
+
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
 
 # Thanksgiving fortnight: 2024-11-28 is a closure and 2024-11-29 closes at
 # 13:00 ET, so the window carries both calendar cases the check must honour.
@@ -352,12 +355,37 @@ async def test_stale_adjustment_receipts_still_refuse_spec_runs(lean_root: Path)
     # Change a valid zip without refreshing its corporate-action companion.
     target = lean_root / "equity" / "usa" / "minute" / "qqq" / "20241203_trade.zip"
     target.write_bytes(target.read_bytes() + b"changed")
+    # Admit the replacement bytes so the separate adjustment guard is exercised.
+    record_fixture_publication(target)
 
     body = await _post_backtest(_sma_spec("QQQ"), *WINDOW)
 
     assert body["success"] is False
     assert "stale or mixed corporate-action version" in body["error"]
     assert body["lake_data_availability_hash"] is None
+
+
+async def test_spec_refuses_lake_bytes_after_their_catalog_receipt_is_revoked(
+    lean_root: Path,
+    seeded_lake_catalog: dict[tuple[UUID, str, str], tuple[str, int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A previous successful Spec run cannot cache admission past catalog revocation."""
+    _seed(lean_root, "QQQ", expected_sessions(*WINDOW))
+    admitted = await _post_backtest(_sma_spec("QQQ"), *WINDOW)
+    assert admitted["success"], admitted["error"]
+    seeded_lake_catalog.clear()
+
+    def must_not_run(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Uncommitted lake files must not reach the engine")
+
+    monkeypatch.setattr(BacktestEngine, "run", must_not_run)
+    refused = await _post_backtest(_sma_spec("QQQ"), *WINDOW)
+
+    assert refused["success"] is False
+    assert "no committed catalog receipt for these bytes" in refused["error"]
+    assert refused["total_trades"] == 0
+    assert refused["lake_data_availability_hash"] is None
 
 
 @pytest.mark.parametrize(

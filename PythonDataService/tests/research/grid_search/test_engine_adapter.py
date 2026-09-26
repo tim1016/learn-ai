@@ -30,6 +30,8 @@ from app.services import engine_backtest_service as engine_service
 from app.services.engine_backtest_service import execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
 
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 START, END = date(2025, 1, 6), date(2025, 1, 24)
 SESSIONS = expected_sessions(START, END)
 DAY_MS = 24 * 60 * 60 * 1000

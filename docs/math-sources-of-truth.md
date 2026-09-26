@@ -70,6 +70,11 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > daily, quote, Python-run, and LEAN-run receipts share that version. This
 > changes cache validity and input provenance, with no new formula or port;
 > see `docs/references/lake-adjustment-dimension.md` §5.
+>
+> **#2456:** `app/data_lake/admission.py` requires a committed catalog receipt
+> for exact lake bytes at reader/preflight admission. This changes input
+> validity only; formulas, tolerances, and calculation ownership are unchanged.
+> See `docs/references/lake-committed-admission.md`.
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|

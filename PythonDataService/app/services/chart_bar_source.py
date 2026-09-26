@@ -74,6 +74,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
+from app.data_lake.admission import LakeAdmissionError
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.path_policy import resolve_lake_root
 from app.data_lake.types import PriceAdjustmentMode, is_lake_addressable_symbol, polygon_mode_for
 from app.engine.data.lean_format import LeanMinuteDataReader
@@ -422,7 +424,7 @@ def _execute_plan(
     history_fallback_reason: SpanReason = "lake_gap"
     lake_dates: frozenset[date] = frozenset()
     if completed:
-        held = set(reader.iter_dates(symbol, completed[0].session_date, completed[-1].session_date))
+        held = set(reader.iter_committed_dates(symbol, completed[0].session_date, completed[-1].session_date))
         lake_dates = frozenset(held.intersection(window.session_date for window in completed))
 
     if not lake_dates:
@@ -465,7 +467,13 @@ def _execute_plan(
     executed: list[_ExecutedSegment] = []
     for source, reason, windows in plan:
         if source == "lake":
-            segment_bars = _read_lake_bars(reader, symbol, windows)
+            try:
+                segment_bars = _read_lake_bars(reader, symbol, windows)
+            except LakeAdmissionError:
+                source, reason = "provider", "lake_gap"
+                segment_bars = fetch_provider(
+                    windows[0].session_date.isoformat(), windows[-1].session_date.isoformat(),
+                )
         else:
             segment_bars = fetch_provider(
                 windows[0].session_date.isoformat(),
@@ -509,16 +517,22 @@ def compose_chart_bars(
     at_ms = now_ms_utc() if now_ms is None else now_ms
     completed, live, boundary_ms_utc = split_sessions_at_boundary(from_date, to_date, at_ms, session)
 
-    executed = _execute_plan(
-        ticker=ticker,
-        from_date=from_date,
-        to_date=to_date,
-        adjusted=adjusted,
-        completed=completed,
-        live=live,
-        fetch_provider=fetch_provider,
-        lake_root=lake_root,
-    )
+    try:
+        executed = _execute_plan(
+            ticker=ticker,
+            from_date=from_date,
+            to_date=to_date,
+            adjusted=adjusted,
+            completed=completed,
+            live=live,
+            fetch_provider=fetch_provider,
+            lake_root=lake_root,
+        )
+    except CatalogUnavailableError:
+        executed = _whole_window_from_provider(
+            from_date=from_date, to_date=to_date, windows=[*completed, *live],
+            reason="lake_gap", fetch_provider=fetch_provider,
+        )
 
     bars = [bar for _source, _reason, _windows, segment_bars in executed for bar in segment_bars]
 
