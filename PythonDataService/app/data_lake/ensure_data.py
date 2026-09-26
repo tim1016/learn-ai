@@ -1245,7 +1245,7 @@ async def _process_minute_quote_artifact(
 
     # Read source trade bars from disk.
     try:
-        trade_bars = read_minute_trade_bars(source_trade_record.file_path, lake_root)
+        trade_bars = await asyncio.to_thread(read_minute_trade_bars, source_trade_record.file_path, lake_root)
     except Exception as e:
         await catalog_client.fail_artifact(artifact_id, "io_error", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
         return (

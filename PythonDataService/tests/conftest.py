@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from tests._helpers.fake_lake_catalog import seeded_lake_catalog as seeded_lake_catalog
+
 # POLYGON_API_KEY and the Signal Program source anchor are primed by the
 # service-root conftest before any collection import (#2485) — including for
 # the spec layer's own test root beside its package. Only the router-test

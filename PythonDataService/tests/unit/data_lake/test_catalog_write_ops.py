@@ -1263,3 +1263,60 @@ async def test_mark_complete_artifact_failed_refuses_a_claimed_row(clean_artifac
     )
     assert await catalog_client.mark_complete_artifact_failed(artifact_id, "io_error", "disk disagrees") is True
     assert (await _lease_row(artifact_id))["Status"] == "failed"
+
+
+async def test_publication_commit_failure_is_invisible_until_reclaimed_and_committed(clean_artifacts, pool, tmp_path):
+    """#2456: a real deferred Postgres failure happens after the filesystem rename."""
+    from app.data_lake.admission import LakeAdmissionError
+    from app.data_lake.root_identity import init_empty_root
+    from app.engine.data.lean_format import LeanMinuteDataReader
+    from tests._helpers.lean_store import seed_store_day
+
+    context = init_empty_root(tmp_path / "store", _minute_identity().data_root_id)
+    lake = context.lake_root("raw")
+    staging = context.staging_root("raw")
+    lake.mkdir(parents=True)
+    staging.mkdir(parents=True)
+    day = date(2024, 5, 20)
+    source = seed_store_day(tmp_path / "source", "SPY", day, count=1)
+    relative = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
+    artifact_id = await _claim_a(relative)
+    async with catalog_client.connection() as conn:
+        await conn.execute('''
+            CREATE FUNCTION reject_test_lake_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'injected lake commit failure'; END $$;
+            CREATE CONSTRAINT TRIGGER reject_test_lake_commit
+            AFTER UPDATE ON "DataLakeArtifacts" DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW WHEN (NEW."Status" = 'complete')
+            EXECUTE FUNCTION reject_test_lake_commit();
+        ''')
+    publication = dict(
+        content=source.read_bytes(), lake_root=lake, staging_root=staging,
+        rel_lake_path=relative, request_id=uuid4(), worker_id="writer-a", attempt=1,
+        artifact_id=artifact_id, lease_generation=1, row_count=1,
+        first_bar_start_ms=1716211800000, last_bar_start_ms=1716211800000,
+    )
+    try:
+        with pytest.raises(asyncpg.RaiseError, match="injected lake commit"):
+            await atomic.publish_artifact(**publication)
+        assert (lake / relative).read_bytes() == source.read_bytes()
+        assert (await _lease_row(artifact_id))["Status"] == "fetching"
+        with pytest.raises(LakeAdmissionError, match="committed"):
+            await asyncio.to_thread(LeanMinuteDataReader(lake).read_day, "SPY", day)
+    finally:
+        async with catalog_client.connection() as conn:
+            await conn.execute('DROP TRIGGER reject_test_lake_commit ON "DataLakeArtifacts"; '
+                               'DROP FUNCTION reject_test_lake_commit();')
+
+    await _expire_lease(artifact_id)
+    generation = await catalog_client.steal_or_retry_minute_bar(artifact_id, "writer-a", 300_000, 3)
+    assert generation == 2
+    await atomic.publish_artifact(**{**publication, "lease_generation": generation})
+    assert len(await asyncio.to_thread(LeanMinuteDataReader(lake).read_day, "SPY", day)) == 1
+
+    receipt = [context.root_id, "raw", str(relative), hashlib.sha256(source.read_bytes()).hexdigest(), source.stat().st_size]
+    assert await catalog_client.has_committed_file_receipt(*receipt)
+    for column, wrong in enumerate([uuid4(), "polygon_split_adjusted", "another.zip", "0" * 64, 0]):
+        altered = receipt.copy()
+        altered[column] = wrong
+        assert not await catalog_client.has_committed_file_receipt(*altered)

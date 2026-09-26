@@ -252,7 +252,7 @@ async def test_an_unpriced_session_in_the_lead_in_the_returns_never_read_does_no
     )
     wide = await run_materialization.materialize_symbol_history(symbol=SYMBOL, start=WIDE_START, end=WIDE_END)
     assert wide.status == "complete", wide.detail
-    assert read_recorded_factor_file(lake_root, market="usa", symbol=SYMBOL).spans == (
+    assert (await asyncio.to_thread(read_recorded_factor_file, lake_root, market="usa", symbol=SYMBOL)).spans == (
         SessionRun(WIDE_START, unpriced),
         SessionRun(date(2024, 4, 23), WIDE_END),
     )
@@ -278,7 +278,7 @@ async def test_an_actionless_symbol_whose_first_and_last_sessions_have_no_close_
 
     wide = await run_materialization.materialize_symbol_history(symbol=SYMBOL, start=WIDE_START, end=WIDE_END)
     assert wide.status == "complete", wide.detail
-    assert read_recorded_factor_file(lake_root, market="usa", symbol=SYMBOL).spans == (
+    assert (await asyncio.to_thread(read_recorded_factor_file, lake_root, market="usa", symbol=SYMBOL)).spans == (
         SessionRun(WIDE_START, WIDE_END),
     )
     assert _factor_rows(lake_root) == ["20240415,1,1,100", "20240712,1,1,50"]

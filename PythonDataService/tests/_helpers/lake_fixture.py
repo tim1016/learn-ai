@@ -61,6 +61,9 @@ def _write(lake_root: Path, relative: Path, payload: bytes) -> Path:
     target = lake_root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(payload)
+    from tests._helpers.fake_lake_catalog import record_fixture_publication
+
+    record_fixture_publication(target)
     return target
 
 

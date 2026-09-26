@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.data_lake.adjustment_versions import AdjustmentVersionGuard, adjusted_root_for, companion_path
+from app.data_lake.admission import read_committed_bytes
 from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
@@ -149,7 +150,7 @@ def capture_data_snapshot(
             relative = _daily_relative(symbol) if resolution == "daily" else _minute_relative(symbol, day)
             if relative not in artifacts:
                 path = Path(root) / relative
-                payload = path.read_bytes()
+                payload = read_committed_bytes(path)
                 if adjusted_root_for(path) is not None:
                     companion = companion_path(path).read_bytes()
                     guard.verify(path, payload, symbol, companion_payload=companion)
@@ -225,7 +226,7 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
         if not zip_path.exists():
             _refuse_if_receipted(self._manifest, relative)
             return []
-        payload = zip_path.read_bytes()
+        payload = read_committed_bytes(zip_path)
         _verify_bytes(self._manifest, relative, payload)
         _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
         return self.parse_day_zip(payload, symbol, trading_date)
@@ -243,7 +244,7 @@ class ManifestBoundDailyReader(LeanDailyDataReader):
         if not zip_path.exists():
             _refuse_if_receipted(self._manifest, relative)
             return []
-        payload = zip_path.read_bytes()
+        payload = read_committed_bytes(zip_path)
         _verify_bytes(self._manifest, relative, payload)
         _verify_adjustment_receipt(self.adjustment_guard, self._manifest, relative, zip_path, payload, symbol)
         return self.parse_history_zip(payload, symbol)

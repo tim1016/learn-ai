@@ -584,7 +584,8 @@ async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeA
         raise LeanSidecarServiceError(f"lake_mount_unsupported_by_launcher: {e}") from e
 
     try:
-        return resolve_lake_artifacts(
+        return await asyncio.to_thread(
+            resolve_lake_artifacts,
             lake_root=data_plane_lake_root(polygon_mode_for(request.data_policy.adjusted)),
             symbol=request.symbol,
             start=request.start_date,

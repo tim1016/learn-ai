@@ -41,6 +41,17 @@ _STAGING_DIR = "staging"
 _ADJUSTMENT_MODES: frozenset[str] = frozenset(get_args(PriceAdjustmentMode))
 
 
+def lake_root_for(path: Path) -> Path | None:
+    """Identify a managed lake path, including an alternate mount of that root.
+
+    Independent LEAN reference trees are outside the catalog. The lake's
+    structural mode directory identifies managed files even if its identity
+    marker is missing; losing the marker must never turn off admission.
+    """
+    return next((parent for parent in path.absolute().parents
+                 if parent.name in _ADJUSTMENT_MODES and parent.parent.name == _LAKE_DIR), None)
+
+
 def lake_subpath(price_adjustment_mode: PriceAdjustmentMode) -> PurePosixPath:
     """Return the lake root's path *relative to the write root*.
 

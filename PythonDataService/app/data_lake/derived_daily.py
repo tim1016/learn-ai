@@ -24,9 +24,9 @@ consistency only.
 This module also owns the *read* side of that reduction —
 ``read_minute_trade_bars`` and the two reductions built on it (the
 whole-history daily rollup and the factor file's reference closes) — so the
-minute-to-daily fold lives in one place. They are pure functions of
-bars and paths, with no catalog, lease or async concern, and every caller runs
-them off the event loop (#1943).
+minute-to-daily fold lives in one place. Reductions are pure functions of
+bars; file reads first require a committed catalog receipt (#2456). Every
+caller runs them off the event loop (#1943).
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from app.data_lake.adjustment_versions import verify_adjusted_payload
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.lean_writer import MinuteTradeBar, to_deci_cent
 from app.data_lake.types import ArtifactRecord
 from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
@@ -199,7 +200,7 @@ def read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeB
     The trading date is inferred from the file path (equity/<mkt>/minute/<sym>/<yyyymmdd>_trade.zip).
     """
     full_path = lake_root / Path(*PurePosixPath(file_path).parts)
-    payload = full_path.read_bytes()
+    payload = read_committed_bytes(full_path)
     verify_adjusted_payload(full_path, payload, full_path.parent.name.upper())
     with zipfile.ZipFile(io.BytesIO(payload)) as zf:
         names = zf.namelist()
@@ -307,7 +308,7 @@ def factor_file_reference_closes(
     for src in sorted(records, key=lambda r: r.trading_date or fallback_date):
         try:
             bars.extend(read_minute_trade_bars(src.file_path, lake_root))
-        except (OSError, zipfile.BadZipFile, ValueError, IndexError) as e:
+        except (LakeAdmissionError, OSError, zipfile.BadZipFile, ValueError, IndexError) as e:
             unreadable.append(MinuteBarReadError(src.file_path, e))
     return rth_daily_closes(bars), unreadable
 

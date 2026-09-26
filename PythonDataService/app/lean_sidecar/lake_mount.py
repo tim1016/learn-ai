@@ -409,20 +409,32 @@ def resolve_lake_artifacts(
         )
 
     from app.data_lake.adjustment_versions import AdjustmentVersionError, AdjustmentVersionGuard, adjusted_root_for
+    from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 
     guard = AdjustmentVersionGuard()
     try:
         for path in (*trade_zip_paths, *quote_zip_paths):
-            if adjusted_root_for(path) is not None:
-                guard.verify(path, path.read_bytes(), safe_symbol)
+            guard.verify(path, read_committed_bytes(path), safe_symbol)
         daily_zip_path = _require_daily_artifact_covering(lake_root, safe_symbol, required_sessions)
         if adjusted_root_for(daily_zip_path) is not None:
             guard.verify(daily_zip_path, daily_zip_path.read_bytes(), safe_symbol)
+    except LakeAdmissionError as exc:
+        raise LakeMountError(f"lake_artifact_not_committed: {exc}") from exc
     except AdjustmentVersionError as exc:
         raise LakeMountError(f"lake_adjustment_version_mismatch: {exc}") from exc
     market_hours_path, symbol_properties_path = require_lake_metadata(lake_root)
     log_lake_mode_input_divergences(lake_root)
     interest_rate_path = resolve_optional_lake_interest_rate(lake_root)
+
+    factor_file_paths = _existing_corporate_action_files(lake_root, safe_symbol, "factor")
+    map_file_paths = _existing_corporate_action_files(lake_root, safe_symbol, "map")
+    try:
+        for path in (market_hours_path, symbol_properties_path, *factor_file_paths, *map_file_paths):
+            read_committed_bytes(path)
+        if interest_rate_path is not None:
+            read_committed_bytes(interest_rate_path)
+    except LakeAdmissionError as exc:
+        raise LakeMountError(f"lake_artifact_not_committed: {exc}") from exc
 
     logger.info(
         "lean sidecar resolving lake artifacts",
@@ -442,8 +454,8 @@ def resolve_lake_artifacts(
         market_hours_path=market_hours_path,
         symbol_properties_path=symbol_properties_path,
         interest_rate_path=interest_rate_path,
-        factor_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "factor"),
-        map_file_paths=_existing_corporate_action_files(lake_root, safe_symbol, "map"),
+        factor_file_paths=factor_file_paths,
+        map_file_paths=map_file_paths,
     )
 
 

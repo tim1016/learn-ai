@@ -41,6 +41,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.data_lake.adjustment_versions import AdjustmentVersionGuard
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.lean_writer import to_deci_cent
 from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
@@ -275,6 +276,19 @@ class LeanMinuteDataReader:
                     break
             current += one_day
 
+    def iter_committed_dates(self, symbol: str, start: date, end: date) -> Iterator[date]:
+        """Probe captured sessions for chart fallback and study recapture.
+
+        Execution still walks physical dates and refuses an uncommitted file
+        in read_day; filtering there would silently shorten a running backtest.
+        """
+        for day in self.iter_dates(symbol, start, end):
+            try:
+                read_committed_bytes(self._zip_path(symbol, day))
+            except LakeAdmissionError:
+                continue
+            yield day
+
     def read_day(self, symbol: str, trading_date: date) -> list[TradeBar]:
         """Read all minute bars for a single trading day.
 
@@ -286,7 +300,7 @@ class LeanMinuteDataReader:
         zip_path = self._zip_path(symbol, trading_date)
         if not zip_path.exists():
             return []
-        payload = zip_path.read_bytes()
+        payload = read_committed_bytes(zip_path)
         self.adjustment_guard.verify(zip_path, payload, symbol)
         return self.parse_day_zip(payload, symbol, trading_date)
 
@@ -425,7 +439,7 @@ class LeanDailyDataReader:
     def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
         if not zip_path.exists():
             return []
-        payload = zip_path.read_bytes()
+        payload = read_committed_bytes(zip_path)
         self.adjustment_guard.verify(zip_path, payload, symbol)
         return self.parse_history_zip(payload, symbol)
 

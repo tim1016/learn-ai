@@ -29,6 +29,8 @@ from app.services import engine_backtest_service as engine_service
 from app.services.engine_backtest_service import execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
 
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 DAY_ONE = date(2026, 1, 5)  # Monday
 DAY_THREE = date(2026, 1, 7)
 SEEDED_DAYS = (DAY_ONE, date(2026, 1, 6), DAY_THREE)
