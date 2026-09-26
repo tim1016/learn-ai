@@ -85,6 +85,10 @@ async def _paginated_get(url: str, params: dict) -> list[dict]:
             resp = await client.get(next_url, params=req_params)
             resp.raise_for_status()
             payload = resp.json()
+            if not isinstance(payload, dict) or payload.get("status") != "OK":
+                raise ValueError("Polygon corporate-action response did not confirm status OK; version is unknown")
+            if payload.get("results") is not None and not isinstance(payload["results"], list):
+                raise ValueError("Polygon corporate-action results must be a list; version is unknown")
             out.extend(payload.get("results") or [])
             next_url = payload.get("next_url")
     return out

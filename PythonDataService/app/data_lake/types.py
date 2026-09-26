@@ -320,6 +320,7 @@ class ArtifactRecord(BaseModel):
     provider: str
     price_adjustment_mode: str | None
     data_contract_hash: str
+    corporate_action_version: str | None = None
     file_path: str
     file_sha256: str
     row_count: int | None
@@ -405,6 +406,7 @@ class DataAvailabilityResult(BaseModel):
     # every artifact below actually landed in, not just where on disk.
     data_root_id: UUID = Field(default_factory=active_root_id)
     data_availability_hash: str
+    corporate_action_versions: dict[str, str] = Field(default_factory=dict)
     artifacts: list[ArtifactRecord] = []
     failures: list[ArtifactFailure] = []
     skipped_non_sessions: list[NonSessionRecord] = []

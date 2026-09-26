@@ -1124,3 +1124,56 @@ async def test_a_current_daily_artifact_is_reused_without_reparsing_its_history(
 
     assert second.overall_status == "complete"
     assert builds == 0, "the daily payload was rebuilt to answer a cache hit"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_split_refresh_commits_one_version_to_the_real_catalog(clean_artifacts, pool, tmp_lake) -> None:
+    """Real claim/refresh/fenced publication, with a split between two captures (#2454)."""
+    from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+    respx.post("http://launcher-mock:8090/extract-metadata").mock(side_effect=_launcher_side_effect(tmp_lake))
+    _mock_corpus_actions_and_events()
+    split_route = respx.get(re.compile(r"https://api\.polygon\.io/v3/reference/splits.*"))
+    split_route.respond(200, json={"status": "OK", "results": []})
+    before, after = date(2024, 6, 7), date(2024, 6, 10)
+
+    def bars(day: date, price: float) -> dict:
+        payload = _polygon_ok_payload_date("NVDA", session_open_ms_utc(day))
+        for bar in payload["results"]:
+            bar.update(o=price, h=price, l=price, c=price, vw=price)
+        return payload
+
+    old_day = respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/NVDA/range/1/minute/2024-06-07.*")
+    old_day.respond(200, json=bars(before, 100.0))
+    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/NVDA/range/1/minute/2024-06-10.*").respond(
+        200, json=bars(after, 10.0),
+    )
+    request = _spec(["NVDA"]).model_copy(update={
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(before),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(before),
+        "price_adjustment_mode": "polygon_split_adjusted", "include_factor_files": False, "include_map_files": False,
+    })
+    first = await ensure_data(request)
+    assert first.overall_status == "complete", first.failures
+    split_route.respond(200, json={"status": "OK", "results": [
+        {"ticker": "NVDA", "execution_date": "2024-06-10", "split_from": 1, "split_to": 10},
+    ]})
+    old_day.respond(200, json=bars(before, 10.0))
+    latest = await ensure_data(request.model_copy(update={
+        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(after),
+        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(after),
+    }))
+    assert latest.overall_status == "complete", latest.failures
+    assert latest.corporate_action_versions != first.corporate_action_versions
+    records = await catalog_client.select_coverage_minute_bars(
+        "usa", "NVDA", "trade", None, None, price_adjustment_mode="polygon_split_adjusted",
+    )
+    assert {r.corporate_action_version for r in records} == {latest.corporate_action_versions["NVDA"]}
+    root = Path(latest.lean_data_root_path)
+    for reader in (LeanMinuteDataReader(root), LeanDailyDataReader(root)):
+        assert {b.close for b in reader.iter_bars("NVDA", before, after)} == {Decimal(10)}
+    reused = await ensure_data(request)
+    assert reused.corporate_action_versions == latest.corporate_action_versions
+    assert reused.fetched_artifact_count == 0

@@ -13,6 +13,7 @@ rather than in isolation.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import date
@@ -366,7 +367,25 @@ async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
 
     monkeypatch.setattr(service, "_resolve_lake_artifacts_or_refuse", _spy)
 
-    await service.run_trusted_sample(_request("adjusted-reaches-the-lake", adjusted=True))
+    from app.data_lake.adjustment_versions import current_snapshot_path, current_version
+    from app.utils.advisory_lock import try_advisory_file_lock
+
+    root = write_root / lake_subpath("polygon_split_adjusted")
+    launch = service.post_launch
+
+    async def check_basis_is_locked(request: LaunchRequest) -> LaunchResponse:
+        with try_advisory_file_lock(root / current_snapshot_path(SYMBOL)) as acquired:
+            assert not acquired, "an adjusted LEAN run must exclude a concurrent cache rebuild"
+        return await launch(request)
+
+    monkeypatch.setattr(service, "post_launch", check_basis_is_locked)
+    result = await service.run_trusted_sample(_request("adjusted-reaches-the-lake", adjusted=True))
+    assert _read_manifest(result.workspace_root)["staged_data"]["corporate_action_versions"] == {
+        SYMBOL: current_version(root, SYMBOL),
+    }
+    with try_advisory_file_lock(root / current_snapshot_path(SYMBOL)) as acquired:
+        assert acquired, "the basis lock must release after the run"
+
 
     assert resolved, "an adjusted run never consulted the lake"
     assert orchestrator.launch_requests
@@ -578,3 +597,27 @@ async def test_absent_interest_rate_file_still_produces_a_manifest(
     manifest = _read_manifest(result.workspace_root)
 
     assert manifest["staged_data"]["interest_rate_database"] is None
+
+
+@pytest.mark.asyncio
+async def test_adjusted_run_can_cancel_while_waiting_for_a_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+) -> None:
+    from app.config import settings
+    from app.data_lake.adjustment_versions import capture_lock
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    lake_root = write_root / lake_subpath("polygon_split_adjusted")
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    cancelled = False
+    async with capture_lock(lake_root, [SYMBOL], 1):
+        task = asyncio.create_task(service.run_trusted_sample(
+            _request("cancel-during-capture", adjusted=True), cancel_requested=lambda: cancelled,
+        ))
+        await asyncio.sleep(0)
+        cancelled = True
+        with pytest.raises(service.LeanRunCancelled):
+            await asyncio.wait_for(task, timeout=1)
+    assert orchestrator.launch_requests == []
+    assert not (orchestrator.artifacts_root / "cancel-during-capture").exists()

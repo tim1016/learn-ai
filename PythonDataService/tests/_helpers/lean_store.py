@@ -12,6 +12,12 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from app.data_lake.adjustment_versions import (
+    CorporateActionSnapshot,
+    adjusted_root_for,
+    adjustment_companion,
+    current_snapshot_path,
+)
 from app.engine.data.lean_format import write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 
@@ -45,9 +51,24 @@ def make_minute_bars(symbol: str, trading_date: date, *, count: int = 390) -> li
     return bars
 
 
+def record_fixture_adjustment(path: Path, symbol: str) -> None:
+    """Receipt synthetic adjusted fixtures against their known empty action set."""
+    root = adjusted_root_for(path)
+    if root is None:
+        return
+    snapshot = CorporateActionSnapshot((), (), date(2000, 1, 1))
+    current = root / current_snapshot_path(symbol)
+    current.parent.mkdir(parents=True, exist_ok=True)
+    current.write_bytes(snapshot.payload())
+    companion, payload = adjustment_companion(path.relative_to(root), path.read_bytes(), snapshot.version)
+    (root / companion).write_bytes(payload)
+
+
 def seed_store_day(root: Path, symbol: str, trading_date: date, *, count: int = 390) -> Path:
     """Write one deterministic day zip into a store root; returns the zip path."""
-    return write_lean_day_zip(root, symbol, trading_date, make_minute_bars(symbol, trading_date, count=count))
+    path = write_lean_day_zip(root, symbol, trading_date, make_minute_bars(symbol, trading_date, count=count))
+    record_fixture_adjustment(path, symbol)
+    return path
 
 
 def seed_pre_market_day(root: Path, symbol: str, trading_date: date) -> Path:
@@ -67,4 +88,6 @@ def seed_pre_market_day(root: Path, symbol: str, trading_date: date) -> Path:
         )
         for i in range(60)
     ]
-    return write_lean_day_zip(root, symbol, trading_date, bars)
+    path = write_lean_day_zip(root, symbol, trading_date, bars)
+    record_fixture_adjustment(path, symbol)
+    return path

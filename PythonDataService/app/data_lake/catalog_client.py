@@ -159,7 +159,7 @@ async def select_complete_metadata_artifact(
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
-               "DataContractHash", "FilePath",
+               "DataContractHash", "CorpActionRevision", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
                "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
                "DataRootId"
@@ -185,6 +185,7 @@ async def select_complete_metadata_artifact(
         provider=row["Provider"],
         price_adjustment_mode=row["PriceAdjustmentMode"],
         data_contract_hash=row["DataContractHash"],
+        corporate_action_version=row["CorpActionRevision"],
         file_path=row["FilePath"],
         file_sha256=row["file_sha256"],
         row_count=row["RowCount"],
@@ -211,7 +212,7 @@ async def select_complete_corp_action_artifact(
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
-               "DataContractHash", "FilePath",
+               "DataContractHash", "CorpActionRevision", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
                "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
                "DataRootId"
@@ -248,6 +249,7 @@ async def select_complete_corp_action_artifact(
         provider=row["Provider"],
         price_adjustment_mode=row["PriceAdjustmentMode"],
         data_contract_hash=row["DataContractHash"],
+        corporate_action_version=row["CorpActionRevision"],
         file_path=row["FilePath"],
         file_sha256=row["file_sha256"],
         row_count=row["RowCount"],
@@ -272,7 +274,7 @@ async def select_complete_aggregated_bar_artifact(
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
-               "DataContractHash", "FilePath",
+               "DataContractHash", "CorpActionRevision", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
                "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
                "DataRootId"
@@ -312,6 +314,7 @@ async def select_complete_aggregated_bar_artifact(
         provider=row["Provider"],
         price_adjustment_mode=row["PriceAdjustmentMode"],
         data_contract_hash=row["DataContractHash"],
+        corporate_action_version=row["CorpActionRevision"],
         file_path=row["FilePath"],
         file_sha256=row["file_sha256"],
         row_count=row["RowCount"],
@@ -331,13 +334,17 @@ async def select_coverage_minute_bars(
     *,
     price_adjustment_mode: str,
     data_root_id: UUID | None = None,
+    include_previously_published: bool = False,
 ) -> list[ArtifactRecord]:
     """Return all complete minute-bar artifacts for the given window and
     adjustment mode.
 
     Used by ensure_data to compute which dates already exist on disk before
-    deciding what to fetch. In Slice 1a there are no rows; this returns an
-    empty list and exercises the schema/query end-to-end.
+    deciding what to fetch. ``include_previously_published`` is only for
+    rebuilding adjusted history: also return prior publication receipts whose
+    refresh failed or is in progress. They are rebuild obligations, never
+    readable coverage. Keeping them prevents a retry from dropping older days
+    out of the daily rollup after a failed corporate-action refresh.
 
     ``start_trading_date``/``end_trading_date`` may both be ``None`` for an
     unbounded, symbol-wide query — the daily-trade rollup's source-of-truth
@@ -362,7 +369,7 @@ async def select_coverage_minute_bars(
     query = """
         SELECT "Id", "ArtifactKind", "Market", "Symbol", "TradingDate",
                "Resolution", "DataType", "Provider", "PriceAdjustmentMode",
-               "DataContractHash", "FilePath",
+               "DataContractHash", "CorpActionRevision", "FilePath",
                COALESCE("FileSha256", '') AS file_sha256,
                "RowCount", "FirstBarStartMs", "LastBarStartMs", "FileSizeBytes",
                "DataRootId"
@@ -376,12 +383,13 @@ async def select_coverage_minute_bars(
            AND ($5::date IS NULL OR "TradingDate" <= $5)
            AND "PriceAdjustmentMode" = $6
            AND "DataRootId" = $7
-           AND "Status" = 'complete'
+           AND ("Status" = 'complete' OR ($8::boolean AND "FileSha256" IS NOT NULL))
          ORDER BY "TradingDate"
     """
     async with connection() as conn:
         rows = await conn.fetch(
-            query, market, symbol, data_type, start_trading_date, end_trading_date, price_adjustment_mode, root_id
+            query, market, symbol, data_type, start_trading_date, end_trading_date, price_adjustment_mode, root_id,
+            include_previously_published,
         )
     return [
         ArtifactRecord(
@@ -395,6 +403,7 @@ async def select_coverage_minute_bars(
             provider=r["Provider"],
             price_adjustment_mode=r["PriceAdjustmentMode"],
             data_contract_hash=r["DataContractHash"],
+            corporate_action_version=r["CorpActionRevision"],
             file_path=r["FilePath"],
             file_sha256=r["file_sha256"],
             row_count=r["RowCount"],
@@ -411,7 +420,7 @@ async def select_coverage_minute_bars(
 class MinuteBarLeaseStatus:
     """Current row state for one minute-bar claim, independent of Status.
 
-    ``select_coverage_minute_bars`` above only ever answers "is it
+    ``select_coverage_minute_bars`` above normally answers "is it
     complete?" — the caller can't tell an in-flight claim from one that
     has already permanently failed. This lets a caller (the backfill
     job's lease-wait loop, #1836) distinguish the two without re-running
@@ -785,6 +794,7 @@ _COMPLETE_ARTIFACT_SQL = """
            "FileSha256" = $6,
            "CompletedAtMs" = $7,
            "DataContractHash" = COALESCE($8, "DataContractHash"),
+           "CorpActionRevision" = COALESCE($10, "CorpActionRevision"),
            "LeaseOwner" = NULL,
            "LeaseExpiresAtMs" = NULL,
            "LastError" = NULL,
@@ -809,6 +819,7 @@ async def complete_artifact(
     file_sha256: str,
     lease_generation: int,
     data_contract_hash: str | None = None,
+    corporate_action_version: str | None = None,
 ) -> bool:
     """Transition an artifact from 'fetching' \u2192 'complete' with byte metadata.
 
@@ -859,6 +870,7 @@ async def complete_artifact(
             now_ms,
             data_contract_hash,
             lease_generation,
+            corporate_action_version,
         )
     return _rows_affected(result) > 0
 
@@ -875,6 +887,7 @@ async def publish_under_lease(
     file_size_bytes: int,
     file_sha256: str,
     data_contract_hash: str | None = None,
+    corporate_action_version: str | None = None,
 ) -> None:
     """Publish one artifact: authorize, rename, and record, atomically w.r.t.
     every other writer of the same row (issue #1888).
@@ -960,6 +973,7 @@ async def publish_under_lease(
             now_ms,
             data_contract_hash,
             lease_generation,
+            corporate_action_version,
         )
         if _rows_affected(result) != 1:
             # Unreachable while the row lock is held -- the predicate was just

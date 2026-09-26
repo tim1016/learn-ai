@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.data_lake.adjustment_versions import AdjustmentVersionGuard
 from app.data_lake.lean_writer import to_deci_cent
 from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
@@ -234,6 +235,7 @@ class LeanMinuteDataReader:
             if not roots:
                 raise ValueError("LeanMinuteDataReader requires at least one root")
         self.data_roots: list[Path] = roots
+        self.adjustment_guard = AdjustmentVersionGuard()
         # Preserved for backward compatibility with any code that reads the
         # ``data_root`` attribute (tests, logging). Points at the first root.
         self.data_root: Path = roots[0]
@@ -284,7 +286,9 @@ class LeanMinuteDataReader:
         zip_path = self._zip_path(symbol, trading_date)
         if not zip_path.exists():
             return []
-        return self.parse_day_zip(zip_path.read_bytes(), symbol, trading_date)
+        payload = zip_path.read_bytes()
+        self.adjustment_guard.verify(zip_path, payload, symbol)
+        return self.parse_day_zip(payload, symbol, trading_date)
 
     def parse_day_zip(self, payload: bytes, symbol: str, trading_date: date) -> list[TradeBar]:
         """Decode one day's zip bytes under this reader's session filter.
@@ -408,6 +412,7 @@ class LeanDailyDataReader:
             if not roots:
                 raise ValueError("LeanDailyDataReader requires at least one root")
         self.data_roots: list[Path] = roots
+        self.adjustment_guard = AdjustmentVersionGuard()
         self.data_root: Path = roots[0]
         # Cache of parsed history per symbol: {symbol_upper: list[TradeBar]}.
         # Lazily populated on first access and kept for the life of the
@@ -420,7 +425,9 @@ class LeanDailyDataReader:
     def _read_zip(self, zip_path: Path, symbol: str) -> list[TradeBar]:
         if not zip_path.exists():
             return []
-        return self.parse_history_zip(zip_path.read_bytes(), symbol)
+        payload = zip_path.read_bytes()
+        self.adjustment_guard.verify(zip_path, payload, symbol)
+        return self.parse_history_zip(payload, symbol)
 
     def parse_history_zip(self, payload: bytes, symbol: str) -> list[TradeBar]:
         """Decode a per-symbol daily history zip from bytes (see ``LeanMinuteDataReader.parse_day_zip``)."""

@@ -226,6 +226,7 @@ async def publish_artifact(
     first_bar_start_ms: int,
     last_bar_start_ms: int,
     data_contract_hash: str | None = None,
+    corporate_action_version: str | None = None,
     companions: Sequence[tuple[PurePosixPath, bytes]] = (),
 ) -> str:
     """Publish one artifact under its catalog lease (issue #1888).
@@ -295,6 +296,7 @@ async def publish_artifact(
             file_size_bytes=len(content),
             file_sha256=sha,
             data_contract_hash=data_contract_hash,
+            corporate_action_version=corporate_action_version,
         )
     finally:
         # promote_staged renames a staged path away on success, so there is

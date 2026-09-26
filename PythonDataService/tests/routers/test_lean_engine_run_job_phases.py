@@ -32,7 +32,7 @@ import pytest
 from app.jobs.phases import JOB_PHASES, LEAN_ENGINE_RUN_PHASES, friendly
 from app.lean_sidecar.normalized_parser import NormalizedOrderEvent, NormalizedResult
 from app.routers.jobs import LeanEngineRunJobRequest, start_lean_engine_run_job
-from app.services.lean_sidecar_service import TrustedRunResult, run_trusted_sample
+from app.services.lean_sidecar_service import TrustedRunResult, _run_trusted_sample, run_trusted_sample
 
 EXPECTED_PHASE_IDS = (
     "staging_data",
@@ -78,7 +78,9 @@ class TestLeanEngineRunPhaseRegistry:
 
 class TestRunTrustedSamplePhaseSequence:
     def test_emit_phase_calls_match_expected_sequence(self) -> None:
-        source = inspect.getsource(run_trusted_sample)
+        # The public wrapper holds the adjusted-data lock; the orchestrator
+        # inside it still owns the phase sequence.
+        source = inspect.getsource(_run_trusted_sample)
         emitted = re.findall(r'_emit_phase\("([a-z_]+)"\)', source)
         assert emitted == list(EXPECTED_PHASE_IDS), (
             f"phase emission sequence drifted from the registry; "

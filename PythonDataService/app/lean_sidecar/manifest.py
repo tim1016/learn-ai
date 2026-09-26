@@ -121,6 +121,7 @@ class StagedDataFile:
 class StagedDataManifest:
     """Hashes for every staged file the LEAN container can read."""
 
+    corporate_action_versions: dict[str, str] = field(default_factory=dict)
     bar_zips: tuple[StagedDataFile, ...] = ()
     factor_files: tuple[StagedDataFile, ...] = ()
     map_files: tuple[StagedDataFile, ...] = ()
@@ -276,7 +277,10 @@ def _as_jsonable(value: Any) -> Any:
     int64-ms-UTC rule applies to every persisted timestamp.
     """
     if hasattr(value, "__dataclass_fields__"):
-        return {item.name: _as_jsonable(getattr(value, item.name)) for item in fields(value)}
+        return {
+            item.name: _as_jsonable(getattr(value, item.name)) for item in fields(value)
+            if item.name != "corporate_action_versions" or getattr(value, item.name)
+        }
     if isinstance(value, Mapping):
         return {k: _as_jsonable(v) for k, v in value.items()}
     if isinstance(value, tuple):

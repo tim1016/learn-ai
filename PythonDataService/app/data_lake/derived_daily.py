@@ -42,6 +42,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from app.data_lake.adjustment_versions import verify_adjusted_payload
 from app.data_lake.lean_writer import MinuteTradeBar, to_deci_cent
 from app.data_lake.types import ArtifactRecord
 from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
@@ -198,7 +199,9 @@ def read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeB
     The trading date is inferred from the file path (equity/<mkt>/minute/<sym>/<yyyymmdd>_trade.zip).
     """
     full_path = lake_root / Path(*PurePosixPath(file_path).parts)
-    with zipfile.ZipFile(full_path) as zf:
+    payload = full_path.read_bytes()
+    verify_adjusted_payload(full_path, payload, full_path.parent.name.upper())
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
         names = zf.namelist()
         if not names:
             return []
