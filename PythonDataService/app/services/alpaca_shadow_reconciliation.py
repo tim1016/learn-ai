@@ -73,6 +73,7 @@ SessionState = Literal[
     "sweep_opened_late",
     "run_not_covering",
     "twin_diverged",
+    "execution_evidence_missing",
     "not_evaluable",
 ]
 
@@ -124,6 +125,7 @@ class TwinDayReconciliation:
     # the module docstring's "Not proven" — positional pairing cannot see it.
     max_fill_time_drift_ms: int | None
     fill_price_atol: Decimal
+    execution_evidence_missing: tuple[str, ...] = ()
 
     @property
     def gating(self) -> tuple[TwinDivergence, ...]:
@@ -131,7 +133,7 @@ class TwinDayReconciliation:
 
     @property
     def passed(self) -> bool:
-        return not self.gating
+        return not self.gating and not self.execution_evidence_missing
 
     def report_sha256(self) -> str:
         """A content hash of the whole comparison — what the receipt names.
@@ -247,6 +249,12 @@ class FillSource(Protocol):
         """
         ...
 
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[str, ...]:
+        """Canceled reducing orders whose execution window had no retained bars."""
+        ...
+
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         """Every run this authority recorded for one instance, oldest first."""
         ...
@@ -329,6 +337,13 @@ class EconomicFillSource:
                 f"{strategy_instance_id}: execution coverage is {snapshot.execution_coverage}"
             )
         self._coverage_proven.add(strategy_instance_id)
+
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[str, ...]:
+        return self._reader.missing_exit_execution_evidence(
+            strategy_instance_id=strategy_instance_id, from_ms=from_ms, to_ms=to_ms,
+        )
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         return self._reader.runs_for_strategy(strategy_instance_id)
@@ -572,6 +587,21 @@ def _judge_day(
             run_id=run.run_id,
         )
     try:
+        missing = shadow_source.missing_exit_execution_evidence(
+            strategy_instance_id=strategy_instance_id,
+            from_ms=et_midnight_ms(day), to_ms=et_day_end_ms(day),
+        )
+        if missing:
+            reconciliation = TwinDayReconciliation(
+                session_open_ms=calendar_open_ms, strategy_instance_id=strategy_instance_id,
+                twin_strategy_instance_id=twin_strategy_instance_id, shadow_fills=(), twin_fills=(),
+                divergences=(), max_fill_price_drift=None, max_fill_time_drift_ms=None,
+                fill_price_atol=FILL_PRICE_ATOL, execution_evidence_missing=missing,
+            )
+            return verdict(
+                "execution_evidence_missing", "No after-hours evidence for the shadow exit.",
+                run_id=run.run_id, reconciliation=reconciliation,
+            )
         shadow_fills = read_twin_fills(
             shadow_source,
             strategy_instance_id=strategy_instance_id,

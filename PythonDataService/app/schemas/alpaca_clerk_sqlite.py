@@ -216,6 +216,17 @@ class ProjectedHoldResponse(BaseModel):
     evidence_refs: tuple[str, ...]
 
 
+class RecoveryStatusResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    kind: Literal["working", "on_hold", "allowed_now", "allowed_from", "broker_unreachable", "stuck", "unknown"]
+    reason_code: str
+    explanation: str
+    last_checked_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    stuck_since_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    allowed_from_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class ProjectedUncertaintyResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
@@ -244,6 +255,7 @@ class ProjectedUncertaintyResponse(BaseModel):
     # The episode's recorded facts could not be read: its next attempt is
     # unknown, not unscheduled (#2440 review). The row itself still projects.
     facts_unreadable: bool = False
+    recovery_status: RecoveryStatusResponse | None = None
 
 
 class ProjectedReconciliationResponse(BaseModel):
@@ -353,6 +365,28 @@ class ProjectionGuidanceResponse(BaseModel):
     next_attempt_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     exit_working: bool = False
     facts_unreadable: bool = False
+    recovery_status: RecoveryStatusResponse | None = None
+
+
+class ExposureNoticeView(BaseModel):
+    """What an abnormal run end left behind at the broker (#2410).
+
+    An ended run manages nothing, so the refusal says so whenever something
+    could still move money: ``position_unmanaged`` for a nonzero position the
+    Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
+    currently vouch for that position, and ``entry_order_working`` for an entry
+    order still working that can open one. Nothing is cancelled or flattened on
+    the operator's behalf.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["position_unmanaged", "position_unverified", "entry_order_working"]
+    label: str
+    explanation: str
+    strategy_instance_id: str | None = None
+    symbol: str | None = None
+    action_label: str = "Open bot"
 
 
 class ClerkProjectionResponse(BaseModel):
@@ -360,6 +394,7 @@ class ClerkProjectionResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    exposure_notices: list[ExposureNoticeView] = Field(default_factory=list)
     account_id: str
     strategy_instance_id: str | None
     authority_generation: int

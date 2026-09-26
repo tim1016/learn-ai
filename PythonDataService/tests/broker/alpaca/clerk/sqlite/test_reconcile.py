@@ -17,6 +17,7 @@ import json
 import logging
 import threading
 from collections.abc import Iterator
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -85,6 +86,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.schemas.market_liveness import TopOfBookQuote
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
@@ -2618,10 +2620,10 @@ async def test_watchdog_escalates_a_permanently_flat_broker_without_submitting(
         )
 
     with caplog.at_level(logging.WARNING):
-        for _ in range(policy.max_count + 1):
+        for _ in range(policy.after_ms * (policy.max_count + 1) // 15_000):
             await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
             assert _stuck() is None
-            clock.advance(policy.after_ms)
+            clock.advance(15_000)
         await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
 
     assert _stuck() is not None
@@ -2681,6 +2683,132 @@ async def test_watchdog_defers_outside_the_regular_session_when_nothing_can_be_p
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=WATCHDOG_SID,
     ) is not None
+
+
+@pytest.mark.parametrize("interruption", [
+    "broker_outage", "broker_outage_short", "restart", "restart_short",
+    "mirror_rebuild", "unobserved_gap",
+])
+async def test_exit_failure_budget_survives_interruption_without_counting_downtime(
+    tmp_path: Path, interruption: str,
+) -> None:
+    """#2504: three observed minutes survive, but ten unobserved minutes do not count."""
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000,
+    )
+    repo.register_strategy_instance(strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID, lifecycle_run_id=WATCHDOG_RUN)
+    trade = _FakeTrade()
+
+    async def check_failure() -> None:
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+    def stuck() -> dict[str, Any] | None:
+        return repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE,
+            strategy_instance_id=WATCHDOG_SID,
+        )
+
+    try:
+        await _held_position(repo)
+        episode = _aged_exit_not_flat(repo, clock)
+        await check_failure()
+        for _ in range(12):
+            clock.advance(15_000)
+            await check_failure()
+        assert stuck() is None
+
+        downtime_ms = 15_000 if interruption.endswith("_short") else 600_000
+        if interruption in {"restart", "restart_short", "mirror_rebuild"}:
+            db_path = repo.db_path
+            repo.close()
+            clock.advance(downtime_ms)
+            if interruption == "mirror_rebuild":
+                db_path.rename(db_path.with_suffix(".db.damaged"))
+                repo = ClerkSqliteRepository.rebuild_from_mirror(
+                    account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock,
+                )
+            else:
+                repo = ClerkSqliteRepository.open(
+                    account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000,
+                )
+        else:
+            if interruption.startswith("broker_outage"):
+                last_checked_ms = clock()
+                clock.advance(5_000)
+                await reconcile_account(
+                    repo, read=_FakeRead(error=BrokerUnavailable("broker down")),
+                    trade=trade, pricing=UNPRICEABLE_RECOVERY,
+                )
+                observation = repo.last_strategy_transition(
+                    strategy_instance_id=WATCHDOG_SID, transition_kind="EXIT_RECOVERY_EVALUATED",
+                )
+                assert observation is not None
+                assert json.loads(observation["facts_json"])["last_checked_at_ms"] == last_checked_ms
+            _walk_clock_to(repo, clock() + downtime_ms)
+        await check_failure()
+        assert stuck() is None
+
+        for _ in range(19):
+            clock.advance(15_000)
+            await check_failure()
+            assert stuck() is None
+        clock.advance(15_000)
+        await check_failure()
+        assert stuck() is not None
+        assert trade.submit_calls == []
+        current = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
+            strategy_instance_id=WATCHDOG_SID,
+        )
+        assert current is not None
+        assert current["uncertainty_id"] == episode["uncertainty_id"]
+        assert current["observed_at_ms"] == episode["observed_at_ms"]
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("day", [date(2023, 11, 17), date(2023, 11, 24)])
+async def test_exit_failure_budget_pauses_across_weekend_and_early_close(
+    clocked_repo, day: date,
+) -> None:
+    """Two observed minutes before close leave six, even across a weekend."""
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _aged_exit_not_flat(repo, clock)
+    close_ms = session_window_for_date(day).close_ms_utc
+    _walk_clock_to(repo, close_ms - 180_000)
+    trade = _FakeTrade()
+
+    async def check() -> None:
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+    def stuck() -> dict[str, Any] | None:
+        return repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE,
+            strategy_instance_id=WATCHDOG_SID,
+        )
+
+    await check()
+    for _ in range(8):
+        clock.advance(15_000)
+        await check()
+    _walk_clock_to(repo, close_ms + 15_000)
+    await check()
+    assert stuck() is None
+    next_open_ms = session_window_for_date(next_trading_day(day)).open_ms_utc
+    _walk_clock_to(repo, next_open_ms)
+    await check()
+    assert stuck() is None
+    for _ in range(23):
+        clock.advance(15_000)
+        await check()
+        assert stuck() is None
+    clock.advance(15_000)
+    await check()
+    assert stuck() is not None
+    assert trade.submit_calls == []
 
 
 async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
@@ -2838,7 +2966,7 @@ async def test_watchdog_burns_no_attempt_on_a_redrive_the_send_would_refuse(
     _assert_redrive_deferred(repo, episode, trade)
 
 
-async def test_watchdog_sends_the_market_leg_a_moment_before_the_regular_open(clocked_repo) -> None:
+async def test_watchdog_waits_for_the_actual_regular_open(clocked_repo) -> None:
     """09:29:55: the market leg reaches Alpaca inside the regular session, so it is sent.
 
     Judged at now it was a pre-market instant, and an authority with no
@@ -2855,6 +2983,13 @@ async def test_watchdog_sends_the_market_leg_a_moment_before_the_regular_open(cl
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
         pricing=UNPRICEABLE_RECOVERY,
+    )
+
+    _assert_redrive_deferred(repo, episode, trade)
+    _walk_clock_to(repo, repo.clock() + 5_000)
+    await reconcile_account(
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=trade, pricing=UNPRICEABLE_RECOVERY,
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
@@ -2916,6 +3051,33 @@ async def test_reconcile_account_escalates_exit_stuck_after_redrive_cap(
         strategy_instance_id=WATCHDOG_SID,
     )
     assert stuck is not None  # durable, operator-visible escalation
+
+
+async def test_working_own_exit_never_spends_failure_time_or_escalates(
+    clocked_repo, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A working reduction remains a hold even when no retry budget remains."""
+    repo, clock = clocked_repo
+    entry_ref = await _held_position(repo)
+    _aged_exit_not_flat(repo, clock)
+    accepted = accept_exit(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
+        decision_id="own-exit", lifecycle_run_id=WATCHDOG_RUN, entry_order_ref=entry_ref,
+    )
+    _set_exit_not_flat_max_redrives(monkeypatch, 0)
+    trade = _FakeTrade()
+    for _ in range(40):
+        await reconcile_account(
+            repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+            trade=trade, pricing=UNPRICEABLE_RECOVERY,
+        )
+        assert repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE,
+            strategy_instance_id=WATCHDOG_SID,
+        ) is None
+        clock.advance(15_000)
+    assert len(trade.submit_calls) == 1
+    assert repo.active_exit_for_strategy(WATCHDOG_SID).effect_operation_id == accepted.effect_operation_id
 
 
 async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> None:
@@ -3031,8 +3193,8 @@ async def test_watchdog_redrive_count_survives_episode_refresh(
     to observed_at_ms it would reset to zero, so the watchdog would re-mint
     `exit-redrive-<token>-1` forever and never escalate. With the count anchored
     to the episode identity, one redrive followed by a refresh must still be
-    counted, so the next pass escalates. (MAX=1 isolates the count: the
-    escalation branch runs before the active-exit entry filter.)"""
+    counted, so the next pass escalates after the broker confirms the failed
+    reduction. An order still working is a hold, never an exhausted retry."""
     repo, clock = clocked_repo
     await _held_position(repo)
     _raise_exit_not_flat(repo, attributed_qty=10.0)
@@ -3058,10 +3220,15 @@ async def test_watchdog_redrive_count_survives_episode_refresh(
         strategy_instance_id=WATCHDOG_SID,
     ) is None
 
-    # The redrive completes non-flat: exit_resolution refreshes the same episode
-    # with the new reducing order_ref, moving observed_at_ms forward.
+    # Broker-confirmed rejection ends the redrive and refreshes its episode.
     clock.advance(5_000)
-    _raise_exit_not_flat(repo, attributed_qty=10.0, evidence_ref="reducing-redrive-1")
+    reducing = next(order for order in repo.orders_for_strategy(WATCHDOG_SID) if order.role == "REDUCING")
+    await reconcile_account(
+        repo, read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
+        trade=_FakeTrade(lookup_result=_broker_order(
+            reducing.order_ref, status="rejected", side="sell", quantity=10.0,
+        )), pricing=UNPRICEABLE_RECOVERY,
+    )
     refreshed = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT",
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
@@ -3695,3 +3862,43 @@ async def test_absence_void_rechecks_broker_identity_before_folding(
     assert reads["n"] >= 2  # the fold re-read the identity
     effect = repo.effect_operation(inner_order(order_ref).effect_operation_id)  # type: ignore[union-attr]
     assert effect is not None and effect.state == "unknown"  # not voided as absent
+
+
+@pytest.mark.parametrize("final_failure", [False, True])
+async def test_failed_snapshot_does_not_advance_recovery_check_or_failure_budget(clocked_repo, final_failure: bool) -> None:
+    from app.broker.alpaca.clerk.sqlite.exit_recovery import latest_exit_recovery
+    from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    _walk_clock_to(repo, repo.clock() + _exit_not_flat_redrive_policy().after_ms + 1)
+    await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=WATCHDOG_SID,
+    )
+    assert episode is not None
+    before = latest_exit_recovery(repo, strategy_instance_id=WATCHDOG_SID, uncertainty_id=episode["uncertainty_id"])
+    clock.advance(15_000)
+
+    class UnavailableSnapshot(_FakeRead):
+        calls = 0
+
+        async def list_positions(self):
+            self.calls += 1
+            if self.calls == (2 if final_failure else 1):
+                raise BrokerUnavailable("broker connection unavailable")
+            return []
+
+    result = await reconcile_account(repo, read=UnavailableSnapshot(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+    assert result.verdict == "stale"
+    after = latest_exit_recovery(repo, strategy_instance_id=WATCHDOG_SID, uncertainty_id=episode["uncertainty_id"])
+    assert after.last_checked_at_ms == before.last_checked_at_ms
+    assert after.failure_elapsed_ms == before.failure_elapsed_ms
+    reader = SqliteClerkProjectionReader.from_repository(repo, pricing=UNPRICEABLE_RECOVERY)
+    try:
+        statuses = [item.recovery_status for item in reader.bot_snapshot(WATCHDOG_SID).uncertainties if item.reason_code == EXIT_NOT_FLAT_REASON_CODE]
+        assert statuses[0].kind == "broker_unreachable"
+        assert statuses[0].last_checked_at_ms == before.last_checked_at_ms
+    finally:
+        reader.close()

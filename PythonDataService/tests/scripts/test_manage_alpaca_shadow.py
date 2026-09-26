@@ -404,6 +404,7 @@ def test_the_printed_report_names_its_clock_and_not_the_two_order_books(
         "max_fill_price_drift",
         "max_fill_time_drift_ms",
         "fill_price_atol",
+        "execution_evidence_missing",
         "report_sha256",
     }
 

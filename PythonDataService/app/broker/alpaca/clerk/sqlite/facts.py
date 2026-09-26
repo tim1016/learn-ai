@@ -37,7 +37,7 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -50,6 +50,34 @@ if TYPE_CHECKING:
     from app.schemas.market_liveness import TopOfBookQuote
 
 FACTS_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class ExitRecoveryEvaluatedFacts:
+    """One episode's observed recovery outcome and durable failure-time budget."""
+
+    uncertainty_id: str
+    outcome: Literal["failure", "hold", "accepted"]
+    reason_code: str
+    last_checked_at_ms: int | None
+    first_failure_at_ms: int | None
+    failure_elapsed_ms: int
+    lease_owner: str
+    allowed_from_ms: int | None = None
+    explanation: str = ""
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExitRecoveryEvaluatedFacts:
+        facts = cls(**json.loads(facts_json))
+        if facts.outcome not in {"failure", "hold", "accepted"}:
+            raise ValueError("Unknown exit recovery outcome")
+        for value in (facts.last_checked_at_ms, facts.failure_elapsed_ms, facts.first_failure_at_ms, facts.allowed_from_ms):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("Exit recovery times must be non-negative integer milliseconds")
+        return facts
 
 
 @dataclass(frozen=True)

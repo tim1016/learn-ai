@@ -21,6 +21,89 @@ When a bot crashed or was stopped while holding a position, the operator had no 
 
 **Clarified 2026-09-25 (PR #2495 follow-up, #2493):** `next_attempt_at_ms` means the earliest session-eligible retry after the episode's age gate. Proven custody and a sweep pass are still required. A usable quote is required only outside the regular session; regular-session retries are market orders and read no quote. Closed sessions project to the next permitted opening; on reopening the displayed timestamp is anchored to that trading day's eligibility, never yesterday's expired time. Until #2501 records actual retry reasons, the UI says only `Automatic retry: allowed from <time ET>`. No timer infers a waiting status. Working EXITs and stopped automatic retries keep their existing precedence. Projection readers must explicitly carry the same recovery-pricing policy as the authority they describe.
 
+### Exit obligation lifecycle amendment (2026-09-25, PRD #2504)
+
+The owner approved persisting **accumulated regular-session failure time**,
+rather than measuring eight minutes from a first-refusal timestamp. Holds,
+broker outages and Clerk downtime pause the budget without erasing time
+already spent. The original first-failure time remains audit evidence, not
+the clock that drives escalation. A submitted recovery order clears that refusal budget while its outcome
+is pending; an unsent hold does not reset it; a resolved episode cannot lend its budget to a later episode.
+
+Recovery observations belong in separate custody transitions. They must not
+refresh `EXIT_NOT_FLAT` itself, change its original raise time, or continually
+restart its retry-age gate. A restart requires a fresh observation before any
+additional time can accrue. Only intervals bounded by consecutive, current
+regular-session failure observations may count; no process may infer that a
+failure continued throughout an unobserved gap.
+
+The continuity bound is 30 seconds (two normal reconciliation intervals).
+A longer gap adds no time, even if the same writer returns with the same
+failure. Both observations must be inside the same canonical regular session;
+the calendar therefore handles early closes, weekends and holidays. The
+separate `EXIT_RECOVERY_EVALUATED` facts retain the episode identity, writer,
+outcome, reason, check time, first-failure time and accumulated duration.
+They replay from the mirror without changing the original uncertainty.
+
+This amendment supersedes the earlier 2026-09-25 projection-only retry
+clarification above. `RecoveryStatus` is the last actual Clerk evaluation:
+`working`, `on_hold`, `allowed_now`, `allowed_from`, `broker_unreachable`,
+`stuck`, or `unknown`. It includes the reason and explanation, the last check,
+the original `EXIT_NOT_FLAT` raise time, and a future session eligibility time
+when one is known. Reads never infer broker failure from elapsed time. A
+restart starts at unknown until a fresh check; incomplete or stale sweeps do
+not advance the last successful check or spend failure time. Recovery-only
+observations commit after the pass's final broker snapshot succeeds.
+
+The canonical calendar owns actual session opens and early closes. The
+five-second transport guard protects closes only: it never authorizes a
+03:59:55 pre-market send or a 09:29:55 market send. Every reducing create and
+resubmit checks live market evidence on the event loop. A retained positive
+IBKR halt continues to hold an Alpaca exit until explicitly cleared (ADR
+0067), even if the surrounding liveness fact is unknown. A fresh emergency
+market close during scheduled RTH also holds; unknown or stale evidence
+without a positive halt otherwise falls back to the calendar. Synthetic
+execution uses the same calendar with the runner's injected clock.
+
+A Clerk-priced extended-hours DAY limit still working at regular open is
+canceled by its existing EXIT. Only exact terminal evidence releases its
+custody. The Clerk reads the broker's remaining position after cancellation,
+then accepts a new market EXIT with a new episode-derived identity. Partial
+fills reduce its quantity; a full fill racing cancellation suppresses it;
+an uncertain cancellation cannot create a second live order. An operator's
+confirmed safe-flatten limit is never replaced automatically. No automatic
+limit is chased repeatedly within its extended session.
+
+An own working EXIT is a hold. Only submitted, terminal, non-flat regular
+market redrives consume the three-attempt budget. Extended-session attempts,
+closed sessions, missing or unusable pricing, halts, and outages do not
+consume that count. The independent eight-minute refusal budget counts only
+observed regular-session failures and the escalation names the actual cause.
+
+### Abnormal run endings and shadow evidence (PRD #2504)
+
+Every abnormal terminal run outcome, including feed loss, missed decision bars,
+startup refusal and crash, now projects reconciled exposure independently of the
+startup phase. A nonzero position reads “Bot is not managing this position”; a
+missing or stale reconciliation reads “Position could not be verified; check the
+broker”. A working entry has its own warning. These facts reach the bot panel,
+account desk and lane attention bell; Flatten opens the existing guarded recovery
+flow. An operator Stop retains its own explanation.
+
+The 2026-09-25 holding-Resume allowance bypass is superseded. Carry-over remains
+disabled; a held position requires Flatten before Resume. There is no automatic
+exit on run death, no broker-side protective stop (the contract supports market
+and limit orders only; stops do not trade in extended hours), and no carry-over
+without a per-strategy replay-equivalence proof.
+
+Shadow cancellation records `untouched` when eligible later bars existed and
+`no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
+order to `execution_evidence_missing`, counting neither a pass nor a divergence.
+The report names the affected orders. Expiry uses the canonical after-hours close,
+including early closes. Recovery binds only a retained bar from its send session;
+otherwise it refuses cleanly. The completed decision bar never fills a resting
+extended-hours limit.
+
 ## Consequences
 
 - Every attributed position now has a presented, executable, Clerk-custody path to flat; the operator never has to intervene at the broker out-of-band (F18 closed).

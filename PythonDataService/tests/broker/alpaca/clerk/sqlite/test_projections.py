@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, Rec
 from app.broker.alpaca.clerk.sqlite import projections
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.exit_recovery import observe_exit_recovery
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.projections import (
@@ -317,7 +318,7 @@ def test_one_unreadable_uncertainty_is_projected_as_unreadable_without_failing_t
     assert snapshot is not None
     by_reason = {item.reason_code: item for item in snapshot.uncertainties}
     readable = by_reason["EXIT_NOT_FLAT"]
-    assert (readable.next_attempt_at_ms, readable.facts_unreadable) == (1_788_422_400_000, False)
+    assert (readable.next_attempt_at_ms, readable.facts_unreadable) == (None, False)
     unreadable = by_reason["ORDER_OUTCOME_UNKNOWN"]
     assert (unreadable.next_attempt_at_ms, unreadable.facts_unreadable) == (None, True)
     assert unreadable.headline == "SPY order outcome is unknown"
@@ -347,31 +348,33 @@ def _raise_exit_not_flat(repo: ClerkSqliteRepository, sid: str, *, next_attempt_
     )
 
 
-def test_a_retry_projects_eligibility_without_inventing_a_waiting_state(tmp_path: Path) -> None:
-    """Past and future eligibility are times, without an inferred retry status."""
+def _observe_retry(repo: ClerkSqliteRepository, sid: str, allowed_from_ms: int | None) -> None:
+    episode = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=sid)
+    assert episode is not None
+    observe_exit_recovery(
+        repo, strategy_instance_id=sid, uncertainty_id=episode["uncertainty_id"],
+        outcome="hold", reason_code="NO_SESSION_OPEN", allowed_from_ms=allowed_from_ms,
+        explanation="The next session has not opened.",
+    )
+
+
+@pytest.mark.parametrize("offset,kind", [(3_600_000, "allowed_from"), (-60_000, "allowed_now")])
+def test_recovery_eligibility_is_evaluated_and_does_not_show_a_past_due_time(tmp_path: Path, offset: int, kind: str) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    future_at_ms, due_at_ms = clock.value + 3_600_000, clock.value - 60_000
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=future_at_ms)
-    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=due_at_ms)
-    # 17:13 ET: after-hours is open, so the watchdog could have tried the due one.
+    allowed = clock.value + offset
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=allowed)
+    _observe_retry(repo, SID, allowed)
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
     try:
-        future = reader.bot_snapshot(SID)
-        eligible = reader.bot_snapshot(OTHER_SID)
+        snapshot = reader.bot_snapshot(SID)
+        status = snapshot.uncertainties[0].recovery_status
+        assert status.kind == kind
+        assert status.allowed_from_ms == (allowed if offset > 0 else None)
+        assert snapshot.guidance.recovery_status == status
     finally:
         reader.close()
         repo.close()
-
-    assert future is not None and eligible is not None
-    [future_episode] = future.uncertainties
-    assert not hasattr(future_episode, "next_attempt_overdue")
-    assert not hasattr(future.guidance, "next_attempt_overdue")
-    [eligible_episode] = eligible.uncertainties
-    assert future_episode.next_attempt_at_ms == future_at_ms
-    assert eligible_episode.next_attempt_at_ms == due_at_ms
-    assert future.guidance.next_attempt_at_ms == future_at_ms
-    assert eligible.guidance.next_attempt_at_ms == due_at_ms
 
 
 def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
@@ -386,6 +389,8 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
     future_at_ms = clock.value + 3_600_000
     _raise_exit_not_flat(repo, SID, next_attempt_at_ms=future_at_ms)
     _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=future_at_ms)
+    _observe_retry(repo, SID, future_at_ms)
+    _observe_retry(repo, OTHER_SID, future_at_ms)
     raise_uncertainty(
         repo,
         strategy_instance_id=SID,
@@ -429,73 +434,38 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("read_at_ms", "shown_at_ms"),
-    [
-        # The watchdog's 16:02 try deferred (no after-hours quote) and wrote
-        # nothing; after 20:00 its next eligibility is the pre-market send.
-        (_et(20, 30), _et(3, 59, 55, day=3)),
-        (_et(23, 0), _et(3, 59, 55, day=3)),
-        (_et(3, 59, 55, day=3), _et(3, 59, 55, day=3)),
-        (_et(4, 0, 15, day=3), _et(3, 59, 55, day=3)),
-        (_et(4, 0, 15, day=3) + 1, _et(3, 59, 55, day=3)),
-        (_et(9, 30, day=3), _et(3, 59, 55, day=3)),
-        (_et(16, 0, day=3), _et(3, 59, 55, day=3)),
-        # Friday's unpriceable attempt rolls through Labor Day to Tuesday.
-        (_et(4, 0, day=8), _et(3, 59, 55, day=8)),
-        # After-hours is still open, so the watchdog could have sent by now:
-        # show the original eligibility without guessing why it has not sent.
-        (_et(16, 30), _et(16, 2)),
-    ],
-)
-def test_a_deferred_retry_keeps_the_current_window_eligibility_after_rollover(
-    tmp_path: Path, read_at_ms: int, shown_at_ms: int
-) -> None:
-    """#2440 review (Y m6, X m3): from 20:00 the notice read "overdue since 16:02" all night.
-
-    The time is re-projected on every read by the computation that recorded
-    it, under the authority's own pricing policy, so the surfaces name the
-    current window's eligibility.
-    """
+@pytest.mark.parametrize("delay_ms", [0, 60_000, 86_400_000, 4 * 86_400_000])
+def test_an_unevaluated_exit_never_infers_retry_eligibility(tmp_path: Path, delay_ms: int) -> None:
     clock = _Clock()
-    clock.value = _et(16, 0)
     repo = _repository(tmp_path, clock)
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=_et(16, 2))
-    clock.value = read_at_ms
-    reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=lambda: read_at_ms, pricing=_XH_PRICING
-    )
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 120_000)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=lambda: clock.value + delay_ms, pricing=_XH_PRICING)
     try:
-        snapshot = reader.bot_snapshot(SID)
+        [episode] = reader.bot_snapshot(SID).uncertainties
+        assert episode.next_attempt_at_ms is None
+        assert episode.recovery_status.kind == "unknown"
+        assert episode.recovery_status.last_checked_at_ms is None
     finally:
         reader.close()
         repo.close()
 
-    assert snapshot is not None
-    [episode] = snapshot.uncertainties
-    assert episode.next_attempt_at_ms == shown_at_ms
-    assert snapshot.guidance.next_attempt_at_ms == shown_at_ms
 
-
-@pytest.mark.parametrize(("pricing", "read_at_ms", "expected_ms"), [
-    (_XH_PRICING, _et(16, 59, 55, day=27, month=11), _et(3, 59, 55, day=30, month=11)),
-    (_XH_PRICING, _et(4, 0, 15, day=30, month=11), _et(3, 59, 55, day=30, month=11)),
-    (UNPRICEABLE_RECOVERY, _et(18, day=25, month=11), _et(9, 29, 55, day=27, month=11)),
-    (UNPRICEABLE_RECOVERY, _et(9, 30, 15, day=27, month=11), _et(9, 29, 55, day=27, month=11)),
-    (UNPRICEABLE_RECOVERY, _et(9, 30, 16, day=27, month=11), _et(9, 29, 55, day=27, month=11)),
-])
-def test_retry_eligibility_obeys_half_days_holidays_and_missing_allowances(
-    tmp_path: Path, pricing: RecoveryPricing, read_at_ms: int, expected_ms: int,
-) -> None:
+def test_status_keeps_original_episode_age_without_refreshing_evaluation(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=_et(16, 2, day=25, month=11))
-    reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=lambda: read_at_ms, pricing=pricing,
-    )
+    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 120_000)
+    _observe_retry(repo, SID, clock.value + 120_000)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock, pricing=_XH_PRICING)
     try:
-        [episode] = reader.account_snapshot().uncertainties
-        assert episode.next_attempt_at_ms == expected_ms
+        original = reader.bot_snapshot(SID).uncertainties[0].recovery_status
+        for _ in range(6):
+            clock.value += 10_000
+            repo.renew_execution_lease()
+        _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 120_000)
+        current = reader.bot_snapshot(SID).uncertainties[0].recovery_status
+        assert current.kind == "unknown"
+        assert current.last_checked_at_ms == original.last_checked_at_ms
+        assert current.stuck_since_ms == original.stuck_since_ms
     finally:
         reader.close()
         repo.close()
@@ -551,7 +521,7 @@ def test_a_record_with_mistyped_facts_is_unreadable_and_never_breaks_the_read(
     assert sorted(logged) == sorted([SID, OTHER_SID])
 
 
-def test_a_next_attempt_beyond_the_calendar_is_unreadable_and_never_breaks_the_read(
+def test_a_legacy_future_time_is_not_reinterpreted_by_the_projection(
     tmp_path: Path,
 ) -> None:
     """#2440 final review (m3): an in-range int64 the calendar cannot project fails only its row.
@@ -575,7 +545,7 @@ def test_a_next_attempt_beyond_the_calendar_is_unreadable_and_never_breaks_the_r
         repo.close()
 
     shown = {item.strategy_instance_id: item.facts_unreadable for item in snapshot.uncertainties}
-    assert shown == {SID: True, OTHER_SID: False}
+    assert shown == {SID: False, OTHER_SID: False}
 
 
 def test_timeline_cursor_is_stable_while_new_transitions_append(tmp_path: Path) -> None:

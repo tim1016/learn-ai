@@ -55,9 +55,11 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     next_redrive_at_ms,
     reducing_leg_session_end_ms,
     reducing_leg_verdict,
+    reduction_market_hold,
     reduction_touch,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
+from app.broker.alpaca.clerk.sqlite.exit_recovery import observe_exit_recovery
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
@@ -76,6 +78,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_drained,
     run_inline,
 )
+from app.broker.alpaca.clerk.sqlite.open_replacement import cancel_at_regular_open
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     entry_never_accepted_durably,
@@ -493,6 +496,13 @@ async def _resolve_claimed(
             broker=broker,
             run=run,
         ):
+            return await run(lambda: _snapshot(repo, effect_operation_id))
+        now_ms = repo.clock()
+        hold = reduction_market_hold(now_ms=now_ms, fact=pricing.read_liveness(state.symbol, now_ms))
+        if hold is not None:
+            await run(lambda: _fold_market_hold(
+                repo, effect_operation_id, _primary_entry_ref(repo, state.entries), state.symbol, hold, pricing,
+            ))
             return await run(lambda: _snapshot(repo, effect_operation_id))
         prepared = await run(
             lambda: _prepare_reduction(repo, effect_operation_id, state, None, pricing)
@@ -1540,6 +1550,14 @@ async def _refresh_or_resume_reducing_order(
                 simulated_authority=trade_port_folds_simulated_evidence(broker.trade),
             )
         )
+        refreshed, accepted, created = await run(lambda: (
+            repo.order(reducing.order_ref), _accepted_facts(repo, effect_operation_id),
+            _reducing_order_facts(repo, reducing.order_ref),
+        ))
+        assert refreshed is not None
+        await cancel_at_regular_open(
+            repo, broker=broker, order=refreshed, accepted=accepted, created=created, run=run,
+        )
         return
 
     def _absence_folds_uncertain() -> bool:
@@ -1601,6 +1619,15 @@ async def _submit_reducing_order(
     pricing: RecoveryPricing,
     run: OffLoop,
 ) -> None:
+    created = await run(lambda: _reducing_order_facts(repo, reducing.order_ref))
+    now_ms = repo.clock()
+    hold = reduction_market_hold(now_ms=now_ms, fact=pricing.read_liveness(created.symbol, now_ms))
+    if hold is not None:
+        await run(lambda: _fold_market_hold(
+            repo, effect_operation_id, reducing.order_ref, created.symbol, hold, pricing,
+        ))
+        return
+
     def _prepare_submit() -> BrokerOrderLeg | None:
         facts = _reducing_order_facts(repo, reducing.order_ref)
         leg = BrokerOrderLeg(
@@ -1626,14 +1653,12 @@ async def _submit_reducing_order(
             reducing.client_order_id,
             symbol=facts.symbol,
         ):
-            fold_uncertain(
+            _fold_submit_refused(
                 repo,
                 effect_operation_id=effect_operation_id,
-                order_ref=reducing.order_ref,
-                why=(
-                    "Recovery reduction has no retained source bar in its strategy evidence "
-                    "namespace; keeping the order unsubmitted."
-                ),
+                reducing=reducing,
+                why="Shadow recovery has no retained source bar in its send session; no order was sent.",
+                pricing=pricing,
             )
             return None
         _append_order_phase(repo, effect_operation_id, reducing, "ORDER_SUBMIT_REQUESTED")
@@ -1686,6 +1711,30 @@ async def _submit_reducing_order(
             order=observed,
             trade=broker.trade,
         )
+    )
+
+
+def _fold_market_hold(
+    repo: ClerkSqliteRepository, effect_operation_id: str, order_ref: str,
+    symbol: str, hold: LegRefusal, pricing: RecoveryPricing,
+) -> None:
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    _fold_exit_not_flat(
+        repo, effect_operation_id=effect_operation_id, order_ref=order_ref,
+        symbol=symbol, attributed_qty=repo.position(effect.strategy_instance_id, symbol),
+        summary_code=hold.reason_code, reason=hold.explanation,
+        headline="Exit on hold; the position is still open", explanation=hold.explanation,
+        next_step=hold.next_step, pricing=pricing,
+    )
+    episode = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=effect.strategy_instance_id,
+    )
+    assert episode is not None
+    observe_exit_recovery(
+        repo, strategy_instance_id=effect.strategy_instance_id,
+        uncertainty_id=episode["uncertainty_id"], outcome="hold", reason_code=hold.reason_code,
     )
 
 

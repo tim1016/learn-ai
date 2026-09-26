@@ -42,7 +42,6 @@ from app.services.live_arming_admission import ArmingFactResolver, live_arming_a
 from app.services.market_liveness import get_market_liveness_store, market_liveness_fact
 from app.services.run_admission import (
     evaluate_run_admission,
-    log_resume_admitted_without_exit_allowance,
 )
 from app.services.signal_program_admission import (
     LegacyProgramUnreconstructibleError,
@@ -361,8 +360,6 @@ class BotResumeAdmission:
                     custody,
                     evaluated_at_ms=self._now_ms(),
                 )
-                if mutating:
-                    log_resume_admitted_without_exit_allowance(facts, custody, decision)
                 yield (proposed, decision, feed, custody)
         except ClerkAdmissionSnapshotStaleError as exc:
             raise StartAdmissionEvidenceChanged(

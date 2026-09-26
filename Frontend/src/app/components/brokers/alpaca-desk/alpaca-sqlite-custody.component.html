@@ -20,6 +20,15 @@
       </small>
     </div>
 
+    @for (notice of custody.exposure_notices ?? []; track notice.strategy_instance_id + ':' + notice.kind) {
+      <div class="sqlite-custody__uncertainties" role="alert">
+        <strong>{{ notice.label }}</strong>
+        <p>{{ notice.explanation }}</p>
+        <a [routerLink]="['/brokers', 'alpaca', 'accounts', accountId(), 'bots', notice.strategy_instance_id]"
+           [queryParams]="operatorLensQuery">{{ notice.action_label }}</a>
+      </div>
+    }
+
     @if (custody.uncertainties.length > 0) {
       <ul class="sqlite-custody__uncertainties" aria-label="Open custody uncertainties">
         @for (uncertainty of custody.uncertainties; track uncertainty.uncertainty_id) {

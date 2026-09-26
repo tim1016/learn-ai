@@ -2,13 +2,13 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { ExposureNoticeView } from '../lib/broker-v2-panel.types';
 
-/** What a startup refusal left at the broker (#2410); the copy is the backend's. */
+/** What an abnormal run end left at the broker (PRD #2504); the copy is the backend's. */
 @Component({
   selector: 'app-exposure-notices',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (notices().length > 0) {
-      <ul class="exposure-notices" aria-label="What this refusal left at the broker">
+      <ul class="exposure-notices" aria-label="What this run left at the broker">
         @for (notice of notices(); track notice.kind) {
           <li role="alert">
             <strong>{{ notice.label }}</strong>

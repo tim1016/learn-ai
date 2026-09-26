@@ -519,3 +519,48 @@ def test_the_trade_port_holds_no_vendor_client() -> None:
     source = inspect.getsource(shadow_broker_module)
     assert "TradingClient" not in source and "AlpacaBroker" not in source
     assert list(inspect.signature(NoSubmitAlpacaTradePort.__init__).parameters) == ["self", "book"]
+
+
+@pytest.mark.parametrize("kept_bar", [False, True])
+async def test_canceled_shadow_exit_distinguishes_missing_execution_evidence(world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], kept_bar: bool) -> None:
+    ports, bars, _live, clock = world
+    decision = _retain(bars, minute=959, close="100")
+    ref = f"{NAMESPACE}:exit-no-evidence"
+    ports.trade.bind_evaluated_bar(ref, decision)
+    await ports.trade.submit(_extended_leg(99), client_order_id=ref)
+    if kept_bar:
+        _retain(bars, minute=960, close="101", low="100", phase="POST")
+    bounds = declared_session_bounds(DAY, ALPACA_EXTENDED_HOURS_WINDOW)
+    clock.now_ms = bounds.close_ms + MINUTE_MS
+    record = ports.book.record(ref)
+    assert record.order.status == "canceled"
+    assert record.anchor.unfilled_reason == ("untouched" if kept_bar else "no_evidence")
+
+
+async def test_shadow_recovery_does_not_bind_yesterdays_decision_bar(world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock]) -> None:
+    ports, bars, _live, clock = world
+    _retain(bars, minute=959, close="100")
+    tomorrow = declared_session_bounds(date(2026, 9, 9), ALPACA_EXTENDED_HOURS_WINDOW)
+    clock.now_ms = tomorrow.open_ms
+    assert ports.trade.bind_latest_recovery_bar(f"{NAMESPACE}:recovery", symbol="SPY") is False
+
+
+async def test_shadow_limit_expires_at_the_calendar_early_close(tmp_path: Path) -> None:
+    from app.services.session_authority import scheduled_extended_session_bounds
+    day = date(2026, 11, 27)
+    bounds = scheduled_extended_session_bounds(day)
+    clock = _Clock(bounds.rth_close_ms)
+    ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path, clock=clock)
+    bars = SourceBarLedger(artifacts_root=tmp_path, account_id=EVIDENCE)
+    decision = bars.append(MarketDataBar(
+        feed_id="fixture", symbol="SPY", start_ms=bounds.rth_close_ms - MINUTE_MS,
+        end_ms=bounds.rth_close_ms, open=Decimal(100), high=Decimal(100), low=Decimal(100),
+        close=Decimal(100), volume=1, fetched_at_ms=bounds.rth_close_ms, session_phase="RTH",
+    ), run_id="run-1")
+    ref = f"{NAMESPACE}:early-exit"
+    ports.trade.bind_evaluated_bar(ref, decision)
+    await ports.trade.submit(_extended_leg(99), client_order_id=ref)
+    clock.now_ms = bounds.close_ms + MINUTE_MS
+    order = await ports.trade.get_order_by_client_order_id(ref)
+    assert order.status == "canceled"
+    assert order.canceled_at_ms == bounds.close_ms

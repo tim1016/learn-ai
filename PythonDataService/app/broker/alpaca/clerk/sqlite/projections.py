@@ -18,11 +18,8 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import (
     RecoveryPricing,
-    next_redrive_at_ms,
-    redrive_window_opened_at_ms,
 )
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -54,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
+    RecoveryStatus,
     TimelineEntry,
     TimelinePage,
 )
@@ -62,6 +60,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_projection_guidance,
     build_recovery_catalog,
 )
+from app.broker.alpaca.clerk.sqlite.recovery_status import read_recovery_status
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     DatabaseMissingAfterEstablishment,
@@ -104,18 +103,16 @@ def project_uncertainties(
     *,
     now_ms: int,
     exits_in_progress: ExitsInProgress,
-    redrive_policy: ProgramLegPolicy | None,
+    recovery_connection: sqlite3.Connection | None = None,
 ) -> tuple[ProjectedUncertainty, ...]:
     """Open episodes, in the order given, each projected with the one read of its facts.
 
     The single projection of an ``uncertainties`` row — the custody read, the
     bot page's guidance and the lane's attention bell all come through here.
-    A recorded next attempt marks earliest eligibility, not a scheduled
-    broker submission. Quotes, custody evidence and the periodic sweep can
-    delay it. Closed sessions project forward under the authority's own
-    recovery policy. Without a policy authority, eligibility is unknown.
-    An active EXIT hides the
-    timestamp and an EXIT_STUCK episode stops automatic attempts entirely.
+    Recovery status comes only from a durable evaluation in this writer
+    generation. Reads never guess a new check from an elapsed retry time;
+    stale or missing observations project unknown. Working custody and
+    stopped recovery take precedence within a current evaluation.
     """
     rows = tuple(rows)
     escalated = frozenset(
@@ -131,7 +128,7 @@ def project_uncertainties(
         _projected_uncertainty(
             row,
             now_ms=now_ms,
-            redrive_policy=redrive_policy,
+            recovery_connection=recovery_connection,
             redrives_stopped=(
                 row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
                 and row["strategy_instance_id"] in escalated
@@ -185,20 +182,6 @@ def _checked_record(
     return cause_facts, recorded
 
 
-def _projected_next_attempt(
-    recorded: int, *, now_ms: int, redrive_policy: ProgramLegPolicy
-) -> int:
-    """Earliest retry eligibility, re-anchored after a closed-session deferral.
-
-    Quotes or custody can defer an eligible attempt without rewriting its
-    record. Once the next window opens, keep that window's opening time.
-    """
-    projected = next_redrive_at_ms(not_before_ms=max(recorded, now_ms), policy=redrive_policy)
-    if projected > now_ms:
-        return projected
-    return max(recorded, redrive_window_opened_at_ms(now_ms=now_ms, policy=redrive_policy))
-
-
 def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
     """The symbol an episode's cause names, when it names one (an ``EXIT_NOT_FLAT`` does)."""
     symbol = cause_facts.get("symbol")
@@ -209,7 +192,7 @@ def _projected_uncertainty(
     row: Mapping[str, Any],
     *,
     now_ms: int,
-    redrive_policy: ProgramLegPolicy | None,
+    recovery_connection: sqlite3.Connection | None,
     redrives_stopped: bool,
     exit_working: bool,
 ) -> ProjectedUncertainty:
@@ -223,15 +206,22 @@ def _projected_uncertainty(
     (#2440 review).
     """
     next_attempt_at_ms = None
+    recovery_status = None
     try:
-        cause_facts, recorded = _checked_record(
+        cause_facts, _recorded = _checked_record(
             UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
         )
         symbol = _cause_symbol(cause_facts)
-        if recorded is not None and redrive_policy is not None and not (redrives_stopped or exit_working):
-            next_attempt_at_ms = _projected_next_attempt(
-                recorded, now_ms=now_ms, redrive_policy=redrive_policy
+        if row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE:
+            recovery_status = (
+                RecoveryStatus("unknown", "RECOVERY_NOT_CHECKED", "Recovery status has not been checked.", None, None)
+                if recovery_connection is None else read_recovery_status(
+                    recovery_connection, strategy_instance_id=row["strategy_instance_id"],
+                    uncertainty_id=row["uncertainty_id"], now_ms=now_ms,
+                    stopped=redrives_stopped, working=exit_working,
+                )
             )
+            next_attempt_at_ms = recovery_status.allowed_from_ms
         facts_unreadable = False
     except (TypeError, ValueError, OverflowError):
         _log_unreadable_once(row)
@@ -257,6 +247,7 @@ def _projected_uncertainty(
         next_attempt_at_ms=next_attempt_at_ms,
         exit_working=exit_working,
         facts_unreadable=facts_unreadable,
+        recovery_status=recovery_status,
     )
 
 
@@ -958,7 +949,7 @@ class SqliteClerkProjectionReader:
             rows,
             now_ms=now_ms,
             exits_in_progress=partial(reads.strategies_with_active_exit, self._conn),
-            redrive_policy=self._pricing.policy_source(),
+            recovery_connection=self._conn,
         )
 
     def _execution_coverage_conflicts(

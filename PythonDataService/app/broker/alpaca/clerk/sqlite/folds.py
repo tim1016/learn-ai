@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
+    ExitRecoveryEvaluatedFacts,
     ManualOrderCancelResultFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
@@ -1566,6 +1567,12 @@ DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_REFRESHED", _fold_uncertainty_refres
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolved)
 # Audit-only EXIT phase markers. Their facts remain in the canonical transition
 # stream; materialized order/effect state is advanced by the evidence folds.
+def _fold_exit_recovery_evaluated(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Validate replayed recovery evidence without refreshing the exit uncertainty."""
+    ExitRecoveryEvaluatedFacts.from_facts_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("EXIT_RECOVERY_EVALUATED", _fold_exit_recovery_evaluated)
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)

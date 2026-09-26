@@ -576,7 +576,7 @@ def _sell_fill_frame(red: str, bo: str) -> str:
 
 
 def _transition_count(repo: ClerkSqliteRepository) -> int:
-    return len(repo.custody_transitions())
+    return sum(row["transition_kind"] != "EXIT_RECOVERY_EVALUATED" for row in repo.custody_transitions())
 
 
 async def test_exit_reducing_fill_in_boot_window_reaches_flat(

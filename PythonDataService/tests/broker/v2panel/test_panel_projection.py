@@ -3027,6 +3027,14 @@ def test_a_stopped_run_that_was_never_refused_shows_no_preparation() -> None:
     assert build_startup_join(None, running=True) is None
 
 
+def _exposure_projection(*, orders: tuple[ProjectedOrder, ...]) -> ClerkProjection:
+    return _rail_projection(orders=orders, latest_reconciliation=ProjectedReconciliation(
+        reconciliation_id="reconciliation:fresh", effect_operation_id=None, order_ref=None,
+        trigger="sweep", attempted_at_ms=_NOW - 100, outcome="RESOLVED_SUCCESS",
+        evidence_age_ms=100, evidence_refs=(),
+    ))
+
+
 def _refused_panel(reason_code: str = "RESUME_HOLE_UNFILLED") -> BotPanelView:
     status = _status(running=False).model_copy(
         update={
@@ -3070,7 +3078,7 @@ def _notices(
 
 
 def test_a_startup_refusal_with_a_position_says_the_bot_is_not_managing_it() -> None:
-    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
 
     outcome = adapt_sqlite_panel(_refused_panel(), projection).health.duty_outcome
 
@@ -3081,33 +3089,56 @@ def test_a_startup_refusal_with_a_position_says_the_bot_is_not_managing_it() -> 
 
 
 def test_a_confirmed_flat_refusal_says_nothing_about_a_position() -> None:
-    assert _notices(_refused_panel(), _rail_projection(orders=())) == []
+    assert _notices(_refused_panel(), _exposure_projection(orders=())) == []
 
 
 def test_a_flat_refusal_with_a_working_entry_order_warns_it_can_still_fill() -> None:
-    notices = _notices(_refused_panel(), _rail_projection(orders=(_entry_order(),)))
+    notices = _notices(_refused_panel(), _exposure_projection(orders=(_entry_order(),)))
 
     assert notices == [("entry_order_working", "An entry order is still working")]
 
 
 def test_a_refusal_the_clerk_cannot_vouch_for_says_the_position_is_unverified() -> None:
-    projection = replace(_rail_projection(orders=()), positions=_held(3.0), authority_health="degraded_to_mirror")
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0), authority_health="degraded_to_mirror")
 
     assert _notices(_refused_panel(), projection) == [
         ("position_unverified", "Position could not be verified; check the broker")
     ]
 
 
-def test_exposure_notices_are_only_for_startup_refusals() -> None:
-    projection = replace(_rail_projection(orders=(_entry_order(),)), positions=_held(3.0))
+@pytest.mark.parametrize("reason", ["CRASHED", "FEED_DEATH", "EXITED_UNVERIFIED", "DECISION_BAR_MISSED", "WARMUP_HISTORY_UNAVAILABLE"])
+@pytest.mark.parametrize("exposure", ["held", "flat", "unknown"])
+@pytest.mark.parametrize("working_entry", [False, True])
+def test_every_abnormal_end_reports_reconciled_exposure(reason: str, exposure: str, working_entry: bool) -> None:
+    projection = replace(
+        _exposure_projection(orders=(_entry_order(),) if working_entry else ()),
+        positions=_held(3.0) if exposure == "held" else (),
+        authority_health="degraded_to_mirror" if exposure == "unknown" else "healthy",
+    )
+    notices = _notices(_refused_panel(reason), projection)
+    expected = []
+    if exposure == "held":
+        expected.append(("position_unmanaged", "Bot is not managing this position"))
+    if exposure == "unknown":
+        expected.append(("position_unverified", "Position could not be verified; check the broker"))
+    if working_entry:
+        expected.append(("entry_order_working", "An entry order is still working"))
+    assert notices == expected
 
-    assert _notices(_refused_panel("FEED_DEATH"), projection) == []
+
+def test_lost_feed_with_exposure_and_an_entry_warns_about_both() -> None:
+    projection = replace(_exposure_projection(orders=(_entry_order(),)), positions=_held(3.0))
+
+    assert _notices(_refused_panel("FEED_DEATH"), projection) == [
+        ("position_unmanaged", "Bot is not managing this position"),
+        ("entry_order_working", "An entry order is still working"),
+    ]
 
 
 def test_an_impossible_bar_refusal_while_preparing_shows_the_exposure_notices() -> None:
     """#2444: the impossible-bar refusal is in the startup-notices vocabulary,
     and a panel with no startup-join view cannot prove the run ever decided."""
-    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
 
     outcome = adapt_sqlite_panel(_refused_panel("IMPOSSIBLE_SOURCE_BAR"), projection).health.duty_outcome
 
@@ -3116,13 +3147,9 @@ def test_an_impossible_bar_refusal_while_preparing_shows_the_exposure_notices() 
     assert (notice.kind, notice.label) == ("position_unmanaged", "Bot is not managing this position")
 
 
-def test_an_impossible_bar_refusal_after_the_run_was_deciding_shows_no_startup_notices() -> None:
-    """#2444: IMPOSSIBLE_SOURCE_BAR can also end a run mid-flight; the startup
-    notices speak of a run that never managed anything, so a join that reached
-    ready keeps them off. The projected view drops the join for a stopped run
-    (review P2), so the ready evidence arrives as the retained join record,
-    exactly as the panel read path supplies it."""
-    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+def test_an_impossible_bar_refusal_after_the_run_was_deciding_still_warns_about_exposure() -> None:
+    """Exposure warnings outlive startup: an ended run cannot manage its position."""
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
     panel = _refused_panel("IMPOSSIBLE_SOURCE_BAR")
     retained = _startup(
         **_SEAM,
@@ -3131,13 +3158,15 @@ def test_an_impossible_bar_refusal_after_the_run_was_deciding_shows_no_startup_n
     )
     assert build_startup_join(retained, running=False) is None  # the view is gone; the record answers
 
-    assert _notices(panel, projection, startup_join=retained) == []
+    assert _notices(panel, projection, startup_join=retained) == [
+        ("position_unmanaged", "Bot is not managing this position")
+    ]
 
 
 def test_an_impossible_bar_refusal_with_a_retained_join_that_never_reached_ready_keeps_the_notices() -> None:
     """#2444: a retained join that was still filling when the run stopped proves
     the run never decided, so the startup notices stay on."""
-    projection = replace(_rail_projection(orders=()), positions=_held(3.0))
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
 
     assert _notices(
         _refused_panel("IMPOSSIBLE_SOURCE_BAR"),
@@ -3151,10 +3180,28 @@ def test_an_entry_order_the_broker_has_not_finished_is_warned_about(broker_state
     """Review P2: any non-terminal state can still fill, including an order not yet acknowledged."""
     order = replace(_entry_order(), broker_state=broker_state)
 
-    assert _notices(_refused_panel(), _rail_projection(orders=(order,))) == [
+    assert _notices(_refused_panel(), _exposure_projection(orders=(order,))) == [
         ("entry_order_working", "An entry order is still working")
     ]
 
 
 def test_a_finished_entry_order_is_not_warned_about() -> None:
-    assert _notices(_refused_panel(), _rail_projection(orders=(_entry_order("canceled"),))) == []
+    assert _notices(_refused_panel(), _exposure_projection(orders=(_entry_order("canceled"),))) == []
+
+
+@pytest.mark.parametrize("age_ms", [30_001, 60_000])
+def test_a_stale_position_after_a_crash_is_unverified(age_ms: int) -> None:
+    projection = _exposure_projection(orders=())
+    projection = replace(projection, positions=_held(3), latest_reconciliation=replace(
+        projection.latest_reconciliation, attempted_at_ms=_NOW - age_ms,
+    ))
+    assert _notices(_refused_panel("CRASHED"), projection) == [
+        ("position_unverified", "Position could not be verified; check the broker")
+    ]
+
+
+def test_operator_stop_keeps_its_own_copy_even_with_exposure() -> None:
+    panel = _refused_panel("OPERATOR_STOP")
+    outcome = panel.health.duty_outcome.model_copy(update={"kind": "STOPPED"})
+    panel = panel.model_copy(update={"health": panel.health.model_copy(update={"duty_outcome": outcome})})
+    assert _notices(panel, replace(_exposure_projection(orders=()), positions=_held(3))) == []

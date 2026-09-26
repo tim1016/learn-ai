@@ -186,6 +186,13 @@ class _Source:
         self._fills, self._runs = tuple(fills), tuple(runs)
         self._unreadable = frozenset(et_midnight_ms(day) for day in unreadable)
 
+    missing_evidence: tuple[str, ...] = ()
+
+    def missing_exit_execution_evidence(
+        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
+    ) -> tuple[str, ...]:
+        return self.missing_evidence
+
     def fills_between(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int
     ) -> tuple[TwinFill, ...]:
@@ -595,3 +602,18 @@ def test_a_non_clean_day_and_a_seal_mismatch_are_named(tmp_path: Path) -> None:
             window=ALPACA_EXTENDED_HOURS_WINDOW,
             now_ms=CLOSE + 1,
         )
+
+
+def test_no_execution_evidence_is_neither_a_pass_nor_a_divergence(tmp_path: Path) -> None:
+    ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id="shadow:9LIVE0001")
+    _clean_day(ledger)
+    shadow = _shadow_source([_fill(600)], [_run(OPEN - 1, None)])
+    shadow.missing_evidence = ("shadow:exit",)
+    twin = _twin_source([_fill(600), _fill(960, side="sell")], COVERING_TWIN_RUN)
+    evaluation = _evaluate(tmp_path, ledger=ledger, shadow=shadow, twin=twin)
+    [verdict] = evaluation.sessions
+    assert verdict.state == "execution_evidence_missing"
+    assert evaluation.counted == () and not evaluation.satisfied
+    assert verdict.reconciliation.execution_evidence_missing == ("shadow:exit",)
+    assert not verdict.reconciliation.passed
+    assert verdict.reconciliation.divergences == ()

@@ -110,7 +110,7 @@ def compose_market_liveness(
             reason_code="MARKET_CLOCK_UNAVAILABLE",
             reason="No live broker clock evidence is available.",
             market_data=market_data,
-        )
+        ).model_copy(update={"symbol_status": symbol_status})
     clock_violation = _freshness_violation(
         now_ms,
         market_clock.observed_at_ms,

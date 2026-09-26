@@ -3852,6 +3852,13 @@
             "title": "Exposure",
             "type": "object"
           },
+          "exposure_notices": {
+            "items": {
+              "$ref": "#/components/schemas/ExposureNoticeView"
+            },
+            "title": "Exposure Notices",
+            "type": "array"
+          },
           "fills_today": {
             "anyOf": [
               {
@@ -8734,6 +8741,13 @@
           "db_identity_token": {
             "title": "Db Identity Token",
             "type": "string"
+          },
+          "exposure_notices": {
+            "items": {
+              "$ref": "#/components/schemas/ExposureNoticeView"
+            },
+            "title": "Exposure Notices",
+            "type": "array"
           },
           "generated_at_ms": {
             "title": "Generated At Ms",
@@ -15706,8 +15720,13 @@
         "type": "object"
       },
       "ExposureNoticeView": {
-        "description": "What a startup refusal left behind at the broker (#2410).\n\nA refused run manages nothing, so the refusal says so whenever something\ncould still move money: ``position_unmanaged`` for a nonzero position the\nClerk attributes to this bot, ``position_unverified`` when the Clerk cannot\ncurrently vouch for that position, and ``entry_order_working`` for an entry\norder still working that can open one. Nothing is cancelled or flattened on\nthe operator's behalf.",
+        "description": "What an abnormal run end left behind at the broker (#2410).\n\nAn ended run manages nothing, so the refusal says so whenever something\ncould still move money: ``position_unmanaged`` for a nonzero position the\nClerk attributes to this bot, ``position_unverified`` when the Clerk cannot\ncurrently vouch for that position, and ``entry_order_working`` for an entry\norder still working that can open one. Nothing is cancelled or flattened on\nthe operator's behalf.",
         "properties": {
+          "action_label": {
+            "default": "Open bot",
+            "title": "Action Label",
+            "type": "string"
+          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
@@ -15724,6 +15743,28 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
           }
         },
         "required": [
@@ -21799,6 +21840,11 @@
       "LaneAttentionItem": {
         "description": "One condition currently needing the operator on this lane (#2228).\n\n``condition_id`` is the uncertainty id \u2014 stable across polls, so the bell\ndedupes by it and an item disappears exactly when the underlying episode\nresolves. The narrow v1 set: active uncertainties only, which includes\n``EXIT_NOT_FLAT`` and every exit waiting for an operator.",
         "properties": {
+          "action_label": {
+            "default": "Open bot",
+            "title": "Action Label",
+            "type": "string"
+          },
           "condition_id": {
             "title": "Condition Id",
             "type": "string"
@@ -21838,6 +21884,16 @@
           "reason_code": {
             "title": "Reason Code",
             "type": "string"
+          },
+          "recovery_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryStatusResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "severity": {
             "title": "Severity",
@@ -25191,6 +25247,16 @@
               }
             ],
             "title": "Next Attempt At Ms"
+          },
+          "recovery_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryStatusResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "enum": [
@@ -29922,6 +29988,16 @@
             "title": "Reason Code",
             "type": "string"
           },
+          "recovery_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryStatusResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scope": {
             "enum": [
               "CUSTODY_SUBJECT",
@@ -30029,6 +30105,16 @@
           "next_step": {
             "title": "Next Step",
             "type": "string"
+          },
+          "recovery_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryStatusResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "scope": {
             "enum": [
@@ -32079,6 +32165,77 @@
           "freshness"
         ],
         "title": "RecoveryEvidenceResponse",
+        "type": "object"
+      },
+      "RecoveryStatusResponse": {
+        "properties": {
+          "allowed_from_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed From Ms"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "working",
+              "on_hold",
+              "allowed_now",
+              "allowed_from",
+              "broker_unreachable",
+              "stuck",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_checked_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At Ms"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "stuck_since_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stuck Since Ms"
+          }
+        },
+        "required": [
+          "kind",
+          "reason_code",
+          "explanation"
+        ],
+        "title": "RecoveryStatusResponse",
         "type": "object"
       },
       "RefusedFlattenPricing": {
@@ -41904,6 +42061,7 @@
           "EXIT_ACCEPTED",
           "EXIT_ATTRIBUTED_FLAT",
           "EXIT_NOT_FLAT",
+          "EXIT_RECOVERY_EVALUATED",
           "EXIT_REDUCING_ORDER_CREATED",
           "EXTERNAL_ORDER_ACKNOWLEDGED",
           "EXTERNAL_ORDER_OBSERVED",

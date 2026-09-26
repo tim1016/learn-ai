@@ -80,6 +80,7 @@ class SynthesizedAnchor(BaseModel):
     decision_bar_end_ms: int = Field(ge=0)
     cancel_at_ms: int | None = Field(default=None, ge=0)
     fill_bar_ref: str | None = None
+    unfilled_reason: Literal["untouched", "no_evidence"] | None = None
 
 
 class SynthesizedOrderRecord(BaseModel):

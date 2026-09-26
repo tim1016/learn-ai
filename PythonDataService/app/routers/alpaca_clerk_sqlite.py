@@ -85,6 +85,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     TimelinePageResponse,
     safe_flatten_pricing_response,
 )
+from app.services.broker_v2_panel.sqlite_panel_source import read_terminal_exposure_notices
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
@@ -320,7 +321,8 @@ async def get_account_snapshot(account_id: str) -> ClerkProjectionResponse:
         )
     except ProjectionReadError as exc:
         raise _projection_read_error(exc) from exc
-    return ClerkProjectionResponse.from_projection(projection)
+    notices = await read_terminal_exposure_notices(facade)
+    return ClerkProjectionResponse.from_projection(projection).model_copy(update={"exposure_notices": notices})
 
 
 @router.get(

@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
+from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -1024,3 +1025,32 @@ __all__ = [
     "read_sqlite_panel_evidence",
     "read_sqlite_roster_statuses",
 ]
+
+
+async def read_terminal_exposure_notices(facade: SqliteAlpacaClerkFacade) -> list[ExposureNoticeView]:
+    """Read terminal lifecycle and custody without loading the economic roster."""
+    from app.services.broker_v2_panel.sqlite_panel_adapter import terminal_exposure_notices
+    from app.services.broker_v2_panel.sqlite_roster_status import lifecycle_record, terminal_duty_outcome
+
+    def read() -> list[ExposureNoticeView]:
+        notices: list[ExposureNoticeView] = []
+        repository = facade.repository
+        reader = SqliteClerkProjectionReader.from_facade(facade)
+        try:
+            for registration in repository.strategy_instances():
+                sid = str(registration["strategy_instance_id"])
+                if repository.active_run(sid) is not None:
+                    continue
+                outcome = terminal_duty_outcome(sid, lifecycle_record(sid), repository, running=False)
+                if outcome is None:
+                    continue
+                projection = reader.bot_snapshot(sid)
+                notices.extend(terminal_exposure_notices(
+                    projection, sid=sid, symbol=str(registration["symbol"]),
+                    kind=outcome.kind, reason_code=outcome.reason_code, running=False,
+                ))
+        finally:
+            reader.close()
+        return notices
+
+    return await asyncio.to_thread(read)

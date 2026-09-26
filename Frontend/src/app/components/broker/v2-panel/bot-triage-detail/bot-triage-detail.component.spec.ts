@@ -152,7 +152,10 @@ describe('BotTriageDetailComponent', () => {
           explanation: '10 SPY is still held: this exit could not go out after its session ended.',
           next_action: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
           evaluated_at_ms: 1_700_000_001_000,
-          next_attempt_at_ms: 1_788_422_400_000,
+          recovery_status: {
+            kind: 'allowed_from', reason_code: 'NO_SESSION_OPEN', explanation: 'No session is open.',
+            allowed_from_ms: 1_788_422_400_000,
+          },
         },
       }),
     );
@@ -165,8 +168,8 @@ describe('BotTriageDetailComponent', () => {
   });
 
   it.each([
-    [{ exit_working: true }, 'An exit is in progress; no automatic attempt is due while it works.'],
-    [{ facts_unreadable: true }, "Automatic retry: eligibility unknown; this notice's record could not be read."],
+    [{ recovery_status: { kind: 'working' as const, reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' } }, 'An exit is in progress.'],
+    [{ facts_unreadable: true }, "Recovery status is unknown; this notice's record could not be read."],
   ])('says what the desk says when the verdict carries no time (%o) (#2440 review)', async (facts, text) => {
     await renderDetail(
       fakeBotPanelView({

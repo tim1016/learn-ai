@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.sqlite.exit_recovery import observe_exit_recovery
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -192,6 +193,14 @@ async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
             refresh_unchanged=True,
             next_attempt_at_ms=next_attempt_at_ms,
         )
+        episode = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
+            strategy_instance_id=strategy_instance_id,
+        )
+        observe_exit_recovery(
+            repo, strategy_instance_id=strategy_instance_id, uncertainty_id=episode["uncertainty_id"],
+            outcome="hold", reason_code="NO_SESSION_OPEN", allowed_from_ms=next_attempt_at_ms,
+        )
     _raise_exit_not_flat(repo, strategy_instance_id="ema-3", symbol="IWM")
     repo._conn.execute(
         "UPDATE uncertainties SET facts_json = ? WHERE strategy_instance_id = 'ema-3'",
@@ -222,7 +231,8 @@ async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
     assert response.status_code == 200
     by_sid = {item["strategy_instance_id"]: item for item in response.json()["items"]}
     assert by_sid["ema-1"]["next_attempt_at_ms"] == wednesday_after_hours + 3_600_000
-    assert by_sid["ema-2"]["next_attempt_at_ms"] == wednesday_after_hours - 60_000
+    assert by_sid["ema-2"]["recovery_status"]["kind"] == "allowed_now"
+    assert by_sid["ema-2"]["next_attempt_at_ms"] is None
     unreadable = by_sid["ema-3"]
     assert (
         unreadable["symbol"],
@@ -233,7 +243,9 @@ async def test_items_carry_the_next_attempt_as_the_one_projection_says_it(
     overnight_ema_2 = next(
         item for item in overnight.json()["items"] if item["strategy_instance_id"] == "ema-2"
     )
-    assert overnight_ema_2["next_attempt_at_ms"] == to_ms_utc(datetime(2026, 9, 3, 3, 59, 55, tzinfo=_ET))
+    assert overnight_ema_2["next_attempt_at_ms"] is None
+    assert overnight_ema_2["recovery_status"]["kind"] == "unknown"
+    assert overnight_ema_2["recovery_status"]["last_checked_at_ms"] == by_sid["ema-2"]["recovery_status"]["last_checked_at_ms"]
     assert "next_attempt_overdue" not in overnight_ema_2
 
 
@@ -258,5 +270,45 @@ async def test_attention_without_facade_retains_notice_but_cannot_invent_retry_t
         assert item["symbol"] == "SPY"
         assert item["next_attempt_at_ms"] is None
         assert "next_attempt_overdue" not in item
+    finally:
+        repo.close()
+
+
+async def test_dead_run_notice_reaches_account_desk_and_bell_without_selling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.bot_lifecycle_state import (
+        BotDutyOutcome,
+        BotLifecyclePhase,
+        BotLifecycleStateRecord,
+        stable_bot_lifecycle_state_path,
+    )
+    from app.services.broker_v2_panel import sqlite_roster_status
+
+    clock = _Clock()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="dead-bot", symbol="SPY", config_hash="h1")
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+    path = stable_bot_lifecycle_state_path(tmp_path, "dead-bot")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(BotLifecycleStateRecord(
+        phase=BotLifecyclePhase.OFF_DUTY, active_run_id=None, last_transition_at_ms=clock.now_ms,
+        duty_outcome=BotDutyOutcome(kind="CRASHED", reason_code="FEED_DEATH", recorded_at_ms=clock.now_ms, run_id="dead-run"),
+    ).model_dump_json())
+    # No broker methods exist: these projections must neither sell nor contact it.
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,
+    ))
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            bell = await client.get("/api/brokers/alpaca/attention")
+            desk = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT}/snapshot")
+        assert bell.status_code == 200
+        [notice] = bell.json()["items"]
+        assert notice["headline"] == "Position could not be verified; check the broker"
+        assert notice["strategy_instance_id"] == "dead-bot"
+        assert desk.status_code == 200
+        assert desk.json()["exposure_notices"][0]["label"] == notice["headline"]
     finally:
         repo.close()

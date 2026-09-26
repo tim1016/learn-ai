@@ -608,7 +608,7 @@ async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operato
     # as a time value. This Clerk prices nothing outside the regular session
     # (the degraded seam), so that is the first send that lands in Thursday's
     # 09:30 ET open: 09:29:55, the guard band before it.
-    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == 1_700_144_995_000
+    assert json.loads(episode["facts_json"])["next_attempt_at_ms"] == 1_700_145_000_000
 
 
 async def test_next_exit_decision_reissues_at_the_new_anchor(

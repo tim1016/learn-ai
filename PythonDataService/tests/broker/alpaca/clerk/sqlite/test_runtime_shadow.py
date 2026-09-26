@@ -277,16 +277,17 @@ async def test_shadow_fill_survives_restart_and_reconciles_to_attributed_exposur
 async def test_shadow_safe_flatten_binds_retained_evidence_and_finishes_flat(
     tmp_path: Path,
 ) -> None:
-    ports = compose_shadow_ports(
-        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path
-    )
     evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
     decision = _retain(evidence, minute=600, close="100.25")
+    clock = _Clock(decision.end_ms + 60_000)
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path, clock=clock,
+    )
     # Inside the regular session, where an unshaped flatten reduces market DAY
     # (#2007) -- pinned, not the wall clock, so the test cannot depend on when
     # it runs.
     repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_Clock(decision.end_ms + 60_000)
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
     )
     facade = SqliteAlpacaClerkFacade(
         repo=repo,
@@ -486,3 +487,55 @@ async def test_a_shadow_sweep_pass_journals_the_trading_day(tmp_path: Path) -> N
     ledger = ShadowSessionLedger(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
     assert [row.kind for row in ledger.rows()] == ["day_opened", "session_closed_clean"]
     assert ledger.completed_session_opens() == (open_ms,)
+
+
+async def test_shadow_canceled_exit_exposes_missing_evidence_through_the_economic_reader(tmp_path: Path) -> None:
+    from app.services.alpaca_shadow_reconciliation import EconomicFillSource
+    from app.services.session_authority import scheduled_extended_session_bounds
+    from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
+    from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _walk_clock_to
+
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
+    entry = _retain(evidence, minute=600, close="100.25")
+    clock = _clock_at(entry.end_ms)
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path, clock=clock,
+    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=_EXTENDED_POLICY,
+    )
+    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    await facade.register_strategy_run(binding)
+    try:
+        receipt = await facade.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN_ID, decision_id="entry-evidence",
+            purpose=EffectPurpose.ENTER, action_plan=binding.action_plan, quantity=binding.quantity,
+            use_rth=True, retained_source_bar=entry,
+        )
+        assert receipt.state == "submitted"
+        exit_bar = _retain(evidence, minute=959, close="101")
+        _walk_clock_to(repo, exit_bar.end_ms)
+        await facade.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN_ID, decision_id="exit-evidence",
+            purpose=EffectPurpose.EXIT, action_plan=binding.action_plan, quantity=binding.quantity,
+            use_rth=True, retained_source_bar=exit_bar,
+        )
+        bounds = scheduled_extended_session_bounds(DAY)
+        _walk_clock_to(repo, bounds.close_ms + 60_000)
+        orders = await ports.read.list_orders()
+        [canceled] = [order for order in orders if order.status == "canceled"]
+        source = EconomicFillSource.from_database_path(repo.db_path)
+        try:
+            assert source.missing_exit_execution_evidence(
+                strategy_instance_id=SID, from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
+            ) == (canceled.client_order_id,)
+            assert source.missing_exit_execution_evidence(
+                strategy_instance_id="someone-else", from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
+            ) == ()
+        finally:
+            source.close()
+    finally:
+        repo.close()
+        evidence.close()

@@ -70,6 +70,7 @@ from app.broker.alpaca.clerk.synthetic_broker import (
     synthesized_positions,
 )
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
+from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -90,7 +91,11 @@ from app.engine.live.order_identity import (
     build_bot_order_namespace,
     parse_order_ref,
 )
-from app.services.session_authority import declared_session_bounds
+from app.services.session_authority import (
+    declared_session_bounds,
+    order_session_state_at_ms,
+    scheduled_extended_session_bounds,
+)
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
@@ -100,7 +105,7 @@ _RESTING = "new"
 _TERMINAL = frozenset({"filled", "canceled", "expired", "rejected"})
 
 
-class ShadowFillBindingError(RuntimeError):
+class ShadowFillBindingError(BrokerOrderRejected, RuntimeError):
     """A shadow order cannot be synthesized: no bound decision bar, or no declared window."""
 
 
@@ -241,7 +246,16 @@ class ShadowOrderBook:
         """
         account_id = self._evidence_namespace_for(client_order_id)
         retained_bar = self._evidence.latest_for_symbol(account_id, symbol=symbol)
-        if retained_bar is None:
+        now_ms = self._clock()
+        if retained_bar is None or retained_bar.end_ms > now_ms:
+            return False
+        now_session = order_session_state_at_ms(now_ms=now_ms, extended_window=self._window)
+        bar_session = order_session_state_at_ms(now_ms=retained_bar.start_ms, extended_window=self._window)
+        if (
+            now_session.phase == "CLOSED"
+            or now_session.phase != bar_session.phase
+            or et_date_at_ms(now_ms) != et_date_at_ms(retained_bar.start_ms)
+        ):
             return False
         self.bind_evaluated_bar(client_order_id, retained_bar)
         return True
@@ -295,8 +309,20 @@ class ShadowOrderBook:
                     update={"status": "canceled", "canceled_at_ms": now, "updated_at_ms": now}
                 ),
                 leg=record.leg,
-                anchor=record.anchor,
+                anchor=self._canceled_anchor(record, now),
             )
+
+    def _canceled_anchor(self, record: SynthesizedOrderRecord, at_ms: int) -> SynthesizedAnchor | None:
+        anchor = record.anchor
+        if anchor is None or anchor.fill_model != "limit_touch":
+            return anchor
+        bars = self._evidence.bars_after(
+            anchor.evidence_account_id, provider=anchor.provider, symbol=record.order.symbol,
+            start_ms=anchor.decision_bar_end_ms,
+        )
+        end_ms = min(at_ms, anchor.cancel_at_ms) if anchor.cancel_at_ms is not None else at_ms
+        witnessed = any(bar.start_ms >= anchor.decision_bar_end_ms and bar.end_ms <= end_ms for bar in bars)
+        return anchor.model_copy(update={"unfilled_reason": "untouched" if witnessed else "no_evidence"})
 
     def orders(self) -> list[BrokerOrder]:
         return [record.order for record in self._settled_records().values()]
@@ -407,6 +433,10 @@ class ShadowOrderBook:
                 f"The decision bar closes at {bar.end_ms} ms, outside the declared window "
                 f"{bounds.open_ms}-{bounds.close_ms} ms; no resting order can be synthesized from it."
             )
+        scheduled = scheduled_extended_session_bounds(et_date_at_ms(bar.end_ms))
+        cancel_at_ms = min(bounds.close_ms, scheduled.close_ms) if scheduled is not None else bounds.close_ms
+        if bar.end_ms >= cancel_at_ms:
+            raise ShadowFillBindingError("The decision bar closes after the day's after-hours session ended.")
         at_ms = bar.end_ms
         # Shares ``shape_immediate_order``'s ``BrokerOrder`` field list; only the
         # outcome half (status, fills, events) differs. A field added to the
@@ -444,7 +474,7 @@ class ShadowOrderBook:
             bar_ref=bar.bar_ref,
             decision_bar_start_ms=bar.start_ms,
             decision_bar_end_ms=bar.end_ms,
-            cancel_at_ms=bounds.close_ms,
+            cancel_at_ms=cancel_at_ms,
         )
 
     def _settle_locked(self, records: list[SynthesizedOrderRecord]) -> None:
@@ -506,7 +536,12 @@ class ShadowOrderBook:
                         }
                     ),
                     leg=leg,
-                    anchor=anchor,
+                    anchor=anchor.model_copy(update={"unfilled_reason": (
+                        "untouched" if any(
+                            bar.start_ms >= anchor.decision_bar_end_ms and bar.end_ms <= cancel_at_ms
+                            for bar in bars
+                        ) else "no_evidence"
+                    )}),
                 )
 
 

@@ -36,61 +36,6 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
 
 logger = logging.getLogger(__name__)
 
-# Rides the explanation of an admitted Resume that
-# `_resumes_holding_without_exit_allowance` let through, stating what the
-# missing allowance still costs. It is on the API decision only: no screen
-# renders an admitted Resume's explanation (the panel's health card and the
-# Resume result use fixed copy), so the mutating Resume's
-# `resume_admitted_without_exit_allowance` warning is where it is seen.
-EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE = (
-    "The exit allowance is unavailable. An exit reaching the broker after the close "
-    "is held for recovery; session eligibility alone does not guarantee a retry."
-)
-
-
-def _resumes_holding_without_exit_allowance(
-    bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot
-) -> bool:
-    """A Resume of a regular-hours run with no exit allowance that may still hold a position (#2440).
-
-    Owner decision 2026-09-25: Start refuses such a run, and so does a Resume
-    of a flat one, but a run still holding a position always resumes — an
-    exit is never blocked by a configuration error (ADR 0060). The position
-    is the Clerk's canonical exposure read. Outside Dry Run ``unknown`` counts
-    as holding, so this rule never refuses on it; whether unknown custody
-    admits a Resume at all is the Clerk gates' question
-    (``CLERK_EXPOSURE_UNKNOWN``), unchanged. A Dry Run skips those gates, and
-    its synthetic Clerk reads ``unknown`` until it publishes a verdict — for a
-    flat bot too, whose Resume then reconciles to zero and refuses — so there
-    only a proven non-zero position holds: the preview and the click agree.
-    """
-    if not isinstance(bot, ResumeRunFacts) or bot.extended_hours.state != "EXIT_ALLOWANCE_UNSET":
-        return False
-    exposure = clerk.exposure.state
-    return exposure == "non_zero" or (exposure == "unknown" and bot.mode != "dry_run")
-
-
-def log_resume_admitted_without_exit_allowance(
-    bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot, decision: RunAdmissionDecision
-) -> None:
-    """Warn that a Resume went ahead without the exit allowance its close needs (#2440).
-
-    Called only on the mutating Resume path, with its final decision: a
-    preview (the panel's 5 s poll, a gallery snapshot) resumes nothing, and a
-    Resume a later gate refused (``CLERK_EXPOSURE_UNKNOWN``) admitted nothing.
-    """
-    if not (decision.allowed and _resumes_holding_without_exit_allowance(bot, clerk)):
-        return
-    logger.warning(
-        "Resume of a run that may hold a position was admitted without an exit allowance",
-        extra={
-            "action": "resume_admitted_without_exit_allowance",
-            "strategy_instance_id": bot.strategy_instance_id,
-            "exposure_state": clerk.exposure.state,
-            "mode": bot.mode,
-        },
-    )
-
 
 def _not_armed(bot: RunAdmissionFacts) -> bool:
     """Whether the admitted launch must say that every ENTER refuses until it is armed (R6)."""
@@ -396,7 +341,18 @@ def evaluate_run_admission(
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
     # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
     extended_refusal = bot.extended_hours.refusal
-    if extended_refusal is not None and not _resumes_holding_without_exit_allowance(bot, clerk):
+    if (
+        isinstance(bot, ResumeRunFacts)
+        and clerk.exposure.state == "non_zero"
+        and not bot.exposure_carryover_supported
+    ):
+        return decide(
+            allowed=False,
+            reason_code="RESUME_CARRYOVER_UNSUPPORTED",
+            explanation="This bot still holds a position and cannot carry it into another run.",
+            next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+        )
+    if extended_refusal is not None:
         return decide(
             allowed=False,
             reason_code=extended_refusal.reason_code,
@@ -457,7 +413,7 @@ def evaluate_run_admission(
                 allowed=False,
                 reason_code="START_REQUIRES_FLAT_CUSTODY",
                 explanation="The Clerk proves that this instance already has attributed exposure.",
-                next_step="Use Resume for approved carryover, or flatten through the Clerk.",
+                next_step="Flatten the exact Clerk-attributed exposure before starting another run.",
             )
 
         unresolved = (
@@ -534,13 +490,13 @@ def evaluate_run_admission(
     return decide(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",
-        explanation=_admitted_explanation(bot, clerk),
+        explanation=_admitted_explanation(bot),
         next_step=ARMING_NEXT_STEP if _not_armed(bot) else None,
     )
 
 
-def _admitted_explanation(bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot) -> str:
-    """The admitted sentence, with the corpus-coverage, exit-allowance and not-armed stamps that apply."""
+def _admitted_explanation(bot: RunAdmissionFacts) -> str:
+    """The admitted sentence with the corpus-coverage and not-armed notices that apply."""
     admitted = (
         "The process slot is absent, market data is ready, and the Clerk proves flat custody."
         if bot.operation == "START"
@@ -548,15 +504,6 @@ def _admitted_explanation(bot: RunAdmissionFacts, clerk: ClerkCustodySnapshot) -
     )
     if bot.program_build.corpus_coverage == "UNCOVERED":
         admitted = f"{admitted} {CORPUS_UNCOVERED_ADMITTED_NOTE}"
-    if _resumes_holding_without_exit_allowance(bot, clerk):
-        if bot.mode == "dry_run":
-            admitted += (
-                " The exit allowance could not be loaded. This holding Dry Run may resume, "
-                "but a late exit folds for operator recovery; its synthetic authority "
-                "does not retry from a live quote."
-            )
-        else:
-            admitted = f"{admitted} {EXIT_ALLOWANCE_UNSET_ADMITTED_NOTE}"
     if _not_armed(bot):
         admitted = f"{admitted} {ARMING_REQUIRED_ADMITTED_NOTE}"
     return admitted

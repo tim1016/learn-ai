@@ -19,6 +19,12 @@
 
 **Amended 2026-09-17 (owner decision — UI-owned graduation):** Graduation is a first-class ceremony on the Live account's Configuration page; copying or running a host command is no longer the normal product path. The lane obtains its own fresh broker account/position/open-order observation, accepts no caller-authored evidence or filesystem paths, initializes the still-inactive Live authority when needed, publishes and verifies its database backup, and presents the content-addressed cutover plan for an explicit final confirmation. Apply has no force mode, shares one mutation fence with Deploy and Resume, rechecks the exact stopped-bot roster and plan evidence, appends the activation receipt, answers `202`, then requests the deployment supervisor's graceful worker restart. The running Shadow authority may remain online during this narrow ceremony because it owns the isolated `shadow:` database and no submit port; the target Live database is inactive and unopened until the restart. Shutdown drains Shadow and releases its lease before boot selects Live. This exception does not make restore, rebuild, reset, Paper activation, or legacy migration online operations; their existing stop boundary remains. The CLI ceremony remains a recovery/fallback interface, not the expected UI journey. Graduation still deploys nothing, arms nothing, and cannot submit an order.
 
+**Exit lifecycle amendment (2026-09-25, PRD #2504):**
+[ADR 0045's exit obligation lifecycle](0045-exposure-lifecycle-closure.md#exit-obligation-lifecycle-amendment-2026-09-25-prd-2504)
+owns overnight holds, cancellation proof at regular open, recovery status,
+and the persistent regular-session failure budget. IBKR remains the data
+source and Alpaca remains the order authority.
+
 ## Context
 
 The scope memo established what this ADR takes as given:

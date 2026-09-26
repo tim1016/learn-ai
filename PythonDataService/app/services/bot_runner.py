@@ -502,6 +502,7 @@ class BotTaskRegistry:
             real_projector=self._lifecycle_projector,
             external_start_guard=start_custody_guard,
             runtime_in_use=self._synthetic_runtime_in_use,
+            clock=self._now_ms,
         )
         self._boot_recovery = BotBootRecovery(
             self._artifacts_root,

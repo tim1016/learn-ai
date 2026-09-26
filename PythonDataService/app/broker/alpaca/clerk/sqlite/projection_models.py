@@ -16,6 +16,16 @@ EvidenceFreshness = Literal["fresh", "stale", "not_required", "unavailable"]
 
 
 @dataclass(frozen=True)
+class RecoveryStatus:
+    kind: Literal["working", "on_hold", "allowed_now", "allowed_from", "broker_unreachable", "stuck", "unknown"]
+    reason_code: str
+    explanation: str
+    last_checked_at_ms: int | None
+    stuck_since_ms: int | None
+    allowed_from_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class ProjectedCommand:
     command_id: str
     kind: str
@@ -127,6 +137,7 @@ class ProjectedUncertainty:
     # The episode's recorded facts could not be read, so what only they carry
     # (``next_attempt_at_ms``) is unknown, not absent (#2440 review).
     facts_unreadable: bool = False
+    recovery_status: RecoveryStatus | None = None
 
 
 @dataclass(frozen=True)
@@ -248,6 +259,7 @@ class ProjectionGuidance:
     next_attempt_at_ms: int | None = None
     exit_working: bool = False
     facts_unreadable: bool = False
+    recovery_status: RecoveryStatus | None = None
 
 
 @dataclass(frozen=True)

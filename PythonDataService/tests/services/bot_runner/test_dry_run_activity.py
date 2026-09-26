@@ -305,7 +305,7 @@ async def test_dry_run_start_reports_its_own_unpriceable_authority_and_binding_f
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("holding", [False, True])
-async def test_dry_run_resume_uses_its_own_policy_and_preserves_held_exposure(
+async def test_dry_run_resume_requires_flatten_before_restoring_held_exposure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     _isolated_synthetic_authority: None, holding: bool,
 ) -> None:
@@ -327,15 +327,10 @@ async def test_dry_run_resume_uses_its_own_policy_and_preserves_held_exposure(
     monkeypatch.setattr(active_binding, "_binding", None)
     monkeypatch.setattr(active_binding, "_refusal", refusal)
     decision = await registry.preview_resume_admission("alpaca", _SID)
-    assert decision.allowed is holding
+    assert decision.allowed is False
     if not holding:
         assert decision.reason_code == refusal.reason
         assert refusal.next_step in decision.next_step
     else:
-        assert "exit allowance could not be loaded" in decision.explanation
-        assert "operator recovery" in decision.explanation
-        assert "live quote" in decision.explanation
-        assert "will be tried" not in decision.explanation
-        resumed = await registry.resume_existing_with_admission("alpaca", _SID)
-        assert resumed.admission.allowed is True
-        await registry.stop("alpaca", _SID)
+        assert decision.reason_code == "RESUME_CARRYOVER_UNSUPPORTED"
+        assert "Flatten" in decision.next_step

@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
     unregister_clerk_runtime,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
@@ -43,6 +44,7 @@ from app.services.bot_start_admission import (
     default_start_custody_projection,
 )
 from app.services.source_bar_ledger import SourceBarLedger
+from app.utils.timestamps import Clock, now_ms_utc
 
 
 class BindingAuthority:
@@ -144,6 +146,7 @@ class SyntheticBindingAuthority(BindingAuthority):
     runtime_in_use: Callable[[BrokerBotBinding], bool]
     brokers: dict[str, SyntheticBroker]
     account_id: str = field(init=False)
+    clock: Clock = now_ms_utc
 
     def __post_init__(self) -> None:
         self.account_id = synthetic_account_id_for_strategy(self.binding.strategy_instance_id)
@@ -235,16 +238,20 @@ class SyntheticBindingAuthority(BindingAuthority):
         existing = get_clerk_runtime(self.account_id)
         if existing is not None:
             return existing
-        broker = SyntheticBroker(account_id=self.account_id, source_bars=self.source_bars())
+        broker = SyntheticBroker(account_id=self.account_id, source_bars=self.source_bars(), clock=self.clock)
         await activate_synthetic_clerk_authority(
             account_id=self.account_id,
             artifacts_root=self.artifacts_root,
+            clock=self.clock,
         )
         runtime = await select_synthetic_clerk_runtime(
             account_id=self.account_id,
             read=broker,
             trade=broker,
             artifacts_root=self.artifacts_root,
+            repository_opener=lambda account_id, root: ClerkSqliteRepository.open(
+                account_id=account_id, artifacts_root=root, clock=self.clock,
+            ),
         )
         if runtime.clerk is not None:
             register_clerk_runtime(runtime)
@@ -262,6 +269,7 @@ class BindingAuthoritySelector:
     external_start_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None
     runtime_in_use: Callable[[BrokerBotBinding], bool]
     synthetic_brokers: dict[str, SyntheticBroker] = field(default_factory=dict)
+    clock: Clock = now_ms_utc
 
     def for_binding(self, binding: BrokerBotBinding) -> BindingAuthority:
         if binding.mode == "dry_run":
@@ -271,6 +279,7 @@ class BindingAuthoritySelector:
                 lifecycle_repo_for=self.lifecycle_repo_for,
                 runtime_in_use=self.runtime_in_use,
                 brokers=self.synthetic_brokers,
+                clock=self.clock,
             )
         return PrimaryAccountBindingAuthority(
             binding=binding,

@@ -9189,6 +9189,8 @@ export interface components {
             exposure: {
                 [key: string]: number;
             };
+            /** Exposure Notices */
+            exposure_notices?: components["schemas"]["ExposureNoticeView"][];
             /** Fills Today */
             fills_today: number | null;
             /** Last Activity At Ms */
@@ -11083,6 +11085,8 @@ export interface components {
             custody_owner: string;
             /** Db Identity Token */
             db_identity_token: string;
+            /** Exposure Notices */
+            exposure_notices?: components["schemas"]["ExposureNoticeView"][];
             /** Generated At Ms */
             generated_at_ms: number;
             guidance: components["schemas"]["ProjectionGuidanceResponse"];
@@ -14225,9 +14229,9 @@ export interface components {
         };
         /**
          * ExposureNoticeView
-         * @description What a startup refusal left behind at the broker (#2410).
+         * @description What an abnormal run end left behind at the broker (#2410).
          *
-         *     A refused run manages nothing, so the refusal says so whenever something
+         *     An ended run manages nothing, so the refusal says so whenever something
          *     could still move money: ``position_unmanaged`` for a nonzero position the
          *     Clerk attributes to this bot, ``position_unverified`` when the Clerk cannot
          *     currently vouch for that position, and ``entry_order_working`` for an entry
@@ -14235,6 +14239,11 @@ export interface components {
          *     the operator's behalf.
          */
         ExposureNoticeView: {
+            /**
+             * Action Label
+             * @default Open bot
+             */
+            action_label?: string;
             /** Explanation */
             explanation: string;
             /**
@@ -14244,6 +14253,10 @@ export interface components {
             kind: "position_unmanaged" | "position_unverified" | "entry_order_working";
             /** Label */
             label: string;
+            /** Strategy Instance Id */
+            strategy_instance_id?: string | null;
+            /** Symbol */
+            symbol?: string | null;
         };
         /**
          * ExposureSlice
@@ -16983,6 +16996,11 @@ export interface components {
          *     ``EXIT_NOT_FLAT`` and every exit waiting for an operator.
          */
         LaneAttentionItem: {
+            /**
+             * Action Label
+             * @default Open bot
+             */
+            action_label?: string;
             /** Condition Id */
             condition_id: string;
             /**
@@ -17006,6 +17024,7 @@ export interface components {
             next_attempt_at_ms?: number | null;
             /** Reason Code */
             reason_code: string;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /** Severity */
             severity: string;
             /** Strategy Instance Id */
@@ -18570,6 +18589,7 @@ export interface components {
             next_action: string | null;
             /** Next Attempt At Ms */
             next_attempt_at_ms?: number | null;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * State
              * @enum {string}
@@ -20616,6 +20636,7 @@ export interface components {
             operator_impact: string;
             /** Reason Code */
             reason_code: string;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * Scope
              * @enum {string}
@@ -20658,6 +20679,7 @@ export interface components {
             next_attempt_at_ms?: number | null;
             /** Next Step */
             next_step: string;
+            recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
             /**
              * Scope
              * @enum {string}
@@ -21376,6 +21398,24 @@ export interface components {
             observed_at_ms: number | null;
             /** Reference */
             reference: string;
+        };
+        /** RecoveryStatusResponse */
+        RecoveryStatusResponse: {
+            /** Allowed From Ms */
+            allowed_from_ms?: number | null;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "working" | "on_hold" | "allowed_now" | "allowed_from" | "broker_unreachable" | "stuck" | "unknown";
+            /** Last Checked At Ms */
+            last_checked_at_ms?: number | null;
+            /** Reason Code */
+            reason_code: string;
+            /** Stuck Since Ms */
+            stuck_since_ms?: number | null;
         };
         /**
          * RefusedFlattenPricing
@@ -25774,7 +25814,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */

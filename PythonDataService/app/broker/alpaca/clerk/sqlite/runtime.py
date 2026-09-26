@@ -371,6 +371,7 @@ class SqliteAlpacaClerkFacade:
         return RecoveryPricing(
             policy_source=lambda: self.program_leg_policy,
             quote_source=self._quote_source,
+            liveness_source=market_liveness_fact,
         )
 
     @property
