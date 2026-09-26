@@ -7,7 +7,13 @@ from typing import Any
 
 import pytest
 
-from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
+from app.schemas.run_verdict import RunVerdict
+from app.services.run_verdict_service import (
+    RUN_VERDICT_NOTES_REVISION,
+    _grade_psr_sub,
+    compute_run_verdict,
+    failed_run_verdict,
+)
 
 V1_FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "golden" / "run-verdict-v1" / "fixture.json"
 V2_FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "golden" / "run-verdict-v2" / "fixture.json"
@@ -400,3 +406,64 @@ def test_compute_run_verdict_unclean_incomplete_run_has_no_evidence_action() -> 
     assert verdict.grade is None
     assert verdict.evidence_action is None
     assert verdict.signal == "Rework"
+
+
+# ── Probabilistic Sharpe note vocabulary (#2462, #2462 review) ────────────────
+
+_BANNED_PSR_PHRASES = ("Near-certain", "High statistical confidence")
+_SELECTION_MARKER = "not adjusted for picking the best of several tried settings"
+
+
+@pytest.mark.parametrize(("v", "expected_score"), [(0.97, 20), (0.999, 18)])
+def test_a_high_psr_note_names_the_missing_selection_adjustment(v: float, expected_score: int) -> None:
+    """PSR comes from one run's return series; the best of N tried settings
+    clears a high PSR most of the time by chance, so the ≥ 0.95 buckets must
+    not read as certainty. Scores and thresholds are the frozen v2 policy and
+    must not move."""
+    sub = _grade_psr_sub(v)
+
+    assert sub.score == expected_score
+    assert _SELECTION_MARKER in sub.note
+    assert not any(phrase in (sub.note or "") for phrase in _BANNED_PSR_PHRASES)
+
+
+@pytest.mark.parametrize(
+    ("v", "expected_score"),
+    [(0.0, 2), (0.5, 8), (0.8, 14), (0.95, 20), (0.99, 18), (None, None)],
+)
+def test_the_frozen_v2_psr_thresholds_and_scores_are_unchanged(v: float | None, expected_score: int | None) -> None:
+    assert _grade_psr_sub(v).score == expected_score
+
+
+def test_a_newly_computed_verdict_declares_the_revision_2_note_vocabulary() -> None:
+    """A verdict's note vocabulary is carried by data, not by its wall-clock
+    date (#2462 review): every newly computed verdict declares revision 2."""
+    verdict = compute_run_verdict(None, engine="python", generated_at_ms=1_700_000_000_000)
+
+    assert verdict.verdict_version == 2
+    assert verdict.notes_revision == RUN_VERDICT_NOTES_REVISION
+
+
+def test_a_verdict_persisted_before_the_revision_field_parses_as_revision_1() -> None:
+    """Old rows keep their as-authored revision-1 copy — historical evidence
+    of what was computed — and are distinguishable from revision-2 rows by
+    the field, so the same verdict_version never has date-dependent
+    semantics. A persisted row predating the field is exactly this shape:
+    every schema-required key, no ``notes_revision``."""
+    persisted = {
+        "verdict_version": 2,
+        "status": "incomplete",
+        "engine": "python",
+        "generated_at_ms": 1_700_000_000_000,
+        "composite": None,
+        "grade": None,
+        "signal": None,
+        "headline": "Backtest Evidence Grade incomplete.",
+        "available_required_metrics": 0,
+        "required_metrics": 17,
+        "normalized_weights": False,
+    }
+
+    parsed = RunVerdict.model_validate(persisted)
+
+    assert parsed.notes_revision == 1

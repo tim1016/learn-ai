@@ -61,6 +61,15 @@ class RunVerdictMissingEvidence(BaseModel):
 
 class RunVerdict(BaseModel):
     verdict_version: int
+    # Which explanatory-note vocabulary authored this verdict's sub-score
+    # notes: revision 1 is the pre-#2462 copy ("Near-certain" / "High
+    # statistical confidence" on high Probabilistic Sharpe), revision 2 the
+    # selection-adjustment-neutral copy. The frozen v2 *scoring* policy
+    # (scores, thresholds, weights) is unchanged by a copy revision, so
+    # ``verdict_version`` stays 2; persisted rows distinguish their note
+    # vocabulary by this field, never by wall-clock date. Defaults to 1 so
+    # verdicts persisted before the field existed parse as revision 1.
+    notes_revision: int = 1
     status: RunVerdictStatus
     engine: EngineKind
     # Which equity series the verdict's headline statistics graded (#2447):

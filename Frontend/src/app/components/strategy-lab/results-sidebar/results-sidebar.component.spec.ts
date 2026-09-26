@@ -115,19 +115,50 @@ describe("ResultsSidebarComponent", () => {
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    const disclosure = root.querySelector("details.results-sidebar__note");
-    expect(disclosure).not.toBeNull();
+    const disclosures = Array.from(root.querySelectorAll("details.results-sidebar__note"));
+    expect(disclosures.length).toBeGreaterThan(1);
     // No metric row leans on a hover `title` for its explanation anymore.
     expect(root.querySelector(".results-sidebar__metrics [title]")).toBeNull();
 
-    const summary = disclosure?.querySelector("summary") ?? null;
-    expect(summary?.textContent?.trim()).toBe("Why this score");
-    // The note text itself lives inside the disclosure, reachable once opened.
-    expect(disclosure?.textContent).toContain("Above target.");
+    // Every disclosure's accessible name names its metric, so a screen
+    // reader tabbing through the list can tell the controls apart.
+    const summaries = disclosures.map((details) => details.querySelector("summary")?.textContent?.trim());
+    expect(summaries).toEqual(["Why this score: CAGR", "Why this score: Calmar"]);
+    expect(new Set(summaries).size).toBe(summaries.length);
 
-    summary?.click();
-    fixture.detectChanges();
-    expect((disclosure as HTMLDetailsElement).open).toBe(true);
-    expect(disclosure?.querySelector("p")?.textContent).toContain("Above target.");
+    const disclosure = disclosures[0] as HTMLDetailsElement;
+    expect(disclosure.textContent).toContain("Above target.");
+  });
+
+  it("opens and closes a note by keyboard alone (#2462)", async () => {
+    await TestBed.configureTestingModule({
+      imports: [ResultsSidebarComponent],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(ResultsSidebarComponent);
+    fixture.componentRef.setInput("run", run());
+    // Attached to the document so Tab navigation and Enter activation run
+    // against real focus, the way a keyboard user reaches the control.
+    document.body.appendChild(fixture.nativeElement);
+    try {
+      fixture.detectChanges();
+
+      const summary = (fixture.nativeElement as HTMLElement)
+        .querySelector("details.results-sidebar__note summary") as HTMLElement | null;
+      expect(summary).not.toBeNull();
+
+      summary?.focus();
+      expect(document.activeElement).toBe(summary);
+      const disclosure = summary?.closest("details") as HTMLDetailsElement;
+      expect(disclosure.open).toBe(false);
+
+      summary?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      summary?.click(); // Enter on a summary activates it — jsdom needs the click spelled out
+      fixture.detectChanges();
+      expect(disclosure.open).toBe(true);
+      expect(disclosure.querySelector("p")?.textContent).toContain("Above target.");
+    } finally {
+      document.body.removeChild(fixture.nativeElement);
+    }
   });
 });

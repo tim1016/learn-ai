@@ -12,7 +12,7 @@
           <strong>{{ metric.display }}</strong>
           @if (metric.note) {
             <details class="results-sidebar__note">
-              <summary>Why this score</summary>
+              <summary>Why this score: {{ metric.label }}</summary>
               <p>{{ metric.note }}</p>
             </details>
           }
