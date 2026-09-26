@@ -35459,6 +35459,11 @@
             "title": "Normalized Weights",
             "type": "boolean"
           },
+          "notes_revision": {
+            "default": 1,
+            "title": "Notes Revision",
+            "type": "integer"
+          },
           "parity_signature": {
             "title": "Parity Signature",
             "type": "object"
