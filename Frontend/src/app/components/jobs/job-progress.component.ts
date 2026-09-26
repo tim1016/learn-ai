@@ -54,6 +54,11 @@ import { JobsService, JobState } from '../../services/jobs.service';
       color: var(--red-600, #dc2626);
       margin-top: 0.5rem;
     }
+    .log {
+      color: var(--text-color-secondary, #64748b);
+      font-size: 0.75rem;
+      margin-top: 0.375rem;
+    }
     .actions {
       display: flex;
       gap: 0.5rem;
@@ -87,6 +92,13 @@ import { JobsService, JobState } from '../../services/jobs.service';
         }
         <span>{{ elapsedLabel() }}</span>
       </div>
+
+      <!-- The worker's latest word — e.g. the "cancel requested too late"
+           acknowledgment a LEAN run emits after its container launched
+           (#2463) — so the drawer answers the Cancel the operator pressed. -->
+      @if (latestLog(); as log) {
+        <div class="log" role="status">{{ log }}</div>
+      }
 
       @if (job.errorMessage) {
         <div class="error" role="alert">
@@ -167,6 +179,13 @@ export class JobProgressComponent {
     const min = Math.floor(sec / 60);
     const rem = sec % 60;
     return `${min}m ${rem}s`;
+  });
+
+  /** The worker's latest log line, so the drawer answers what the operator
+   * just asked it — chiefly the too-late cancel acknowledgment (#2463). */
+  readonly latestLog = computed(() => {
+    const logs = this.jobOrNull()?.recentLogs;
+    return logs?.length ? (logs[logs.length - 1].message ?? null) : null;
   });
 
   cancel(): void {
