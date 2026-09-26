@@ -375,7 +375,10 @@ async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dic
         )
         return _serialize(result)
 
-    run_in_thread(req.job_id, work, thread_name=f"backtest-{req.job_id[:8]}")
+    # The rule-based job checks cancellation only at its three phase
+    # boundaries, so every check must read the flag (#2463; the framework
+    # default is also 1 — this states it like every sibling job).
+    run_in_thread(req.job_id, work, thread_name=f"backtest-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "status": "queued"}
 
 
@@ -673,6 +676,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
     )
     from app.routers.lean_sidecar import TrustedRunRequestModel
     from app.services.lean_sidecar_service import (
+        LeanRunCancelled,
         LeanSidecarServiceError,
         RunIdAlreadyUsedError,
         TrustedRunRequest,
@@ -720,7 +724,13 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:
-        cancel.raise_if_cancelled()
+        # Cancellation is owned by the orchestrator (#2463 review): it stops
+        # the run at the pre-launch seams (cleaning the workspace so the
+        # run_id stays reusable) and acknowledges a too-late request as a
+        # durable typed job event while the container runs and through final
+        # persistence. The worker supplies the flag reader and the
+        # acknowledgment emitter, and translates the service's cancellation
+        # into the framework's.
 
         def _mark_parity(status_label: str, detail: str) -> None:
             """Surface a companion failure on the group's ParityVerdict.
@@ -739,10 +749,15 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
                 trusted_request,
                 on_phase=emit.phase,
                 on_log=emit.log,
+                cancel_requested=cancel.should_cancel,
+                on_cancel_too_late=emit.cancel_acknowledged,
             )
             return jsonable_encoder(result, by_alias=False)
 
         try:
+            # The pre-flight check lives inside the try so a pre-start cancel
+            # reaches the same ``JobCancelled`` exit as a seam cancel below.
+            cancel.raise_if_cancelled()
             # ``run_trusted_sample`` is async because the launcher hop
             # uses ``httpx.AsyncClient``. The job
             # framework runs ``work`` in a thread, so each job gets its
@@ -777,6 +792,18 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             emit.failed(code="lean_sidecar_service_error", message=str(e))
             _mark_parity("run_failed", f"lean_sidecar_service_error: {e}")
             return None
+        except LeanRunCancelled as e:
+            # The orchestrator stopped the run before any container existed
+            # and cleaned its workspace (#2463): an operator outcome, not a
+            # machinery failure — but the LEAN half of a paired run will
+            # never land, so the group must not stay eternally pending. The
+            # runner's sink turns this into ``job.cancelled``.
+            _mark_parity("run_failed", "cancelled before the LEAN container launched")
+            raise JobCancelled(str(e)) from e
+        except JobCancelled:
+            # The worker's own pre-flight check (above) — same outcome.
+            _mark_parity("run_failed", "cancelled before the LEAN container launched")
+            raise
         except Exception as e:
             # Propagates to ``run_in_thread``'s terminal sink, which
             # converts it to ``job.failed`` — but the parity group must
@@ -784,7 +811,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             _mark_parity("run_failed", f"{type(e).__name__}: {e}")
             raise
 
-    run_in_thread(req.job_id, work, thread_name=f"lean-{req.job_id[:8]}")
+    run_in_thread(req.job_id, work, thread_name=f"lean-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "status": "queued"}
 
 

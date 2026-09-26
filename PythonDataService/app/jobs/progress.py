@@ -208,12 +208,15 @@ class CancellationCheck:
     The inner loop calls :meth:`should_cancel` (or
     :meth:`raise_if_cancelled`) on every iteration. Redis is consulted at
     most once per ``check_every_n`` calls; intermediate calls return the
-    cached result. This keeps a 100k-bar backtest from issuing 100k
-    Redis HGETs.
+    cached result. The **first** call always consults Redis (#2463): a job
+    that checks cancellation only a handful of times — at phase boundaries —
+    would otherwise never read the flag at all, so its Cancel control was
+    inert. Hot loops that genuinely check per bar opt into throttling with
+    an explicit ``check_every_n``; the default (1) reads on every call.
     """
 
     job_id: str
-    check_every_n: int = 1000
+    check_every_n: int = 1
 
     def __post_init__(self) -> None:
         self._calls = 0
@@ -221,7 +224,7 @@ class CancellationCheck:
 
     def should_cancel(self) -> bool:
         self._calls += 1
-        if self._calls % self.check_every_n != 0 and self._cached is False:
+        if self._calls > 1 and self._calls % self.check_every_n != 0 and self._cached is False:
             return False
         try:
             r = get_redis()
@@ -317,6 +320,15 @@ class ProgressEmitter:
 
     def log(self, message: str, *, level: str = "info") -> None:
         self._emit("job.log", {"level": level, "message": message})
+
+    def cancel_acknowledged(self, message: str) -> None:
+        """Acknowledge a cancel request the work can no longer honour (#2463).
+
+        A durable, typed outcome — not a log line that the next progress
+        event overwrites — so the UI that offered Cancel can answer for it
+        while the (unstoppable) work runs to completion.
+        """
+        self._emit("job.cancel_acknowledged", {"message": message})
 
     def completed(self, result: Any) -> None:
         self._r.set(_result_key(self.job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)

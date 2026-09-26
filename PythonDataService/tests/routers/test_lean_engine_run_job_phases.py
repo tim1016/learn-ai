@@ -121,6 +121,9 @@ class TestRunTrustedSamplePhaseSequence:
             def raise_if_cancelled(self) -> None:
                 return None
 
+            def should_cancel(self) -> bool:
+                return False
+
         class _Emitter:
             def phase(self, _phase: str) -> None:
                 return None
@@ -130,6 +133,9 @@ class TestRunTrustedSamplePhaseSequence:
 
             def failed(self, *, code: str, message: str) -> None:
                 raise AssertionError(f"job unexpectedly failed: {code} {message}")
+
+            def cancel_acknowledged(self, message: str) -> None:
+                return None
 
         def run_sync(job_id: str, work: Any, **_kwargs: Any) -> None:
             def target() -> None:

@@ -15,6 +15,7 @@ export type JobEventType =
   | 'job.phase'
   | 'job.progress'
   | 'job.log'
+  | 'job.cancel_acknowledged'
   | 'job.completed'
   | 'job.failed'
   | 'job.cancelled';
@@ -79,6 +80,10 @@ export interface JobState {
   // Wall-clock at which the job started/finished, for elapsed display.
   startedAt?: number;
   finishedAt?: number;
+  /** A cancel request the work could no longer honour (#2463): the run
+   *  finished anyway and its result was saved; this is the durable answer
+   *  to the Cancel the operator pressed, distinct from the rolling log. */
+  cancelAcknowledged?: string;
   /** Structured lifecycle feed, including phases and progress (not just logs). */
   recentEvents?: readonly JobEventRecord[];
   eventSeq?: number;
@@ -414,6 +419,11 @@ export function applyJobEvent(
       const recent = [...prev.recentLogs, log].slice(-MAX_RECENT_LOGS);
       return withEvent({ ...prev, recentLogs: recent, logSeq: prev.logSeq + 1 });
     }
+    case 'job.cancel_acknowledged':
+      return withEvent({
+        ...prev,
+        cancelAcknowledged: (evt['message'] as string) ?? prev.cancelAcknowledged,
+      });
     case 'job.completed':
       return withEvent({
         ...prev,
@@ -457,7 +467,9 @@ function appendEvent(
     id,
     type: event.type,
     timestamp,
-    level: event.type === 'job.failed' ? 'error' : event.type === 'job.cancelled' ? 'warn' : 'info',
+    level: event.type === 'job.failed' ? 'error'
+      : event.type === 'job.cancelled' || event.type === 'job.cancel_acknowledged' ? 'warn'
+      : 'info',
     summary: describeJobEvent(event),
   };
   return {
@@ -482,6 +494,8 @@ function describeJobEvent(event: JobEvent): string {
     }
     case 'job.log':
       return (event['message'] as string | undefined) ?? 'Log event';
+    case 'job.cancel_acknowledged':
+      return (event['message'] as string | undefined) ?? 'Cancel acknowledged';
     case 'job.completed':
       return event['cached'] === true ? 'Run completed · cached result' : 'Run completed';
     case 'job.failed':

@@ -54,6 +54,11 @@ import { JobsService, JobState } from '../../services/jobs.service';
       color: var(--red-600, #dc2626);
       margin-top: 0.5rem;
     }
+    .cancel-notice {
+      color: var(--warn, #b45309);
+      font-size: 0.75rem;
+      margin-top: 0.375rem;
+    }
     .actions {
       display: flex;
       gap: 0.5rem;
@@ -87,6 +92,13 @@ import { JobsService, JobState } from '../../services/jobs.service';
         }
         <span>{{ elapsedLabel() }}</span>
       </div>
+
+      <!-- A cancel this work could no longer honour: a durable typed outcome
+           (#2463), not a rolling log line, so the drawer keeps answering for
+           the Cancel the operator pressed until the job finishes. -->
+      @if (job.cancelAcknowledged) {
+        <div class="cancel-notice" role="status">{{ job.cancelAcknowledged }}</div>
+      }
 
       @if (job.errorMessage) {
         <div class="error" role="alert">

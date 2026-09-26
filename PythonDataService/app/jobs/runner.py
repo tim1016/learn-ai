@@ -45,7 +45,10 @@ def run_in_thread(
     job_id: str,
     work: JobWork,
     *,
-    cancel_check_every_n: int = 1000,
+    # Default 1 (#2463): a job that checks cancellation only a handful of
+    # times must actually read the flag, so throttling is opt-in for hot
+    # loops that check per bar (feature research passes 100, signal engine 50).
+    cancel_check_every_n: int = 1,
     thread_name: str | None = None,
 ) -> threading.Thread:
     """Spawn a daemon thread that runs ``work(emitter, cancel_check)``.
