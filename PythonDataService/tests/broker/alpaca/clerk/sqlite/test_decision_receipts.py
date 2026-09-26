@@ -162,6 +162,62 @@ def test_final_outcome_replaces_the_provisional_receipt_without_new_sequence(
     assert [receipt.seq for receipt in receipts.tail(2)] == [1]
 
 
+def test_evidence_pages_pin_the_watermark_while_new_decisions_arrive(
+    repository: ClerkSqliteRepository, receipts: SqliteDecisionReceipts,
+) -> None:
+    for index in range(3):
+        receipts.append(outcome="no_action", symbol="SPY", observed_at_ms=index,
+                        facts={"bar_ref": f"SPY@{index}", "run_id": "run-1"})
+    first = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=2)
+    assert [r.seq for r in first.receipts] == [1, 2]
+    assert first.highest_seq == 3
+    assert first.next_after_seq == 2
+    assert first.meta == repository.control_meta_snapshot()
+    receipts.append(outcome="no_action", symbol="SPY", observed_at_ms=3, facts={"bar_ref": "SPY@3"})
+    second = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=2, through_seq=3, limit=2)
+    assert [r.seq for r in second.receipts] == [3]
+    assert second.highest_seq == 3
+    assert second.next_after_seq is None
+
+
+def test_evidence_pages_keep_protected_history_and_expose_retention_gaps(
+    repository: ClerkSqliteRepository, receipts: SqliteDecisionReceipts, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.broker.alpaca.clerk.sqlite.decision_receipts as module
+
+    monkeypatch.setattr(module, "MAX_DECISION_RECEIPTS_PER_STRATEGY", 3)
+    for index in range(6):
+        receipts.append(outcome="no_action", symbol="SPY", observed_at_ms=index, facts={
+            "bar_ref": f"SPY@{index}", "retention_class": "protected_effect" if index == 0 else "ordinary",
+        })
+    page = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=500)
+    assert [r.seq for r in page.receipts] == [1, 4, 5, 6]
+    assert page.highest_seq == 6
+    assert page.next_after_seq is None
+
+
+def test_new_evidence_walk_sees_an_older_receipts_final_outcome(
+    repository: ClerkSqliteRepository, receipts: SqliteDecisionReceipts,
+) -> None:
+    receipts.append(outcome="enter_intent", symbol="SPY", observed_at_ms=1, facts={"bar_ref": "SPY@1"})
+    before = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=500)
+    receipts.update_final_outcome(bar_ref="SPY@1", outcome="blocked", facts={"bar_ref": "SPY@1"})
+    after = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=500)
+    assert before.highest_seq == after.highest_seq == 1
+    assert before.receipts[0].outcome == "enter_intent"
+    assert after.receipts[0].outcome == "blocked"
+
+
+def test_empty_evidence_and_unknown_bot_are_distinct(repository: ClerkSqliteRepository) -> None:
+    page = repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=None, limit=500)
+    assert page.highest_seq == 0
+    assert page.receipts == ()
+    with pytest.raises(KeyError):
+        repository.decision_receipt_page(strategy_instance_id="missing-bot", after_seq=0, through_seq=None, limit=500)
+    with pytest.raises(ValueError, match="watermark moved backwards"):
+        repository.decision_receipt_page(strategy_instance_id="spy-bot", after_seq=0, through_seq=1, limit=500)
+
+
 def test_append_prunes_receipts_beyond_the_retention_bound(
     receipts: SqliteDecisionReceipts,
     repository: ClerkSqliteRepository,

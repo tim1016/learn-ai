@@ -8792,6 +8792,106 @@
         "title": "ClerkCustodyWindowSummary",
         "type": "object"
       },
+      "ClerkDecisionEvidencePage": {
+        "additionalProperties": false,
+        "description": "A bounded source page; missing retained sequences are never concealed.",
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Account Mode",
+            "type": "string"
+          },
+          "after_seq": {
+            "minimum": 0.0,
+            "title": "After Seq",
+            "type": "integer"
+          },
+          "authority_generation": {
+            "minimum": 1.0,
+            "title": "Authority Generation",
+            "type": "integer"
+          },
+          "authority_kind": {
+            "enum": [
+              "sqlite",
+              "synthetic",
+              "shadow"
+            ],
+            "title": "Authority Kind",
+            "type": "string"
+          },
+          "config_hash": {
+            "minLength": 1,
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "db_identity_token": {
+            "minLength": 1,
+            "title": "Db Identity Token",
+            "type": "string"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ExperimentDecision"
+            },
+            "maxLength": 500,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "highest_seq": {
+            "minimum": 0.0,
+            "title": "Highest Seq",
+            "type": "integer"
+          },
+          "next_after_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After Seq"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "strategy_instance_id",
+          "db_identity_token",
+          "authority_generation",
+          "config_hash",
+          "account_mode",
+          "authority_kind",
+          "observed_at_ms",
+          "after_seq",
+          "highest_seq",
+          "next_after_seq",
+          "decisions"
+        ],
+        "title": "ClerkDecisionEvidencePage",
+        "type": "object"
+      },
       "ClerkOrderInstruction": {
         "additionalProperties": false,
         "description": "Typed, receipt-supplied order fields; never a client-side inference.",
@@ -16021,6 +16121,110 @@
           "exit_allowance_bps"
         ],
         "title": "ExitTermsInput",
+        "type": "object"
+      },
+      "ExperimentDecision": {
+        "additionalProperties": false,
+        "description": "One Clerk receipt; observation time is never substituted for decision time.",
+        "properties": {
+          "decision_bar_close_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Bar Close Ms"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "outcome": {
+            "enum": [
+              "enter_intent",
+              "exit_intent",
+              "entered",
+              "exited",
+              "no_action",
+              "blocked",
+              "candidate_uncaptured_at_crash",
+              "decision_bar_quarantined"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "trace_digest": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Digest"
+          }
+        },
+        "required": [
+          "seq",
+          "run_id",
+          "recorded_at_ms",
+          "outcome",
+          "reason_code"
+        ],
+        "title": "ExperimentDecision",
         "type": "object"
       },
       "ExposureNoticeView": {
@@ -46374,6 +46578,113 @@
         ]
       }
     },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence": {
+      "get": {
+        "operationId": "decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "through_seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Through Seq"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkDecisionEvidencePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Paged, identity-bearing decision evidence for Paper/Live experiments",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm": {
       "post": {
         "description": "Append only the signed plan's exact evidence and its existing proof result.",
@@ -56399,6 +56710,90 @@
           }
         },
         "summary": "Fleet Bot Chart Live",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/decision-evidence": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/decision-evidence (custody_read).",
+        "operationId": "fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Decision Evidence",
         "tags": [
           "broker-clerks"
         ]

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome
+from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptPageResource
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 EpochMs = Annotated[int, Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)]
@@ -154,3 +156,80 @@ class ExperimentDecisionRevision(BaseModel):
 
     captured_at_ms: EpochMs
     decision: ExperimentDecision
+
+
+class ClerkDecisionEvidencePage(BaseModel):
+    """A bounded source page; missing retained sequences are never concealed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    account_id: str = Field(min_length=1)
+    strategy_instance_id: str = Field(min_length=1)
+    db_identity_token: str = Field(min_length=1)
+    authority_generation: int = Field(strict=True, ge=1)
+    config_hash: str = Field(min_length=1)
+    account_mode: Literal["paper", "live"]
+    authority_kind: Literal["sqlite", "synthetic", "shadow"]
+    observed_at_ms: EpochMs
+    after_seq: int = Field(strict=True, ge=0)
+    highest_seq: int = Field(strict=True, ge=0)
+    next_after_seq: int | None = Field(strict=True, ge=1)
+    decisions: tuple[ExperimentDecision, ...] = Field(max_length=500)
+
+    @model_validator(mode="after")
+    def ordered_page(self) -> Self:
+        sequences = [receipt.seq for receipt in self.decisions]
+        if sequences != sorted(set(sequences)):
+            raise ValueError("Evidence page sequences must be unique and ascending")
+        if self.after_seq > self.highest_seq or any(
+            seq <= self.after_seq or seq > self.highest_seq for seq in sequences
+        ):
+            raise ValueError("Evidence page is outside its sequence bounds")
+        if self.next_after_seq is not None and (
+            not sequences or self.next_after_seq != sequences[-1] or self.next_after_seq >= self.highest_seq
+        ):
+            raise ValueError("Evidence page continuation must advance within its source watermark")
+        return self
+
+    @classmethod
+    def from_resource(
+        cls,
+        page: DecisionReceiptPageResource,
+        *,
+        account_mode: Literal["paper", "live"],
+        authority_kind: Literal["sqlite", "synthetic", "shadow"],
+    ) -> Self:
+        decisions = []
+        for receipt in page.receipts:
+            facts = json.loads(receipt.facts_json)
+            if not isinstance(facts, dict):
+                raise ValueError("Decision receipt facts must be an object")
+            decisions.append(
+                ExperimentDecision.model_validate(
+                    {
+                        "seq": receipt.seq,
+                        "run_id": facts.get("run_id"),
+                        "recorded_at_ms": receipt.observed_at_ms,
+                        "decision_bar_close_ms": facts.get("decision_bar_close_ms"),
+                        "trace_digest": facts.get("trace_digest"),
+                        "outcome": receipt.outcome,
+                        "reason_code": facts.get("reason_code") or receipt.outcome,
+                        "decision_id": facts.get("decision_id") or facts.get("evaluation_id"),
+                        "order_ref": receipt.order_ref,
+                    }
+                )
+            )
+        return cls(
+            account_id=page.meta.account_id,
+            strategy_instance_id=page.strategy_instance_id,
+            db_identity_token=page.meta.db_identity_token,
+            authority_generation=page.meta.authority_generation,
+            config_hash=page.config_hash,
+            account_mode=account_mode,
+            authority_kind=authority_kind,
+            observed_at_ms=page.observed_at_ms,
+            after_seq=page.after_seq,
+            highest_seq=page.highest_seq,
+            next_after_seq=page.next_after_seq,
+            decisions=tuple(decisions),
+        )

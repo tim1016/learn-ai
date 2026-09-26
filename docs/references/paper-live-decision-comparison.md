@@ -47,6 +47,22 @@ Receipts, revisions, watermarks and per-session summaries (including both lanes'
 run IDs) commit together under SQLite WAL with full synchronization. A failure
 to build the comparison rolls the entire capture back.
 
+The Clerk exposes a bounded read at
+`GET /api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence`.
+Its fleet operation is `bot_decision_evidence`, routed through
+`/api/brokers/alpaca/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/decision-evidence`.
+Each page carries the database identity, authority generation, configuration
+hash, execution world and source sequence watermark. It includes older protected
+receipts as well as the ordinary retention window. Page reads share the Clerk's
+writer coordinator; the whole multi-page walk is not a point-in-time snapshot.
+
+`paper_live_evidence_reader.py` consumes this operation through `LaneRouter`.
+It checks the frozen routing binding, canonical account identity, database,
+strategy instance and Paper/Live world on every page. It also refuses changed
+configuration/authority or sequence bounds mid-walk. Each collection pass starts
+at zero and freezes the first page's highest sequence, observing earlier receipt
+revisions without chasing new arrivals indefinitely. No command is dispatched.
+
 ## Validation
 
 - `tests/services/test_paper_live_comparison.py`: exact join/count fixtures,
@@ -58,16 +74,25 @@ to build the comparison rolls the entire capture back.
   independent concurrent connections, retention gaps, mutable final outcomes,
   sticky trace conflicts, frozen provenance, idempotency and transactional
   rollback of both evidence and summaries.
+- `tests/services/test_paper_live_evidence_reader.py`: paged fleet collection,
+  account spelling aliases, identity/world mismatches, changing authority,
+  malformed pagination and a synthetic ENTER/EXIT collection into the archive
+  with no broker command. This does not validate real order or fill execution.
+- `tests/broker/alpaca/clerk/sqlite/test_decision_receipts.py` and
+  `tests/routers/test_alpaca_clerk_sqlite.py`: committed source pages, protected
+  history, final-outcome revisions, HTTP boundaries and non-mutating reads.
 
 ## Remaining integration
 
-This is the tested evidence foundation; it has no production collector, HTTP
-route, or UI caller yet. Issue #2371 remains open. The next steps are:
+The source endpoint, routed reader and archive are implemented. The experiment
+workflow and scheduled collector are not integrated yet. Issue #2371 remains
+open. The next steps are:
 
-1. Read complete, identity-verified Clerk snapshots through the existing fleet
-   routing boundary, including revised earlier receipts and explicit sequence
-   watermarks. Serialize collection per lane and expose collection failures and
-   freshness. Do not infer completeness from the panel's bounded receipt tail.
+1. Schedule collection through the routed reader, serialize passes per lane,
+   and persist/expose collection failures and freshness. Preserve successful
+   observations from one lane when the other is unavailable. Do not infer
+   completeness from the panel's bounded receipt tail or display an old capture
+   as a current successful observation after a collection failure.
 2. Persist the twin deployment request and each lane's idempotent command state
    before dispatch. Reuse existing admission and deployment commands; preserve
    partial success and unknown outcomes. Both lanes must receive one resolved

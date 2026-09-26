@@ -85,6 +85,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     TimelinePageResponse,
     safe_flatten_pricing_response,
 )
+from app.schemas.paper_live_experiments import ClerkDecisionEvidencePage
 from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
@@ -210,6 +211,45 @@ def _historical_recovery_refusal(exc: HistoricalExecutionRecoveryRefused) -> HTT
             "next_step": exc.next_step,
         },
     )
+
+
+@router.get(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence",
+    response_model=ClerkDecisionEvidencePage,
+    summary="Paged, identity-bearing decision evidence for Paper/Live experiments",
+)
+async def decision_evidence(
+    account_id: str, strategy_instance_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    through_seq: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=500, ge=1, le=500),
+) -> ClerkDecisionEvidencePage:
+    facade = _active_sqlite_facade(account_id)
+    try:
+        page = await asyncio.to_thread(
+            facade.repository.decision_receipt_page,
+            strategy_instance_id=strategy_instance_id, after_seq=after_seq,
+            through_seq=through_seq, limit=limit,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"reason": "unknown_strategy_instance"}) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "decision_evidence_cursor_conflict", "message": str(exc)},
+        ) from exc
+    try:
+        return ClerkDecisionEvidencePage.from_resource(
+            page, account_mode=facade.account_mode, authority_kind=facade.authority_kind,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "decision_evidence_invalid",
+                "message": "The Clerk's retained decision evidence could not be validated.",
+            },
+        ) from exc
 
 
 @router.post(

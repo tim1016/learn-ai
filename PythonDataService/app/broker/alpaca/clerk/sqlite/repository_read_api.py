@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
     ControlMetaSnapshot,
+    DecisionReceiptPageResource,
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
@@ -360,6 +361,17 @@ class ClerkSqliteRepositoryReadApi:
                 strategy_instance_id=strategy_instance_id,
                 transaction_ref=transaction_ref,
                 limit=limit,
+            )
+
+    def decision_receipt_page(
+        self: ClerkSqliteRepository, *, strategy_instance_id: str,
+        after_seq: int, through_seq: int | None, limit: int,
+    ) -> DecisionReceiptPageResource:
+        """Read receipt rows, identity and watermark under the writer coordinator."""
+        with self._write_lock:
+            return reads.decision_receipt_page(
+                self._conn, strategy_instance_id=strategy_instance_id,
+                after_seq=after_seq, through_seq=through_seq, limit=limit, observed_at_ms=self._clock(),
             )
 
     def external_order(

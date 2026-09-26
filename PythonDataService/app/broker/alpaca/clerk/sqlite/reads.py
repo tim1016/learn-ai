@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
     ControlMetaSnapshot,
+    DecisionReceiptPageResource,
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
@@ -281,6 +282,42 @@ def decision_receipts_by_transaction(
         (strategy_instance_id, transaction_ref, transaction_ref, limit),
     ).fetchall()
     return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
+
+
+def decision_receipt_page(
+    conn: sqlite3.Connection, *, strategy_instance_id: str, after_seq: int,
+    through_seq: int | None, limit: int, observed_at_ms: int,
+) -> DecisionReceiptPageResource:
+    """Walk retained evidence from the oldest row, including protected history.
+
+    ``through_seq`` freezes a walk's upper sequence while new decisions arrive.
+    Each page is a committed read; the walk is not a historical database snapshot.
+    A new walk starts at zero so revisions to old receipts remain observable.
+    """
+    instance = strategy_instance(conn, strategy_instance_id)
+    if instance is None:
+        raise KeyError(strategy_instance_id)
+    latest = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) FROM decision_receipts WHERE strategy_instance_id = ?",
+        (strategy_instance_id,),
+    ).fetchone()[0]
+    highest = latest if through_seq is None else through_seq
+    if highest > latest:
+        raise ValueError("The source receipt watermark moved backwards")
+    if after_seq > highest:
+        raise ValueError("The receipt cursor exceeds the requested source watermark")
+    rows = conn.execute(
+        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
+        "WHERE strategy_instance_id = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+        (strategy_instance_id, after_seq, highest, limit + 1),
+    ).fetchall()
+    receipts = tuple(DecisionReceiptResource(**dict(row)) for row in rows[:limit])
+    return DecisionReceiptPageResource(
+        meta=control_meta_snapshot(conn), strategy_instance_id=strategy_instance_id,
+        config_hash=instance["config_hash"], observed_at_ms=observed_at_ms,
+        after_seq=after_seq, highest_seq=highest,
+        next_after_seq=receipts[-1].seq if len(rows) > limit else None, receipts=receipts,
+    )
 
 
 def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
