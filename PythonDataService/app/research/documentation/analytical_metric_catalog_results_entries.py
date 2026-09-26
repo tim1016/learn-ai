@@ -84,7 +84,7 @@ _PLATFORM_TRADER_CAUTION: Final[dict[str, str]] = {
     "recovery_duration": "An unrecovered drawdown may be censored by the run end rather than fully represented by a completed recovery interval.",
     "max_consecutive_losers": "The next losing streak can exceed the historical maximum.",
     "fee_drag": "A low percentage is only meaningful if the fee, spread, and slippage model is realistic.",
-    "probabilistic_sharpe": "The probability is conditional on the estimator and sample assumptions; it is not the chance the next trade wins.",
+    "probabilistic_sharpe": "The probability is conditional on the estimator and sample assumptions; it is not the chance the next trade wins. It describes this one run and is not adjusted for selection among several tried settings.",
     "sample_size": "Observation count does not measure market-regime diversity or independence.",
     "skepticism_penalty": "This policy adjustment is an investigation prompt, not proof of overfitting.",
     "trade_portfolio_sharpe_gap": "A gap identifies different measurement contracts; it does not by itself identify which one is wrong.",

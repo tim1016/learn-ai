@@ -66,6 +66,25 @@ header {
     font: 650 var(--fs-xs)/1 var(--font-mono);
     white-space: nowrap;
   }
+
+  // The note rides under the label/value row, inside the same counter-led
+  // grid; a native <details> keeps it reachable by keyboard, touch, and
+  // screen reader without a hover-only `title` (#2462).
+  .results-sidebar__note {
+    grid-column: 2 / -1;
+
+    summary {
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: var(--fs-xxs);
+    }
+
+    p {
+      margin: 2px 0 0;
+      color: var(--text-subtle);
+      font-size: var(--fs-xxs);
+    }
+  }
 }
 
 [data-band="positive"] { border-left-color: var(--bull) !important; }

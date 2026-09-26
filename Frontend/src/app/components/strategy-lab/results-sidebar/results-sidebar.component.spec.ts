@@ -104,4 +104,30 @@ describe("ResultsSidebarComponent", () => {
     expect(root.textContent).toContain("Diverged");
     expect(root.textContent).not.toContain("Counts differ");
   });
+
+  it("exposes each metric's note through a keyboard-operable disclosure, not a hover-only title (#2462)", async () => {
+    await TestBed.configureTestingModule({
+      imports: [ResultsSidebarComponent],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(ResultsSidebarComponent);
+    fixture.componentRef.setInput("run", run());
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const disclosure = root.querySelector("details.results-sidebar__note");
+    expect(disclosure).not.toBeNull();
+    // No metric row leans on a hover `title` for its explanation anymore.
+    expect(root.querySelector(".results-sidebar__metrics [title]")).toBeNull();
+
+    const summary = disclosure?.querySelector("summary") ?? null;
+    expect(summary?.textContent?.trim()).toBe("Why this score");
+    // The note text itself lives inside the disclosure, reachable once opened.
+    expect(disclosure?.textContent).toContain("Above target.");
+
+    summary?.click();
+    fixture.detectChanges();
+    expect((disclosure as HTMLDetailsElement).open).toBe(true);
+    expect(disclosure?.querySelector("p")?.textContent).toContain("Above target.");
+  });
 });

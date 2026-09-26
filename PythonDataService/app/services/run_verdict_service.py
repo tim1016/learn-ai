@@ -800,8 +800,14 @@ def _grade_psr_sub(v: float | None) -> RunVerdictSubScore:
     if v < 0.95:
         return base.model_copy(update={"score": 14, "note": "Approaching the 95% threshold."})
     if v < 0.99:
-        return base.model_copy(update={"score": 20, "note": "High statistical confidence."})
-    return base.model_copy(update={"score": 18, "note": "Near-certain - verify sample size isn't inflated."})
+        return base.model_copy(update={
+            "score": 20,
+            "note": "Above the 95% threshold for this one run - not adjusted for picking the best of several tried settings.",
+        })
+    return base.model_copy(update={
+        "score": 18,
+        "note": "Above the 99% threshold for this one run - not adjusted for picking the best of several tried settings.",
+    })
 
 
 def _grade_sample_size_sub(n: float | None) -> RunVerdictSubScore:
