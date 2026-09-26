@@ -29,6 +29,7 @@ from app.broker.contract.registry import (
 )
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
+from app.schemas.exit_terms import ExitTermsInput
 from app.services import sqlite_clerk_compat
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
@@ -39,6 +40,7 @@ from tests._helpers.bot_runner.custody import (
 )
 from tests._helpers.bot_runner.doubles import _CustodyClerk
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
@@ -127,7 +129,7 @@ def _start_guard_sealing(
 
     @asynccontextmanager
     async def guard(sid: str) -> AsyncIterator[ClerkCustodySnapshot]:
-        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id}), ProgramLegPolicy.regular_only()
+        yield _flat_custody_snapshot(sid).model_copy(update={"account_id": account_id}), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
     return guard
 
@@ -167,7 +169,7 @@ async def test_unknown_broker_is_typed_404(api) -> None:
 @pytest.mark.asyncio
 async def test_deploy_stop_button_rule_end_to_end(api) -> None:
     app, registry = api
-    deployed = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert deployed.running is True
     assert deployed.phase == "ON_DUTY"
     assert deployed.broker == "alpaca"
@@ -202,7 +204,7 @@ async def test_registry_not_installed_is_503(api) -> None:
 @pytest.mark.asyncio
 async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
     app, registry = api
-    deployed = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     first_run_id = deployed.active_run_id
     await registry.stop("alpaca", _SID)
     resumed = await registry.resume_existing("alpaca", _SID)
@@ -280,7 +282,7 @@ async def test_scoped_run_reads_match_the_canonical_account_identity(
     registry = _bot_registry(tmp_path / "sealed", _start_guard_sealing(sealed_account_id))
     set_bot_task_registry(registry)
     deployed = await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode=mode
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode=mode
     )
     assert registry.binding_for_control("alpaca", _SID).sealed_account_id == sealed_account_id
     monkeypatch.setattr(
@@ -322,7 +324,7 @@ async def test_scoped_run_read_refuses_a_legacy_unsealed_binding(
 ) -> None:
     """A binding with no sealed account is attributable to no account."""
     app, registry = api
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     unsealed = registry.binding_for_control("alpaca", _SID).model_copy(
         update={"sealed_account_id": None}
     )
@@ -350,7 +352,7 @@ async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
     configure_execution_allowances(monkeypatch)
     app, registry = api
     await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run"
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run"
     )
     monkeypatch.setattr(sqlite_clerk_compat, "active_sqlite_facade", lambda _broker: None)
 
@@ -366,7 +368,7 @@ async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
 @pytest.mark.asyncio
 async def test_run_reads_reject_unknown_bot_and_foreign_cursor(api) -> None:
     app, registry = api
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     async with _client(app) as client:
         missing = await client.get(
             "/api/brokers/alpaca/bots/missing/runs/current"

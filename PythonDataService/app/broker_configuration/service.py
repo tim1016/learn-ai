@@ -405,11 +405,6 @@ class BrokerConfigurationService:
         N+1 — one would win on the primary key and the loser would surface a
         constraint error instead of the contract's ``revision_conflict``.
         """
-        if live_envelope is not None:
-            live_envelope.validate_for_write()
-            if default_exit_terms is not None and default_exit_terms.exit_allowance_bps != live_envelope.xh_exit_bps:
-                from app.broker_configuration.errors import InvalidLiveEnvelope
-                raise InvalidLiveEnvelope("Default exit allowance must match the live envelope exit allowance.")
         self._require_known_credential_slot(credential_slot)
         content_sha256 = revision_content_sha256(
             credential_slot=credential_slot,

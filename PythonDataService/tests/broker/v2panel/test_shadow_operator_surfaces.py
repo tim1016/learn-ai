@@ -75,6 +75,7 @@ from tests._helpers.bot_runner.custody import admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
     SHADOW_ACCT,
@@ -211,7 +212,7 @@ async def test_shadow_runner_can_deploy_stop_and_resume(
     """A real Shadow launch must cross the SQLite-to-runner projection boundary."""
     app, runtime = shadow_app
     deployed = await shadow_registry.deploy(
-        broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
     )
     assert deployed.running is True
     assert deployed.phase == "ON_DUTY"
@@ -278,7 +279,7 @@ async def test_shadow_failed_activation_recovers_and_resumes_the_existing_bindin
         )
         with pytest.raises(ActivationFailedCleanupProvenError):
             await shadow_registry.deploy(
-                broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
+                exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
             )
 
     failed_binding = shadow_registry.binding_for_control("alpaca", SID)
@@ -351,7 +352,7 @@ async def test_shadow_evidence_route_reads_the_custody_namespace(
     """The public live-account route, in either spelling, reads Shadow's SQLite timeline (#2221)."""
     app, _runtime = shadow_app
     await shadow_registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=SID,
         symbol="SPY",
         mode="trade",

@@ -94,7 +94,7 @@ async function renderWorkflow(service = mockService()) {
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
     ],
-    componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
+    componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
   });
   await screen.findByRole('heading', { name: 'Bot binding' });
   return rendered;
@@ -465,7 +465,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
 
       // Switching account supersedes the in-flight PA9 request.
-      await rerender({ componentInputs: { target: withAccount(DEPLOY_TARGET, 'PA7'), accountId: 'PA7' } });
+      await rerender({ componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: withAccount(DEPLOY_TARGET, 'PA7'), accountId: 'PA7' } });
       await vi.advanceTimersByTimeAsync(10);
       pa9Scoped.resolve(labelledView('PA9 readiness'));
       await vi.advanceTimersByTimeAsync(10);

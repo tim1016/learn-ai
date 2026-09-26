@@ -53,6 +53,7 @@ from typing import Literal
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.program_leg import (
+    EXTENDED_HOURS_ALLOWANCE_UNSET,
     LegRefusal,
     LegShape,
     ProgramLegPolicy,
@@ -121,11 +122,9 @@ limit may go, in multiples of the sealed exit allowance.
 
 Owner decision 2026-09-19: refuse a price more than twice the allowance past
 the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
-Deploy-time configurable since #2229 — ``ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE``,
-carried on ``ExtendedHoursAllowances.exit_band_multiple`` — and this constant
-is the value every unset deployment prices the band at. An alias of
-``marketable_limit.DEFAULT_EXIT_BAND_MULTIPLE``, the dataclass default's own
-number: one concept, one value.
+The deploy form pre-fills this value; each bot seals its explicit choice.
+Runtime recovery reads that immutable seal. The legacy environment override
+is consulted only during the one-time upgrade of existing registrations.
 """
 
 RECOVERY_SPREAD_WARNING_BPS = int(DEFAULT_EXIT_SPREAD_CAP_BPS)
@@ -245,7 +244,7 @@ RECOVERY_SPREAD_TOO_WIDE = LegRefusal(
         "price would reach through a broken book."
     ),
     next_step=(
-        "Review the spread and use the operator-confirmed safe-flatten ticket after reviewing the logged "
+        "Review the logged "
         "spreads, or send the operator's priced flatten — its ticket shows the "
         "wide spread and can override it."
     ),
@@ -406,9 +405,8 @@ def price_recovery_reduction(
     state = _tradeable_state(now_ms=now_ms, policy=policy)
     if state.phase == "RTH":
         return RegularSessionReduction()
-    if policy.allowances is None:
-        assert policy.allowance_refusal is not None
-        raise ProgramLegRefused(policy.allowance_refusal)
+    if policy.allowances is None or policy.allowances.exit_bps is None:
+        raise ProgramLegRefused(policy.allowance_refusal or EXTENDED_HOURS_ALLOWANCE_UNSET)
     if quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
     return ExtendedLimitProposal(
@@ -456,9 +454,8 @@ def recovery_reduction_shape(
         return None
     if confirmed is None:
         raise ProgramLegRefused(RECOVERY_LIMIT_REQUIRED)
-    if policy.allowances is None:
-        assert policy.allowance_refusal is not None
-        raise ProgramLegRefused(policy.allowance_refusal)
+    if policy.allowances is None or policy.allowances.exit_bps is None:
+        raise ProgramLegRefused(policy.allowance_refusal or EXTENDED_HOURS_ALLOWANCE_UNSET)
     if current_quote is None:
         raise ProgramLegRefused(RECOVERY_QUOTE_UNAVAILABLE)
     if (
@@ -545,28 +542,18 @@ class PricingSnapshot:
 
 @dataclass(frozen=True)
 class RecoveryPricing:
-    """The seam one pass prices an automatic recovery reduction from (#2229).
+    """One bot-scoped policy and fresh market evidence for an automatic reduction.
 
-    One object instead of a policy and a quote source threaded as two optional
-    arguments. ``policy_source`` is a *resolver*, not a value: the facade's
-    ``program_leg_policy`` re-reads the envelope in force on every access, and
-    a holder that snapshotted it at construction would price from a seal the
-    next re-arm replaced.
+    The facade reads immutable terms from its cache. Pricing and scheduling
+    require the same instance identity; neither falls back to account defaults.
     """
 
-    policy_source: Callable[[], ProgramLegPolicy]
+    policy_for: Callable[[str], ProgramLegPolicy]
     quote_source: QuoteSource
     liveness_source: LivenessSource | None = None
-    instance_policy_source: Callable[[str], ProgramLegPolicy] | None = None
 
-    def policy_for(self, strategy_instance_id: str | None) -> ProgramLegPolicy:
-        """Resolve the bot's sealed terms for both eligibility and pricing."""
-        return (self.instance_policy_source(strategy_instance_id)
-                if self.instance_policy_source is not None and strategy_instance_id is not None
-                else self.policy_source())
-
-    def read(self, symbol: str, now_ms: int, *, strategy_instance_id: str | None = None) -> PricingSnapshot:
-        """Resolve the policy and read the live touch for ``symbol`` — on the event loop."""
+    def read(self, symbol: str, now_ms: int, *, strategy_instance_id: str) -> PricingSnapshot:
+        """Read this bot's cached execution policy and the current live touch."""
         return PricingSnapshot(
             policy=self.policy_for(strategy_instance_id), quote=self.quote_source(symbol, now_ms),
             market_liveness=self.read_liveness(symbol, now_ms),
@@ -616,7 +603,7 @@ def _no_live_quote(symbol: str, now_ms: int) -> TopOfBookQuote | None:
 
 
 UNPRICEABLE_RECOVERY = RecoveryPricing(
-    policy_source=lambda: ProgramLegPolicy.regular_only(),
+    policy_for=lambda _sid: ProgramLegPolicy.regular_only(),
     quote_source=_no_live_quote,
 )
 """The degraded default: nothing can be priced, so an out-of-session re-drive
@@ -766,7 +753,7 @@ def next_redrive_at_ms(*, not_before_ms: int, policy: ProgramLegPolicy) -> int:
     names that session's actual open. A timestamp authorizes evaluation;
     it is never a promise that the Clerk has submitted an order.
     """
-    sendable = policy if policy.allowances is not None else ProgramLegPolicy.regular_only()
+    sendable = policy if policy.allowances is not None and policy.allowances.exit_bps is not None else ProgramLegPolicy.regular_only()
     try:
         _tradeable_state(now_ms=not_before_ms, policy=sendable)
         return not_before_ms

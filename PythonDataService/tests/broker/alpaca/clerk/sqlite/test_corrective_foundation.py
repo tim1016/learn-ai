@@ -64,7 +64,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_includes_the_durable_cash_reservations() -> None:
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION == 18
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -919,6 +919,6 @@ def test_v16_upgrade_adds_only_replaceable_recovery_freshness(tmp_path: Path) ->
     try:
         assert migrated.custody_transitions() == custody
         assert migrated.recovery_check(SID_A) is None
-        assert migrated._conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 17
+        assert migrated._conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 18
     finally:
         migrated.close()

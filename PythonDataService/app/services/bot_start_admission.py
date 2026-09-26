@@ -75,7 +75,7 @@ RECOVERY_EVALUATION_WINDOW_MS = 120_000
 #: than this proves the sweep is no longer evaluating anything.
 RECOVERY_SWEEP_LIVENESS_BOUND_MS = 60_000
 
-type AdmissionCustodyCut = tuple[ClerkCustodySnapshot, ProgramLegPolicy]
+type AdmissionCustodyCut = tuple[ClerkCustodySnapshot, ProgramLegPolicy, ExitTerms | None]
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[AdmissionCustodyCut]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
@@ -104,7 +104,7 @@ class StartRequest:
     # an empty dict) so the hash-backward-compatibility rule in
     # bot_binding_repository.py's ``BrokerBotBinding`` holds all the way
     # through construction.
-    exit_terms: ExitTerms | None = None
+    exit_terms: ExitTerms | None
     strategy_params: dict[str, Any] | None = None
     # Widened to the canonical 3-member ParameterOrigin (not just
     # registered_default/deploy_override): `make_start_request` below already
@@ -182,7 +182,7 @@ def make_start_request(
     carryover_policy: Literal["FORBID", "ALLOW"],
     evidence_override: AlpacaPaperEvidenceOverride | None,
     action_plan: ActionPlan,
-    exit_terms: ExitTerms | None = None,
+    exit_terms: ExitTerms | None,
     strategy_params: dict[str, Any] | None = None,
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
 ) -> StartRequest:
@@ -341,43 +341,28 @@ async def resolve_start_runtime_fact(
 
 
 def extended_hours_admission_fact(
-    *, use_rth: bool, policy: ProgramLegPolicy, observed_at_ms: int
+    *, use_rth: bool, policy: ProgramLegPolicy, observed_at_ms: int, exit_terms: ExitTerms | None
 ) -> ExtendedHoursAdmissionFact:
-    """What the selected authority can price for this run outside regular hours.
+    """Ask entry permission of the account and exit permission of this bot's seal.
 
-    An extended-hours run needs the declared window and both allowances. A
-    regular-hours run asks for no extended session, but its exit on the day's
-    last bar reaches the broker after the close and goes out as an after-hours
-    limit priced from the exit allowance (#2440). Owner decisions 2026-09-25:
-    until that allowance is configured — never a built-in default — the run's
-    state is ``EXIT_ALLOWANCE_UNSET``, which Start refuses. A flat Resume reads
-    the bot's stored terms. Holding Resume separately requires Flatten first
-    (ADR 0045 exit lifecycle amendment); it cannot inherit fresh exit terms.
-    The allowances are one document (``ExtendedHoursAllowances`` has no
-    exit-only form), so the refusal is the shared one. An authority that
-    declares no extended window at all cannot price that exit whatever it is
-    configured with; its run is admitted as before and the send-time rule
-    tells the operator at the close.
+    Every new run needs exit terms, including regular-session runs whose last
+    bar exits after the close. Extended entries additionally need the account's
+    declared window and entry allowance. Holding Resume separately requires
+    Flatten and cannot change the prior bot's immutable terms.
     """
-    if use_rth:
-        state: ExtendedHoursAdmissionState = (
-            "EXIT_ALLOWANCE_UNSET"
-            if policy.window is not None and policy.allowances is None
-            else "NOT_REQUESTED"
-        )
+    if exit_terms is None or exit_terms.exit_allowance_bps is None:
+        state: ExtendedHoursAdmissionState = "EXIT_ALLOWANCE_UNSET"
+    elif use_rth:
+        state = "NOT_REQUESTED"
     elif policy.window is None:
         state = "UNSUPPORTED"
-    elif policy.allowances is None:
+    elif policy.allowances is None or policy.allowances.entry_bps is None:
         state = "ALLOWANCE_UNSET"
     else:
         state = "READY"
-    window = deploy_window(observed_at_ms) if use_rth else None
     return ExtendedHoursAdmissionFact(
-        start_window_refusal=None if window is None else window.refusal,
-        premarket_start=window is not None and window.premarket,
-        state=state,
-        observed_at_ms=observed_at_ms,
-        refusal=policy.allowance_refusal if state in {"ALLOWANCE_UNSET", "EXIT_ALLOWANCE_UNSET"} else None,
+        state=state, observed_at_ms=observed_at_ms,
+        refusal=policy.allowance_refusal if state == "ALLOWANCE_UNSET" else None,
     )
 
 
@@ -406,7 +391,7 @@ async def default_start_custody_guard(
     """Custody for an action: reconciles, so the proof is act-time fresh."""
     clerk = _admission_clerk(binding)
     async with clerk.start_admission_snapshot(binding.strategy_instance_id) as snapshot:
-        yield snapshot, clerk.exit_policy_for_instance(binding.strategy_instance_id, binding.exit_terms)
+        yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(binding.strategy_instance_id)
 
 
 @asynccontextmanager
@@ -420,7 +405,7 @@ async def default_start_custody_projection(
     """
     clerk = _admission_clerk(binding)
     async with clerk.start_admission_projection(binding.strategy_instance_id) as snapshot:
-        yield snapshot, clerk.exit_policy_for_instance(binding.strategy_instance_id, binding.exit_terms)
+        yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(binding.strategy_instance_id)
 
 
 def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
@@ -545,7 +530,7 @@ class BotStartAdmission:
             # evidence_refs. #1702 relaxes what dry_run is *gated on* inside
             # evaluate_run_admission, never what is *fetched* to build the
             # decision.
-            async with self._custody_guard(binding) as (custody, policy):
+            async with self._custody_guard(binding) as (custody, policy, _stored_terms):
                 binding = seal_binding_to_custody_snapshot(binding, custody)
                 observed_at_ms = self._now_ms()
                 get_market_liveness_store().request_symbol(binding.symbol, now_ms=observed_at_ms)
@@ -611,8 +596,9 @@ class BotStartAdmission:
                         binding.symbol,
                         observed_at_ms,
                     ),
+                    start_window=deploy_window(observed_at_ms) if binding.use_rth else None,
                     extended_hours=extended_hours_admission_fact(
-                        use_rth=binding.use_rth, policy=policy, observed_at_ms=observed_at_ms
+                        use_rth=binding.use_rth, policy=policy, observed_at_ms=observed_at_ms, exit_terms=binding.exit_terms
                     ),
                     arming=self._arming_fact(binding, custody, observed_at_ms),
                 )

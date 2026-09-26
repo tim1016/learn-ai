@@ -26,6 +26,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 
 from ._support import _SESSION_OPEN_MS, _green_bar
@@ -41,7 +42,7 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=10, exit_bps=20)
 
 def _extended_binding(account_id: str) -> BrokerBotBinding:
     return BrokerBotBinding(
-        strategy_instance_id=_SID,
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="SPY",

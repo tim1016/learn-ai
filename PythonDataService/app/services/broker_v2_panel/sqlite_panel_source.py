@@ -1029,41 +1029,53 @@ __all__ = [
 ]
 
 
-async def read_terminal_exposure_notices(facade: SqliteAlpacaClerkFacade) -> list[ExposureNoticeView]:
+async def read_account_custody(
+    facade: SqliteAlpacaClerkFacade,
+) -> tuple[ClerkProjection, list[ExposureNoticeView]]:
+    """Read desk and bell custody with terminal notices on one SQLite snapshot."""
+    def read() -> tuple[ClerkProjection, list[ExposureNoticeView]]:
+        reader = SqliteClerkProjectionReader.from_facade(facade)
+        try:
+            with reader.snapshot():
+                projection = reader.account_snapshot()
+                return projection, _terminal_exposure_notices(facade, reader)
+        finally:
+            reader.close()
+
+    return await asyncio.to_thread(read)
+
+
+def _terminal_exposure_notices(
+    facade: SqliteAlpacaClerkFacade, reader: SqliteClerkProjectionReader,
+) -> list[ExposureNoticeView]:
     """Reuse roster lifecycle truth; a bad bot never hides its healthy siblings."""
     from app.services.broker_v2_panel.sqlite_panel_adapter import terminal_exposure_notices
 
-    def read() -> list[ExposureNoticeView]:
-        notices: list[ExposureNoticeView] = []
-        repository = facade.repository
-        reader = SqliteClerkProjectionReader.from_facade(facade)
+    notices: list[ExposureNoticeView] = []
+    repository = facade.repository
+    for registration in repository.strategy_instances():
+        sid = str(registration["strategy_instance_id"])
         try:
-            for registration in repository.strategy_instances():
-                sid = str(registration["strategy_instance_id"])
-                if repository.active_run(sid) is not None:
-                    continue
-                try:
-                    status = build_roster_status("alpaca", registration, repository)
-                    outcome = status.duty_outcome
-                    if outcome is None or outcome.kind not in UNCLEAN_DUTY_OUTCOMES:
-                        continue
-                    notices.extend(terminal_exposure_notices(
-                        reader.bot_snapshot(sid), sid=sid, symbol=status.symbol,
-                        kind=outcome.kind, reason_code=outcome.reason_code, running=status.running,
-                    ))
-                except (SqliteCatalogProjectionUnavailable, ProjectionReadError):
-                    logger.error("Could not read one bot's terminal custody evidence", extra={
-                        "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
-                        "account_id": repository.account_id,
-                    }, exc_info=True)
-                    notices.append(ExposureNoticeView(
-                        strategy_instance_id=sid, symbol=str(registration["symbol"]),
-                        kind="position_unverified", label="Position could not be verified; check the broker",
-                        explanation="This bot's lifecycle or custody evidence could not be read. Check its position and working orders at the broker.",
-                        action_label="Open bot",
-                    ))
-        finally:
-            reader.close()
-        return notices
-
-    return await asyncio.to_thread(read)
+            status = build_roster_status("alpaca", registration, repository)
+            outcome = status.duty_outcome
+            if outcome is None or outcome.kind not in UNCLEAN_DUTY_OUTCOMES:
+                continue
+            projection = reader.bot_snapshot(sid)
+            if projection is None:
+                raise ProjectionReadError(f"Custody projection is missing for {sid}")
+            notices.extend(terminal_exposure_notices(
+                projection, sid=sid, symbol=status.symbol,
+                kind=outcome.kind, reason_code=outcome.reason_code, running=status.running,
+            ))
+        except (SqliteCatalogProjectionUnavailable, ProjectionReadError):
+            logger.error("Could not read one bot's terminal custody evidence", extra={
+                "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
+                "account_id": repository.account_id,
+            }, exc_info=True)
+            notices.append(ExposureNoticeView(
+                strategy_instance_id=sid, symbol=str(registration["symbol"]),
+                kind="position_unverified", label="Position could not be verified; check the broker",
+                explanation="This bot's lifecycle or custody evidence could not be read. Check its position and working orders at the broker.",
+                action_label="Open bot",
+            ))
+    return notices

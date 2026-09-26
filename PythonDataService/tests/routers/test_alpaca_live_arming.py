@@ -39,28 +39,29 @@ def _url(sid=ARMING_SID, account=LIVE_ACCT):
     return f"/api/brokers/alpaca/accounts/{account}/bots/{sid}/arming"
 
 
-async def test_plan_confirm_and_disarm_keep_one_durable_seal(ceremony):
+@pytest.mark.parametrize("route_account", [LIVE_ACCT, LIVE_ACCT.lower()])
+async def test_plan_confirm_and_disarm_keep_one_durable_seal(ceremony, route_account):
     app, root, _, _ = ceremony
     ledger = LiveArmingLedger(root, live_account_id=LIVE_ACCT)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
-        assert (await client.get(_url())).json()["state"] == "unarmed"
-        response = await client.post(_url() + "/plan")
+        assert (await client.get(_url(account=route_account))).json()["state"] == "unarmed"
+        response = await client.post(_url(account=route_account) + "/plan")
         assert response.status_code == 200, response.text
         plan = response.json()
         assert plan["exit_terms"]["provenance"] == "deployed"
         assert plan["expires_at_ms"] - plan["created_at_ms"] == 120_000
         assert ledger.records() == ()
         body = {"plan_id": plan["plan_id"], "confirmation_token": "wrong"}
-        assert (await client.post(_url() + "/apply", json=body)).status_code == 409
+        assert (await client.post(_url(account=route_account) + "/apply", json=body)).status_code == 409
         body["confirmation_token"] = plan["confirmation_token"]
-        armed = await client.post(_url() + "/apply", json=body)
+        armed = await client.post(_url(account=route_account) + "/apply", json=body)
         assert armed.status_code == 200, armed.text
         assert armed.json()["state"] == "armed"
         assert armed.json()["armed_instance_count"] == 1
-        assert (await client.post(_url() + "/apply", json=body)).status_code == 200
+        assert (await client.post(_url(account=route_account) + "/apply", json=body)).status_code == 200
         assert len(ledger.records()) == 1
         assert ledger.records()[0].exit_terms == plan["exit_terms"]
-        disarmed = await client.post(_url() + "/disarm")
+        disarmed = await client.post(_url(account=route_account) + "/disarm")
         assert disarmed.status_code == 200, disarmed.text
         assert disarmed.json()["state"] == "disarmed"
         assert disarmed.json()["armed_instance_count"] == 0
@@ -110,3 +111,29 @@ async def test_disarm_does_not_need_readable_configuration(ceremony):
         assert response.status_code == 200, response.text
         assert response.json()["state"] == "disarmed"
         assert len(LiveArmingLedger(root, live_account_id=LIVE_ACCT).records()) == 2
+
+
+async def test_corrupt_sibling_ledger_does_not_hide_the_requested_account(ceremony):
+    app, root, _, _ = ceremony
+    damaged = LiveArmingLedger(root, live_account_id="OTHER-LIVE")
+    damaged.path.parent.mkdir(parents=True, exist_ok=True)
+    damaged.path.write_text("corrupt\n")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+        response = await client.get(_url(account=LIVE_ACCT.lower()))
+    assert response.status_code == 200, response.text
+    assert response.json()["account_id"] == LIVE_ACCT
+
+
+async def test_preparing_a_plan_prunes_only_expired_plans(ceremony):
+    app, root, now, _ = ceremony
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+        first = (await client.post(_url() + "/plan")).json()
+        first_path = root / "live-arming-plans" / (first["plan_id"] + ".json")
+        now[0] += 1
+        second = (await client.post(_url() + "/plan")).json()
+        assert first_path.exists()
+        now[0] = first["expires_at_ms"] + 1
+        response = await client.post(_url() + "/plan")
+        assert response.status_code == 200, response.text
+        assert not first_path.exists()
+        assert (root / "live-arming-plans" / (second["plan_id"] + ".json")).exists()

@@ -590,6 +590,7 @@ class BotTaskRegistry:
         strategy_instance_id: str,
         strategy_key: str = "deployment_validation",
         symbol: str,
+        exit_terms: ExitTerms,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -603,6 +604,7 @@ class BotTaskRegistry:
                 strategy_instance_id=strategy_instance_id,
                 strategy_key=strategy_key,
                 symbol=symbol,
+                exit_terms=exit_terms,
                 use_rth=use_rth,
                 mode=mode,
                 quantity=quantity,
@@ -623,7 +625,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
-        exit_terms: ExitTerms | None = None,
+        exit_terms: ExitTerms,
         strategy_params: dict[str, Any] | None = None,
         # Widened to the canonical 3-member ParameterOrigin: this is threaded
         # straight through to `make_start_request` (bot_start_admission.py),
@@ -1069,7 +1071,7 @@ class BotTaskRegistry:
                     detail="The roster has no binding for this instance.",
                 )
             status = self.status(broker, strategy_instance_id)
-            async with self._start_custody_guard(binding) as (custody, _policy):
+            async with self._start_custody_guard(binding) as (custody, _policy, _terms):
                 verdict = evaluate_retirement(
                     running=status.running,
                     phase=status.phase,
@@ -1127,7 +1129,7 @@ class BotTaskRegistry:
                 )
             status = self.status(broker, strategy_instance_id)
             try:
-                async with self._start_custody_guard(binding) as (custody, _policy):
+                async with self._start_custody_guard(binding) as (custody, _policy, _terms):
                     verdict = evaluate_archive(
                         running=status.running,
                         phase=status.phase,

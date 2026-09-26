@@ -100,6 +100,7 @@ CHANGE_REF = "incident-2026-09-23-drained-lane-quiesce"
 QUIESCE_OPERATION_IDS = frozenset(
     {
         "bot_cohort_flatten",
+        "live_arming_disarm",
         "bot_panel_quiesce_action",
         "custody_runs_stop",
         "lane_stop_all_bots",

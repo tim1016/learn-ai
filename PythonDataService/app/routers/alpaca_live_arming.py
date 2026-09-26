@@ -64,7 +64,7 @@ async def arming_apply(
             result = await run_in_threadpool(
                 service.apply, account_id, sid, plan_id=body.plan_id, confirmation_token=body.confirmation_token
             )
-            _refresh_gate()
+            await run_in_threadpool(_refresh_gate)
             return result
     except (BrokerUnbound, BrokerConfigurationError, LiveArmingRefused, OSError, ValueError) as error:
         _refuse(error)
@@ -75,7 +75,7 @@ async def arming_disarm(account_id: AccountId, sid: InstanceId, service: Service
     try:
         async with graduation_mutation_fence():
             result = await run_in_threadpool(service.disarm, account_id, sid)
-            _refresh_gate()
+            await run_in_threadpool(_refresh_gate)
             return result
     except (BrokerUnbound, BrokerConfigurationError, LiveArmingRefused, OSError, ValueError) as error:
         _refuse(error)

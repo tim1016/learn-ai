@@ -298,8 +298,30 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_ENTRY_COLUMN}",
         f"ALTER TABLE profile_revisions ADD COLUMN {_PAPER_XH_EXIT_COLUMN}",
         "DROP TRIGGER trg_profile_revisions_content_immutable",
-        _REVISION_CONTENT_IMMUTABLE_TRIGGER.replace(
-            "    OR OLD.default_exit_terms_json IS NOT NEW.default_exit_terms_json\n", ""),
+        """CREATE TRIGGER trg_profile_revisions_content_immutable
+BEFORE UPDATE ON profile_revisions
+FOR EACH ROW WHEN
+    OLD.profile_id IS NOT NEW.profile_id
+    OR OLD.revision IS NOT NEW.revision
+    OR OLD.schema_version IS NOT NEW.schema_version
+    OR OLD.credential_slot IS NOT NEW.credential_slot
+    OR OLD.endpoint_mode IS NOT NEW.endpoint_mode
+    OR OLD.live_loss_fraction IS NOT NEW.live_loss_fraction
+    OR OLD.live_loss_usd IS NOT NEW.live_loss_usd
+    OR OLD.live_shadow_sessions IS NOT NEW.live_shadow_sessions
+    OR OLD.live_arming_max_sessions IS NOT NEW.live_arming_max_sessions
+    OR OLD.live_xh_entry_bps IS NOT NEW.live_xh_entry_bps
+    OR OLD.live_xh_exit_bps IS NOT NEW.live_xh_exit_bps
+    OR OLD.paper_xh_entry_bps IS NOT NEW.paper_xh_entry_bps
+    OR OLD.paper_xh_exit_bps IS NOT NEW.paper_xh_exit_bps
+    OR OLD.content_sha256 IS NOT NEW.content_sha256
+    OR OLD.complete IS NOT NEW.complete
+    OR OLD.author_owner_id IS NOT NEW.author_owner_id
+    OR OLD.created_at_ms IS NOT NEW.created_at_ms
+    OR OLD.account_pin IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'a profile revision is immutable apart from binding its account pin once');
+END""",
     ),
     3: (
         "ALTER TABLE profile_revisions ADD COLUMN default_exit_terms_json TEXT",

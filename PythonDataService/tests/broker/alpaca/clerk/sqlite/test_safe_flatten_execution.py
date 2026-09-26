@@ -62,6 +62,7 @@ from app.broker.contract.models import (
 )
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.broker_v2_panel.sqlite_panel_adapter import _recent_fill_view
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 
 ACCOUNT_ID = "PA-FLATTEN"
@@ -254,7 +255,7 @@ def crashed_with_exposure(tmp_path: Path):
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
-    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield repo, clock
     repo.close()
@@ -814,7 +815,7 @@ async def test_the_flatten_drives_its_exit_with_the_pricing_seam_it_is_handed(
     result = await execute_safe_flatten_plan(
         repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
         pricing=RecoveryPricing(
-            policy_source=lambda: _XH_POLICY,
+            policy_for=lambda _sid: _XH_POLICY,
             quote_source=lambda _symbol, now_ms: _live_quote(now_ms),
         ),
     )

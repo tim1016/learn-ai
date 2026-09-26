@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.program_leg import (
 )
 from app.marketdata.feed import BarSessionPhase
 from app.schemas.market_liveness import MarketLivenessFact
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class RunProcessAdmissionFact(BaseModel):
@@ -65,20 +66,25 @@ ExtendedHoursAdmissionState = Literal[
 ]
 
 
+class StartWindowFact(BaseModel):
+    """The canonical calendar's permission to start a regular-session bot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    state: Literal["PREMARKET", "REGULAR", "CLOSED"]
+    next_open_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class ExtendedHoursAdmissionFact(BaseModel):
     """Whether the active authority can clock and price a run outside regular hours (ADR 0059 D5).
 
     ``EXIT_ALLOWANCE_UNSET`` is the regular-hours run's own state (#2440): no
     extended session was asked for, but the exit on the day's last bar needs
-    the exit allowance. It refuses as ``ALLOWANCE_UNSET`` does, except on a
-    Resume that still holds a position (see ``run_admission``).
+    the exit allowance. It refuses as ``ALLOWANCE_UNSET`` does; holding Resume requires Flatten.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: ExtendedHoursAdmissionState
-    start_window_refusal: LegRefusal | None = None
-    premarket_start: bool = False
     refusal: LegRefusal | None = None
     observed_at_ms: int = Field(ge=0)
 
@@ -312,6 +318,7 @@ class StartRunFacts(BaseModel):
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
     extended_hours: ExtendedHoursAdmissionFact
+    start_window: StartWindowFact | None = None
     arming: ArmingAdmissionFact | None = None
 
 
@@ -367,6 +374,7 @@ class ResumeRunFacts(BaseModel):
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
     extended_hours: ExtendedHoursAdmissionFact
+    start_window: StartWindowFact | None = None
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     carryover_policy: Literal["FORBID", "ALLOW"]

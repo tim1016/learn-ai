@@ -51,6 +51,7 @@ from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_f
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.services.bot_runner._support import (
     _WIN_START_MS,
     _green_bar,
@@ -238,7 +239,7 @@ async def _run_late_fill_case(
     base = _WIN_START_MS + 60_000
     deployed = False
     try:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
         deployed = True
         for bar in (_green_bar(base), _green_bar(base + 60_000)):
             feed.q.put_nowait(bar)

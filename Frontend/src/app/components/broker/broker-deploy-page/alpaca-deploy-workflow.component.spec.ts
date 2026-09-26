@@ -160,7 +160,7 @@ async function renderWorkflow(service = mockService()) {
       provideRouter([]),
       { provide: BrokerV2PanelService, useValue: service },
     ],
-    componentInputs: { target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
+    componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
   });
   await screen.findByRole('heading', { name: 'Bot binding' });
   return rendered;
@@ -173,6 +173,24 @@ import {
 } from '../../../shared/symbol-picker/testing/fake-picker-world';
 
 describe('AlpacaDeployWorkflowComponent', () => {
+  it('accepts lowercase routes and keeps the opening fence after a rebind before the first click', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    fixture.componentRef.setInput('accountId', 'pa9');
+    fixture.componentRef.setInput('target', resourceTarget('alpaca', DEPLOY_TARGET.clerkId, {
+      accountId: 'pa9', bindingGeneration: 999, routingEpoch: 1000,
+    }));
+    fixture.detectChanges();
+    fireEvent.input(await screen.findByLabelText('Bot name'), { target: { value: 'case-and-fence' } });
+    await fixture.whenStable();
+    await fixture.componentInstance['submit']();
+    expect(service.deployBot).toHaveBeenCalledTimes(1);
+    const [target] = service.deployBot.mock.calls[0];
+    expect(target.bindingGeneration).toBe(DEPLOY_TARGET.bindingGeneration);
+    expect(target.routingEpoch).toBe(DEPLOY_TARGET.routingEpoch);
+    expect(target.accountId).toBe('PA9');
+  });
+
   it('defaults to a concise trader view without duplicating strategy provenance', async () => {
     await renderWorkflow();
 
@@ -463,7 +481,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
         },
         { provide: BrokerV2PanelService, useValue: mockService() },
       ],
-      componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
+      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
     });
     await screen.findByText(DEPLOY_VIEW.eligibility.headline);
 
@@ -485,7 +503,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
         },
         { provide: BrokerV2PanelService, useValue: mockService() },
       ],
-      componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
+      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
     });
     await screen.findByRole('heading', { name: 'Bot binding' });
 
@@ -522,7 +540,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
         },
         { provide: BrokerV2PanelService, useValue: service },
       ],
-      componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
+      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
     });
     await screen.findByRole('heading', { name: 'Dangerous human override' });
 
@@ -569,7 +587,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
         },
         { provide: BrokerV2PanelService, useValue: service },
       ],
-      componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
+      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
     });
     await screen.findByText(DEPLOY_VIEW.eligibility.headline);
     await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
@@ -618,7 +636,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
         },
         { provide: BrokerV2PanelService, useValue: service },
       ],
-      componentInputs: { target: DEPLOY_TARGET, accountId: 'PA9' },
+      componentInputs: { fence: { bindingGeneration: DEPLOY_TARGET.bindingGeneration, routingEpoch: DEPLOY_TARGET.routingEpoch }, target: DEPLOY_TARGET, accountId: 'PA9' },
     });
     await screen.findByText(DEPLOY_VIEW.eligibility.headline);
     await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
@@ -1181,7 +1199,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: service },
       ],
-      componentInputs: { target: coldTarget, accountId: 'PA9' },
+      componentInputs: { fence: { bindingGeneration: null, routingEpoch: null }, target: coldTarget, accountId: 'PA9' },
     });
     await screen.findByRole('heading', { name: 'Bot binding' });
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
@@ -1199,5 +1217,6 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(service.previewStartAdmission).not.toHaveBeenCalled();
     expect(service.deployBot).not.toHaveBeenCalled();
     expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
+    expect(component['readinessSummary']()?.label).toBe('Blocked');
   });
 });

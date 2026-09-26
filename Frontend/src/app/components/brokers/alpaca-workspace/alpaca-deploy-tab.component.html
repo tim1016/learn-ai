@@ -1,3 +1,9 @@
+@if (laneReviewRequired() && !blockedReason()) {
+  <section role="alert">
+    <p>This account’s routing changed. Review the refreshed account before a new deployment attempt.</p>
+    <button type="button" (click)="reviewCurrentLane()">Review refreshed account</button>
+  </section>
+}
 @if (blockedReason(); as reason) {
   <section class="deploy-tab-context deploy-tab-context--error" role="alert">
     <strong>Deploy is unavailable.</strong>
@@ -5,7 +11,7 @@
   </section>
 } @else if (target(); as target) {
   @if (accountId(); as accountId) {
-    <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" />
+    <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" />
     <app-deploy-resume-bots [target]="target" [accountId]="accountId" [fence]="fence()" />
   }
 } @else {

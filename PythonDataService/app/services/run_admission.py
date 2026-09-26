@@ -23,6 +23,7 @@ from app.schemas.run_admission import (
     RunAdmissionFacts,
 )
 from app.services.canary_admission import canary_gate_applies, canary_pairing_admitted
+from app.services.deploy_window import start_window_next_step
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
 _QTY_TOLERANCE_ULPS = 4
@@ -406,16 +407,14 @@ def evaluate_run_admission(
     # unchanged, byte-for-byte, to the exact checks that existed before this
     # mode ever existed.
     if bot.mode != "dry_run":
-        window_refusal = bot.extended_hours.start_window_refusal
-        if window_refusal is not None:
-            return decide(allowed=False, reason_code=window_refusal.reason_code,
-                          explanation=window_refusal.explanation, next_step=window_refusal.next_step)
-        premarket_ready = (
-            bot.extended_hours.premarket_start and bot.market_liveness.state == "CLOSED"
-            and (bot.market_liveness.symbol_status is None
-                 or bot.market_liveness.symbol_status.state in {"TRADABLE", "NOT_REPORTED"})
-        )
-        if bot.market_liveness.state != "TRADABLE" and not premarket_ready:
+        window = bot.start_window
+        if window is not None and window.state == "CLOSED":
+            return decide(allowed=False, reason_code="DEPLOY_WINDOW_CLOSED",
+                          explanation="Regular-session bots may start from pre-market open through the regular close.",
+                          next_step=start_window_next_step(window))
+        permitted_liveness = {"TRADABLE", "CLOSED"} if window is not None and window.state == "PREMARKET" else {"TRADABLE"}
+        symbol_halted = bot.market_liveness.symbol_status is not None and bot.market_liveness.symbol_status.state == "HALTED"
+        if bot.market_liveness.state not in permitted_liveness or symbol_halted:
             reason_codes = {
                 "HALTED": "MARKET_LIVENESS_HALTED",
                 "CLOSED": "MARKET_LIVENESS_CLOSED",
@@ -423,7 +422,7 @@ def evaluate_run_admission(
             }
             return decide(
                 allowed=False,
-                reason_code=reason_codes[bot.market_liveness.state],
+                reason_code=reason_codes["HALTED" if symbol_halted else bot.market_liveness.state],
                 explanation=bot.market_liveness.reason,
                 next_step=(
                     f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."

@@ -85,15 +85,16 @@ def patch_fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
     monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
     from datetime import date
-    from types import ModuleType, SimpleNamespace
+    from time import monotonic
+    from types import SimpleNamespace
 
     from app.lean_sidecar.trading_calendar import session_open_ms_utc
     from app.utils import timestamps
 
     # One controllable source backs imported/default clock callables too.
     start = session_open_ms_utc(date(2026, 9, 25)) + 60_000
-    if isinstance(timestamps.time, ModuleType):
-        monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: start / 1000))
+    started = monotonic()
+    monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: start / 1000 + monotonic() - started))
 
 
 def patch_wall_clock_to_the_fed_bar(

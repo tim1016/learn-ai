@@ -28,6 +28,7 @@ from app.engine.strategy.signal_program import EvaluationMode, Settlement
 from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _RTH_MS, _WIN_START_MS, _bar, _green_bar, _red_bar, _wait_for
 
@@ -68,7 +69,7 @@ async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
             mode="trade",
@@ -110,7 +111,7 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -213,7 +214,7 @@ async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -250,7 +251,7 @@ async def test_sqlite_trade_bot_records_a_rejected_enter_as_a_blocked_decision(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -315,7 +316,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",

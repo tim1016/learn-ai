@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
@@ -39,8 +37,9 @@ from app.services.broker_v2_panel.channel_health import (
     evaluate_channels_at_account_scope,
 )
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope, compose_strategy_catalog
-from app.services.deploy_window import deploy_window
+from app.services.deploy_window import deploy_window, session_label, start_window_next_step
 from app.services.session_authority import scheduled_extended_session_bounds
+from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 
@@ -809,12 +808,12 @@ def build_alpaca_paper_deploy_view(
     window = deploy_window(evaluated_at_ms)
     readiness_checks += (
         AlpacaPaperDeployReadinessCheck(
-            gate_id="deploy.window", label="Start window", ready=window.ready, scope="broker",
+            gate_id="deploy.window", label="Start window", ready=window.state != "CLOSED", scope="broker",
             authority="Canonical session calendar",
-            headline="Start window is open." if window.ready else window.refusal.explanation,
+            headline="Start window is open." if window.state != "CLOSED" else "Regular-session bots may start from pre-market open through the regular close.",
             explanation="Regular-session bots start between pre-market open and regular close.",
             evidence_summary="Dry Run is exempt from the Start window.",
-            recovery=None if window.ready else window.refusal.next_step,
+            recovery=None if window.state != "CLOSED" else start_window_next_step(window),
         ),
         AlpacaPaperDeployReadinessCheck(
             gate_id="deploy.exit_terms", label="Exit terms", ready=default_exit_terms is not None,
@@ -927,22 +926,18 @@ def build_alpaca_paper_deploy_receipt(
 def exit_steps_summary(terms: ExitTermsInput | None, now_ms: int) -> str:
     if terms is None:
         return "Set exit terms to review this bot's exit steps."
-    zone = ZoneInfo("America/New_York")
     window = deploy_window(now_ms)
-    day = datetime.fromtimestamp((window.next_open_ms or now_ms) / 1000, UTC).astimezone(zone).date()
+    day = et_date_at_ms(window.next_open_ms or now_ms)
     current = scheduled_extended_session_bounds(day)
     following = scheduled_extended_session_bounds(next_trading_day(day))
     if current is None or following is None:
         raise RuntimeError("The canonical calendar returned no deploy session")
 
-    def label(instant: int) -> str:
-        return datetime.fromtimestamp(instant / 1000, UTC).astimezone(zone).strftime("%a %b %d %H:%M ET")
-
     return (
-        f"Regular close ({label(current.rth_close_ms)}): limit at decision close minus {terms.exit_allowance_bps:g} bps. "
-        f"After-hours ends {label(current.close_ms)}. "
-        f"Next pre-market ({label(following.open_ms)}): limit at bid minus {terms.exit_allowance_bps:g} bps; "
+        f"Regular close ({session_label(current.rth_close_ms)}): limit at decision close minus {terms.exit_allowance_bps:g} bps. "
+        f"After-hours ends {session_label(current.close_ms)}. "
+        f"Next pre-market ({session_label(following.open_ms)}): limit at bid minus {terms.exit_allowance_bps:g} bps; "
         f"hold if the spread exceeds {terms.spread_cap_bps:g} bps. "
-        f"Next regular open ({label(following.rth_open_ms)}): cancel the unfilled Clerk-priced limit, confirm cancellation, "
+        f"Next regular open ({session_label(following.rth_open_ms)}): cancel the unfilled Clerk-priced limit, confirm cancellation, "
         "then sell the remaining quantity at market. A confirmed halt pauses exits."
     )

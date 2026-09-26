@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     RecoveryEvaluation,
     commit_recovery_evaluations,
     redrive_or_escalate_stale_exits,
+    revalidate_recovery_evaluations,
 )
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -1136,6 +1137,10 @@ async def _reconcile_account_serialized(
             simulated_authority=simulated_authority,
         )
         if finalized is not None:
+            await _under_intake(
+                intake, revalidate_recovery_evaluations, repo, recovery_checks,
+                broker_symbol=broker_symbol_reader(repo, broker_orders=broker_orders, broker_positions=broker_positions),
+            )
             return finalized
         verdict_base_revision = await _under_intake(intake, _control_revision, repo)
 

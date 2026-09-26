@@ -217,6 +217,11 @@ class _CustodyClerk:
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
 
+    def exit_terms_for_instance(self, _sid: str):
+        from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+        return DEPLOY_EXIT_TERMS
+
+
     def exit_policy_for_instance(self, sid, terms=None):
         from app.broker.alpaca.clerk.exit_terms import policy_with_exit_terms
         return self.program_leg_policy if terms is None else policy_with_exit_terms(self.program_leg_policy, terms)
@@ -456,6 +461,11 @@ class _FakeClerk:
     account_id = "PA-TEST"
     # A regular-hours authority: it declares no extended session (ADR 0059 D5.2).
     program_leg_policy: ProgramLegPolicy = ProgramLegPolicy.regular_only()
+
+    def exit_terms_for_instance(self, _sid: str):
+        from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+        return DEPLOY_EXIT_TERMS
+
 
     def __init__(
         self,

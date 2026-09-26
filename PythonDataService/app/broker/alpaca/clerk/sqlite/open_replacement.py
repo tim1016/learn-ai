@@ -28,7 +28,7 @@ def replacement_due(
     """A Clerk-priced DAY limit becomes replaceable at the actual regular open."""
     return (
         created.extended_hours and created.time_in_force == "day"
-        and not accepted.operator_priced and market_leg_sendable(now_ms)
+        and (created.priced_by or accepted.reducing_priced_by) == "clerk" and market_leg_sendable(now_ms)
         and (order.broker_state or "").lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
         and order.broker_order_id is not None
     )

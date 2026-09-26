@@ -46,6 +46,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
 from app.services.broker_v2_panel.cohort_execution import CohortLegCommand
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _broker_position_fixture,
     _FakeReadPort,
@@ -236,7 +237,7 @@ def cohort_lease_lost_api(tmp_path):
         account_id=ACCT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1_000
     )
     for sid in _LEASE_COHORT_SIDS:
-        repo.register_strategy_instance(
+        repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
             strategy_instance_id=sid,
             symbol="SPY",
             config_hash="config-1",
@@ -469,7 +470,7 @@ async def cohort_api(tmp_path):
         account_id=ACCT, artifacts_root=tmp_path, clock=_clock_seq(start=_COHORT_RTH_MS)
     )
     for sid in sids:
-        repo.register_strategy_instance(
+        repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
             strategy_instance_id=sid,
             # _make_held_position enters SPY, so the cohort trades SPY.
             symbol="SPY" if sid in _COHORT_SIDS else "TSLA",

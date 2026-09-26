@@ -37,6 +37,7 @@ import type {
   SqliteRecoveryResult,
   SqliteTimelinePage,
 } from '../api/alpaca.types';
+import type { components } from '../api/broker.types';
 import type {
   ClerkTransactionDetail,
   ClerkTransactionFilters,
@@ -383,7 +384,7 @@ export class BrokersService {
   checkSqliteSafeFlatten(
     clerkId: string,
     accountId: string,
-    action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'> & { proposed_limit_price?: number; band_override?: boolean },
+    action: components['schemas']['RecoveryActionCheckRequest'],
     strategyInstanceId: string | null = null,
   ): Promise<SqliteRecoveryActionCheck> {
     // A diagnostic over durable state: read-idempotent, no envelope.

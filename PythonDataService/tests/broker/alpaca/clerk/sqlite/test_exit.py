@@ -86,7 +86,7 @@ def _live_touch_pricing() -> RecoveryPricing:
             symbol=symbol, bid=100.00, ask=100.05, source="ibkr.market_data.status", observed_at_ms=now_ms
         )
 
-    return RecoveryPricing(policy_source=lambda: policy, quote_source=quote)
+    return RecoveryPricing(policy_for=lambda _sid: policy, quote_source=quote)
 
 
 # The two pricing inputs an EXIT can be driven with: nothing that can price

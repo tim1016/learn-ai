@@ -55,6 +55,7 @@ from app.services.bot_runner import (
 from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard, _lifecycle_json
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
@@ -123,7 +124,7 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -148,7 +149,7 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     assert view.phase == "ON_DUTY"  # the stale record, rendered as-is, not repaired
     assert view.duty_outcome is None
     with pytest.raises(BootRecoveryIncompleteError) as denied:
-        await rebooted.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await rebooted.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert denied.value.admission_decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
 
 
@@ -212,10 +213,10 @@ async def test_starts_refused_until_boot_sweep_completes(tmp_path: Path) -> None
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
     with pytest.raises(BootRecoveryIncompleteError):
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await registry.run_boot_recovery()
-    view = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    view = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert view.running is True
     await registry.stop("alpaca", _SID)
 
@@ -230,7 +231,7 @@ async def test_failed_authority_preparation_keeps_boot_gate_closed(tmp_path: Pat
         await registry.run_boot_recovery(recover=fail_recovery)
 
     with pytest.raises(BootRecoveryIncompleteError):
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 async def test_boot_recovers_sqlite_before_reading_file_projection(tmp_path: Path) -> None:
@@ -545,7 +546,7 @@ async def test_boot_sweep_records_interrupted_evidence_and_never_restarts(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
     # Simulated hard stop: the process dies — tasks vanish, files survive.
     # A hard kill never runs the supervisor's finalizer, so suppress it
@@ -632,7 +633,7 @@ async def test_boot_sweep_repairs_interrupted_bot_stranded_as_running(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -664,7 +665,7 @@ async def test_boot_sweep_repairs_service_shutdown_stranded_as_running(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await registry.stop_all()
     assert registry.status("alpaca", _SID).desired_state == "RUNNING"
@@ -686,7 +687,7 @@ async def test_boot_sweep_repairs_service_shutdown_stranded_as_paused(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await registry.pause("alpaca", _SID)
     await registry.stop_all()
     assert registry.status("alpaca", _SID).desired_state == "PAUSED"
@@ -715,7 +716,7 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
     )
     registry._bindings.record_launch(
         BrokerBotBinding(
-            strategy_instance_id=_SID,
+            exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
             broker="ibkr",
             symbol="SPY",
             action_plan=alpaca_v1_action_plan("SPY"),
@@ -759,7 +760,7 @@ async def test_boot_sweep_refuses_corrupt_binding_for_sqlite_active_run(
         start_custody_guard=_flat_start_guard,
     )
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -915,7 +916,7 @@ async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     shadow_sealed = registry._bots[_SID].binding.sealed_account_id
     await registry.stop("alpaca", _SID, updated_by="test")
 
@@ -966,7 +967,7 @@ async def test_boot_leaves_a_shadow_sealed_binding_as_its_files_say_under_its_li
     )
     registry._bindings.record_launch(
         BrokerBotBinding(
-            strategy_instance_id=_SID,
+            exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
             broker="alpaca",
             symbol="SPY",
             action_plan=alpaca_v1_action_plan("SPY"),
@@ -1012,7 +1013,7 @@ async def test_boot_projects_a_binding_the_installed_authority_still_custodies(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -1053,7 +1054,7 @@ async def test_a_native_bindings_genuine_identity_refusal_still_aborts_the_sweep
     )
     registry._bindings.record_launch(
         BrokerBotBinding(
-            strategy_instance_id=_SID,
+            exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
             broker="ibkr",
             symbol="SPY",
             action_plan=alpaca_v1_action_plan("SPY"),
@@ -1087,7 +1088,7 @@ async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path, monk
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
     await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
         mode="dry_run",

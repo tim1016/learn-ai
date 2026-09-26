@@ -107,8 +107,8 @@ def project_uncertainties(
     bot page's guidance and the lane's attention bell all come through here.
     Recovery status comes only from a durable evaluation in this writer
     generation. Reads never guess a new check from an elapsed retry time;
-    stale or missing observations project unknown. Working custody and
-    stopped recovery take precedence within a current evaluation.
+    stale or missing observations project unknown. Current working custody and
+    stopped recovery take precedence even without a fresh evaluation.
     """
     rows = tuple(rows)
     escalated = frozenset(
@@ -259,7 +259,7 @@ class SqliteClerkProjectionReader:
         self._authority_generation = authority_generation
         self._db_identity_token = db_identity_token
         self._clock = clock
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         if not db_path.is_file():
             # A resolvable broker account whose local authority is absent is a
             # real operator state (post-reset, pre-cutover), not a programming
@@ -310,6 +310,9 @@ class SqliteClerkProjectionReader:
         commits landing concurrently.
         """
         with self._lock:
+            if self._conn.in_transaction:
+                yield
+                return
             self._conn.execute("BEGIN")
             try:
                 yield
@@ -318,6 +321,13 @@ class SqliteClerkProjectionReader:
                 raise
             else:
                 self._conn.execute("COMMIT")
+
+    @contextmanager
+    def snapshot(self) -> Iterator[None]:
+        """Keep related account and bot projections on one committed revision."""
+        with self._read_transaction():
+            self._verify_identity()
+            yield
 
     @classmethod
     def from_repository(

@@ -144,7 +144,7 @@ def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
         return LegRefusal(
             reason_code=exc.reason,
             explanation=(
-                "This run's exit allowance comes from the Alpaca paper settings, "
+                "This account's entry allowance comes from the Alpaca paper settings, "
                 f"which could not be loaded. {exc.unbound.message}"
             ),
             next_step=f"Fix the Alpaca connection. {exc.unbound.next_step}",
@@ -167,7 +167,7 @@ def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
         return LegRefusal(
             reason_code="ALPACA_CONFIGURATION_UNAVAILABLE",
             explanation=(
-                "This run's exit allowance comes from the Alpaca paper settings, "
+                "This account's entry allowance comes from the Alpaca paper settings, "
                 "which could not be loaded. " + alpaca_configuration_error_detail(exc)
             ),
             next_step="Fix the Alpaca connection and its settings, then restart the clerk.",
@@ -236,20 +236,6 @@ def _exit_spread_cap_from(raw: str | None) -> Decimal:
     )
 
 
-def with_deploy_recovery_pricing(
-    allowances: ExtendedHoursAllowances,
-) -> ExtendedHoursAllowances:
-    """Resolve profile defaults for composition; registered exits use their seal."""
-    from app.broker.alpaca.active_binding import get_active_alpaca_binding
-
-    context = get_active_alpaca_binding()
-    terms = None if context is None else context.default_exit_terms
-    if terms is None:
-        return allowances
-    return replace(allowances, exit_band_multiple=Decimal(str(terms.band_multiple)),
-                   exit_spread_cap_bps=Decimal(str(terms.spread_cap_bps)))
-
-
 def legacy_recovery_pricing(allowances: ExtendedHoursAllowances) -> ExtendedHoursAllowances:
     """One-time upgrade reader for removed environment knobs; never used to price a registered bot."""
     import os
@@ -270,13 +256,11 @@ def resolve_extended_hours_allowances() -> ExtendedHoursAllowances | LegRefusal:
     context = get_active_alpaca_binding()
     sealed = None if context is None else _sealed_allowances(context)
     if sealed is not None:
-        return with_deploy_recovery_pricing(sealed)
+        return sealed
     if context is not None and context.live_envelope is not None:
-        return with_deploy_recovery_pricing(
-            ExtendedHoursAllowances.from_envelope(context.live_envelope)
-        )
+        return ExtendedHoursAllowances.from_envelope(context.live_envelope)
     stamped = _settings_allowances()
-    return stamped if isinstance(stamped, LegRefusal) else with_deploy_recovery_pricing(stamped)
+    return stamped
 
 
 @dataclass(frozen=True)
@@ -571,6 +555,8 @@ def _leg_at_decision_close(
         assert policy.allowance_refusal is not None
         raise ProgramLegRefused(policy.allowance_refusal)
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
+    if allowance is None:
+        raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
     try:
         price = marketable_limit_price(side=side, anchor=decision_bar.close, allowance_bps=allowance)
     except ValueError as exc:

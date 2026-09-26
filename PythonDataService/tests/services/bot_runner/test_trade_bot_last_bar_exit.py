@@ -37,6 +37,7 @@ from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_wall_clock_to_the_fed_bar
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _green_bar, _trade_bar
 
@@ -111,7 +112,7 @@ def _clerk_clock() -> int:
 
 def _regular_hours_binding() -> BrokerBotBinding:
     return BrokerBotBinding(
-        strategy_instance_id=_SID,
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="SPY",

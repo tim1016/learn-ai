@@ -29,6 +29,7 @@ from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.market_liveness import compose_market_liveness
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 _STRATEGY_INSTANCE_ID = "alpaca-skeleton-1"
 
@@ -219,7 +220,7 @@ async def test_unhandled_error_is_preserved_only_on_immutable_run_evidence(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
             strategy_key="ema_crossover_signal",
             symbol="SPY",
@@ -292,7 +293,7 @@ async def test_ema_resume_does_not_decide_on_an_incomplete_signal_bucket(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
             strategy_key="ema_crossover_signal",
             symbol="SPY",
@@ -338,7 +339,7 @@ async def test_resume_after_diagnostic_crash_reuses_the_existing_receipt(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
             strategy_key="ema_crossover_signal",
             symbol="SPY",
@@ -394,7 +395,7 @@ async def test_resume_with_an_unreadable_receipt_is_denied_before_clerk_registra
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
             strategy_key="ema_crossover_signal",
             symbol="SPY",

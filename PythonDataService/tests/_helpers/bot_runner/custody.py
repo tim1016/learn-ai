@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_start_admission import AdmissionCustodyCut
 from app.utils.timestamps import now_ms_utc
@@ -97,7 +98,7 @@ def _flat_custody_snapshot(
 
 @asynccontextmanager
 async def _flat_start_guard(sid: str):
-    yield _flat_custody_snapshot(sid), ProgramLegPolicy.regular_only()
+    yield _flat_custody_snapshot(sid), ProgramLegPolicy.regular_only(), ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal()
 
 
 def admission_guard_for(clerk: ActiveAlpacaClerk):
@@ -105,7 +106,7 @@ def admission_guard_for(clerk: ActiveAlpacaClerk):
     @asynccontextmanager
     async def guard(sid: str):
         async with clerk.start_admission_snapshot(sid) as snapshot:
-            yield snapshot, clerk.program_leg_policy
+            yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(sid)
     return guard
 
 

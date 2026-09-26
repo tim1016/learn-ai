@@ -489,7 +489,14 @@ async def test_a_shadow_sweep_pass_journals_the_trading_day(tmp_path: Path) -> N
     assert ledger.completed_session_opens() == (open_ms,)
 
 
-async def test_shadow_canceled_exit_exposes_missing_evidence_through_the_economic_reader(tmp_path: Path) -> None:
+@pytest.mark.parametrize("wal_state", ["intact", "missing", "truncated"])
+async def test_shadow_canceled_exit_exposes_missing_evidence_through_the_economic_reader(
+    tmp_path: Path, wal_state: str,
+) -> None:
+    from unittest.mock import patch
+
+    from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionUnavailable
+    from app.broker.alpaca.clerk.synthesized_orders import SYNTHESIZED_ORDER_LEDGER_FILENAME, SynthesizedOrderLedger
     from app.services.alpaca_shadow_reconciliation import EconomicFillSource
     from app.services.session_authority import scheduled_extended_session_bounds
     from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
@@ -526,8 +533,32 @@ async def test_shadow_canceled_exit_exposes_missing_evidence_through_the_economi
         _walk_clock_to(repo, bounds.close_ms + 60_000)
         orders = await ports.read.list_orders()
         [canceled] = [order for order in orders if order.status == "canceled"]
+        wal = repo.db_path.parent / SYNTHESIZED_ORDER_LEDGER_FILENAME
+        if wal_state == "missing":
+            wal.unlink()
+        elif wal_state == "truncated":
+            lines = wal.read_text().splitlines(keepends=True)
+            # Retain a valid prefix ending before this EXIT was recorded.
+            prefix = []
+            for line in lines:
+                if canceled.client_order_id in line:
+                    break
+                prefix.append(line)
+            wal.write_text("".join(prefix))
         source = EconomicFillSource.from_database_path(repo.db_path)
         try:
+            if wal_state != "intact":
+                with pytest.raises(EconomicProjectionUnavailable, match="missing orders"):
+                    source.missing_exit_execution_evidence(
+                        strategy_instance_id=SID, from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
+                    )
+                return
+            with patch.object(SynthesizedOrderLedger, "read_latest_beside_database", wraps=SynthesizedOrderLedger.read_latest_beside_database) as read:
+                for offset in (0, 86_400_000, 2 * 86_400_000):
+                    source.missing_exit_execution_evidence(
+                        strategy_instance_id=SID, from_ms=et_midnight_ms(DAY) + offset, to_ms=et_day_end_ms(DAY) + offset,
+                    )
+                assert read.call_count == 1
             [missing] = source.missing_exit_execution_evidence(
                 strategy_instance_id=SID, from_ms=et_midnight_ms(DAY), to_ms=et_day_end_ms(DAY),
             )

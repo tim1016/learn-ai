@@ -61,6 +61,7 @@ from app.broker_configuration.service import BrokerConfigurationService, revisio
 from app.broker_configuration.store import ProfilesStore, profiles_database_path
 from app.broker_configuration.worker_binding import BoundWorker, resolve_worker_binding
 from app.schemas.broker_configuration import PaperXhAllowancesPayload
+from app.schemas.exit_terms import ExitTerms
 from app.services.bot_start_admission import extended_hours_admission_fact
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import to_ms_utc
@@ -652,7 +653,7 @@ async def test_an_applied_paper_pair_admits_a_regular_hours_run_and_prices_its_l
     assert policy.allowances == ExtendedHoursAllowances(
         entry_bps=Decimal("12.5"), exit_bps=Decimal("7.25")
     )
-    admission = extended_hours_admission_fact(use_rth=True, policy=policy, observed_at_ms=1_000)
+    admission = extended_hours_admission_fact(use_rth=True, policy=policy, exit_terms=ExitTerms(exit_allowance_bps=7.25 if policy.allowances else None, band_multiple=2, spread_cap_bps=50, provenance="backfilled"), observed_at_ms=1_000)
     assert admission.state == "NOT_REQUESTED"
 
     # The 15:59-16:00 bar is decided at 16:00: after the close, so the EXIT is
@@ -685,7 +686,7 @@ async def test_without_the_pair_the_gate_refuses_and_names_the_profile_field(
     await _apply_and_bind(clerk_dir, clock, pair=None)
 
     policy = ProgramLegPolicy.from_read_port(_ReadPort(ALPACA_PAPER_CAPABILITIES))
-    admission = extended_hours_admission_fact(use_rth=True, policy=policy, observed_at_ms=1_000)
+    admission = extended_hours_admission_fact(use_rth=True, policy=policy, exit_terms=ExitTerms(exit_allowance_bps=7.25 if policy.allowances else None, band_multiple=2, spread_cap_bps=50, provenance="backfilled"), observed_at_ms=1_000)
     leg = shape_program_leg(
         side=OrderSide.SELL,
         purpose=EffectPurpose.EXIT,
@@ -724,6 +725,12 @@ def test_a_stored_sub_cent_revision_survives_upgrade_without_rounding(
         stored = service.read_revision(profile.profile_id, 1)
         assert stored.live_envelope.loss_usd == 12.345
         assert stored.content_sha256 == written_sha
+        retried = service.create_revision(
+            profile.profile_id, expected_revision=stored.revision,
+            credential_slot=stored.credential_slot, endpoint_mode=stored.endpoint_mode,
+            live_envelope=stored.live_envelope,
+        )
+        assert retried == stored
         assert revision_content_sha256(
             credential_slot=stored.credential_slot, endpoint_mode=stored.endpoint_mode,
             live_envelope=stored.live_envelope,

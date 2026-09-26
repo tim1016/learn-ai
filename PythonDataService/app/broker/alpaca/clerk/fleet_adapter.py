@@ -568,7 +568,8 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         _op("live_arming_apply", "POST", "/accounts/{account_id}/bots/{sid}/arming/apply",
             capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT, account=True),
         _op("live_arming_disarm", "POST", "/accounts/{account_id}/bots/{sid}/arming/disarm",
-            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT, account=True),
+            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT, account=False,
+            drain_admission=_QUIESCE, readiness=_CONFIGURATION),
         # Graduation changes the boot-selected custody world but never deploys
         # or arms a strategy. It is account-scoped and lane-local: the clerk
         # owns its broker evidence, backup, activation receipt and restart.

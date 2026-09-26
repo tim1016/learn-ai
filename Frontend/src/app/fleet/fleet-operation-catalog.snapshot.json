@@ -355,7 +355,7 @@
     "live_arming_disarm": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots/{sid}/arming/disarm",
-      "requires_account": true
+      "requires_account": false
     },
     "live_arming_plan": {
       "method": "POST",

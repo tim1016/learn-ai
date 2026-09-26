@@ -1213,7 +1213,7 @@ def test_v16_migration_adds_the_unfoldable_order_indexes(tmp_path: Path) -> None
 
         schema.migrate_schema(conn, from_version=15)
 
-        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 17
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 18
         names = {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
         }

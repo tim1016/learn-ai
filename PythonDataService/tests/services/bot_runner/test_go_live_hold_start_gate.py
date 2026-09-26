@@ -33,6 +33,7 @@ from app.services.go_live_hold import (
     release_go_live_hold,
 )
 from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 _MARKER = GoLiveHoldMarker(
     kind="learn-ai-go-live-hold",
@@ -65,7 +66,7 @@ async def test_a_held_lane_refuses_every_start_and_resume_before_admission(
     registry = _registry(tmp_path)
 
     with pytest.raises(RunAdmissionRefusedError, match="awaits go-live") as start:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     with pytest.raises(RunAdmissionRefusedError, match="awaits go-live") as resume:
         await registry.resume_existing_with_admission("alpaca", _SID)
 
@@ -80,20 +81,20 @@ async def test_releasing_the_hold_lands_on_the_next_start_without_a_restart(
     _hold(tmp_path)
     registry = _registry(tmp_path)
     with pytest.raises(RunAdmissionRefusedError):
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     release_go_live_hold(tmp_path, operator="inkant", change_ref="go-live", bar_check={})
 
     # The hold no longer answers; the next gate (no feed) does.
     with pytest.raises(MarketDataFeedUnavailableError):
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 async def test_a_lane_that_was_never_held_starts_as_before(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
     with pytest.raises(MarketDataFeedUnavailableError):
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 async def test_a_marker_that_does_not_parse_still_holds(tmp_path: Path) -> None:
@@ -101,7 +102,7 @@ async def test_a_marker_that_does_not_parse_still_holds(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
     with pytest.raises(RunAdmissionRefusedError, match="cannot read its go-live hold") as refused:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert refused.value.reason_code == LANE_GO_LIVE_HOLD_UNREADABLE
 
@@ -116,7 +117,7 @@ async def test_a_lane_that_cannot_read_its_root_fails_closed(tmp_path: Path) -> 
     )
 
     with pytest.raises(RunAdmissionRefusedError) as refused:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert refused.value.reason_code == LANE_GO_LIVE_HOLD_UNREADABLE
 
@@ -125,7 +126,7 @@ async def test_the_refusal_reaches_the_wire_with_its_reason_code(tmp_path: Path)
     _hold(tmp_path)
     registry = _registry(tmp_path)
     with pytest.raises(RunAdmissionRefusedError) as refused:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     from fastapi import HTTPException
 
@@ -149,6 +150,6 @@ async def test_the_drain_answers_before_the_go_live_hold(tmp_path: Path) -> None
     )
 
     with pytest.raises(RunAdmissionRefusedError, match="lane is drained") as refused:
-        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert refused.value.reason_code != LANE_GO_LIVE_PENDING

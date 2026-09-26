@@ -176,7 +176,7 @@ async def test_evidence_uses_active_sqlite_timeline_with_opaque_stable_cursor(
         assert {
             first_body["entries"][0]["seq"],
             second.json()["entries"][0]["seq"],
-        } == {2, 3}
+        } == {1, 2}
     finally:
         repo.close()
 

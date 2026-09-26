@@ -223,11 +223,7 @@ class LiveArmingRecord:
             del unsigned["record_sha256"]
             # Version 1 rows predate predecessor evidence. They remain valid
             # exactly as sealed instead of being rewritten during a read.
-            if record.schema_version < 3:
-                del unsigned["exit_terms"]
-            if record.schema_version == 1:
-                del unsigned["predecessor"]
-                del unsigned["originating_plan_id"]
+            unsigned = arming_version_payload(unsigned, record.schema_version)
             if record.record_sha256 != canonical_sha256(unsigned):
                 raise LiveArmingInvalid("live arming record digest does not verify")
         except LiveArmingInvalid:
@@ -579,3 +575,14 @@ __all__ = [
     "latest_arming",
     "sessions_used",
 ]
+
+
+def arming_version_payload(payload: dict[str, object], version: int) -> dict[str, object]:
+    """Omit fields that were absent from this historical arming wire version."""
+    result = dict(payload)
+    if version < 3:
+        result.pop("exit_terms", None)
+    if version == 1:
+        result.pop("predecessor", None)
+        result.pop("originating_plan_id", None)
+    return result

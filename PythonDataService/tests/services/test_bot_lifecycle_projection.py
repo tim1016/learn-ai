@@ -31,6 +31,7 @@ from tests._helpers.bot_runner.custody import admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
 @pytest.fixture(autouse=True)
@@ -276,7 +277,7 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     try:
         deployed = await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=f"paper-{mode}",
             symbol="SPY",
             mode=mode,
@@ -421,7 +422,7 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     try:
         await registry.deploy(
-            broker="alpaca", strategy_instance_id="paper-archive", symbol="SPY"
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id="paper-archive", symbol="SPY"
         )
         await registry.stop("alpaca", "paper-archive")
 

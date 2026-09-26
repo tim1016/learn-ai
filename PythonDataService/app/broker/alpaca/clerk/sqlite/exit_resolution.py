@@ -1664,13 +1664,16 @@ def _fold_market_hold(
 ) -> None:
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    _fold_exit_not_flat(
-        repo, effect_operation_id=effect_operation_id, order_ref=order_ref,
-        symbol=symbol, attributed_qty=repo.position(effect.strategy_instance_id, symbol),
-        summary_code=hold.reason_code, reason=hold.explanation,
-        headline="Exit on hold; the position is still open", explanation=hold.explanation,
-        next_step=hold.next_step,
-    )
+    previous = repo.last_strategy_transition(strategy_instance_id=effect.strategy_instance_id, transition_kind="EXIT_MARKET_HOLD")
+    if previous is not None and previous["effect_operation_id"] == effect_operation_id and previous["summary_code"] == hold.reason_code:
+        return
+    repo.append_transition(TransitionInput(
+        strategy_instance_id=effect.strategy_instance_id, run_id=effect.run_id,
+        command_id=effect.command_id, effect_operation_id=effect_operation_id, order_ref=order_ref,
+        transition_kind="EXIT_MARKET_HOLD", custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+        operation_state="in_progress", clerk_observed_at_ms=repo.clock(), summary_code=hold.reason_code,
+        facts_json=canonicalize({"symbol": symbol, "explanation": hold.explanation, "next_step": hold.next_step}),
+    ))
 
 
 def _fold_submit_refused(

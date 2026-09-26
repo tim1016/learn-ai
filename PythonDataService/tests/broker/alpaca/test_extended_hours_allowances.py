@@ -340,6 +340,7 @@ def test_from_read_port_takes_the_resolver_as_a_seam() -> None:
 def test_admission_and_exit_preserve_the_composed_binding_refusal() -> None:
     from app.services.bot_start_admission import extended_hours_admission_fact
     from app.services.run_admission import evaluate_run_admission
+    from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
     from tests.services.test_run_admission import _NOW, _bot, _clerk
 
     refusal = UnboundBroker(
@@ -352,7 +353,7 @@ def test_admission_and_exit_preserve_the_composed_binding_refusal() -> None:
     refuse_active_alpaca_binding(UnboundBroker(
         reason="profiles_database_unavailable", message="Other authority failed.", next_step="Restore its DB.",
     ))
-    fact = extended_hours_admission_fact(use_rth=False, policy=policy, observed_at_ms=_NOW)
+    fact = extended_hours_admission_fact(exit_terms=DEPLOY_EXIT_TERMS, use_rth=False, policy=policy, observed_at_ms=_NOW)
     decision = evaluate_run_admission(
         _bot(mode="dry_run").model_copy(update={"extended_hours": fact}),
         _clerk(), evaluated_at_ms=_NOW,

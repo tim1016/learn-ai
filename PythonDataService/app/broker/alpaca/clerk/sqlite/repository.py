@@ -100,6 +100,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictCause,
     ExecutionPriceConflictOrder,
 )
+from app.schemas.exit_terms import ExitTerms
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -1249,6 +1250,18 @@ class ClerkSqliteRepository(
     # Concrete business use of the spine this slice owns
     # ------------------------------------------------------------------
 
+    def exit_terms(self, strategy_instance_id: str) -> ExitTerms | None:
+        from app.broker.alpaca.clerk.exit_terms import read_exit_terms
+
+        with self._write_lock:
+            return read_exit_terms(self._conn, strategy_instance_id)
+
+    def exit_terms_upgrade_completed(self) -> bool:
+        with self._write_lock:
+            return self._conn.execute(
+                "SELECT 1 FROM custody_transitions WHERE transition_kind = 'EXIT_TERMS_UPGRADE_COMPLETED' LIMIT 1"
+            ).fetchone() is not None
+
     def register_strategy_instance(
         self,
         *,
@@ -1258,7 +1271,7 @@ class ClerkSqliteRepository(
         strategy_key: str = "repository_direct_registration",
         display_name: str = "Repository direct registration",
         config_json: str | None = None,
-        exit_terms: dict[str, object] | None = None,
+        exit_terms: ExitTerms | None = None,
     ) -> CommittedTransition:
         """Insert-once bot registration — needs no command/effect lifecycle.
 
@@ -1293,7 +1306,7 @@ class ClerkSqliteRepository(
                     "strategy_key": strategy_key,
                     "display_name": display_name,
                     "config_json": config_json,
-                    **({"exit_terms": exit_terms} if exit_terms is not None else {}),
+                    **({"exit_terms": exit_terms.model_dump()} if exit_terms is not None else {}),
                 }
             ),
         )

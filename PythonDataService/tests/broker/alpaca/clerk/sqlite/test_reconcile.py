@@ -2851,7 +2851,7 @@ async def test_watchdog_redrives_a_priced_limit_outside_the_regular_session(
         read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
         pricing=RecoveryPricing(
-            policy_source=lambda: ProgramLegPolicy(
+            policy_for=lambda _sid: ProgramLegPolicy(
                 window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
                 allowances=ExtendedHoursAllowances(
                     entry_bps=Decimal("10"), exit_bps=Decimal("20")
@@ -2914,7 +2914,7 @@ async def test_watchdog_resumes_its_first_redrive_at_the_regular_open(clocked_re
 def _watchdog_live_pricing() -> RecoveryPricing:
     """A declared 04:00-20:00 window with an exit allowance, and a fresh touch at any instant."""
     return RecoveryPricing(
-        policy_source=lambda: ProgramLegPolicy(
+        policy_for=lambda _sid: ProgramLegPolicy(
             window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
             allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
         ),
@@ -2975,10 +2975,10 @@ async def test_watchdog_burns_no_attempt_on_a_redrive_the_send_would_refuse(
 
 
 async def test_watchdog_waits_for_the_actual_regular_open(clocked_repo) -> None:
-    """09:29:55: the market leg reaches Alpaca inside the regular session, so it is sent.
+    """A market re-drive waits at 09:29:55 and sends at the actual 09:30 open.
 
-    Judged at now it was a pre-market instant, and an authority with no
-    extended-hours pricing deferred the re-drive to its next pass.
+    The guard band protects a closing session; it never permits an early send
+    into a session that has not opened yet.
     """
     repo, _clock = clocked_repo
     await _held_position(repo)
@@ -3954,3 +3954,30 @@ async def test_slow_successful_sweeps_spend_observed_failure_time(clocked_repo, 
         _walk_clock_to(repo, clock() + interval_ms)
     result = latest_exit_recovery(repo, strategy_instance_id=WATCHDOG_SID, uncertainty_id=episode["uncertainty_id"])
     assert result.failure_elapsed_ms > 0
+
+
+async def test_final_broker_snapshot_clears_failure_before_budget_escalation(clocked_repo):
+    from app.broker.alpaca.clerk.sqlite.exit_recovery import latest_exit_recovery
+    repo, clock = clocked_repo
+    await _held_position(repo)
+    _raise_exit_not_flat(repo, attributed_qty=10.0)
+    _walk_clock_to(repo, repo.clock() + _exit_not_flat_redrive_policy().after_ms + 1)
+    # Spend almost the full eight-minute budget observing a real mismatch.
+    for _ in range(32):
+        await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+        clock.advance(15_000)
+    assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_STUCK", strategy_instance_id=WATCHDOG_SID) is None
+
+    class RecoveredSnapshot(_FakeRead):
+        calls = 0
+        async def list_positions(self):
+            self.calls += 1
+            return [] if self.calls == 1 else [_position("SPY", quantity=10)]
+
+    await reconcile_account(repo, read=RecoveredSnapshot(), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
+    episode = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=WATCHDOG_SID)
+    observation = latest_exit_recovery(repo, strategy_instance_id=WATCHDOG_SID, uncertainty_id=episode["uncertainty_id"])
+    assert observation.outcome == "hold"
+    assert observation.reason_code == "RECOVERY_BROKER_REFUSAL_CLEARED"
+    assert observation.failure_elapsed_ms < 480_000
+    assert repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_STUCK", strategy_instance_id=WATCHDOG_SID) is None

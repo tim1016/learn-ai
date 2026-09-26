@@ -24,8 +24,10 @@
       <div class="sqlite-custody__uncertainties" role="alert">
         <strong>{{ notice.label }}</strong>
         <p>{{ notice.explanation }}</p>
+        @if (notice.strategy_instance_id) {
         <a [routerLink]="['/brokers', 'alpaca', 'accounts', accountId(), 'bots', notice.strategy_instance_id]"
            [queryParams]="operatorLensQuery">{{ notice.action_label }}</a>
+        }
       </div>
     }
 

@@ -35,7 +35,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, NamedTuple
 
 from app.broker.alpaca.clerk.program_leg import LegRefusal, ProgramLegPolicy, ProgramLegRefused
@@ -329,6 +329,21 @@ def _redrive_result(repo: ClerkSqliteRepository, stale: _StaleExit, result: Exit
     if row is not None:
         return RecoveryResult("hold", row["summary_code"], "The exit could not be submitted; the Clerk will check again.")
     return RecoveryResult("hold", "OWN_EXIT_WORKING", "The accepted exit is waiting for custody evidence before submission.")
+
+
+def revalidate_recovery_evaluations(
+    repo: ClerkSqliteRepository, evaluations: list[RecoveryEvaluation], *, broker_symbol: BrokerSymbolReader,
+) -> None:
+    """Do not spend failure time on a broker refusal cleared by the final snapshot."""
+    for index, evaluation in enumerate(evaluations):
+        result = evaluation.result
+        if result.outcome != "failure" or result.reason_code not in {"EXIT_OTHER_ORDER_WORKING", "EXIT_BROKER_POSITION_MISMATCH"}:
+            continue
+        symbol = evaluation.stale.cause.symbol
+        if broker_symbol(symbol).agrees and not clerk_work_in_flight(repo, symbol):
+            evaluations[index] = replace(evaluation, evaluated_at_ms=repo.clock(), result=RecoveryResult(
+                "hold", "RECOVERY_BROKER_REFUSAL_CLEARED", "The final broker snapshot cleared the earlier refusal; recovery will check again.",
+            ))
 
 
 def commit_recovery_evaluations(

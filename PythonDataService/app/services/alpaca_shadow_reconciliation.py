@@ -269,6 +269,7 @@ class EconomicFillSource:
     def __init__(self, reader: SqliteEconomicProjectionReader) -> None:
         self._reader = reader
         self._coverage_proven: set[str] = set()
+        self._missing_exit_evidence: dict[str, tuple[tuple[int, MissingExitExecutionEvidence], ...] | EconomicProjectionUnavailable] = {}
 
     @classmethod
     def from_database_path(cls, db_path: Path) -> EconomicFillSource:
@@ -347,9 +348,15 @@ class EconomicFillSource:
     def missing_exit_execution_evidence(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
     ) -> tuple[MissingExitExecutionEvidence, ...]:
-        return self._reader.missing_exit_execution_evidence(
-            strategy_instance_id=strategy_instance_id, from_ms=from_ms, to_ms=to_ms,
-        )
+        if strategy_instance_id not in self._missing_exit_evidence:
+            try:
+                self._missing_exit_evidence[strategy_instance_id] = self._reader.exit_execution_evidence(strategy_instance_id)
+            except EconomicProjectionUnavailable as exc:
+                self._missing_exit_evidence[strategy_instance_id] = exc
+        evidence = self._missing_exit_evidence[strategy_instance_id]
+        if isinstance(evidence, EconomicProjectionUnavailable):
+            raise evidence
+        return tuple(row for stamp, row in evidence if from_ms <= stamp < to_ms)
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
         return self._reader.runs_for_strategy(strategy_instance_id)

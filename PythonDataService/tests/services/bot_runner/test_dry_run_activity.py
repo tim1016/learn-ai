@@ -21,6 +21,7 @@ from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.bot_runner.ema_parity import (
     _ema_parity_bars_through_first_exit,
 )
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _install_fake_clerk, _wait_for
 
@@ -56,7 +57,7 @@ def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> 
             )
         )
     binding = BrokerBotBinding(
-        strategy_instance_id=_SID,
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="SPY",
@@ -90,7 +91,7 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     registry = _registry(tmp_path, feed)
 
     deployed = await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",
@@ -162,7 +163,7 @@ async def test_dry_run_refuses_a_decision_taken_after_its_delivery_allowance(
     registry = _registry(tmp_path, feed)
 
     await registry.deploy(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",
@@ -239,7 +240,7 @@ async def test_dry_run_deploy_at_an_uncovered_parameter_point_is_admitted_and_st
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
     started = await registry.deploy_with_admission(
-        broker="alpaca",
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",
@@ -292,12 +293,12 @@ async def test_dry_run_start_reports_its_own_unpriceable_authority_and_binding_f
     assert get_active_clerk_runtime() is None
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     decision = await registry.preview_start_admission(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run", use_rth=True,
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run", use_rth=False,
     )
     assert decision.allowed is False
     assert decision.reason_code == reason
     assert refusal.message in decision.explanation
-    assert "exit allowance comes from the Alpaca paper settings" in decision.explanation
+    assert "entry allowance comes from the Alpaca paper settings" in decision.explanation
     assert "could not be loaded" in decision.explanation
     assert refusal.next_step in decision.next_step
     assert "Fix the Alpaca connection" in decision.next_step
@@ -316,7 +317,7 @@ async def test_dry_run_resume_requires_flatten_before_restoring_held_exposure(
     bars = [_green_bar(1_704_214_860_000), _green_bar(1_704_214_920_000)] if holding else []
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
     if holding:
         await _wait_for(lambda: len(registry.dry_run_activity("alpaca", _SID)) == 1)
     await registry.stop("alpaca", _SID)

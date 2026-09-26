@@ -94,7 +94,7 @@ def _live_touch(bid: float = 100.00, ask: float = 100.05) -> RecoveryPricing:
             symbol=symbol, bid=bid, ask=ask, source="ibkr.market_data.status", observed_at_ms=now_ms
         )
 
-    return RecoveryPricing(policy_source=lambda: _POLICY, quote_source=quote)
+    return RecoveryPricing(policy_for=lambda _sid: _POLICY, quote_source=quote)
 
 
 @pytest.fixture
@@ -463,7 +463,7 @@ async def test_the_live_touch_is_read_on_the_event_loop_and_only_to_re_price(
         repo,
         effect_operation_id=effect_operation_id,
         trade=trade,
-        pricing=RecoveryPricing(policy_source=lambda: _POLICY, quote_source=quote),
+        pricing=RecoveryPricing(policy_for=lambda _sid: _POLICY, quote_source=quote),
         off_loop=to_thread,
     )
 
@@ -908,12 +908,14 @@ async def test_a_reducing_order_still_working_past_its_session_tells_the_operato
         pytest.param(_EARLY_CLOSE_DAY, (8, 0), ((9, 35), (17, 4)), (17, 6), id="half-day"),
     ],
 )
-async def test_an_operator_limit_working_into_regular_session_is_not_replaced(
+@pytest.mark.parametrize("authored_by", ["operator", "program"])
+async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
     tmp_path: Path,
     day: date,
     sent_at: tuple[int, int],
     quiet_at: tuple[tuple[int, int], ...],
     alarm_at: tuple[int, int],
+    authored_by: str,
 ) -> None:
     """#2440 review: Alpaca keeps a DAY extended-hours limit working until that day's after-hours close.
 
@@ -933,16 +935,22 @@ async def test_an_operator_limit_working_into_regular_session_is_not_replaced(
         repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
         submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
         entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
-        priced = _live_touch().read("SPY", repo.clock()).price(
+        priced = _live_touch().read("SPY", repo.clock(), strategy_instance_id=SID).price(
             side=OrderSide.SELL, symbol="SPY", quantity=10, now_ms=repo.clock(),
         )
         assert priced is not None
-        accepted = accept_recovery_exit(
-            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
-            decision_id=f"{RECOVERY_FLATTEN_DECISION_PREFIX}operator-limit",
-            entry_order_ref=entry_ref, confirmed_shape=replace(priced, priced_by="operator"),
-        )
-        effect_operation_id = accepted.effect_operation_id
+        if authored_by == "operator":
+            accepted = accept_recovery_exit(
+                repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+                decision_id=f"{RECOVERY_FLATTEN_DECISION_PREFIX}operator-limit",
+                entry_order_ref=entry_ref, confirmed_shape=replace(priced, priced_by="operator"),
+            )
+            effect_operation_id = accepted.effect_operation_id
+        else:
+            effect_operation_id = _accept_program_exit(
+                repo, entry_ref, shape=LegShape(side=OrderSide.SELL, order_type=OrderType.LIMIT, time_in_force=TimeInForce.DAY, limit_price=100.0, extended_hours=True),
+                valid_until_ms=_at(20 if day == date(2026, 9, 3) else 17, 0, day=day),
+            )
         assert effect_operation_id is not None
         sent = await resolve_exit(
             repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
@@ -1282,7 +1290,13 @@ async def test_live_market_exceptions_gate_program_exits_and_watchdog(
             broker_symbol=lambda _: BrokerSymbolView(10, 10, False, True),
         )
         assert trade.submit_calls == []
-        assert _exit_not_flat(repo) is not None
+        assert _exit_not_flat(repo) is None
+        assert repo.active_exit_for_strategy(SID).effect_operation_id == effect
+        assert repo.last_strategy_transition(strategy_instance_id=SID, transition_kind="EXIT_MARKET_HOLD") is not None
+        await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch())
+        assert len(trade.submit_calls) == 1
+        assert repo.active_exit_for_strategy(SID).effect_operation_id == effect
+        assert _exit_not_flat(repo) is None
 
 
 @pytest.mark.parametrize("cancel_result,filled_quantity", [("canceled", 0), ("canceled", 3), ("canceled", 10), ("working", 0), ("unknown", 0), ("pending_cancel", 0), ("cancel_error", 0)])
@@ -1291,7 +1305,7 @@ async def test_regular_open_replacement_requires_exact_cancel_proof(
 ) -> None:
     _walk_clock_to(repo, _at(4, day=date(2026, 9, 3)))
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
-    priced = _live_touch().read("SPY", repo.clock()).price(
+    priced = _live_touch().read("SPY", repo.clock(), strategy_instance_id=SID).price(
         side=OrderSide.SELL, symbol="SPY", quantity=10, now_ms=repo.clock(),
     )
     assert priced is not None
@@ -1348,7 +1362,7 @@ async def test_reconciliation_replaces_at_open_using_post_cancel_position(repo: 
 
     _walk_clock_to(repo, _at(4, day=date(2026, 9, 3)))
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
-    priced = _live_touch().read("SPY", repo.clock()).price(
+    priced = _live_touch().read("SPY", repo.clock(), strategy_instance_id=SID).price(
         side=OrderSide.SELL, symbol="SPY", quantity=10, now_ms=repo.clock(),
     )
     accepted = accept_recovery_exit(
@@ -1404,7 +1418,7 @@ async def test_reconciliation_replaces_at_open_using_post_cancel_position(repo: 
 async def test_failed_extended_limit_waits_for_next_eligible_session_without_chasing(repo: ClerkSqliteRepository, hour: int, eligible: tuple[int, ...]) -> None:
     _walk_clock_to(repo, _at(hour, day=date(2026, 9, 3)))
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
-    priced = _live_touch().read("SPY", repo.clock()).price(
+    priced = _live_touch().read("SPY", repo.clock(), strategy_instance_id=SID).price(
         side=OrderSide.SELL, symbol="SPY", quantity=10, now_ms=repo.clock(),
     )
     accepted = accept_recovery_exit(

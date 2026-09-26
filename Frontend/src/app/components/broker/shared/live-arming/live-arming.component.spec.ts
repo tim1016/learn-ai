@@ -43,6 +43,13 @@ describe('Live arming', () => {
     await screen.findByText(/0 armed on this account/);
   });
 
+  it('shows a small loss fraction without rounding it to zero', async () => {
+    const { service } = await setup();
+    service.prepare.mockResolvedValue({ ...plan, envelope: { ...plan.envelope, loss_fraction: 0.00025 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review and arm' }));
+    expect(await screen.findByText(/fraction 0\.00025/)).toBeTruthy();
+  });
+
   it('reads fresh status when returning to a previously armed bot', async () => {
     const { fixture, service } = await setup();
     fireEvent.click(screen.getByRole('button', { name: 'Review and arm' }));

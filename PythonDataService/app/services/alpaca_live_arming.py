@@ -9,8 +9,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from app.broker.alpaca.active_binding import BrokerUnbound
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.active_authority import primary_custody_world
-from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_INPUTS_CHANGED, LiveArmingRefused, latest_arming
+from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_INPUTS_CHANGED, LIVE_ARMING_NOT_ARMED, LiveArmingRefused
 from app.broker.alpaca.clerk.live_arming_ceremony import (
     LiveArmingPlan,
     account_arming,
@@ -18,6 +19,8 @@ from app.broker.alpaca.clerk.live_arming_ceremony import (
     arming_accounts,
     configured_envelope,
     disarm,
+    envelope_change,
+    live_account_id_for_status,
     normalize_ceremony_root,
     plan_arming,
 )
@@ -49,12 +52,33 @@ class AlpacaLiveArmingService:
         clock: Clock = now_ms_utc,
     ) -> None:
         self._resolve = resolve
-        self._live_root = normalize_ceremony_root(live_state_root or live_artifacts_root())
+        self._live_root_override = live_state_root
         self._clock = clock
-        self._artifacts_root = normalize_ceremony_root(artifacts_root or resolve_clerk_dir())
+        self._artifacts_root_override = artifacts_root
+
+    @property
+    def _live_root(self) -> Path:
+        return normalize_ceremony_root(self._live_root_override or live_artifacts_root())
+
+    @property
+    def _artifacts_root(self) -> Path:
+        return normalize_ceremony_root(self._artifacts_root_override or resolve_clerk_dir())
 
     def _plan_path(self, root: Path, plan_id: str) -> Path:
         return resolve_contained_path(root, "live-arming-plans", safe_path_component(plan_id, "plan id") + ".json")
+
+    def _prune_expired_plans(self, root: Path, now_ms: int) -> None:
+        directory = resolve_contained_path(root, "live-arming-plans")
+        if not directory.is_dir():
+            return
+        for candidate in directory.glob("*.json"):
+            path = self._plan_path(root, candidate.stem)
+            try:
+                plan = LiveArmingPlan.from_payload(json.loads(path.read_text()))
+                if plan.expires_at_ms < now_ms:
+                    path.unlink()
+            except (OSError, ValueError, TypeError):
+                logger.warning("Could not prune an expired arming plan", exc_info=True, extra={"plan_id": candidate.stem})
 
     def prepare(self, account_id: str, sid: str) -> ArmingPlanView:
         with arming_configuration_handover():
@@ -69,17 +93,14 @@ class AlpacaLiveArmingService:
                 clock=self._clock,
             )
             self._require_account(account_id, plan.live_account_id)
-            previous = latest_arming(LiveArmingLedger(root, live_account_id=account_id).records_for(sid))
-            changes = []
-            prior_envelope = {} if previous is None else previous.envelope_values
-            prior_terms = {} if previous is None else (previous.exit_terms or {})
-            for section, current, prior in (
-                ("Envelope", plan.envelope_values, prior_envelope),
-                ("Exit terms", plan.exit_terms or {}, prior_terms),
-            ):
-                for key, value in current.items():
-                    if prior.get(key) != value:
-                        changes.append(f"{section}: {key.replace('_', ' ')} · {prior.get(key, 'unset')} → {value}")
+            account_id = plan.live_account_id
+            comparison = envelope_change(plan, artifacts_root=root)
+            changes = [
+                f"{section}: {item['field'].replace('_', ' ')} · {item['before']!r} → {item['after']!r}"
+                for section, items in (("Envelope", comparison["changes"]), ("Exit terms", comparison["exit_terms_changes"]))
+                for item in items
+            ]
+            self._prune_expired_plans(root, plan.created_at_ms)
             atomic_write_json(self._plan_path(root, plan.plan_id), asdict(plan))
             return ArmingPlanView(
                 plan_id=plan.plan_id,
@@ -116,11 +137,10 @@ class AlpacaLiveArmingService:
     def status(self, account_id: str, sid: str) -> ArmingStatusView:
         resolved = self._resolve()
         root = normalize_ceremony_root(resolved.settings.clerk_dir)
-        own_ids = arming_accounts(artifacts_root=root, live_state_root=self._live_root).get(account_id, set())
-        if sid not in own_ids:
-            raise LiveArmingRefused(
-                LIVE_ARMING_INPUTS_CHANGED, "This bot does not belong to the selected live account."
-            )
+        actual = live_account_id_for_status(strategy_instance_id=sid, artifacts_root=root, live_state_root=self._live_root)
+        self._require_account(account_id, actual)
+        account_id = actual
+        own_ids = arming_accounts(artifacts_root=root, live_state_root=self._live_root).get(account_id, {sid})
         now = self._clock()
         account = account_arming(
             live_account_id=account_id,
@@ -143,6 +163,12 @@ class AlpacaLiveArmingService:
         )
 
     def disarm(self, account_id: str, sid: str) -> ArmingStatusView:
+        root = self._artifacts_root
+        ledger = LiveArmingLedger.discover(root, strategy_instance_id=sid)
+        if ledger is None:
+            raise LiveArmingRefused(LIVE_ARMING_NOT_ARMED, "This bot has no arming record to revoke.")
+        self._require_account(account_id, ledger.live_account_id)
+        account_id = ledger.live_account_id
         disarm(
             strategy_instance_id=sid, artifacts_root=self._artifacts_root, live_account_id=account_id, clock=self._clock
         )
@@ -166,7 +192,7 @@ class AlpacaLiveArmingService:
 
     @staticmethod
     def _require_account(expected: str, actual: str) -> None:
-        if expected != actual:
+        if canonical_alpaca_account_id(expected) != canonical_alpaca_account_id(actual):
             raise LiveArmingRefused(LIVE_ARMING_INPUTS_CHANGED, "The arming plan belongs to another account.")
 
 

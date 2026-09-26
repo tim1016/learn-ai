@@ -403,6 +403,9 @@ async def compose_repository_runtime(
                 instance_seals=instance_seals,
             )
         )
+        if envelope_sync is not None:
+            await asyncio.to_thread(envelope_sync.refresh_arming)
+        await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,

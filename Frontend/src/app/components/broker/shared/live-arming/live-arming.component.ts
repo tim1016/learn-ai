@@ -4,7 +4,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, ou
 import { FormField, form } from '@angular/forms/signals';
 import { DialogModule } from 'primeng/dialog';
 
-import type { ResourceTarget } from '../../../../fleet/resource-target';
+import { laneKey, type ResourceTarget } from '../../../../fleet/resource-target';
 import { AlpacaLiveVerdictService } from '../../../../services/alpaca-live-verdict.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
@@ -22,8 +22,8 @@ export class LiveArmingComponent {
   readonly changed = output();
   private readonly service = inject(LiveArmingService);
   private readonly verdicts = inject(AlpacaLiveVerdictService);
-  private readonly identity = computed(() => JSON.stringify([this.target().clerkId, this.target().accountId,
-    this.target().bindingGeneration, this.target().routingEpoch, this.sid()]));
+  private readonly identity = computed(() => `${laneKey(this.target().broker, this.target().clerkId,
+    this.target().routingEpoch, this.target().bindingGeneration, this.target().accountId)}::${this.sid()}`);
   private readonly applied = signal<{ key: string; status: ArmingStatus } | null>(null);
   protected readonly state = resource({
     params: () => this.identity(),

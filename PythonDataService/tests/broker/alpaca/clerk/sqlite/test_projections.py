@@ -40,7 +40,7 @@ OTHER_SID = "qqq-bot"
 # limit in pre-market and after-hours (#2229). No quote is ever read by a
 # projection.
 _XH_PRICING = RecoveryPricing(
-    policy_source=lambda: ProgramLegPolicy(
+    policy_for=lambda _sid: ProgramLegPolicy(
         window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
         allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
     ),
@@ -1032,3 +1032,38 @@ def test_hot_projection_queries_use_covering_fold_indexes(tmp_path: Path) -> Non
     assert "ix_effect_operations_updated_at" in details["account_operations"]
     assert "ix_effect_operations_strategy_updated_at" in details["bot_operations"]
     assert "ix_custody_transitions_strategy_sequence" in details["bot_timeline"]
+
+
+@pytest.mark.parametrize("stopped,working,kind", [(True, False, "stuck"), (False, True, "working")])
+def test_current_recovery_custody_facts_outrank_a_missing_check(tmp_path: Path, stopped, working, kind):
+    from app.broker.alpaca.clerk.sqlite.recovery_status import read_recovery_status
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    try:
+        _raise_exit_not_flat(repo, SID, next_attempt_at_ms=None)
+        episode = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID)
+        status = read_recovery_status(repo._conn, strategy_instance_id=SID, uncertainty_id=episode["uncertainty_id"],
+            now_ms=clock(), stopped=stopped, working=working)
+        assert status.kind == kind
+    finally:
+        repo.close()
+
+
+def test_related_account_and_bot_reads_share_one_revision(tmp_path: Path) -> None:
+    repo = _repository(tmp_path, _Clock())
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        with reader.snapshot():
+            account = reader.account_snapshot()
+            submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="later-run")
+            bot = reader.bot_snapshot(SID)
+            assert bot is not None
+            assert bot.control_revision == account.control_revision
+            assert bot.runs == ()
+        refreshed = reader.bot_snapshot(SID)
+        assert refreshed is not None
+        assert refreshed.runs[0].state == "ACTIVE"
+        assert refreshed.control_revision > account.control_revision
+    finally:
+        reader.close()
+        repo.close()

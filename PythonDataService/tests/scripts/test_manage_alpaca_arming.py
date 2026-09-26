@@ -136,7 +136,7 @@ def test_status_on_an_account_with_no_records_answers_unarmed(
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["live_account_id"] == LIVE_ACCT
     assert report["armed_instance_count"] == 0
     assert report["envelope_state"] == "configured_unsealed"
@@ -171,7 +171,7 @@ def test_status_after_arming_counts_the_instance_and_reports_the_sealed_envelope
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["armed_instance_count"] == 1
     assert report["envelope_state"] == "sealed"
     (instance,) = report["instances"]
@@ -187,7 +187,7 @@ def test_status_lists_an_armed_graduated_account_without_a_shadow_fence(
     artifacts_root, live_state_root = roots
     _graduate_live_account(artifacts_root)
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id=ARMING_SID,
         sealed_account_id=LIVE_ACCT,
     )
@@ -195,7 +195,7 @@ def test_status_lists_an_armed_graduated_account_without_a_shadow_fence(
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["live_account_id"] == LIVE_ACCT
     assert report["armed_instance_count"] == 1
     assert report["instances"][0]["strategy_instance_id"] == ARMING_SID
@@ -331,7 +331,7 @@ def test_status_uses_the_instances_own_ledger_after_its_binding_is_lost(
     artifacts_root, live_state_root = roots
     _graduate_live_account(artifacts_root)
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id=ARMING_SID,
         sealed_account_id=LIVE_ACCT,
     )
@@ -347,7 +347,7 @@ def test_status_uses_the_instances_own_ledger_after_its_binding_is_lost(
         == 0
     )
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["live_account_id"] == LIVE_ACCT
     assert report["armed_instance_count"] == 0
     assert report["instances"][0]["reason_code"] == LIVE_ARMING_SEAL_CHANGED
@@ -370,7 +370,7 @@ def test_status_uses_the_instances_ledger_after_its_shadow_fence_is_lost(
         == 0
     )
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["live_account_id"] == LIVE_ACCT
     assert report["armed_instance_count"] == 1
     assert report["instances"][0]["state"] == "armed"
@@ -382,7 +382,7 @@ def test_recovered_seal_loss_reports_submission_closed_when_live_authority_is_da
     artifacts_root, live_state_root = roots
     _graduate_live_account(artifacts_root)
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id=ARMING_SID,
         sealed_account_id=LIVE_ACCT,
     )
@@ -399,7 +399,7 @@ def test_recovered_seal_loss_reports_submission_closed_when_live_authority_is_da
         == 0
     )
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["instances"][0]["reason_code"] == LIVE_ARMING_SEAL_CHANGED
     assert report["submission_admitted"] is False
     assert "Clerk database" in report["note"]
@@ -436,7 +436,7 @@ def test_live_binding_with_a_missing_database_is_one_typed_refusal(
     artifacts_root, live_state_root = roots
     _graduate_live_account(artifacts_root)
     record_sealed_binding(
-        live_state_root,
+        live_state_root, artifacts_root=artifacts_root,
         strategy_instance_id=ARMING_SID,
         sealed_account_id=LIVE_ACCT,
     )
@@ -517,7 +517,7 @@ def test_planning_without_a_current_shadow_receipt_plans_with_a_null_receipt(
 ) -> None:
     artifacts_root, live_state_root = roots
     activate_shadow_fence(artifacts_root)
-    record_sealed_binding(live_state_root)
+    record_sealed_binding(live_state_root, artifacts_root=artifacts_root)
 
     assert (
         main(
@@ -551,7 +551,7 @@ def test_disarm_revokes_and_status_names_the_revocation(
     assert revocation["revokes_record_sha256"] == armed["record_sha256"]
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS + 1)], settings=SETTINGS) == 0
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["armed_instance_count"] == 0
     (instance,) = report["instances"]
     assert (instance["state"], instance["reason_code"]) == ("disarmed", "LIVE_ARMING_REVOKED")
@@ -851,7 +851,7 @@ def test_a_real_activation_record_reports_submission_admitted(
 
     assert main([*_flags(roots), "status", "--now-ms", str(ARMED_AT_MS)], settings=SETTINGS) == 0
 
-    report = _last_object(capsys)
+    [report] = _last_object(capsys)["accounts"]
     assert report["submission_admitted"] is True
     assert report["note"] == _SUBMISSION_ADMITTED_NOTE
     assert "a live activation record exists for this account" in report["note"]
@@ -868,7 +868,7 @@ def test_status_resolves_explicit_roots_and_lists_unarmed_instances_per_account(
     artifacts_root, live_state_root = roots
     for account_id, sid in [(LIVE_ACCT, "unarmed-one"), ("9LIVE0002", "unarmed-two")]:
         activate_shadow_fence(artifacts_root, live_account_id=account_id)
-        record_sealed_binding(live_state_root, strategy_instance_id=sid,
+        record_sealed_binding(live_state_root, artifacts_root=artifacts_root, strategy_instance_id=sid,
             sealed_account_id=shadow_account_id_for_live_account(account_id))
     monkeypatch.chdir(tmp_path)
     if root_style == "home":

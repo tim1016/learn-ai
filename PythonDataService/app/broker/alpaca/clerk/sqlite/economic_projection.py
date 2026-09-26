@@ -458,7 +458,11 @@ class SqliteEconomicProjectionReader:
     def missing_exit_execution_evidence(
         self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
     ) -> tuple[MissingExitExecutionEvidence, ...]:
-        """Canceled shadow EXITs whose own execution window was unwitnessed."""
+        return tuple(evidence for stamp, evidence in self.exit_execution_evidence(strategy_instance_id)
+                     if from_ms <= stamp < to_ms)
+
+    def exit_execution_evidence(self, strategy_instance_id: str) -> tuple[tuple[int, MissingExitExecutionEvidence], ...]:
+        """One lifetime evidence read, reused across the days of one shadow evaluation."""
         from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
 
         decisions = self.order_decisions(strategy_instance_id)
@@ -468,13 +472,15 @@ class SqliteEconomicProjectionReader:
             latest = SynthesizedOrderLedger.read_latest_beside_database(account_id=self._account_id, db_path=self._db_path)
         except (OSError, RuntimeError, ValueError) as exc:
             raise EconomicProjectionUnavailable(f"Shadow execution evidence is unreadable: {exc}") from exc
+        missing = [ref for ref, decision in decisions.items() if decision.kind == "EXIT" and ref not in latest]
+        if missing:
+            raise EconomicProjectionUnavailable("Shadow execution evidence is missing orders: " + ", ".join(sorted(missing)))
         return tuple(
-            MissingExitExecutionEvidence(ref, decision.decision_id, row.order.symbol, str(row.order.side), row.order.quantity)
+            (row.anchor.decision_bar_end_ms, MissingExitExecutionEvidence(ref, decision.decision_id, row.order.symbol, str(row.order.side), row.order.quantity))
             for ref, decision in sorted(decisions.items()) if decision.kind == "EXIT"
             and (row := latest.get(ref)) is not None
             and row.order.status == "canceled" and row.anchor is not None
             and row.anchor.unfilled_reason == "no_evidence"
-            and from_ms <= row.anchor.decision_bar_end_ms < to_ms
         )
 
     def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:

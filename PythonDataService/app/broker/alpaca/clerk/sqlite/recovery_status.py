@@ -38,6 +38,10 @@ def read_recovery_status(
     def status(kind: RecoveryStatusKind, reason_code: str, explanation: str, allowed_from_ms: int | None = None) -> RecoveryStatus:
         return RecoveryStatus(kind, reason_code, explanation, last_checked, since, allowed_from_ms)
 
+    if stopped:
+        return status("stuck", "EXIT_STUCK", "Automatic recovery stopped after repeated regular-session failures.")
+    if working:
+        return status("working", "OWN_EXIT_WORKING", "An exit is in progress; the Clerk is waiting for its outcome.")
     unknown = "Recovery status is unknown until the Clerk completes a fresh check."
     if row is None:
         return status("unknown", "RECOVERY_NOT_CHECKED", unknown)
@@ -47,12 +51,8 @@ def read_recovery_status(
     if facts.uncertainty_id != uncertainty_id or facts.lease_owner != owner:
         return status("unknown", "RECOVERY_NOT_CHECKED", unknown)
     last_checked = facts.last_checked_at_ms
-    if stopped:
-        return status("stuck", "EXIT_STUCK", "Automatic recovery stopped after repeated regular-session failures.")
     if facts.reason_code == "BROKER_SNAPSHOT_STALE":
         return status("broker_unreachable", facts.reason_code, "The Clerk could not reach the broker; recovery is paused.")
-    if working:
-        return status("working", "OWN_EXIT_WORKING", "An exit is in progress; the Clerk is waiting for its outcome.")
     completed_at_ms = last_checked if checkpoint is None else checkpoint["completed_at_ms"]
     interval_ms = DEFAULT_RECOVERY_INTERVAL_MS if checkpoint is None else checkpoint["interval_ms"]
     if last_checked is None or completed_at_ms is None or not 0 <= now_ms - completed_at_ms <= 2 * interval_ms:

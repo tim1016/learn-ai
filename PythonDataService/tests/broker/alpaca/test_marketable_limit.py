@@ -189,7 +189,6 @@ def test_allowance_converters_keep_defaults_legacy_knobs_only_apply_at_upgrade(m
     monkeypatch.setenv("ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE", "4")
     monkeypatch.setenv("ALPACA_LIVE_XH_EXIT_SPREAD_CAP_BPS", "200")
     stamped = program_leg.legacy_recovery_pricing(envelope)
-    assert program_leg.with_deploy_recovery_pricing(envelope) == envelope
     assert (stamped.entry_bps, stamped.exit_bps) == (envelope.entry_bps, envelope.exit_bps)
     assert stamped.exit_band_multiple == Decimal("4")
     assert stamped.exit_spread_cap_bps == Decimal("200")

@@ -15906,7 +15906,7 @@
       },
       "ExitTerms": {
         "additionalProperties": false,
-        "description": "A historical registration may be explicitly sealed with an unset allowance.",
+        "description": "Immutable stored terms; an upgraded registration may retain an unset allowance.",
         "properties": {
           "band_multiple": {
             "maximum": 10.0,
@@ -15936,16 +15936,16 @@
             "type": "string"
           },
           "spread_cap_bps": {
-            "exclusiveMaximum": 10000.0,
-            "minimum": 0.0,
+            "maximum": 1000.0,
+            "minimum": 1.0,
             "title": "Spread Cap Bps",
             "type": "number"
           }
         },
         "required": [
-          "exit_allowance_bps",
           "band_multiple",
           "spread_cap_bps",
+          "exit_allowance_bps",
           "provenance"
         ],
         "title": "ExitTerms",
@@ -15953,7 +15953,7 @@
       },
       "ExitTermsInput": {
         "additionalProperties": false,
-        "description": "Explicit operator values for a new deployment or profile default.",
+        "description": "Explicit complete terms required for a new deployment.",
         "properties": {
           "band_multiple": {
             "maximum": 10.0,
@@ -15968,16 +15968,16 @@
             "type": "number"
           },
           "spread_cap_bps": {
-            "exclusiveMaximum": 10000.0,
-            "minimum": 0.0,
+            "maximum": 1000.0,
+            "minimum": 1.0,
             "title": "Spread Cap Bps",
             "type": "number"
           }
         },
         "required": [
-          "exit_allowance_bps",
           "band_multiple",
-          "spread_cap_bps"
+          "spread_cap_bps",
+          "exit_allowance_bps"
         ],
         "title": "ExitTermsInput",
         "type": "object"
@@ -42287,10 +42287,12 @@
           "EXECUTION_SLICE_FILLED",
           "EXIT_ACCEPTED",
           "EXIT_ATTRIBUTED_FLAT",
+          "EXIT_MARKET_HOLD",
           "EXIT_NOT_FLAT",
           "EXIT_RECOVERY_EVALUATED",
           "EXIT_REDUCING_ORDER_CREATED",
           "EXIT_TERMS_SEALED",
+          "EXIT_TERMS_UPGRADE_COMPLETED",
           "EXTERNAL_ORDER_ACKNOWLEDGED",
           "EXTERNAL_ORDER_OBSERVED",
           "MANUAL_ORDER_ACCEPTED",
@@ -51864,8 +51866,6 @@
             "schema": {
               "anyOf": [
                 {
-                  "exclusiveMaximum": 10000.0,
-                  "minimum": 0.0,
                   "type": "number"
                 },
                 {
@@ -51882,8 +51882,6 @@
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 10.0,
-                  "minimum": 1.0,
                   "type": "number"
                 },
                 {
@@ -51900,8 +51898,6 @@
             "schema": {
               "anyOf": [
                 {
-                  "exclusiveMaximum": 10000.0,
-                  "minimum": 0.0,
                   "type": "number"
                 },
                 {

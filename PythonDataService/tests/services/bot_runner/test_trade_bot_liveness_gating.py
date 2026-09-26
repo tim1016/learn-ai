@@ -33,6 +33,7 @@ from tests._helpers.bot_runner.custody import _SID, _T0, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _WIN_START_MS, _green_bar, _red_bar, _wait_for
 
@@ -69,7 +70,7 @@ async def test_unknown_liveness_blocks_entry(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -140,7 +141,7 @@ async def test_halted_liveness_blocks_entry(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -232,7 +233,7 @@ async def test_blocked_entry_is_rolled_back_and_can_re_enter(
     set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
-            broker="alpaca",
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
             symbol="SPY",
@@ -455,7 +456,7 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
     feed = _FakeFeed(bars, mode="finite")
     feed.capability_account_id = "IBKR-MKTDATA-ACCT"  # distinct from clerk.account_id above
     binding = BrokerBotBinding(
-        strategy_instance_id=_SID,
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol="SPY",

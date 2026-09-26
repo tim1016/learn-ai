@@ -31,6 +31,18 @@ describe('BrokersService', () => {
 
   afterEach(() => httpMock.verify());
 
+  it('sends the operator proposed price and override in the safe-flatten check body', async () => {
+    const promise = service.checkSqliteSafeFlatten(TEST_CLERK_ID, 'PA1', {
+      action_id: 'prepare_safe_flatten', concurrency_token: 'reviewed-token', proposed_limit_price: 99.37, band_override: true,
+    });
+    const request = httpMock.expectOne((req) => req.method === 'POST' && req.url.includes('/recovery-actions/check'));
+    expect(request.request.body).toEqual({
+      action_id: 'prepare_safe_flatten', concurrency_token: 'reviewed-token', proposed_limit_price: 99.37, band_override: true,
+    });
+    request.flush({ allowed: true });
+    await promise;
+  });
+
   it('GETs the account for the named broker', async () => {
     const promise = service.getAccount(TARGET);
 

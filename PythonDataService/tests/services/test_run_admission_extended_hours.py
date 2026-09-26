@@ -11,6 +11,7 @@ from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.schemas.run_admission import ExtendedHoursAdmissionFact
 from app.services.bot_start_admission import extended_hours_admission_fact
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("10"))
@@ -24,7 +25,7 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal(
         # is an after-hours limit priced from the exit allowance, so a paper or
         # sim authority (a declared window, no allowance) has its own state —
         # refused on Start and on a flat Resume, never on a holding one.
-        (True, ProgramLegPolicy(window=_WINDOW, allowances=None), "EXIT_ALLOWANCE_UNSET"),
+        (True, ProgramLegPolicy(window=_WINDOW, allowances=None), "NOT_REQUESTED"),
         (True, ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES), "NOT_REQUESTED"),
         (False, ProgramLegPolicy.regular_only(), "UNSUPPORTED"),
         (False, ProgramLegPolicy(window=_WINDOW, allowances=None), "ALLOWANCE_UNSET"),
@@ -32,7 +33,7 @@ _ALLOWANCES = ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal(
     ],
 )
 def test_extended_hours_admission_fact(use_rth: bool, policy: ProgramLegPolicy, state: str) -> None:
-    fact = extended_hours_admission_fact(use_rth=use_rth, policy=policy, observed_at_ms=1_788_361_200_000)
+    fact = extended_hours_admission_fact(exit_terms=DEPLOY_EXIT_TERMS, use_rth=use_rth, policy=policy, observed_at_ms=1_788_361_200_000)
     assert fact.state == state
     assert fact.observed_at_ms == 1_788_361_200_000
 
@@ -61,12 +62,24 @@ def test_calendar_window_is_shared_by_readiness_and_start(point, allowed, mode):
     holiday = scheduled_extended_session_bounds(date(2026, 11, 25))
     now = {'pre': bounds.open_ms, 'rth': bounds.rth_open_ms, 'close': bounds.rth_close_ms,
            'night': bounds.open_ms - 1, 'holiday': holiday.open_ms + 86_400_000}[point]
-    fact = extended_hours_admission_fact(use_rth=True, policy=ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES), observed_at_ms=now)
-    bot = _bot(observed_at_ms=now, mode=mode, liveness_state='CLOSED' if point == 'pre' else 'TRADABLE').model_copy(update={'extended_hours': fact})
+    fact = extended_hours_admission_fact(exit_terms=DEPLOY_EXIT_TERMS, use_rth=True, policy=ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES), observed_at_ms=now)
+    bot = _bot(observed_at_ms=now, mode=mode, liveness_state='CLOSED' if point == 'pre' else 'TRADABLE').model_copy(update={'extended_hours': fact, 'start_window': paper_deploy_service.deploy_window(now)})
     decision = evaluate_run_admission(bot, _clerk(observed_at_ms=now), evaluated_at_ms=now)
     assert decision.allowed is (allowed or mode == 'dry_run'), decision.explanation
-    assert paper_deploy_service.deploy_window(now).ready is allowed
+    assert (paper_deploy_service.deploy_window(now).state != "CLOSED") is allowed
     if not allowed and mode == 'trade':
         assert decision.reason_code == 'DEPLOY_WINDOW_CLOSED'
         assert 'ET' in decision.next_step
-        assert fact.start_window_refusal.available_at_ms > now
+        assert bot.start_window.next_open_ms > now
+
+
+def test_explicit_exit_terms_do_not_invent_an_extended_entry_allowance():
+    fact = extended_hours_admission_fact(use_rth=False, policy=ProgramLegPolicy(window=_WINDOW, allowances=None),
+        observed_at_ms=1_788_361_200_000, exit_terms=DEPLOY_EXIT_TERMS)
+    assert fact.state == "ALLOWANCE_UNSET"
+
+
+def test_new_start_needs_explicit_exit_terms_even_with_account_defaults():
+    fact = extended_hours_admission_fact(use_rth=True, policy=ProgramLegPolicy(window=_WINDOW, allowances=_ALLOWANCES),
+        observed_at_ms=1_788_361_200_000, exit_terms=None)
+    assert fact.state == "EXIT_ALLOWANCE_UNSET"

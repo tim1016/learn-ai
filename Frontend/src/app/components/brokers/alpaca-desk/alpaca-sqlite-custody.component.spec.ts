@@ -183,6 +183,20 @@ describe('AlpacaSqliteCustodyComponent', () => {
       .toBe('/brokers/alpaca/accounts/PA1/bots/dead-bot?lens=operator');
   });
 
+  it('keeps an account notice visible without linking to a null bot', async () => {
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...projection([]),
+        exposure_notices: [{
+          kind: 'position_unverified', strategy_instance_id: null, symbol: 'SPY',
+          label: 'Position could not be verified', explanation: 'Check the broker.', action_label: 'Open bot',
+        }],
+      }),
+    });
+    expect(await screen.findByText('Position could not be verified')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Open bot' })).toBeNull();
+  });
+
   it('fails closed when the SQLite authority is unavailable', async () => {
     const getSqliteClerkProjection = vi.fn().mockRejectedValue(
       new HttpErrorResponse({ status: 409 }),
