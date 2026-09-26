@@ -46,6 +46,12 @@ export interface RunVerdictMissingEvidence {
 
 export interface RunVerdict {
   verdict_version: number;
+  /** Which explanatory-note vocabulary authored the sub-score notes.
+   *  Revision 1 is the pre-#2462 copy ("Near-certain" / "High statistical
+   *  confidence" on high Probabilistic Sharpe); revision 2 is the
+   *  selection-adjustment-neutral copy. Optional only so historical
+   *  persisted verdicts (revision 1, field absent) continue to render. */
+  notes_revision?: number;
   /** Optional only so historical persisted v1 verdicts continue to render. */
   status?: RunVerdictStatus;
   engine: RunVerdictEngine;

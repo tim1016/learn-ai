@@ -29,6 +29,13 @@ from app.schemas.run_verdict import (
 )
 
 RUN_VERDICT_VERSION = 2
+RUN_VERDICT_NOTES_REVISION = 2
+"""Revision of the sub-score explanatory-note vocabulary (the copy, not the
+scoring): revision 2 replaces the pre-#2462 "Near-certain" / "High statistical
+confidence" Probabilistic Sharpe notes with selection-adjustment-neutral text.
+Persisted verdicts parse with revision 1 (the field's default), so a row's note
+vocabulary is carried by data, never by its wall-clock date. The frozen v2
+scoring policy is untouched, hence verdict_version stays 2."""
 
 # V2 freezes the old scorer's relative 25:20:20:20 intent once at the
 # definition level. It never changes weights based on which values a run happens
@@ -190,6 +197,7 @@ def compute_run_verdict(
             )
         verdict = RunVerdict(
             verdict_version=RUN_VERDICT_VERSION,
+        notes_revision=RUN_VERDICT_NOTES_REVISION,
             statistics_basis=statistics_basis,
             status=status,
             engine=engine,
@@ -221,6 +229,7 @@ def compute_run_verdict(
     grade, signal, evidence_action, headline = _grade_and_signal(composite)
     verdict = RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
+        notes_revision=RUN_VERDICT_NOTES_REVISION,
         statistics_basis=statistics_basis,
         status="complete",
         engine=engine,
@@ -297,6 +306,7 @@ def _empty_verdict(
 ) -> RunVerdict:
     return RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
+        notes_revision=RUN_VERDICT_NOTES_REVISION,
         status="unavailable",
         engine=engine,
         generated_at_ms=generated_at_ms,
@@ -800,8 +810,14 @@ def _grade_psr_sub(v: float | None) -> RunVerdictSubScore:
     if v < 0.95:
         return base.model_copy(update={"score": 14, "note": "Approaching the 95% threshold."})
     if v < 0.99:
-        return base.model_copy(update={"score": 20, "note": "High statistical confidence."})
-    return base.model_copy(update={"score": 18, "note": "Near-certain - verify sample size isn't inflated."})
+        return base.model_copy(update={
+            "score": 20,
+            "note": "Above the 95% threshold for this one run - not adjusted for picking the best of several tried settings.",
+        })
+    return base.model_copy(update={
+        "score": 18,
+        "note": "Above the 99% threshold for this one run - not adjusted for picking the best of several tried settings.",
+    })
 
 
 def _grade_sample_size_sub(n: float | None) -> RunVerdictSubScore:

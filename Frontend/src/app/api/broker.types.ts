@@ -22969,6 +22969,11 @@ export interface components {
             missing_required_metrics?: string[];
             /** Normalized Weights */
             normalized_weights: boolean;
+            /**
+             * Notes Revision
+             * @default 1
+             */
+            notes_revision?: number;
             /** Parity Signature */
             parity_signature?: Record<string, never>;
             /** Red Flags */

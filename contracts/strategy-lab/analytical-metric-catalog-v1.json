@@ -6528,7 +6528,7 @@
       "canonical_symbol": "PythonDataService/app/engine/results/statistics.py::_probabilistic_sharpe_ratio",
       "category": "statistical_confidence",
       "common_misreadings": [
-        "The probability is conditional on the estimator and sample assumptions; it is not the chance the next trade wins.",
+        "The probability is conditional on the estimator and sample assumptions; it is not the chance the next trade wins. It describes this one run and is not adjusted for selection among several tried settings.",
         "A familiar label is not interchangeable with a different producer's calculation."
       ],
       "contract_id": "platform-results-statistics-v1",

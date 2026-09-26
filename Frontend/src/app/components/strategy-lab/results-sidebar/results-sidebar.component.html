@@ -7,9 +7,15 @@
   @if (metrics().length > 0) {
     <ol class="results-sidebar__metrics">
       @for (metric of metrics(); track metric.key) {
-        <li [attr.data-band]="metric.band" [attr.title]="metric.note">
+        <li [attr.data-band]="metric.band">
           <span>{{ metric.label }}</span>
           <strong>{{ metric.display }}</strong>
+          @if (metric.note) {
+            <details class="results-sidebar__note">
+              <summary>Why this score: {{ metric.label }}</summary>
+              <p>{{ metric.note }}</p>
+            </details>
+          }
         </li>
       }
     </ol>
