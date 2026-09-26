@@ -212,6 +212,10 @@ class AvailabilityReport:
             "available_days": self.available_days,
             "is_complete": self.is_complete,
             "missing_days": [d.isoformat() for d in self.missing_days],
+            "unreadable_days": [d.isoformat() for d in self.unreadable_days],
+            "unreadable_files": [
+                {"path": file.path, "reason": file.reason} for file in self.unreadable_files
+            ],
             "sources": {root: [d.isoformat() for d in dates] for root, dates in self.sources.items()},
         }
 

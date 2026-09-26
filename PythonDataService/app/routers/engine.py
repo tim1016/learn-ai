@@ -207,6 +207,13 @@ def generate_pine_script(name: str, params: dict[str, Any]) -> PlainTextResponse
 # ---------------------------------------------------------------------------
 # Data availability endpoint
 # ---------------------------------------------------------------------------
+class UnreadableFileResponse(BaseModel):
+    """A data file that is on disk but its reader cannot decode (#2489, #2499)."""
+
+    path: str
+    reason: str
+
+
 class AvailabilityResponse(BaseModel):
     symbol: str
     start: str
@@ -216,6 +223,11 @@ class AvailabilityResponse(BaseModel):
     available_days: int
     is_complete: bool
     missing_days: list[str] = []
+    # Sessions whose file is present but undecodable — the window is refused
+    # and a backfill does not repair it, so the caller must see both the
+    # sessions and the files at fault, not just ``is_complete=false``.
+    unreadable_days: list[str] = []
+    unreadable_files: list[UnreadableFileResponse] = []
     # Per-root breakdown (reference mount vs cache) so the UI can tell
     # the user where the data is coming from.
     sources: dict[str, list[str]] = Field(default_factory=dict)
