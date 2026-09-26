@@ -66,9 +66,7 @@ from app.research.runs import (
     save_run,
     summarize_window,
 )
-from app.routers.spec_strategy import (
-    _default_data_source_factory,
-)
+from app.services.spec_run_data import SpecDataSourceFactory, materialize_spec_data_source
 
 router = APIRouter()
 
@@ -132,14 +130,14 @@ class StrategyRunListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Dependencies.
 # ---------------------------------------------------------------------------
-def get_data_source_factory():
+def get_data_source_factory() -> SpecDataSourceFactory:
     """Return a ``(symbol, start, end) -> reader`` factory.
 
     Mirrors the dependency in ``app/routers/spec_strategy.py``. Tests
     override via ``app.dependency_overrides`` to inject a synthetic
     data source — same pattern the spec parity tests already use.
     """
-    return _default_data_source_factory
+    return materialize_spec_data_source
 
 
 def get_artifacts_root() -> Path | None:

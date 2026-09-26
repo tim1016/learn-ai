@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError
 from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult, EquitySnapshot
 from app.engine.execution.fill_model import FillModel
@@ -45,6 +46,7 @@ from app.research.runs.result import (
     RunTrade,
 )
 from app.research.runs.window import summarize_window
+from app.services.spec_run_data import MaterializedSpecReader
 from app.utils.timestamps import datetime_at_ms, now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -335,9 +337,9 @@ def run_strategy_spec(
         # produce a trailing-pipe ``data_snapshot_id`` indistinguishable
         # from a regression in ``resolve_data_root_revision``. Treat it as
         # missing and resolve the real revision.
-        # TODO(phase-e): memoize ``resolve_data_root_revision()`` keyed on
-        # ``LEAN_DATA_ROOT`` so 10×10 sensitivity sweeps don't pay for 100
-        # ``git rev-parse`` subprocess starts.
+        # Injected sources may supply their own revision. A lake-backed
+        # source replaces this provisional identity with its admitted
+        # fingerprint after materialization succeeds below.
         revision = (
             data_root_revision
             if data_root_revision
@@ -389,6 +391,9 @@ def run_strategy_spec(
         # crash: its message already names the gaps.
         try:
             data_source = data_source_factory(symbol, data_start_date, end_date)
+        except LakeMaterializationError as exc:
+            logger.warning("[RUNS] lake refused the run", extra={"run_id": rid, "reason": str(exc)})
+            return _failed(ledger, f"Lake refused this run: {exc}")
         except MissingSessionsError as exc:
             logger.warning(
                 "[RUNS] refused: the data source does not cover the requested window",
@@ -404,6 +409,15 @@ def run_strategy_spec(
         except Exception as exc:
             logger.exception("[RUNS] data source unavailable for %s", symbol)
             return _failed(ledger, f"data source unavailable: {exc}")
+
+        if isinstance(data_source, MaterializedSpecReader):
+            ledger.data_snapshot_id = make_data_snapshot_id(
+                symbol=symbol,
+                resolution_minutes=resolution,
+                start_ms=warmup_start_ms,
+                end_ms=end_ms,
+                data_root_revision=f"lake:{data_source.materialization.availability_hash}",
+            )
 
         # ML predictions-as-data (v0.5): if the spec references a prediction
         # set, load + validate it before constructing the strategy so the

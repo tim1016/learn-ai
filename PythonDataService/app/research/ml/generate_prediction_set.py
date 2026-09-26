@@ -138,8 +138,7 @@ def _default_lean_bars_provider(
     """Yield ``(close, timestamp_ms)`` for each bar the engine will see.
 
     Constructs a ``LeanMinuteDataReader`` from ``LEAN_DATA_ROOT`` /
-    ``LEAN_DATA_CACHE`` (mirroring ``app/routers/spec_strategy.py``'s
-    default factory) and drives the same ``TradeBarConsolidator``
+    ``LEAN_DATA_CACHE`` and drives the same ``TradeBarConsolidator``
     configuration the engine uses internally via
     :func:`app.research.ml.coverage.iter_consolidated_bars`. This makes
     the artifact's bar clock identical to the engine's at run time.

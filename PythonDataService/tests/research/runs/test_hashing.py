@@ -8,6 +8,8 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
+from app.config import settings
+from app.data_lake.path_policy import lake_subpath
 from app.research.runs import ledger
 from app.research.runs.hashing import (
     canonical_json,
@@ -258,22 +260,27 @@ def test_compute_window_files_fingerprint_ignores_files_outside_window(tmp_path)
     assert inside_only == inside_only_after
 
 
-def test_resolve_data_root_revision_prefers_window_files_before_later_git_root(
+def test_resolve_data_root_revision_follows_the_lake_and_ignores_legacy_roots(
     tmp_path, monkeypatch
 ):
-    reference_root = tmp_path / "reference"
-    cache_root = tmp_path / "cache"
-    cache_root.mkdir()
+    writer = tmp_path / "writer"
+    lake_root = writer / lake_subpath("polygon_split_adjusted")
+    legacy_root = tmp_path / "cache"
+    legacy_root.mkdir()
     first_path = _write_empty_lean_minute_zip(
-        reference_root, "SPY", date(2024, 1, 2), 1_700_000_000.0
+        lake_root, "SPY", date(2024, 1, 2), 1_700_000_000.0
+    )
+    legacy_path = _write_empty_lean_minute_zip(
+        legacy_root, "SPY", date(2024, 1, 2), 1_799_999_999.0
     )
 
-    monkeypatch.setenv("LEAN_DATA_ROOT", str(reference_root))
-    monkeypatch.setenv("LEAN_DATA_CACHE", str(cache_root))
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(writer))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(legacy_root))
+    monkeypatch.setenv("LEAN_DATA_CACHE", str(legacy_root))
     monkeypatch.delenv("LEAN_DATA_ROOT_REVISION", raising=False)
 
     def fake_run(*args, **kwargs):
-        if kwargs.get("cwd") == str(cache_root):
+        if kwargs.get("cwd") == str(legacy_root):
             return ledger.subprocess.CompletedProcess(args[0], 0, stdout="cache-sha\n", stderr="")
         return ledger.subprocess.CompletedProcess(args[0], 1, stdout="", stderr="not a git repo")
 
@@ -284,6 +291,10 @@ def test_resolve_data_root_revision_prefers_window_files_before_later_git_root(
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 2),
     )
+    os.utime(legacy_path, (1_799_999_000.0, 1_799_999_000.0))
+    assert resolve_data_root_revision(
+        symbol="SPY", start_date=date(2024, 1, 2), end_date=date(2024, 1, 2)
+    ) == before
     os.utime(first_path, (1_700_000_100.0, 1_700_000_100.0))
     after = resolve_data_root_revision(
         symbol="SPY",
