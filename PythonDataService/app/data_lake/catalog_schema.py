@@ -99,6 +99,7 @@ DATA_LAKE_ARTIFACTS = TableExpectation(
         # DataRootId-leading hot lookup index (#1878); the drift test only
         # asserts index names exist, not column order.
         "ix_data_lake_artifacts_root_scoped_coverage",
+        "ix_data_lake_artifacts_committed_file",
     ),
 )
 

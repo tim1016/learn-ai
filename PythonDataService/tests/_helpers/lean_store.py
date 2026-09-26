@@ -53,6 +53,9 @@ def make_minute_bars(symbol: str, trading_date: date, *, count: int = 390) -> li
 
 def record_fixture_adjustment(path: Path, symbol: str) -> None:
     """Receipt synthetic adjusted fixtures against their known empty action set."""
+    from tests._helpers.fake_lake_catalog import record_fixture_publication
+
+    record_fixture_publication(path)
     root = adjusted_root_for(path)
     if root is None:
         return

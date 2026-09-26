@@ -19,6 +19,12 @@ while reading the mounted lake. Both persist the corporate-action version.
 See [the verification note](../references/lake-adjustment-dimension.md#5-corporate-action-versions-2454-2026-09-26).
 No calculation ownership changes.
 
+Committed lake-file admission (#2456) is owned by
+`PythonDataService/app/data_lake/admission.py`, backed by committed catalog
+receipts. Python reads and LEAN preflight refuse files whose exact bytes have
+no receipt; expired-lease capture reconciles interrupted publications.
+[Verification and scope](../references/lake-committed-admission.md).
+
 | Job | Owning engine (canonical) | Path / entry point | Role | Status |
 |---|---|---|---|---|
 | Paper/Live experiment decision comparison (#2371) | **Python comparison service over archived Clerk observations** | `PythonDataService/app/services/paper_live_comparison.py`; transactional archive in `paper_live_evidence_store.py`; source reader in `paper_live_evidence_reader.py` via fleet operation `bot_decision_evidence` | Owns exact per-bar trace comparison, separate execution-outcome differences, sequence-coverage counts and durable per-session summaries with source run IDs. Its archive is separate from the fleet registry and custody stores. It grants no deployment, arming, account or order authority. | **tested foundation; source API available** — scheduled collection, twin deployment, arming flow, fills and UI remain in #2371. [Contract and implementation status](../references/paper-live-decision-comparison.md). |

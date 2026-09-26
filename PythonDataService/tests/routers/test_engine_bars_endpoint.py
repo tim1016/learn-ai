@@ -21,6 +21,8 @@ from app.data_lake.types import polygon_mode_for
 from app.main import app
 from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
 
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 DAY_ONE = date(2026, 1, 5)  # Monday
 DAY_TWO = date(2026, 1, 6)  # Tuesday
 

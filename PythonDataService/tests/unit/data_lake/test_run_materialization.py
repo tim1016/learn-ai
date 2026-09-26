@@ -25,7 +25,7 @@ import respx
 
 from app.data_lake import catalog_client, run_materialization
 from app.data_lake.ensure_data import ensure_data, minute_bar_identity
-from app.data_lake.factor_files import FactorFileNotCoveringError, SessionRun, read_recorded_factor_file
+from app.data_lake.factor_files import SessionRun, read_recorded_factor_file
 from app.data_lake.path_policy import LeanFactorFilePath, lake_subpath
 from app.data_lake.run_materialization import (
     EngineRunMaterialization,
@@ -531,12 +531,16 @@ async def test_a_factor_file_row_completes_only_with_its_coverage_record_beside_
 
     async def _complete_observing_the_record(**kwargs):
         if fake_catalog.rows[kwargs["artifact_id"]]["artifact_kind"] == "factor_file":
-            try:
-                recorded = read_recorded_factor_file(lake_root, market="usa", symbol="SPY")
-            except FactorFileNotCoveringError as exc:
-                record_at_completion.append(f"not vouched for: {exc.reason}")
-            else:
-                record_at_completion.append(recorded.file_sha256)
+            # The companion is physically present before commit, but is
+            # deliberately not yet admissible through the public reader.
+            import hashlib
+            import json
+
+            paths = LeanFactorFilePath(market="usa", symbol="SPY")
+            csv = lake_root.joinpath(*paths.relative_path().parts).read_bytes()
+            record = json.loads(lake_root.joinpath(*paths.coverage_record_path().parts).read_bytes())
+            assert record["factor_file_sha256"] == hashlib.sha256(csv).hexdigest()
+            record_at_completion.append(record["factor_file_sha256"])
         return await real_complete(**kwargs)
 
     monkeypatch.setattr(fake_catalog, "complete_artifact", _complete_observing_the_record)
@@ -578,8 +582,8 @@ def _a_wider_capture_publishes_before_this_claim(monkeypatch, *, then_capture_da
     monkeypatch.setattr(catalog_client, "claim_corp_action_artifact", _claim_after_the_sibling)
 
 
-def _recorded_spans(tmp_lake: Path) -> tuple[SessionRun, ...]:
-    return read_recorded_factor_file(tmp_lake / lake_subpath("raw"), market="usa", symbol="SPY").spans
+async def _recorded_spans(tmp_lake: Path) -> tuple[SessionRun, ...]:
+    return (await asyncio.to_thread(read_recorded_factor_file, tmp_lake / lake_subpath("raw"), market="usa", symbol="SPY")).spans
 
 
 @respx.mock
@@ -602,7 +606,7 @@ async def test_a_factor_file_built_from_a_stale_snapshot_reuses_the_newer_file_a
 
     assert result.overall_status == "complete", result.failures
     (factor,) = [a for a in result.artifacts if a.artifact_kind == "factor_file"]
-    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),)
+    assert await _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),)
     assert fake_catalog.rows[factor.id]["file_sha256"] == factor.file_sha256
 
 
@@ -625,12 +629,12 @@ async def test_a_factor_file_build_older_than_the_current_sources_publishes_noth
     (factor_failure,) = [f for f in result.failures if f.artifact_kind == "factor_file"]
     assert factor_failure.reason == "lease_timeout", factor_failure.detail
     assert run_materialization._is_blocked_by_a_sibling_fetch(result, resolution="minute")
-    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),), "the sibling's file stands"
+    assert await _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),), "the sibling's file stands"
 
     retried = await ensure_data(_history_spec())
 
     assert retried.overall_status == "complete", retried.failures
-    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, _THIRD_DAY),)
+    assert await _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, _THIRD_DAY),)
 
 
 def _a_wider_capture_publishes_before_this_refresh(monkeypatch) -> None:
@@ -677,12 +681,12 @@ async def test_a_factor_file_refresh_never_replaces_a_file_a_sibling_published_a
     (factor_failure,) = [f for f in result.failures if f.artifact_kind == "factor_file"]
     assert factor_failure.reason == "lease_timeout", factor_failure.detail
     assert run_materialization._is_blocked_by_a_sibling_fetch(result, resolution="minute")
-    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),), "the sibling's file stands"
+    assert await _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),), "the sibling's file stands"
 
     retried = await ensure_data(_history_spec())
 
     assert retried.overall_status == "complete", retried.failures
-    assert _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),)
+    assert await _recorded_spans(tmp_lake) == (SessionRun(TRADING_DAY, WIDER_WINDOW_END),)
 
 
 @pytest.mark.asyncio
@@ -1650,3 +1654,49 @@ async def test_materialize_symbol_history_skips_inverted_and_unaddressable(monke
     )
     assert inverted.status == "skipped"
     assert "inverted" in (inverted.detail or "")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_next_capture_reconciles_a_file_promoted_before_failed_commit(fake_catalog, tmp_lake, monkeypatch):
+    """#2456: readers refuse the orphan until the normal lease retry commits it."""
+    from app.data_lake.admission import LakeAdmissionError
+    from app.engine.data.lean_format import LeanMinuteDataReader
+
+    mock_launcher()
+    polygon = _mock_polygon()
+    real_publish = fake_catalog.publish_under_lease
+    failed = False
+
+    async def interrupt_commit(**kwargs):
+        nonlocal failed
+        row = fake_catalog.rows[kwargs["artifact_id"]]
+        if not failed and row["resolution"] == "minute":
+            failed = True
+            kwargs["promote"]()
+            raise OSError("injected post-rename commit failure")
+        await real_publish(**kwargs)
+
+    monkeypatch.setattr(catalog_client, "publish_under_lease", interrupt_commit)
+    with pytest.raises(OSError, match="post-rename"):
+        await ensure_data(_spec())
+    lake_root = tmp_lake / lake_subpath("raw")
+    reader = LeanMinuteDataReader(lake_root)
+    assert reader._zip_path("SPY", TRADING_DAY).is_file()
+    with pytest.raises(LakeAdmissionError, match="committed"):
+        await asyncio.to_thread(reader.read_day, "SPY", TRADING_DAY)
+    assert await asyncio.to_thread(lambda: list(reader.iter_committed_dates("SPY", TRADING_DAY, TRADING_DAY))) == []
+
+    # A process death cannot release its claim. Advance past its lease,
+    # exactly the state the next capture reclaims after the writer disappears.
+    for row in fake_catalog.rows.values():
+        if row["status"] == "fetching":
+            row["lease_expires_at_ms"] = 0
+    second = await ensure_data(_spec())
+    assert second.overall_status == "complete", second.failures
+    assert len(await asyncio.to_thread(reader.read_day, "SPY", TRADING_DAY)) == 390
+    assert polygon.call_count == 2
+    minute_rows = [r for r in fake_catalog.rows.values() if r["resolution"] == "minute"]
+    assert len(minute_rows) == 1
+    assert minute_rows[0]["status"] == "complete"
+    assert minute_rows[0]["lease_generation"] == 2

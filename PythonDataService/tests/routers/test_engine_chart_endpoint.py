@@ -18,6 +18,8 @@ from app.schemas.engine_chart import EngineChartRequest
 from app.services.engine_chart_service import build_engine_chart, compute_strategy_indicator_results
 from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
 
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 DAY = date(2026, 1, 5)
 FROM_MS = session_open_ms_utc(DAY)
 TO_MS = session_open_ms_utc(next_trading_day(DAY))

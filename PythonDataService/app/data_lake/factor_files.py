@@ -566,7 +566,12 @@ def read_recorded_factor_file(lake_root: Path, *, market: str, symbol: str) -> R
         record = FactorCoverageRecord.model_validate(json.loads(record_path.read_bytes()))
     except ValueError as exc:  # malformed JSON or UTF-8, or a schema violation
         raise FactorFileNotCoveringError(symbol, f"the factor file's coverage record is unreadable: {exc}") from exc
-    csv_bytes = csv_path.read_bytes()
+    from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
+
+    try:
+        csv_bytes = read_committed_bytes(csv_path)
+    except LakeAdmissionError as exc:
+        raise FactorFileNotCoveringError(symbol, str(exc)) from exc
     file_sha256 = hashlib.sha256(csv_bytes).hexdigest()
     if record.symbol != symbol or record.factor_file_sha256 != file_sha256:
         raise FactorFileNotCoveringError(

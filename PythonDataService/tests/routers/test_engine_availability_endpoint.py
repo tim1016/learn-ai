@@ -102,3 +102,18 @@ def test_the_wire_contract_marks_the_unreadable_fields_required() -> None:
     schema = AvailabilityResponse.model_json_schema()
     item = schema["$defs"]["UnreadableFileResponse"]
     assert item["required"] == ["path", "reason"]
+
+
+async def test_catalog_outage_returns_service_unavailable(monkeypatch):
+    from app.data_lake.catalog_client import CatalogUnavailableError
+
+    def unavailable(**kwargs):
+        raise CatalogUnavailableError("offline")
+
+    monkeypatch.setattr(engine_router, "check_availability", unavailable)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/engine/data/availability", params={
+            "symbol": "SPY", "start": "2024-12-02", "end": "2024-12-06",
+        })
+    assert response.status_code == 503
+    assert "catalog is unavailable" in response.json()["detail"]

@@ -661,3 +661,20 @@ async def test_day_candles_unaddressable_symbol_is_typed_not_found(
     detail = response.json()["detail"]
     assert detail["error_code"] == "NOT_CAPTURED"
     assert "lake-addressable" in detail["message"]
+
+
+@pytest.mark.parametrize("endpoint", ["return-distribution", "return-distribution/day-candles"])
+async def test_catalog_outage_returns_service_unavailable(api, monkeypatch, endpoint):
+    from app.data_lake.catalog_client import CatalogUnavailableError
+
+    async def unavailable(**kwargs):
+        raise CatalogUnavailableError("offline")
+
+    monkeypatch.setattr(return_distribution_router, "compute_return_distribution", unavailable)
+    monkeypatch.setattr(return_distribution_router, "compute_day_candles", unavailable)
+    body = (_request_body() if endpoint == "return-distribution"
+            else {"symbol": SYMBOL, "session_open_ms_utc": _et_ms(date(2024, 7, 1), 9, 30)})
+    async with AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
+        response = await client.post(f"/api/research/{endpoint}", json=body)
+    assert response.status_code == 503
+    assert "catalog is unavailable" in response.json()["detail"]

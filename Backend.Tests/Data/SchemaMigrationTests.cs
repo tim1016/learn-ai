@@ -339,7 +339,8 @@ public class SchemaMigrationTests
         "uq_data_lake_artifacts_corp_actions",
         "uq_data_lake_artifacts_metadata",
         "ix_data_lake_artifacts_corp_action_lookup",
-        "ix_data_lake_artifacts_incomplete"
+        "ix_data_lake_artifacts_incomplete",
+        "ix_data_lake_artifacts_committed_file"
     ];
 
     private const string RepairLegacySchemaDriftMigration = "20260720010000_RepairLegacySchemaDrift";

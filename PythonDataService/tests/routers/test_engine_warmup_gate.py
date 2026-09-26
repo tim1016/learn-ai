@@ -23,6 +23,8 @@ from app.services.engine_backtest_service import execute_engine_backtest
 from app.utils.session_anchors import et_day_end_ms, et_midnight_ms, et_wall_clock_ms
 from tests._helpers.lean_store import seed_store_day
 
+pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
+
 _ET = ZoneInfo("America/New_York")
 DAYS = (date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5))
 

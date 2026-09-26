@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Literal
 
 from app.data_lake.adjustment_versions import adjusted_root_for, companion_path, current_version
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
+from app.data_lake.path_policy import lake_root_for
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,7 @@ Session = Literal["regular", "extended"]
 # (``ValueError``, which covers ``UnicodeDecodeError``; ``decimal.InvalidOperation``
 # is an ``ArithmeticError``), or a file the process cannot open (``OSError``).
 _DECODE_ERRORS: tuple[type[Exception], ...] = (
+    LakeAdmissionError,
     zipfile.BadZipFile,
     zlib.error,
     EOFError,
@@ -139,9 +142,14 @@ def _read_minute_zip(path: Path, symbol: str, trading_date: date, session: Sessi
     so 500 sessions cost about 5 s the first time. The verdict is cached
     against the file's inode, size, mtime and ctime, so checking an
     unchanged file again costs one ``stat`` (500 sessions: about 13 ms, as
-    the existence check did) and a rewritten one is parsed afresh.
+    the existence check did) and a rewritten one is parsed afresh. Managed
+    lake files additionally recheck their catalog receipt on every probe.
     """
     try:
+        # Catalog status can change while all filesystem cache keys stay the
+        # same. Revalidate lake admission before reusing a parse verdict.
+        if lake_root_for(path) is not None or lake_root_for(path.resolve()) is not None:
+            read_committed_bytes(path)
         stat = path.stat()
         version = (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
         root = adjusted_root_for(path)
@@ -166,7 +174,7 @@ def _parse_minute_zip(
     """The uncached body of :func:`_read_minute_zip`; ``version`` only keys the cache."""
     try:
         reader = LeanMinuteDataReader(Path(path).parent, session=session)
-        payload = Path(path).read_bytes()
+        payload = read_committed_bytes(Path(path))
         reader.adjustment_guard.verify(Path(path), payload, symbol)
         bars = reader.parse_day_zip(payload, symbol, trading_date)
     except _DECODE_ERRORS as exc:
