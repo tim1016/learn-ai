@@ -19,6 +19,16 @@ while reading the mounted lake. Both persist the corporate-action version.
 See [the verification note](../references/lake-adjustment-dimension.md#5-corporate-action-versions-2454-2026-09-26).
 No calculation ownership changes.
 
+**Strategy Spec data admission (#2446).** Spec and the research runners
+that share its data-source factory now call the same lake materializer as
+Strategy Lab through `app/services/spec_run_data.py`. They use Lab's default
+split-adjusted, regular-session minute bars; Spec additionally preserves
+its per-session readable-content check. Spec responses carry the admitted
+lake fingerprint, and research ledgers bind it into `data_snapshot_id`
+before execution. The legacy Spec environment-root resolver is removed.
+Exact consumed-bar parity and the scope of the fingerprint are documented
+in [the Spec reference note](../references/strategy-spec-layer.md#lake-input-authority-2446).
+
 Committed lake-file admission (#2456) is owned by
 `PythonDataService/app/data_lake/admission.py`, backed by committed catalog
 receipts. Python reads and LEAN preflight refuse files whose exact bytes have

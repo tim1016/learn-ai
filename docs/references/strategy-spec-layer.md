@@ -69,6 +69,41 @@ immediately because they diverge in the same run.
   Phase 2.1 manage-layer behavior tests (no parity twin; engineered
   scenarios with known answers)
 
+## Lake input authority (#2446)
+
+`app/services/spec_run_data.py::materialize_spec_data_source` admits Spec
+and its research-run consumers through the same
+`app/data_lake/run_materialization.py::materialize_engine_run` used by
+Strategy Lab. Both default to Polygon split-adjusted minute bars and the
+regular session, using the shared `resolve_data_roots` and
+`LeanMinuteDataReader`. Spec no longer reads `LEAN_DATA_ROOT` or
+`LEAN_DATA_CACHE`; those settings and mounts remain in use by prediction
+generation and reference qualification, so this change does not remove them.
+
+The materializer owns fetching, catalog coordination and coverage refusal.
+Spec retains its additional content admission from #2445: every scheduled
+session must contain readable regular-hours bars. Missing, unreadable or
+stale-adjustment files refuse explicitly, and zero evaluated bars remain a
+failure. Calendar closures are not gaps and early closes are honored.
+
+Successful Spec responses carry `lake_data_availability_hash`. A research
+run using the same reader records `lake:<hash>` in the revision component
+of its persisted `data_snapshot_id`, after materialization and before
+execution. Injected synthetic sources claim no lake fingerprint. The hash
+is the lake state admitted for the run, including supporting artifacts;
+it is **not** a byte-exact digest of only the bars consumed. Concurrent
+replacement between receipt and read is separately tracked in #2455.
+
+`tests/routers/test_spec_strategy_coverage.py` proves exact equality of
+every bar actually consumed by Spec and Strategy Lab, including Decimal
+OHLCV, symbol and integer UTC clocks, over a QQQ window containing a holiday
+and early close. It also covers a lake-held non-SPY symbol with both legacy
+environment variables absent (HTTP 500 on the pre-fix implementation), a
+cold capture, lake-gate refusals and the existing content checks.
+`tests/research/runs/test_runner_inmemory.py` proves that shared callers
+record the admitted fingerprint and surface the same coverage refusal.
+No indicator, strategy, sizing or fill formula changes in this migration.
+
 ## Phase boundaries
 The schema admits forward-compatible Phase 2+ shapes
 (`OPTION_TEMPLATE`, multi-leg legs, multi-symbol portfolios). The

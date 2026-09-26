@@ -136,8 +136,6 @@ def test_the_engine_read_seam_resolves_the_lake_and_nothing_else(
 # thing the single-store invariant exists to prevent.
 _ROOT_RESOLVERS_OUTSIDE_THE_LAKE = {
     "research/ml/generate_prediction_set.py",
-    "research/runs/ledger.py",
-    "routers/spec_strategy.py",
 }
 
 

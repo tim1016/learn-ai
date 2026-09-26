@@ -38147,6 +38147,18 @@
             "title": "Initial Cash",
             "type": "number"
           },
+          "lake_data_availability_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Fingerprint of the lake state admitted for this run, including supporting artifacts.",
+            "title": "Lake Data Availability Hash"
+          },
           "log_lines": {
             "items": {
               "type": "string"

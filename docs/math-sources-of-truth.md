@@ -58,6 +58,13 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 > unchanged: resolution picks which bytes the reader opens, never a formula
 > over them.
 >
+> **#2446:** Strategy Spec and its research-run consumers now use that same
+> materializer through `app/services/spec_run_data.py`, with Strategy Lab's
+> default split-adjusted, regular-session minute bars. Exact consumed-bar
+> parity is tested in `tests/routers/test_spec_strategy_coverage.py`; the
+> [Spec reference note](./references/strategy-spec-layer.md#lake-input-authority-2446)
+> describes the receipts and retained coverage checks. No new math concept.
+>
 > **#2454:** adjusted cache admission additionally pins a corporate-action
 > content version through `app/data_lake/adjustment_versions.py`. Minute,
 > daily, quote, Python-run, and LEAN-run receipts share that version. This

@@ -11,14 +11,11 @@ hand-coded LEAN-pinned algorithms use. This router is the HTTP entry
 point — Frontend / external tooling POSTs a spec + run config and gets
 back the trade log and summary statistics.
 
-The data source is the LEAN minute reader over the legacy
-``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` folders — not the lake
-``/api/engine/backtest`` reads (#2446 moves Spec onto it). A window those
-folders do not fully cover is refused as ``success=false`` naming the
-missing sessions, never run on whatever part of it happens to be on disk
-(#2445); a run that evaluated zero bars is refused the way Strategy Lab
-refuses one. For hermetic testing the ``get_data_source_factory``
-dependency is overridable.
+The data source materializes through Strategy Lab's lake coverage gate and
+uses the same default split-adjusted, regular-session minute reader (#2446).
+The response records the admitted lake fingerprint. Missing or unreadable
+sessions and zero-bar runs remain explicit failures (#2445). For hermetic
+testing the ``get_data_source_factory`` dependency is overridable.
 """
 
 from __future__ import annotations
@@ -34,13 +31,18 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
 
-from app.engine.data.availability import MissingSessionsError, check_availability
-from app.engine.data.lean_format import LeanMinuteDataReader
+from app.data_lake.run_materialization import LakeMaterializationError
+from app.engine.data.availability import MissingSessionsError
 from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade
 from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
+from app.services.spec_run_data import (
+    MaterializedSpecReader,
+    SpecDataSourceFactory,
+    materialize_spec_data_source,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -99,6 +101,10 @@ class SpecBacktestResponse(BaseModel):
     trades: list[SpecTradeResponse] = Field(default_factory=list)
     log_lines: list[str] = Field(default_factory=list)
     error: str | None = None
+    lake_data_availability_hash: str | None = Field(
+        None,
+        description="Fingerprint of the lake state admitted for this run, including supporting artifacts.",
+    )
 
 
 class FixtureListItem(BaseModel):
@@ -112,39 +118,9 @@ class FixtureListItem(BaseModel):
 # ---------------------------------------------------------------------------
 # Data source dependency — overridable for tests.
 # ---------------------------------------------------------------------------
-def _default_data_source_factory(symbol: str, start: Date, end: Date) -> LeanMinuteDataReader:
-    """Build the LEAN minute reader for ``symbol`` over ``[start, end]``, once the window is admitted.
-
-    Reads the legacy ``LEAN_DATA_ROOT`` / ``LEAN_DATA_CACHE`` folders. The
-    reader skips a session with no zip, or whose zip holds no regular-hours
-    bar, so the window is checked here first, against the canonical
-    calendar: the reader must read bars for every scheduled session in it
-    (half days included, closures not), or ``MissingSessionsError`` names
-    the gaps and any unreadable file (#2445). The research-run routers
-    share this factory.
-    Tests override via ``app.dependency_overrides[get_data_source_factory]``.
-    """
-    import os
-
-    roots = []
-    for env_var in ("LEAN_DATA_ROOT", "LEAN_DATA_CACHE"):
-        val = os.environ.get(env_var)
-        if val:
-            roots.append(Path(val))
-    if not roots:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="No LEAN data roots configured (set LEAN_DATA_ROOT or LEAN_DATA_CACHE)",
-        )
-    coverage = check_availability(roots, symbol, start, end, resolution="minute")
-    if not coverage.is_complete:
-        raise MissingSessionsError(coverage)
-    return LeanMinuteDataReader(roots)
-
-
-def get_data_source_factory():
+def get_data_source_factory() -> SpecDataSourceFactory:
     """FastAPI dependency. Returns a callable ``(symbol, start, end) -> reader``."""
-    return _default_data_source_factory
+    return materialize_spec_data_source
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +237,7 @@ def get_fixture(name: str) -> StrategySpec:
 @router.post("/backtest", response_model=SpecBacktestResponse)
 def run_spec_backtest(
     request: SpecBacktestRequest,
-    data_source_factory=Depends(get_data_source_factory),
+    data_source_factory: SpecDataSourceFactory = Depends(get_data_source_factory),
 ) -> SpecBacktestResponse:
     """Run a backtest from an inline ``StrategySpec``.
 
@@ -285,6 +261,9 @@ def run_spec_backtest(
         data_source = data_source_factory(symbol, start_d, end_d)
     except HTTPException:
         raise
+    except LakeMaterializationError as exc:
+        logger.warning("[SPEC] lake refused the run", extra={"strategy": spec.name, "reason": str(exc)})
+        return _failed_response(request, f"Lake refused this run: {exc}")
     except MissingSessionsError as exc:
         logger.warning(
             "[SPEC] refused: the data source does not cover the requested window",
@@ -359,6 +338,16 @@ def run_spec_backtest(
     losing = sum(1 for t in trades if t.result == "LOSS")
     win_rate = (winning / len(trades)) if trades else 0.0
 
+    materialization = data_source.materialization if isinstance(data_source, MaterializedSpecReader) else None
+    data_log: list[str] = []
+    if materialization is not None:
+        data_log.append(
+            f"Lake: fetched {materialization.fetched_artifact_count}, "
+            f"reused {materialization.reused_artifact_count} artifact(s)"
+        )
+        if materialization.incomplete_summary:
+            data_log.append(f"Lake: incomplete — {materialization.incomplete_summary}; minute bars materialized")
+
     return SpecBacktestResponse(
         success=True,
         strategy_name=spec.name,
@@ -371,5 +360,6 @@ def run_spec_backtest(
         losing_trades=losing,
         win_rate=win_rate,
         trades=[_trade_to_response(i, t) for i, t in enumerate(trades)],
-        log_lines=list(result.log_lines),
+        log_lines=[*data_log, *result.log_lines],
+        lake_data_availability_hash=materialization.availability_hash if materialization is not None else None,
     )
