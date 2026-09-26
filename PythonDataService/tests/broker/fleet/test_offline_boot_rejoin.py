@@ -175,7 +175,10 @@ async def _offline_lane(
 
 @pytest.mark.parametrize(
     ("adapter_version", "protocol_version"),
-    [("alpaca-fleet.8", 2), (fleet_boot._ADAPTER.adapter_version, 3)],
+    [
+        (f"{fleet_boot._ADAPTER.adapter_version}.incompatible", FLEET_PROTOCOL_VERSION),
+        (fleet_boot._ADAPTER.adapter_version, FLEET_PROTOCOL_VERSION + 1),
+    ],
     ids=["adapter_label_fence", "protocol_version_fence"],
 )
 async def test_a_version_fence_refusal_is_not_unavailability(

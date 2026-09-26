@@ -133,6 +133,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Paged, identity-bearing decision evidence for Paper/Live experiments */
+        get: operations["decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm": {
         parameters: {
             query?: never;
@@ -2451,6 +2468,26 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/live (bot_panel_read).
          */
         get: operations["fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/decision-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Decision Evidence
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/decision-evidence (custody_read).
+         */
+        get: operations["fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11247,6 +11284,42 @@ export interface components {
             uncertain_count: number;
         };
         /**
+         * ClerkDecisionEvidencePage
+         * @description A bounded source page; missing retained sequences are never concealed.
+         */
+        ClerkDecisionEvidencePage: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Account Mode
+             * @enum {string}
+             */
+            account_mode: "paper" | "live";
+            /** After Seq */
+            after_seq: number;
+            /** Authority Generation */
+            authority_generation: number;
+            /**
+             * Authority Kind
+             * @enum {string}
+             */
+            authority_kind: "sqlite" | "synthetic" | "shadow";
+            /** Config Hash */
+            config_hash: string;
+            /** Db Identity Token */
+            db_identity_token: string;
+            /** Decisions */
+            decisions: components["schemas"]["ExperimentDecision"][];
+            /** Highest Seq */
+            highest_seq: number;
+            /** Next After Seq */
+            next_after_seq: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * ClerkOrderInstruction
          * @description Typed, receipt-supplied order fields; never a client-side inference.
          */
@@ -14472,6 +14545,33 @@ export interface components {
             exit_allowance_bps: number;
             /** Spread Cap Bps */
             spread_cap_bps: number;
+        };
+        /**
+         * ExperimentDecision
+         * @description One Clerk receipt; observation time is never substituted for decision time.
+         */
+        ExperimentDecision: {
+            /** Decision Bar Close Ms */
+            decision_bar_close_ms?: number | null;
+            /** Decision Id */
+            decision_id?: string | null;
+            /** Order Ref */
+            order_ref?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked" | "candidate_uncaptured_at_crash" | "decision_bar_quarantined";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string | null;
+            /** Seq */
+            seq: number;
+            /** Trace Digest */
+            trace_digest?: string | null;
         };
         /**
          * ExposureNoticeView
@@ -27778,6 +27878,44 @@ export interface operations {
             };
         };
     };
+    decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get: {
+        parameters: {
+            query?: {
+                after_seq?: number;
+                through_seq?: number | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkDecisionEvidencePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_confirm_post: {
         parameters: {
             query?: never;
@@ -32452,6 +32590,42 @@ export interface operations {
         };
     };
     fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get: {
         parameters: {
             query?: never;
             header?: {

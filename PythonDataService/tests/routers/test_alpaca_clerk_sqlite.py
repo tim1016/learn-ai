@@ -191,6 +191,68 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
+async def test_decision_evidence_exposes_full_trace_and_run_identity_without_mutation(api: FastAPI) -> None:
+    from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None and isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    repo = runtime.clerk.repository
+    receipt = SqliteDecisionReceipts(repo, strategy_instance_id=SID).append(
+        outcome="enter_intent", symbol="SPY", observed_at_ms=1_790_171_100_001,
+        facts={"bar_ref": "SPY@1790171100000", "run_id": "run-1", "decision_id": "decision-1",
+               "reason_code": "STRATEGY_ENTER", "decision_bar_close_ms": 1_790_171_100_000,
+               "trace_digest": "a" * 64},
+    )
+    meta = repo.control_meta_snapshot()
+    async with _client(api) as client:
+        response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/decision-evidence")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == ACCOUNT_ID
+    assert body["account_mode"] == "paper"
+    assert body["authority_kind"] == "sqlite"
+    assert body["db_identity_token"] == meta.db_identity_token
+    assert body["highest_seq"] == receipt.seq
+    assert body["next_after_seq"] is None
+    assert body["decisions"][0] == {
+        "seq": 1, "run_id": "run-1", "recorded_at_ms": 1_790_171_100_001,
+        "decision_bar_close_ms": 1_790_171_100_000, "trace_digest": "a" * 64,
+        "outcome": "enter_intent", "reason_code": "STRATEGY_ENTER", "decision_id": "decision-1", "order_ref": None,
+    }
+    assert repo.control_meta_snapshot() == meta
+
+
+@pytest.mark.parametrize("suffix,status", [
+    ("?limit=0", 422), ("?limit=501", 422), ("?after_seq=-1", 422),
+    ("?through_seq=-1", 422), ("?through_seq=1", 409), ("?after_seq=1", 409),
+])
+async def test_decision_evidence_enforces_page_bounds(api: FastAPI, suffix: str, status: int) -> None:
+    async with _client(api) as client:
+        response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/decision-evidence{suffix}")
+    assert response.status_code == status
+
+
+async def test_decision_evidence_refuses_foreign_account_and_missing_bot(api: FastAPI) -> None:
+    async with _client(api) as client:
+        foreign = await client.get(f"/api/alpaca-clerk-sqlite/accounts/pa-foreign/bots/{SID}/decision-evidence")
+        missing = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/missing/decision-evidence")
+    assert foreign.status_code == missing.status_code == 404
+
+
+async def test_malformed_source_trace_cannot_be_returned_as_valid_evidence(api: FastAPI) -> None:
+    from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None and isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    SqliteDecisionReceipts(runtime.clerk.repository, strategy_instance_id=SID).append(
+        outcome="no_action", symbol="SPY", observed_at_ms=1, facts={"trace_digest": "not-a-digest"},
+    )
+    async with _client(api) as client:
+        response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/decision-evidence")
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "decision_evidence_invalid"
+
+
 def _historical_recovery_plan(
     account_id: str = ACCOUNT_ID, strategy_instance_id: str = SID,
 ) -> HistoricalExecutionRecoveryPlan:

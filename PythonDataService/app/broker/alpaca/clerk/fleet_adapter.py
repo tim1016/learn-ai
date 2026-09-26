@@ -30,7 +30,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.7"
+_ADAPTER_VERSION = "alpaca-fleet.8"
 
 
 def _op(
@@ -435,6 +435,14 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "/accounts/{account_id}/bots/{sid}/panel",
             capability=Capability.BOT_PANEL_READ,
             account=True,
+        ),
+        _op(
+            "bot_decision_evidence",
+            "GET",
+            "/accounts/{account_id}/bots/{sid}/decision-evidence",
+            capability=Capability.CUSTODY_READ,
+            account=True,
+            agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence",
         ),
         _op(
             "bot_panel_action",

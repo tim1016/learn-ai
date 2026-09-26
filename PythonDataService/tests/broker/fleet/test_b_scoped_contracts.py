@@ -125,6 +125,10 @@ def _build_agent_app(
     async def run_history(account_id: str, sid: str) -> JSONResponse:
         return JSONResponse({"account_id": account_id, "sid": sid, "runs": []})
 
+    @agent.get("/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence")
+    async def decision_evidence(account_id: str, sid: str, request: Request) -> JSONResponse:
+        return JSONResponse({"account_id": account_id, "sid": sid, "query": dict(request.query_params)})
+
     @agent.get("/api/brokers/alpaca/configuration/selection")
     async def selection() -> JSONResponse:
         return JSONResponse({"effective_account_id": ACCOUNT.upper()})
@@ -458,6 +462,18 @@ async def test_a_wrong_target_account_refuses_without_dispatch(fleet: _Fleet) ->
         )
         assert wrong.status_code == 409
         assert wrong.json()["reason"] == "clerk_account_mismatch"
+
+
+async def test_decision_evidence_routes_with_identity_and_sequence_bounds(fleet: _Fleet) -> None:
+    async with fleet.client() as client:
+        response = await client.get(
+            f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/decision-evidence?after_seq=2&through_seq=9&limit=3"
+        )
+    assert response.status_code == 200
+    assert response.headers["x-fleet-clerk-id"] == fleet.lane.clerk_id
+    assert response.headers["x-fleet-binding-generation"] == "3"
+    assert response.json() == {"account_id": ACCOUNT, "sid": "sid-9",
+                               "query": {"after_seq": "2", "through_seq": "9", "limit": "3"}}
 
 
 async def test_an_unsupported_broker_or_lane_refuses(fleet: _Fleet) -> None:
