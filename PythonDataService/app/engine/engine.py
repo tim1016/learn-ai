@@ -309,8 +309,9 @@ class BacktestEngine:
                 )
                 evaluation_pending = False
 
-            # Update portfolio reference price with the latest close.
-            portfolio.update_reference_price(symbol, minute_bar.close)
+            # Preserve the minute valuation mark even when a consolidator
+            # replaces the decision reference with its earlier signal close.
+            portfolio.update_market_price(symbol, minute_bar.close)
 
             # ----- Session-close force-flat barrier.
             # Fires once per calendar day on the first minute bar whose
