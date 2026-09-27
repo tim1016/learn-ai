@@ -15,10 +15,13 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode
+from app.engine.results.statistics import max_drawdown
 from app.engine.strategy.base import Strategy
 
 NY = ZoneInfo("America/New_York")
@@ -74,6 +77,34 @@ class _EmitOnceStrategy(Strategy):
 
     def on_order_event(self, event) -> None:
         self.events.append(event)
+
+
+def test_equity_uses_current_minute_while_sizing_and_fills_keep_signal_price() -> None:
+    """A boundary's signal closes at 100, but the observed minute is 101/90."""
+    class FiveMinuteStrategy(_EmitOnceStrategy):
+        def initialize(self) -> None:
+            self.set_start_date(2026, 2, 9)
+            self.set_end_date(2026, 2, 9)
+            self.set_cash(10_000)
+            assert self.ctx is not None
+            self._symbol = self.ctx.add_equity("AAPL")
+            self.ctx.register_consolidator(self._symbol, timedelta(minutes=5), self._on_daily)
+
+    day = date(2026, 2, 9)
+    closes = ["100"] * 5 + ["101"] * 5 + ["90", "100"]
+    bars = [_minute(day, 9, 30 + i, open_=p, high=p, low=p, close=p) for i, p in enumerate(closes)]
+    strategy = FiveMinuteStrategy()
+    result = BacktestEngine(
+        data_source=_SyntheticStream(bars),
+        fill_model=FillModel(mode=FillMode.SIGNAL_BAR_CLOSE, commission_per_order=Decimal(0)),
+    ).run(strategy)
+
+    assert strategy.events[0].fill_quantity == 100
+    assert strategy.events[0].fill_price == Decimal(100)
+    assert result.equity_curve[5].equity == Decimal(10_100)
+    assert result.equity_curve[10].equity == Decimal(9_000)
+    drawdown = max_drawdown([(p.timestamp_ms, float(p.equity)) for p in result.equity_curve])
+    assert drawdown["max_drawdown"] == pytest.approx(11 / 101, abs=1e-9, rel=0)
 
 
 def _two_day_stream() -> list[TradeBar]:

@@ -4,6 +4,14 @@ The portfolio models a single-account state with per-symbol positions. It
 supports LEAN-style ``set_holdings(symbol, fraction)`` which translates a
 target portfolio weight into a market order for the right number of shares
 at the symbol's current reference price.
+
+Formula: equity = cash + sum(quantity * valuation_mark). Sizing uses the
+  same cash-plus-holdings formula at decision prices, preserving its signal
+  bar basis while reported equity uses the latest observed minute close.
+Reference: repository backtest price-basis contract, issue #2449.
+Canonical implementation: this file (Portfolio); BacktestEngine owns updates.
+Validated against: tests/engine/test_portfolio.py and
+  tests/engine/test_engine_fill_modes.py::test_equity_uses_current_minute_while_sizing_and_fills_keep_signal_price.
 """
 
 from __future__ import annotations
@@ -47,8 +55,10 @@ class Portfolio:
     total_fees: Decimal = Decimal(0)
     pending_orders: list[Order] = field(default_factory=list)
     _next_order_id: int = 0
-    # Last known reference price per symbol (updated on every bar).
+    # Decision reference: the signal close during a strategy callback.
     reference_price: dict[str, Decimal] = field(default_factory=dict)
+    # Latest input-minute close; consolidated signals cannot overwrite it.
+    valuation_price: dict[str, Decimal] = field(default_factory=dict)
     # Position-sizing policy for set_holdings. Defaults to the historical
     # plain-floor behaviour; the engine swaps in LeanSetHoldingsSizing for
     # LEAN-pinned / cross-engine-parity runs.
@@ -66,15 +76,25 @@ class Portfolio:
     def update_reference_price(self, symbol: str, price: Decimal) -> None:
         self.reference_price[symbol] = price
 
+    def update_market_price(self, symbol: str, price: Decimal) -> None:
+        """Observe a minute close before any consolidated decision fires."""
+        self.valuation_price[symbol] = price
+        self.update_reference_price(symbol, price)
+
     def get_position(self, symbol: str) -> Position:
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol=symbol)
         return self.positions[symbol]
 
     def total_value(self) -> Decimal:
+        """Mark holdings at the latest minute close for equity and drawdown."""
+        return self._value_at(self.valuation_price)
+
+    def _value_at(self, prices: dict[str, Decimal]) -> Decimal:
+        """Value holdings on the supplied basis, using known prices as fallback."""
         value = self.cash
         for sym, pos in self.positions.items():
-            price = self.reference_price.get(sym, pos.average_price)
+            price = prices.get(sym, self.reference_price.get(sym, pos.average_price))
             value += pos.market_value(price)
         return value
 
@@ -168,7 +188,9 @@ class Portfolio:
                 f"Cannot set_holdings on {symbol}: no reference price. Did the strategy receive a bar first?"
             )
         current_pos = self.get_position(symbol)
-        portfolio_value = self.total_value()
+        # Sizing must retain its historical signal-price basis even when
+        # the minute that emitted that signal has a newer valuation mark.
+        portfolio_value = self._value_at(self.reference_price)
         target_quantity = self.sizing_model.target_quantity(
             portfolio_value=portfolio_value,
             price=price,
@@ -224,7 +246,7 @@ class Portfolio:
         """Return to the configured starting state, keeping only price marks.
 
         Cash goes back to ``initial_cash``; positions, accumulated fees, and
-        queued orders are dropped. ``reference_price`` survives because it is
+        queued orders are dropped. Both price maps survive because each is
         a fact about the market, not about this book, and the order-id
         counter keeps counting so ids stay unique across the reset. Used at
         the warmup → evaluation boundary of a primed backtest.

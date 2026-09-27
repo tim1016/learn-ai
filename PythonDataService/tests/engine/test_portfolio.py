@@ -153,6 +153,20 @@ def test_total_value_includes_marked_to_market_positions():
     assert portfolio.total_value() == Decimal("10500")
 
 
+@pytest.mark.parametrize("held", [50, -50])
+def test_new_minute_mark_does_not_change_signal_price_rebalancing(held: int) -> None:
+    """A partially invested book still sizes against its signal-price equity."""
+    portfolio = Portfolio(initial_cash=Decimal(10_000))
+    portfolio.apply_fill(_fill(held, "100"))
+    portfolio.update_market_price("SPY", Decimal(110))
+    portfolio.update_reference_price("SPY", Decimal(100))
+
+    assert portfolio.total_value() == Decimal(10_000 + held * 10)
+    order = portfolio.set_holdings("SPY", Decimal(1 if held > 0 else -1), NOW)
+    assert order is not None
+    assert order.quantity == held  # 100/-100 shares at the signal basis, less the existing 50/-50
+
+
 def test_set_holdings_raises_without_reference_price():
     portfolio = Portfolio(initial_cash=Decimal("10000"))
 
