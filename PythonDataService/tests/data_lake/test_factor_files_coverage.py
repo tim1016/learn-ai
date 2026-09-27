@@ -33,6 +33,7 @@ from app.data_lake.factor_files import (
     parse_factor_file,
     plan_factor_file,
     read_covering_factor_rows,
+    read_recorded_factor_file,
 )
 from app.data_lake.path_policy import LeanFactorFilePath
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
@@ -441,3 +442,55 @@ def test_an_unreadable_record_covers_nothing(tmp_path: Path, record: bytes) -> N
 
     with pytest.raises(FactorFileNotCoveringError, match="unreadable"):
         _read(tmp_path, [date(2024, 7, 1)])
+
+
+def test_a_refusal_names_the_cause_adjacent_to_the_uncovered_run(tmp_path: Path) -> None:
+    """#2530 review: with more unpriced sessions than the render cap, the
+    refusal must name the break that explains THIS request — the one at or
+    before the first uncovered run — not the earliest three dates."""
+    closes = _flat_closes(CAPTURED)
+    split, dividend = _split(date(2024, 7, 5)), _dividend(date(2024, 7, 11), 1.5)
+    breaks = [date(2024, 7, 2), date(2024, 7, 3), date(2024, 7, 5), date(2024, 7, 9), date(2024, 7, 10)]
+    for d in breaks:
+        closes.pop(d, None)
+    unpriced = [(d, f"unreadable minute zip day-{d.day}") for d in breaks]
+    plan = plan_factor_file(CAPTURED, [split], [dividend], unpriced_sessions=breaks)
+    paths = LeanFactorFilePath(market="usa", symbol=SYMBOL)
+    csv_path = tmp_path.joinpath(*paths.relative_path().parts)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    body = build_factor_file_bytes(SYMBOL, plan, closes)
+    csv_path.write_bytes(body)
+    tmp_path.joinpath(*paths.coverage_record_path().parts).write_bytes(
+        factor_coverage_record_bytes(SYMBOL, body, list(plan.spans), unpriced=unpriced)
+    )
+
+    # The read crosses only the 07-09/07-10 breaks: those (and the nearest
+    # earlier one) must be named — not 07-02/07-03.
+    with pytest.raises(FactorFileNotCoveringError) as refused:
+        _read(tmp_path, [date(2024, 7, 10), date(2024, 7, 11)])
+
+    message = str(refused.value)
+    assert "2024-07-10 (unreadable minute zip day-10)" in message
+    assert "2024-07-09 (unreadable minute zip day-9)" in message
+    assert "day-2)" not in message and "day-3)" not in message, message
+
+
+def test_a_record_with_a_non_ascii_reason_round_trips(tmp_path: Path) -> None:
+    """#2530 review: an unreadable artifact under a Unicode lake-root path
+    puts non-ASCII into the reason; the record must serialize and read back
+    instead of raising UnicodeEncodeError after the claim."""
+    closes = _flat_closes(CAPTURED)
+    split, dividend = _split(date(2024, 7, 5)), _dividend(date(2024, 7, 11), 1.5)
+    unpriced = [(date(2024, 7, 3), "unreadable minute zip /lake/café-ü/20240703_trade.zip")]
+    plan = plan_factor_file(CAPTURED, [split], [dividend], unpriced_sessions=[date(2024, 7, 3)])
+    paths = LeanFactorFilePath(market="usa", symbol=SYMBOL)
+    csv_path = tmp_path.joinpath(*paths.relative_path().parts)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    body = build_factor_file_bytes(SYMBOL, plan, closes)
+    csv_path.write_bytes(body)
+    tmp_path.joinpath(*paths.coverage_record_path().parts).write_bytes(
+        factor_coverage_record_bytes(SYMBOL, body, list(plan.spans), unpriced=unpriced)
+    )
+
+    recorded = read_recorded_factor_file(tmp_path, market="usa", symbol=SYMBOL)
+    assert recorded.unpriced_sessions == tuple(unpriced)
