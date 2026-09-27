@@ -326,8 +326,13 @@ async def test_generation_out_of_range_ms_window_is_422(api: FastAPI, field: str
 
 
 def test_generation_numeric_window_overrides_fetch_dates() -> None:
-    """Numeric bounds take per-field precedence and convert to the inclusive
-    fetch span; a half-open end on the session open of day X excludes day X."""
+    """Numeric bounds take per-field precedence and resolve through the one
+    shared Data Lab resolver (#2457): each ms value floors to its UTC
+    calendar date — the exact inverse of the frontend's ``utcMsToIsoDate``
+    — so the export fetches exactly the sessions the chart shows. An end on
+    the session open of day X reads as X, the same inclusive reading the
+    chart gives the same commit; half-open honesty is the row-level trim
+    to the requested start, not a second date resolution."""
     from app.models.requests import DatasetGenerationRequest
     from app.services.dataset_plan_service import resolve_generation_window
 
@@ -339,7 +344,7 @@ def test_generation_numeric_window_overrides_fetch_dates() -> None:
     )
     resolved = resolve_generation_window(request)
     assert resolved.from_date == "2025-11-26"
-    assert resolved.to_date == "2025-12-01"  # 12-02 session open is EXCLUSIVE
+    assert resolved.to_date == "2025-12-02"  # inclusive UTC-date floor, as the chart reads it
 
 
 def test_generation_numeric_window_partial_override_and_passthrough() -> None:

@@ -304,6 +304,10 @@ def resolve_request_dates(
 ) -> tuple[str, str]:
     """Apply the numeric window's per-field precedence over the date strings.
 
+    The ONE shared Data Lab session-window resolver (#2457): the chart
+    endpoint, the return study and the dataset export all turn a picked
+    window into ET session dates through this function.
+
     Resolution floors each supplied ms value to its **UTC calendar date** —
     the anchor the Data Lab store commits and the exact inverse of the
     frontend's ``utcMsToIsoDate``, so the numeric channel and the string the
