@@ -49,6 +49,7 @@ from app.data_lake.factor_files import (
     factor_coverage_record_bytes,
     plan_factor_file,
     read_recorded_factor_file,
+    reference_close_unpriced_reason,
 )
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.map_files import build_map_file_bytes
@@ -752,7 +753,7 @@ def _factor_file_over_captured_sessions(
     *,
     lake_root: Path,
     fallback_date: date,
-) -> tuple[bytes, FactorFilePlan]:
+) -> tuple[bytes, FactorFilePlan, list[tuple[date, str]]]:
     """Plan, price, and build the factor file over the symbol's captured sessions.
 
     Pure CPU and file I/O, so callers run it off the event loop (#1943). Only
@@ -763,7 +764,10 @@ def _factor_file_over_captured_sessions(
     captured with extended-hours bars only, or a zip that no longer reads)
     is re-planned as unpriced: its span ends there and the action it would
     have priced is left out, so only reads crossing that session are refused
-    — never the whole symbol. Each one is logged.
+    — never the whole symbol (#2490): a non-positive close now gets the same
+    treatment a missing close always got, and every break is returned with
+    its cause so the coverage record — and the reader's refusal — names the
+    session instead of only a log line.
 
     An anchor session without one still needs a positive reference price
     for its row. The zips from it inward are read one at a time up to the
@@ -794,7 +798,7 @@ def _factor_file_over_captured_sessions(
                 )
                 closes.update(session_closes)
                 unreadable.extend(session_unreadable)
-            if record.trading_date in closes:
+            if reference_close_unpriced_reason(closes.get(record.trading_date)) is None:
                 break
     for failure in unreadable:
         logger.warning(
@@ -804,20 +808,34 @@ def _factor_file_over_captured_sessions(
             failure,
             extra={"symbol": symbol, "file_path": failure.file_path, "action": "factor_file_zip_unreadable"},
         )
-    unpriced = [d for d in plan.reference_sessions if d not in closes]
+    unreadable_sessions = {f.trading_date: f for f in unreadable if f.trading_date is not None}
+    unpriced: list[tuple[date, str]] = []
+    for session in plan.reference_sessions:
+        if session in unreadable_sessions:
+            failure = unreadable_sessions[session]
+            unpriced.append((session, f"unreadable minute zip {failure.file_path} ({failure})"))
+            continue
+        why = reference_close_unpriced_reason(closes.get(session))
+        if why is not None:
+            unpriced.append((session, why))
     if unpriced:
         logger.warning(
-            "data_lake.ensure_data: factor file for %s breaks its covered span after %s (no regular-session close)",
+            "data_lake.ensure_data: factor file for %s breaks its covered span after %s",
             symbol,
-            ", ".join(d.isoformat() for d in unpriced),
+            ", ".join(f"{d.isoformat()} ({why})" for d, why in unpriced),
             extra={
                 "symbol": symbol,
-                "unpriced_sessions": [d.isoformat() for d in unpriced],
+                "unpriced_sessions": [d.isoformat() for d, _ in unpriced],
+                "unpriced_reasons": [why for _, why in unpriced],
                 "action": "factor_file_span_broken",
             },
         )
-        plan = plan_factor_file(captured, splits, dividends, unpriced_sessions=unpriced)
-    return build_factor_file_bytes(symbol, plan, closes), plan
+        plan = plan_factor_file(captured, splits, dividends, unpriced_sessions=[d for d, _ in unpriced])
+    # One definition, one treatment: a non-positive close prices nothing, so
+    # it must not anchor a row either — the builder sees it as absent, exactly
+    # like a session that was never read.
+    closes = {d: close for d, close in closes.items() if reference_close_unpriced_reason(close) is None}
+    return build_factor_file_bytes(symbol, plan, closes), plan, unpriced
 
 
 def _factor_file_is_recorded(lake_root: Path, row: ArtifactRecord) -> bool:
@@ -929,7 +947,7 @@ async def _process_factor_file_artifact(
     except Exception as e:
         return _failure("provider_api_error", str(e))
     try:
-        payload, plan = await asyncio.to_thread(
+        payload, plan, unpriced = await asyncio.to_thread(
             _factor_file_over_captured_sessions,
             symbol,
             splits,
@@ -1021,7 +1039,7 @@ async def _process_factor_file_artifact(
         companions=(
             (
                 LeanFactorFilePath(market=identity.market, symbol=symbol).coverage_record_path(),  # type: ignore[arg-type]
-                factor_coverage_record_bytes(symbol, payload, plan.spans),
+                factor_coverage_record_bytes(symbol, payload, plan.spans, unpriced=unpriced),
             ),
         ),
     )

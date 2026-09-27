@@ -162,6 +162,37 @@ def test_only_reads_crossing_an_unpriced_session_are_refused(tmp_path: Path) -> 
         _read(tmp_path, [date(2024, 7, 3), date(2024, 7, 5)])
 
 
+def test_a_refusal_names_the_unpriced_session_and_its_cause(tmp_path: Path) -> None:
+    """#2490: an operator seeing only a span list has to grep logs to learn
+    why coverage breaks. The record carries the unpriced sessions and their
+    causes, and the refusal names them — unreadable zip, missing close, or
+    non-positive close, the one definition."""
+    closes = _flat_closes(CAPTURED)
+    del closes[date(2024, 7, 3)]
+    split, dividend = _split(date(2024, 7, 5)), _dividend(date(2024, 7, 11), 1.5)
+    unpriced = [
+        (date(2024, 7, 3), "unreadable minute zip equity/usa/minute/aapl/20240703_trade.zip (BadZipFile)"),
+        (date(2024, 7, 9), "reference close 0 is not positive"),
+    ]
+    plan = plan_factor_file(CAPTURED, [split], [dividend], unpriced_sessions=[d for d, _ in unpriced])
+    paths = LeanFactorFilePath(market="usa", symbol=SYMBOL)
+    csv_path = tmp_path.joinpath(*paths.relative_path().parts)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    body = build_factor_file_bytes(SYMBOL, plan, closes)
+    csv_path.write_bytes(body)
+    tmp_path.joinpath(*paths.coverage_record_path().parts).write_bytes(
+        factor_coverage_record_bytes(SYMBOL, body, list(plan.spans), unpriced=unpriced)
+    )
+
+    with pytest.raises(FactorFileNotCoveringError) as refused:
+        _read(tmp_path, [date(2024, 7, 3), date(2024, 7, 5)])
+
+    message = str(refused.value)
+    assert "the covered span ends after" in message
+    assert "2024-07-03 (unreadable minute zip equity/usa/minute/aapl/20240703_trade.zip" in message
+    assert "2024-07-09 (reference close 0 is not positive)" in message
+
+
 # ---------------------------------------------------------------------------
 # Numerical basis
 # ---------------------------------------------------------------------------
