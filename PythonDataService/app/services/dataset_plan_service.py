@@ -10,9 +10,8 @@ NYSE calendar (``pandas_market_calendars``) — it never calls Polygon.
 from __future__ import annotations
 
 import importlib.metadata
-from datetime import date, datetime, timedelta
+from datetime import date
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -24,7 +23,7 @@ from app.lean_sidecar.trading_calendar import (
 )
 from app.models.requests import DatasetGenerationRequest, DatasetPlanRequest
 from app.schemas.dataset_plan import DatasetPlanResponse
-from app.services.chart_service import get_allowed_timeframes
+from app.services.chart_service import get_allowed_timeframes, resolve_request_dates
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     calculate_dynamic_indicators,
@@ -33,8 +32,6 @@ from app.services.dataset_service import (
     time_column_name,
 )
 from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
-
-_ET = ZoneInfo("America/New_York")
 
 EXCHANGE = "NYSE"
 CALENDAR_TIMEZONE = "America/New_York"
@@ -64,24 +61,25 @@ _SESSIONS_PER_UNIT: dict[str, int] = {
 _PROJECTION_FRAME_ROWS = configured_indicator_warmup_bars(INDICATOR_CONFIGS)
 
 
-def _parse_date(s: str) -> date:
-    return datetime.strptime(s, "%Y-%m-%d").date()
-
-
-def _et_date_of_ms(ts_ms: int) -> date:
-    return pd.Timestamp(ts_ms, unit="ms", tz="UTC").tz_convert(_ET).date()
-
-
 def _resolve_window(request: DatasetPlanRequest) -> tuple[int, int, date, date]:
     """Resolve the half-open numeric window and the session-enumeration range.
 
-    Date-only intent resolves session-open → following-session-open via
-    the canonical calendar — never ``T23:59:59`` and never a hard-coded
-    390-minute session. Numeric overrides take precedence per-field.
-    The returned dates bound the exchange-session enumeration.
+    Dates resolve through the one shared Data Lab session-window resolver
+    (:func:`chart_service.resolve_request_dates`): numeric bounds take
+    per-field precedence and each supplied ms value floors to its UTC
+    calendar date — the exact inverse of the frontend's ``utcMsToIsoDate``
+    — so the plan receipt, the chart and the return study enumerate the
+    same ET sessions for the same pick (#2457). Date-only intent defaults
+    the numeric window to session-open → following-session-open via the
+    canonical calendar — never ``T23:59:59`` and never a hard-coded
+    390-minute session. The returned dates bound the exchange-session
+    enumeration.
     """
-    from_date = _parse_date(request.from_date)
-    to_date = _parse_date(request.to_date)
+    resolved_from, resolved_to = resolve_request_dates(
+        request.from_date, request.to_date, request.start_ms_utc, request.end_ms_utc
+    )
+    from_date = date.fromisoformat(resolved_from)
+    to_date = date.fromisoformat(resolved_to)
 
     window_start = (
         request.start_ms_utc
@@ -98,19 +96,7 @@ def _resolve_window(request: DatasetPlanRequest) -> tuple[int, int, date, date]:
             f"resolved window is empty: window_start_ms_utc={window_start} "
             f"must be before window_end_ms_utc={window_end}"
         )
-
-    if request.start_ms_utc is not None or request.end_ms_utc is not None:
-        enum_start = _et_date_of_ms(window_start)
-        # window_end is exclusive — the last date that can contain a bar is
-        # the ET date one millisecond before it.
-        enum_end = _et_date_of_ms(window_end - 1)
-    else:
-        enum_start, enum_end = from_date, to_date
-    if enum_end < enum_start:
-        raise ValueError(
-            f"resolved session range is empty: {enum_start.isoformat()} after {enum_end.isoformat()}"
-        )
-    return window_start, window_end, enum_start, enum_end
+    return window_start, window_end, from_date, to_date
 
 
 def _estimate_bars(
@@ -309,39 +295,25 @@ def build_dataset_plan(request: DatasetPlanRequest) -> DatasetPlanResponse:
 def resolve_generation_window(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
     """Apply the canonical numeric window to a generation request.
 
-    When ``start_ms_utc``/``end_ms_utc`` are supplied they take per-field
-    precedence over the date strings and are converted — through the ET
-    calendar semantics the plan service uses — into the inclusive
-    from/to date span the fetch pipeline consumes:
-
-    * start → the ET date containing ``start_ms_utc``;
-    * end (EXCLUSIVE) → the ET date of ``end_ms_utc - 1ms``; when the end
-      lands at or before that date's session open (e.g. exactly the
-      session open of day X), the fetch span backs off to the prior day
-      so day X's data is excluded — the day-granularity fetch cannot
-      split a calendar day.
+    ``start_ms_utc``/``end_ms_utc`` take per-field precedence over the date
+    strings and resolve through the same shared Data Lab session-window
+    resolver the chart and the return study use
+    (:func:`chart_service.resolve_request_dates`): each ms value floors to
+    its UTC calendar date, the exact inverse of the frontend's
+    ``utcMsToIsoDate``. The export therefore fetches exactly the sessions
+    the chart shows for the same pick (#2457); the generation pipeline
+    additionally trims its output rows to the requested start.
 
     Returns the request unchanged when no numeric bound is supplied.
     Raises :class:`ValueError` when the resolved span is empty.
     """
     if request.start_ms_utc is None and request.end_ms_utc is None:
         return request
-    from_date = _parse_date(request.from_date)
-    to_date = _parse_date(request.to_date)
-    if request.start_ms_utc is not None:
-        from_date = _et_date_of_ms(request.start_ms_utc)
-    if request.end_ms_utc is not None:
-        end_date = _et_date_of_ms(request.end_ms_utc - 1)
-        if request.end_ms_utc <= session_open_ms_utc(end_date):
-            end_date -= timedelta(days=1)
-        to_date = end_date
-    if from_date > to_date:
-        raise ValueError(
-            f"resolved generation window is empty: {from_date.isoformat()} "
-            f"after {to_date.isoformat()}"
-        )
+    resolved_from, resolved_to = resolve_request_dates(
+        request.from_date, request.to_date, request.start_ms_utc, request.end_ms_utc
+    )
     return request.model_copy(
-        update={"from_date": from_date.isoformat(), "to_date": to_date.isoformat()}
+        update={"from_date": resolved_from, "to_date": resolved_to}
     )
 
 
