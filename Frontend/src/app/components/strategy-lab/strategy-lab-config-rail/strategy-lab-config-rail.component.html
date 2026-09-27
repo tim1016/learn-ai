@@ -98,11 +98,15 @@
           <span>Initial cash</span>
           <input type="number" min="0" [value]="initialCash()" (input)="onInitialCashEvent($event)" />
         </label>
-        @if (engine() !== "lean") {
+        @if (engine() === "python") {
           <label>
             <span>Commission / order</span>
             <input type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="onCommissionEvent($event)" />
           </label>
+        } @else if (engine() === "both") {
+          <!-- Both engines charge the pinned IBKR equity fee model; a flat
+               commission here would be an input the run silently ignores (#2465). -->
+          <p>Both engines charge the pinned IBKR equity fee model — commission is not editable.</p>
         } @else {
           <p>Fills and fees are defined by the aligned LEAN template.</p>
         }

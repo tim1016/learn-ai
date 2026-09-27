@@ -294,7 +294,11 @@ export class StrategyLabRunner {
       requested_engine: this.config.engine(),
       fill_mode: this.config.fillMode(),
       initial_cash: this.config.initialCash(),
-      commission_per_order: this.config.commissionPerOrder(),
+      // A paired run charges the pinned IBKR equity fee model; sending a flat
+      // commission for it would be refused at the request boundary (#2465).
+      ...(this.config.engine() === "python"
+        ? { commission_per_order: this.config.commissionPerOrder() }
+        : {}),
       params: this.config.paramValues(),
       auto_fetch: this.config.autoFetch(),
       resolution: this.config.resolution(),

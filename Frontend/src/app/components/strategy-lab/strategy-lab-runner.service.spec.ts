@@ -140,6 +140,10 @@ describe("StrategyLab configuration and runner", () => {
         }),
       }),
     );
+    // A paired run charges the pinned IBKR fee model; the request boundary
+    // refuses an explicit flat commission (#2465), so none is sent.
+    const [, payload] = startJob.mock.calls[0] as [string, { backtest: Record<string, unknown> }];
+    expect(payload.backtest).not.toHaveProperty("commission_per_order");
   });
 
   it("keeps data-policy cadence and adjustment choices in the configuration store", () => {
@@ -369,7 +373,9 @@ describe("StrategyLab configuration and runner", () => {
       const [type, payload] = startJob.mock.calls[0] as [string, Record<string, unknown>];
       expect(type).toBe("engine_backtest");
       // The symbol travels in the data policy, and the policy's bars come
-      // back as the range's multiplier and session.
+      // back as the range's multiplier and session. A paired run carries no
+      // commission to restore — the rail normalizes the absent value to 0
+      // for its hidden control, and the pinned IBKR fee model governs (#2465).
       const symbol = config.effectiveSymbol();
       expect(inputsFromBacktestJob(payload, config.range())).toEqual({
         strategyName: STRATEGY.name,
@@ -378,7 +384,7 @@ describe("StrategyLab configuration and runner", () => {
         parameters: { ...config.paramValues(), symbol },
         fillMode: "next_bar_open",
         initialCash: 75_000,
-        commissionPerOrder: 0.35,
+        commissionPerOrder: 0,
         dataPolicy: config.dataPolicy(),
       });
     });

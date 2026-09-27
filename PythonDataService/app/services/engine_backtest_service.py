@@ -1113,7 +1113,11 @@ def _persist_and_dispatch_companion(
         resolution=resolved_configuration.resolution,
         parameters=resolved_configuration.parameters,
         duration_ms=int((time.time() - run_started_at) * 1000),
-        commission_per_order=float(request.commission_per_order),
+        # A paired run charges the pinned IBKR equity fee model; a flat
+        # number here would describe a fee the run never applied (#2465).
+        commission_per_order=(
+            None if request.compatibility_profile else float(request.commission_per_order)
+        ),
         compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,

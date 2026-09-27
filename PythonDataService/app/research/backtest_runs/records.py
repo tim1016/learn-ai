@@ -91,7 +91,7 @@ class BacktestRunRecord:
     sharpe_ratio: float | None
     sortino_ratio: float | None
     profit_factor: float | None
-    commission_per_order: float
+    commission_per_order: float | None
     brokerage_policy: str | None
     data_policy_json: str
     lean_statistics_json: str | None
@@ -169,7 +169,14 @@ def record_from_payload(payload: Mapping[str, Any]) -> BacktestRunRecord:
         sharpe_ratio=headline["sharpe_ratio"],
         sortino_ratio=headline["sortino_ratio"],
         profit_factor=headline["profit_factor"],
-        commission_per_order=float(payload.get("commission_per_order") or 0.0),
+        # An absent key keeps the legacy 0.0 flat default; an explicit None is
+        # "not applicable" — a paired run whose fees the pinned IBKR tier
+        # describes, never a number it did not apply (#2465).
+        commission_per_order=(
+            None if payload.get("commission_per_order") is None else float(payload["commission_per_order"])
+        )
+        if "commission_per_order" in payload
+        else 0.0,
         brokerage_policy=payload.get("brokerage_policy") or ("algorithm_default" if source == "engine" else None),
         data_policy_json=payload.get("data_policy_json") or synthesize_legacy_data_policy(symbol),
         lean_statistics_json=None if lean_statistics is None else json.dumps(lean_statistics, sort_keys=True),
