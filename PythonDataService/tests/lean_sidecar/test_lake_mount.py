@@ -50,6 +50,7 @@ from app.lean_sidecar.runner import (
 from app.lean_sidecar.staging import stage_minute_zips_from_store
 from app.lean_sidecar.workspace import SymbolValidationError, resolve_workspace
 from tests._helpers.lake_fixture import (
+    seed_lake_corporate_actions,
     seed_lake_daily,
     seed_lake_interest_rate,
     seed_lake_metadata,
@@ -752,3 +753,68 @@ def test_lake_artifacts_are_immutable(fixture_lake: Path) -> None:
     assert isinstance(artifacts, LakeArtifacts)
     with pytest.raises(AttributeError):
         artifacts.lake_root = fixture_lake  # type: ignore[misc]
+
+
+# ── Factor files mount only when they cover the run window (#2480) ──
+
+
+_WELL_FORMED_FACTOR_ROWS = "20260105,1,1,100\n20260106,1,1,100\n"
+
+
+def _write_factor_record(lake_root: Path, spans: list) -> None:
+    """Write a coverage record vouching for the seeded factor CSV over ``spans``."""
+    from app.data_lake.factor_files import factor_coverage_record_bytes
+    from app.data_lake.path_policy import LeanFactorFilePath
+
+    csv_path = lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol="SPY").relative_path().parts)
+    record_path = lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol="SPY").coverage_record_path().parts)
+    record_path.write_bytes(
+        factor_coverage_record_bytes("SPY", csv_path.read_bytes(), spans)
+    )
+
+
+def test_a_factor_file_that_does_not_cover_the_run_window_is_refused(tmp_path: Path) -> None:
+    """#2480: the file on disk was built when the lake held only DAY_ONE; the
+    run spans DAY_ONE..DAY_TWO. Mounting it silently is how LEAN shows a
+    phantom loss with no split event — the mount refuses, naming the
+    uncovered sessions and the rebuild remedy, through the same canonical
+    coverage check the return study runs."""
+    from app.data_lake.factor_files import SessionRun
+
+    lake_root = tmp_path / lake_subpath("raw")
+    seed_lake_window(lake_root, "SPY", WINDOW)
+    seed_lake_corporate_actions(lake_root, "SPY", factor_rows=_WELL_FORMED_FACTOR_ROWS)
+    _write_factor_record(lake_root, [SessionRun(DAY_ONE, DAY_ONE)])
+
+    with pytest.raises(LakeMountError) as exc_info:
+        resolve_lake_artifacts(lake_root=lake_root, symbol="SPY", start=DAY_ONE, end=DAY_TWO)
+
+    message = str(exc_info.value)
+    assert message.startswith("lake_factor_file_not_covering:")
+    assert f"does not include the sessions {DAY_ONE.isoformat()}..{DAY_TWO.isoformat()}" in message
+    assert "ensure_data" in message
+
+
+def test_a_factor_file_without_a_coverage_record_is_refused_not_mounted(tmp_path: Path) -> None:
+    """A file written before coverage records exist covers nothing (#2452's
+    reader rule); the mount says so instead of silently mounting it."""
+    lake_root = tmp_path / lake_subpath("raw")
+    seed_lake_window(lake_root, "SPY", WINDOW)
+    seed_lake_corporate_actions(lake_root, "SPY", factor_rows=_WELL_FORMED_FACTOR_ROWS)  # CSV, no record
+
+    with pytest.raises(LakeMountError, match=r"lake_factor_file_not_covering:.+no coverage record"):
+        resolve_lake_artifacts(lake_root=lake_root, symbol="SPY", start=DAY_ONE, end=DAY_TWO)
+
+
+def test_a_factor_file_covering_the_run_window_mounts_unchanged(tmp_path: Path) -> None:
+    """A fully covered run is unchanged: the file mounts exactly as before."""
+    from app.data_lake.factor_files import SessionRun
+
+    lake_root = tmp_path / lake_subpath("raw")
+    seed_lake_window(lake_root, "SPY", WINDOW)
+    factor_path, _map_path = seed_lake_corporate_actions(lake_root, "SPY", factor_rows=_WELL_FORMED_FACTOR_ROWS)
+    _write_factor_record(lake_root, [SessionRun(DAY_ONE, DAY_TWO)])
+
+    artifacts = resolve_lake_artifacts(lake_root=lake_root, symbol="SPY", start=DAY_ONE, end=DAY_TWO)
+
+    assert artifacts.factor_file_paths == (factor_path,)

@@ -740,6 +740,12 @@ async def run_trusted_sample(
             "lake_artifact_not_committed:", "lake_incomplete_trade_coverage:",
             "lake_missing_daily_artifact:", "lake_daily_artifact_does_not_cover_window:",
             "lake_missing_required_metadata:",
+            # #2480: a factor file that does not cover the run's sessions is
+            # rebuilt over the lake's current captured sessions below — the
+            # include_factor_files spec line sees the file exists, so the
+            # ensure refreshes it (and its coverage record) before the
+            # remount re-runs the canonical check.
+            "lake_factor_file_not_covering:", "lake_factor_file_unreadable:",
         ))
         if (not repairable or request.data_policy.source != "polygon"
                 or request.data_policy.provider_kind == "fixture"):

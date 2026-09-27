@@ -697,6 +697,8 @@ async def test_factor_files_move_the_input_snapshot(
     manifest exists to make.
     """
     from app.config import settings
+    from app.data_lake.factor_files import SessionRun, factor_coverage_record_bytes
+    from app.data_lake.path_policy import LeanFactorFilePath
     from app.services import lean_sidecar_service as service
 
     write_root = tmp_path / "lean-data-writer"
@@ -704,11 +706,23 @@ async def test_factor_files_move_the_input_snapshot(
     seed_lake_window(lake_root, SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
 
-    seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,1,1\n")
+    def seed_recorded_factor(price_factor: str) -> None:
+        # A factor file the canonical coverage check will vouch for: 4-column
+        # rows and a record covering the run window (#2480 made the mount run
+        # that check, so a stub row without a record no longer mounts).
+        seed_lake_corporate_actions(
+            lake_root, SYMBOL, factor_rows=f"20260105,{price_factor},1,100\n20260106,{price_factor},1,100\n"
+        )
+        csv_path = lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path().parts)
+        lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol=SYMBOL).coverage_record_path().parts).write_bytes(
+            factor_coverage_record_bytes(SYMBOL, csv_path.read_bytes(), [SessionRun(DAY_ONE, DAY_TWO)])
+        )
+
+    seed_recorded_factor("1")
     first = await service.run_trusted_sample(_request("factor-snapshot-a"))
     manifest_a = _read_manifest(first.workspace_root)
 
-    seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,0.5,1\n")
+    seed_recorded_factor("0.5")
     second = await service.run_trusted_sample(_request("factor-snapshot-b"))
     manifest_b = _read_manifest(second.workspace_root)
 
@@ -905,3 +919,75 @@ async def test_adjusted_run_can_cancel_while_waiting_for_a_capture(
             await asyncio.wait_for(task, timeout=1)
     assert orchestrator.launch_requests == []
     assert not (orchestrator.artifacts_root / "cancel-during-capture").exists()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_run_whose_factor_file_misses_later_captured_days_rebuilds_it_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    """#2480: the factor file is built while the lake holds only DAY_ONE; a
+    chart capture then adds DAY_TWO's bars without rebuilding it (chart specs
+    never include factor files). A LEAN run over DAY_ONE..DAY_TWO must not
+    mount that stale file silently: the mount refuses through the canonical
+    coverage check, the run path rebuilds the file over the lake's current
+    captured sessions, and the remount launches. On master the stale file
+    mounts without a word and the run launches unadjusted-in-the-window."""
+    import asyncio
+    from uuid import uuid4
+
+    from app.data_lake import ensure_data as pipeline
+    from app.data_lake.factor_files import SessionRun, read_recorded_factor_file
+    from app.data_lake.polygon_fetcher import PolygonBar
+    from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
+    from app.services import lean_sidecar_service as service
+    from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+
+    point_lake_writer_at_tmp(tmp_path, monkeypatch)
+    install_fake_catalog(monkeypatch)
+    mock_launcher()
+
+    async def bars(*, start: date, **_kwargs: Any) -> list[PolygonBar]:
+        return [PolygonBar(t_ms=session_open_ms_utc(start), open=100, high=101, low=99,
+                           close=100, volume=100, vwap=100, n=1)]
+
+    monkeypatch.setattr(pipeline, "fetch_minute_trade_aggregates", bars)
+    monkeypatch.setattr(pipeline, "fetch_splits", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pipeline, "fetch_dividends", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pipeline, "fetch_ticker_events", AsyncMock(return_value=[]))
+
+    async def spec(start: date, end: date) -> DataRunSpec:
+        return DataRunSpec(
+            request_id=uuid4(), run_type="lean_lab", symbols=[SYMBOL],
+            start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
+            end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
+            data_types=["trade", "quote"], price_adjustment_mode="raw",
+            include_factor_files=True, include_map_files=True,
+            lean_image_digest=service.PINNED_LEAN_IMAGE_DIGEST,
+        )
+
+    first = await pipeline.ensure_data(await spec(DAY_ONE, DAY_ONE))
+    assert first.overall_status == "complete", first.failures
+    # A later per-day capture adds DAY_TWO completely (bars, quotes, daily)
+    # but not the factor file — exactly the backfill worker's per-day spec
+    # (include_factor_files=False): the lake now holds a day the factor
+    # file's build never saw, and no other repairable gap exists to mask it.
+    second_day = await pipeline.ensure_data(
+        (await spec(DAY_TWO, DAY_TWO)).model_copy(
+            update={"include_factor_files": False, "include_map_files": False}
+        )
+    )
+    assert second_day.overall_status == "complete", second_day.failures
+    root = Path(first.lean_data_root_path)
+    recorded = await asyncio.to_thread(read_recorded_factor_file, root, market="usa", symbol=SYMBOL)
+    assert recorded.spans == (SessionRun(DAY_ONE, DAY_ONE),)
+
+    await asyncio.wait_for(service.run_trusted_sample(_request("uncovered-factor")), timeout=10)
+
+    assert len(orchestrator.launch_requests) == 1
+    rebuilt = await asyncio.to_thread(read_recorded_factor_file, root, market="usa", symbol=SYMBOL)
+    assert rebuilt.spans == (SessionRun(DAY_ONE, DAY_TWO),)
+    assert rebuilt.file_sha256 != recorded.file_sha256
