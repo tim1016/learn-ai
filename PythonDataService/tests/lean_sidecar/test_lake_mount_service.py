@@ -718,7 +718,7 @@ async def test_factor_files_move_the_input_snapshot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mutation", ["replace", "delete"])
+@pytest.mark.parametrize("mutation", ["replace", "delete", "catalog_down"])
 @pytest.mark.parametrize("relative, manifest_group", [
     ("equity/usa/factor_files/spy.csv", "factor_files"),
     ("equity/usa/daily/spy.zip", "bar_zips"),
@@ -750,8 +750,15 @@ async def test_inputs_replaced_during_launch_keep_original_receipt_and_refuse_re
             replacement = path.with_suffix(".replacement")
             replacement.write_bytes(b"a later file generation")
             replacement.replace(path)
-        else:
+        elif mutation == "delete":
             path.unlink()
+        else:
+            from app.data_lake.catalog_client import CatalogUnavailableError
+
+            def catalog_unavailable(**_kwargs: Any) -> None:
+                raise CatalogUnavailableError("catalog connection lost after LEAN launch")
+
+            monkeypatch.setattr(service, "resolve_lake_artifacts", catalog_unavailable)
         return response.model_copy(update={"exit_code": 0, "is_clean": True})
 
     monkeypatch.setattr(service, "post_launch", replace_during_launch)

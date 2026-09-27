@@ -33,6 +33,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import active_root_id
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
@@ -1191,7 +1192,7 @@ async def _run_trusted_sample(
         after_run = await asyncio.to_thread(_snapshot_staged_data, **after_args)
         if after_run != staged_data:
             snapshot_error = "data_snapshot_changed: run inputs changed during LEAN execution"
-    except (OSError, LakeMountError) as exc:
+    except (OSError, LakeMountError, CatalogUnavailableError) as exc:
         snapshot_error = f"data_snapshot_changed: run input unavailable after LEAN execution: {exc}"
     if snapshot_error is not None:
         failure_reason = f"{failure_reason}; {snapshot_error}" if failure_reason else snapshot_error
