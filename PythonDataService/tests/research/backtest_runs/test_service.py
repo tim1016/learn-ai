@@ -10,6 +10,7 @@ import pytest
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs import service
 from app.research.backtest_runs.records import RunPayloadError, record_from_payload
+from app.research.backtest_runs.service import SaveOutcome
 from app.utils.background_loop import CallerStoppedWaitingError
 from tests.research.backtest_runs.payloads import engine_payload, lean_payload
 
@@ -24,9 +25,9 @@ def test_a_database_failure_leaves_the_run_id_null_and_logs(
     monkeypatch.setattr(service, "run_sync", failing_run_sync)
 
     with caplog.at_level(logging.ERROR):
-        run_id = service.persist_run_payload_sync(engine_payload())
+        save = service.persist_run_payload_sync(engine_payload())
 
-    assert run_id is None
+    assert save == service.SAVE_FAILED
     assert "Run not persisted" in caplog.text and "database down" in caplog.text
 
 
@@ -37,9 +38,9 @@ def test_an_invalid_payload_never_reaches_the_writer(
     monkeypatch.setattr(service, "run_sync", lambda coroutine: reached.append(coroutine) or coroutine.close())
 
     with caplog.at_level(logging.ERROR):
-        run_id = service.persist_run_payload_sync(engine_payload(symbol=""))
+        save = service.persist_run_payload_sync(engine_payload(symbol=""))
 
-    assert run_id is None and reached == []
+    assert save.status == "failed" and save.run_id is None and reached == []
     assert "symbol is required" in caplog.text
 
 
@@ -57,11 +58,11 @@ def test_a_failed_settle_is_logged_and_leaves_the_run_persisted(
     monkeypatch.setattr(service, "run_sync", asyncio.run)
 
     with caplog.at_level(logging.ERROR):
-        run_id = service.persist_run_payload_sync(
+        save = service.persist_run_payload_sync(
             lean_payload("companion-pg-0", parity_group_id="pg-0", requested_engine="both")
         )
 
-    assert run_id == 5  # the row landed; only the verdict did not
+    assert save.status == "saved" and save.run_id == 5  # the row landed; only the verdict did not
     assert "verdict left as it stands" in caplog.text
 
 
@@ -77,9 +78,14 @@ def test_a_caller_that_stops_waiting_is_not_told_the_run_failed(
     monkeypatch.setattr(service, "run_sync", abandoning_run_sync)
 
     with caplog.at_level(logging.WARNING):
-        run_id = service.persist_run_payload_sync(engine_payload())
+        save = service.persist_run_payload_sync(engine_payload())
 
-    assert run_id is None
+    # #2464: a wait that expired before the insert committed is UNKNOWN —
+    # the writer loop keeps going uncancelled, so the row may still land.
+    # On master this came back as the same ``None`` a failure does, which
+    # is exactly the collapse the typed outcome exists to prevent.
+    assert save == service.SAVE_UNKNOWN
+    assert save.status != "failed"
     assert "outcome unknown" in caplog.text
     assert "Run not persisted" not in caplog.text
 
@@ -102,9 +108,9 @@ def test_a_write_that_timed_out_on_the_database_is_still_reported_as_a_failure(
     monkeypatch.setattr(service, "run_sync", command_timeout_run_sync)
 
     with caplog.at_level(logging.WARNING):
-        run_id = service.persist_run_payload_sync(engine_payload())
+        save = service.persist_run_payload_sync(engine_payload())
 
-    assert run_id is None
+    assert save == service.SAVE_FAILED
     assert "Run not persisted" in caplog.text
     assert "outcome unknown" not in caplog.text
 
@@ -135,7 +141,7 @@ def test_the_companions_failure_detail_reaches_the_settle_from_the_record(
         )
     )
 
-    assert run_id == 5
+    assert run_id == SaveOutcome(status="saved", run_id=5)
     assert settled == [
         {
             "right_run_id": 5,

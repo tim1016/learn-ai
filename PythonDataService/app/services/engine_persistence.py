@@ -21,7 +21,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from app.research.backtest_runs.service import persist_run_payload
+from app.research.backtest_runs.service import SaveOutcome, persist_run_payload
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 
 __all__ = [
@@ -164,12 +164,13 @@ async def persist_engine_run(
     trades: list[EngineTrade],
     total_fees: Decimal = Decimal("0"),
     extra_statistics: dict[str, Any] | None = None,
-) -> int | None:
+) -> SaveOutcome:
     """Build the engine persist payload and write it.
 
-    Returns the assigned run id on success, or ``None`` when persistence
-    failed. Persistence failures must not abort the caller; the in-memory
-    trade list remains authoritative and can be retried.
+    Returns the typed :class:`SaveOutcome` (#2464): ``saved`` with the run
+    id, ``failed``, or ``unknown`` when the write outlasted its wait.
+    Persistence problems must not abort the caller; the in-memory trade
+    list remains authoritative and can be retried.
     """
     payload = build_engine_persist_payload(
         strategy_name=strategy_name,

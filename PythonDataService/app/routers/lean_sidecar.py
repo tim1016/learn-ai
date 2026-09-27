@@ -629,6 +629,9 @@ class TrustedRunResponseModel(BaseModel):
     # Task 1.10: the StrategyExecution.Id assigned by the .NET backend.
     # ``None`` when persistence failed (logged; the run is not aborted).
     strategy_execution_id: int | None = None
+    # The typed save outcome (#2464): ``saved``, ``failed``, or ``unknown``
+    # (the write may still commit — never present that as "not saved").
+    save_outcome: Literal["saved", "failed", "unknown"] = "failed"
 
 
 @router.post(
@@ -762,6 +765,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         total_order_events=(result.normalized.total_order_events if result.normalized else None),
         total_equity_points=(result.normalized.total_equity_points if result.normalized else None),
         strategy_execution_id=result.strategy_execution_id,
+        save_outcome=result.save_outcome,
     )
 
 

@@ -83,6 +83,10 @@ export interface EngineBacktestResponse {
   total_trades: number;
   net_profit: number;
   study_id?: number | null;
+  /** Typed save outcome (#2464): `unknown` means the write may still commit —
+   *  never present that as "not saved". Absent reads as `failed` (the wire
+   *  default), matching responses that predate the field. */
+  save_outcome?: "saved" | "failed" | "unknown";
   validation_analytics?: EngineValidationAnalytics | null;
   error?: string;
 }

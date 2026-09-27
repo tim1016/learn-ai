@@ -14045,6 +14045,12 @@ export interface components {
             /** Net Profit */
             net_profit: number;
             run_verdict?: components["schemas"]["RunVerdict"] | null;
+            /**
+             * Save Outcome
+             * @default failed
+             * @enum {string}
+             */
+            save_outcome?: "saved" | "failed" | "unknown";
             /** Statistics */
             statistics?: Record<string, never>;
             /** Strategy Name */
@@ -26441,6 +26447,12 @@ export interface components {
             observations_path: string;
             /** Run Id */
             run_id: string;
+            /**
+             * Save Outcome
+             * @default failed
+             * @enum {string}
+             */
+            save_outcome?: "saved" | "failed" | "unknown";
             /** Strategy Execution Id */
             strategy_execution_id?: number | null;
             /** Timed Out */

@@ -1105,7 +1105,7 @@ def _persist_and_dispatch_companion(
         validated_params=validated_params,
         strategy=strategy,
     )
-    response.study_id = persist_engine_response_sync(
+    save = persist_engine_response_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
         start_date=resolved_configuration.start_date,
@@ -1124,8 +1124,17 @@ def _persist_and_dispatch_companion(
         execution_config=_persisted_execution_config(request, evaluation_start=date.fromisoformat(resolved_configuration.start_date))
         | ({"corporate_action_versions": response.corporate_action_versions} if response.corporate_action_versions else {}),
     )
-
-    on_log(f"Saved study {response.study_id}")
+    response.study_id = save.run_id
+    response.save_outcome = save.status
+    if save.status == "saved":
+        on_log(f"Saved study {save.run_id}")
+    elif save.status == "unknown":
+        on_log(
+            "Study save still finishing — the write outlasted its wait; "
+            "the run should appear in history shortly"
+        )
+    else:
+        on_log("Study save failed — the run was not saved to history")
 
     if parity_group_id is not None:
         on_log("Recording parity disposition")

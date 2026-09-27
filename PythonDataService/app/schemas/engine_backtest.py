@@ -466,6 +466,12 @@ class EngineBacktestResponse(BaseModel):
     # round-trip. Null when persistence failed (the run still succeeded —
     # persistence is best-effort).
     study_id: int | None = None
+    # The typed save outcome (#2464): ``saved`` (study_id names the row),
+    # ``failed`` (the write stopped; nothing will land), or ``unknown``
+    # (the write outlasted its wait and may still commit — never present
+    # this as "not saved"). Defaults to ``failed``: a response constructed
+    # without one claims no successful save.
+    save_outcome: Literal["saved", "failed", "unknown"] = "failed"
     error: str | None = None
     # PR B (2026-05-19) — echo of the post-normalization DataPolicy so the
     # frontend can render the policy that was actually used by the engine
