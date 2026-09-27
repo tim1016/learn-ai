@@ -92,6 +92,16 @@ def test_a_bound_minute_reader_refuses_bytes_that_changed_after_capture(tmp_path
     assert len(consumed) == 2 * 390
 
 
+def test_a_bound_minute_reader_refuses_deletion_before_date_enumeration(tmp_path: Path) -> None:
+    _seed_minutes(tmp_path)
+    snapshot = capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="minute", data_start=WINDOW[0], data_end=WINDOW[1])
+    reader = ManifestBoundMinuteReader([tmp_path], snapshot.artifacts)
+    (tmp_path / f"equity/usa/minute/spy/{SESSIONS[2].strftime('%Y%m%d')}_trade.zip").unlink()
+
+    with pytest.raises(DataSnapshotMismatchError, match="was receipted at launch but is missing now"):
+        list(reader.iter_bars("SPY", *WINDOW))
+
+
 def test_a_bound_reader_yields_identical_bars_to_the_plain_reader(tmp_path: Path) -> None:
     from app.engine.data.lean_format import LeanMinuteDataReader
 
