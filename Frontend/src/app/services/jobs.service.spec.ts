@@ -258,6 +258,50 @@ describe('JobsService.onEvent', () => {
     expect(received).toEqual([{ type: 'chunk_plan', total: 3 }]);
   });
 
+  it('hands a listener registered late everything the stream already delivered, in order (#2472)', async () => {
+    const source = await startJobAndGrabSource();
+    source.dispatch({ type: 'job.started' });
+    source.dispatch({ type: 'data_lake.backfill_day', day_index: 1 });
+    const received: unknown[] = [];
+
+    service.onEvent('job-1', (event) => received.push(event));
+
+    // The replay is the catch-up: both earlier frames, then live delivery
+    // continues from the next frame without double-counting either.
+    expect(received).toEqual([
+      { type: 'job.started' },
+      { type: 'data_lake.backfill_day', day_index: 1 },
+    ]);
+    source.dispatch({ type: 'data_lake.backfill_day', day_index: 2 });
+    expect(received).toHaveLength(3);
+  });
+
+  it('reports a job whose retained history overflowed as trimmed, and replays only the suffix', async () => {
+    const source = await startJobAndGrabSource();
+    for (let i = 0; i < 5_001; i++) {
+      source.dispatch({ type: 'job.log', message: String(i) });
+    }
+    expect(service.historyTrimmed().has('job-1')).toBe(true);
+
+    const received: unknown[] = [];
+    service.onEvent('job-1', (event) => received.push(event));
+    // The bounded suffix only — and the first replayed frame is the one
+    // after the trim boundary, not a frame the job never emitted.
+    expect(received).toHaveLength(5_000);
+    expect((received[0] as { message: string }).message).toBe('1');
+  });
+
+  it('drops the retained history with the job on dismiss', async () => {
+    const source = await startJobAndGrabSource();
+    source.dispatch({ type: 'job.started' });
+
+    service.dismiss('job-1');
+    const received: unknown[] = [];
+    service.onEvent('job-1', (event) => received.push(event));
+
+    expect(received).toEqual([]);
+  });
+
   it('still folds the same frame into JobState — the hook does not replace the existing reducer', async () => {
     const source = await startJobAndGrabSource();
 

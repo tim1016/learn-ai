@@ -6,8 +6,13 @@
 
     @if (reattached()) {
       <p class="run__reattached" role="status">
-        Reattached to a backfill that was already running. Everything below was replayed from the
-        job's own event stream, not reconstructed here.
+        Reattached to a backfill that was already running.
+        @if (historyComplete()) {
+          Everything below was replayed from the job's own event stream, not reconstructed here.
+        } @else {
+          Earlier history is missing: this tab's record of the run no longer holds every session
+          it reported, so what is shown starts from what it still had.
+        }
       </p>
     }
 

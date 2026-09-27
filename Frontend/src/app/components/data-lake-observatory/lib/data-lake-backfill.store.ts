@@ -1,5 +1,6 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
+import { JobsService } from '../../../services/jobs.service';
 import {
   BackfillJobRunner,
   BackfillSubmissionError,
@@ -46,6 +47,7 @@ export interface BackfillError {
 @Injectable()
 export class DataLakeBackfillStore {
   private readonly runner = inject(BackfillJobRunner);
+  private readonly jobs = inject(JobsService);
   private readonly destroyRef = inject(DestroyRef);
 
   private readonly localPhaseState = signal<'idle' | 'submitting' | 'failed'>('idle');
@@ -85,6 +87,13 @@ export class DataLakeBackfillStore {
   });
   /** True when this run was adopted mid-flight rather than started here. */
   readonly reattached = this.reattachedState.asReadonly();
+  /** True when the registry still holds every frame the job has emitted.
+   *  A reattached panel may call its history a replay only while this is
+   *  true; past a trim it is a suffix and the panel must say so (#2472). */
+  readonly historyComplete = computed(() => {
+    const jobId = this.jobIdState();
+    return jobId === null || !this.jobs.historyTrimmed().has(jobId);
+  });
 
   readonly running = computed(() => {
     const phase = this.phase();
@@ -137,16 +146,15 @@ export class DataLakeBackfillStore {
    * while the worker keeps going; coming back would otherwise show an idle
    * form beside a job that is still writing sessions to disk.
    *
-   * Nothing is reconstructed by hand. `GET /api/jobs/{id}/events` with no
-   * `Last-Event-ID` replays the job's whole Redis stream from the start
-   * before it begins tailing (`JobsApi.StreamJobEventsAsync`), so the
-   * ordinary fold rebuilds the progress tick, the per-day receipts and the
-   * failures from the run's own events — and `data_lake.backfill_day` is
-   * keyed on `day_index`, so a session cannot land twice. The only run long
-   * enough to have been trimmed would need more than `MAX_STREAM_LENGTH`
-   * (50k) events, which a day-per-session backfill cannot reach inside the
-   * stream's 24h TTL; a shorter history simply renders as fewer rows, never
-   * as invented ones.
+   * Nothing is reconstructed by hand. The panel rides the tab's one stream
+   * subscription per job (#1856); that stream only delivers frames from
+   * now on, so `JobsService.onEvent` hands a newly registered fold
+   * everything this tab has already seen — every per-day receipt and
+   * failure the run has reported (#2472). `ingestEvent` keys on
+   * `day_index`, so a frame delivered by both that handoff and the live
+   * stream lands once. `historyComplete` says whether the registry still
+   * holds the run's whole history; past a trim the panel must call what it
+   * shows partial, never a replay.
    */
   reattach(jobId: string): void {
     if (this.jobIdState() === jobId) return;

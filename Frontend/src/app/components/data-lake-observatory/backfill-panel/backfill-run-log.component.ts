@@ -38,6 +38,9 @@ export class BackfillRunLogComponent {
   readonly jobId = input<string | null>(null);
   /** True when the panel adopted a run already in flight rather than starting it. */
   readonly reattached = input(false);
+  /** True while the registry still holds every frame the adopted run has
+   *  emitted — the "replayed" claim in the template is honest only then (#2472). */
+  readonly historyComplete = input(true);
 
   /**
    * Identity of one failure row.

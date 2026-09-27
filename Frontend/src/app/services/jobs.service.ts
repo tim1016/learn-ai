@@ -103,6 +103,12 @@ interface ServerJobState {
 
 const TERMINAL: JobStatus[] = ['completed', 'failed', 'cancelled'];
 const MAX_RECENT_LOGS = 5;
+// Frames retained per job for late `onEvent` listeners (#2472). Generous
+// against the jobs that exist: a day-per-session backfill over a decade
+// emits on the order of a few thousand frames. Past it the history becomes
+// a suffix and `historyTrimmed` says so, so a panel can stop claiming a
+// replay.
+const MAX_RETAINED_EVENTS = 5_000;
 
 /**
  * Process-wide registry of in-flight and recently-finished jobs.
@@ -124,6 +130,16 @@ export class JobsService {
   // consumers (RunSessionService, DataLakeBackfillStore) ride this existing
   // stream instead of opening a second EventSource to the same endpoint.
   private readonly listeners = new Map<string, Set<(event: JobStreamEvent, eventId: string) => void>>();
+  // Every frame this tab has seen per job, in delivery order, bounded by
+  // MAX_RETAINED_EVENTS (#2472). A stream opened with no `Last-Event-ID` is
+  // replayed whole by the server, so from open onward this is the job's
+  // complete history — what a late `onEvent` listener (a panel reattaching
+  // after a route change) is handed, since the one live stream only
+  // delivers from now on.
+  private readonly retained = new Map<string, { event: JobStreamEvent; eventId: string }[]>();
+  // Jobs whose retained history had to be trimmed: their history is partial,
+  // and a consumer that claims to show "everything" must not (#2472).
+  private readonly _historyTrimmed = signal<ReadonlySet<string>>(new Set());
   // Last seen event id per job — used when a connection drops and we
   // reopen with `Last-Event-ID`. The browser's native EventSource
   // automatically supplies the last seen id on reconnect, but if the
@@ -148,6 +164,10 @@ export class JobsService {
    *  While set, `activeJobs` describes only the jobs this tab has already seen. */
   private readonly _registryError = signal<string | null>(null);
   readonly registryError = this._registryError.asReadonly();
+  /** Job ids whose retained event history overflowed and was trimmed —
+   *  everything this tab still holds for them is a suffix, not the whole
+   *  run (#2472). */
+  readonly historyTrimmed = this._historyTrimmed.asReadonly();
   private refreshInFlight: Promise<void> | null = null;
 
   constructor() {
@@ -194,6 +214,18 @@ export class JobsService {
    * `EventSource` `startJob`/`resumeActive` already opened for this job
    * rather than requiring the caller to open a second one.
    *
+   * A listener registered after the stream has been delivering receives
+   * everything this tab has already seen for the job, synchronously and in
+   * delivery order, before any live frame reaches it (#2472) — the stream
+   * itself only delivers from now on, so without this a panel reattaching
+   * after a route change would silently drop every earlier session. The
+   * consumer's own keyed fold deduplicates the handoff: it must treat any
+   * frame as a possible redelivery (the registry's history ends at the
+   * registration boundary and live frames continue after it, so the two
+   * cannot overlap — but a reconnect redelivers, and one idempotent rule is
+   * simpler than two). See `historyTrimmed` for when that history is a
+   * suffix rather than the whole run.
+   *
    * The job's stream must already be open (i.e. `startJob` has resolved,
    * or the job was discovered by `resumeActive` on load) — this does not
    * open one itself. Returns an unsubscribe function.
@@ -205,6 +237,9 @@ export class JobsService {
       this.listeners.set(id, handlers);
     }
     handlers.add(handler);
+    for (const { event, eventId } of this.retained.get(id) ?? []) {
+      handler(event, eventId);
+    }
     return () => {
       handlers.delete(handler);
       if (handlers.size === 0) this.listeners.delete(id);
@@ -214,11 +249,36 @@ export class JobsService {
   /** Drop a job from the local registry (e.g., user dismissed it from the drawer). */
   dismiss(id: string): void {
     this.closeStream(id);
+    this.retained.delete(id);
+    this._historyTrimmed.update((trimmed) => {
+      if (!trimmed.has(id)) return trimmed;
+      const next = new Set(trimmed);
+      next.delete(id);
+      return next;
+    });
     this._jobs.update(m => {
       const next = new Map(m);
       next.delete(id);
       return next;
     });
+  }
+
+  /** Retain one delivered frame for late listeners (#2472); see `retained`. */
+  private retainEvent(id: string, event: JobStreamEvent, eventId: string): void {
+    let history = this.retained.get(id);
+    if (!history) {
+      history = [];
+      this.retained.set(id, history);
+    }
+    history.push({ event, eventId });
+    if (history.length > MAX_RETAINED_EVENTS) {
+      history.splice(0, history.length - MAX_RETAINED_EVENTS);
+      this._historyTrimmed.update((trimmed) => {
+        const next = new Set(trimmed);
+        next.add(id);
+        return next;
+      });
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -314,6 +374,7 @@ export class JobsService {
     } catch {
       return;
     }
+    this.retainEvent(id, evt, lastEventId);
     this._jobs.update(m => {
       const next = new Map(m);
       const prev = next.get(id);
