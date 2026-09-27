@@ -14698,6 +14698,16 @@
               }
             ]
           },
+          "save_outcome": {
+            "default": "failed",
+            "enum": [
+              "saved",
+              "failed",
+              "unknown"
+            ],
+            "title": "Save Outcome",
+            "type": "string"
+          },
           "statistics": {
             "title": "Statistics",
             "type": "object"
@@ -43240,6 +43250,16 @@
           },
           "run_id": {
             "title": "Run Id",
+            "type": "string"
+          },
+          "save_outcome": {
+            "default": "failed",
+            "enum": [
+              "saved",
+              "failed",
+              "unknown"
+            ],
+            "title": "Save Outcome",
             "type": "string"
           },
           "strategy_execution_id": {

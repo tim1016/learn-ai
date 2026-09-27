@@ -2,9 +2,11 @@ import { HttpErrorResponse } from "@angular/common/http";
 import { DOCUMENT } from "@angular/common";
 import { computed, DestroyRef, effect, inject, Injectable, signal } from "@angular/core";
 import { Router } from "@angular/router";
+import { firstValueFrom } from "rxjs";
 
 import { JobsService, type JobState } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
+import { BacktestRunsService } from "../../services/backtest-runs.service";
 import type {
   LeanLauncherDiagnosticReport,
   TrustedRunResponse,
@@ -52,6 +54,11 @@ function isStrategyLabJobType(type: string): type is StrategyLabJobType {
  *  parity companion submits `lean_engine_run` jobs through the same public
  *  route with a `companion-…` id, and those must never be adopted here. */
 const STRATEGY_LAB_RUN_ID_PREFIX = "strategy_lab_";
+
+// A save whose write outlasted its wait: re-check history this often, this
+// many times, before leaving the still-finishing message standing (#2464).
+const STUDY_RECHECK_DELAY_MS = 3_000;
+const STUDY_RECHECK_ATTEMPTS = 5;
 
 /** How often an open Strategy Lab asks the registry about jobs other tabs started (#1956). */
 const ACTIVE_JOBS_REFRESH_MS = 10_000;
@@ -150,6 +157,7 @@ function forgetOwnJob(only?: OwnJob): void {
 export class StrategyLabRunner {
   private readonly jobs = inject(JobsService);
   private readonly leanSidecar = inject(LeanSidecarService);
+  private readonly backtestRuns = inject(BacktestRunsService);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
@@ -633,10 +641,59 @@ export class StrategyLabRunner {
       `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
     );
     if (response.study_id != null) return this.openStudy(response.study_id);
+    if ((response.save_outcome ?? "failed") === "unknown") return this.waitForStudy();
     this.runError.set(
       "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
     );
     return Promise.resolve();
+  }
+
+  /**
+   * A save whose write outlasted its wait (#2464): still finishing, never
+   * "not saved". The screen says so, re-checks history a few times, and
+   * opens the study the moment it lands. In a paired run the LEAN
+   * comparison starts only once this row exists, so the note explains why
+   * it is not there yet instead of leaving it silently missing.
+   */
+  private async waitForStudy(): Promise<void> {
+    const paired = this.config.engine() === "both";
+    this.runError.set(
+      "Still saving — the history write outlasted its wait; the run should appear in history shortly. Re-checking…"
+      + (paired
+        ? " The LEAN comparison starts once the save lands; it is not missing."
+        : ""),
+    );
+    for (let attempt = 0; attempt < STUDY_RECHECK_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, STUDY_RECHECK_DELAY_MS));
+      const landed = await this.findJustSavedStudy();
+      if (landed !== null) {
+        this.runError.set("");
+        return void this.openStudy(landed);
+      }
+    }
+    this.runError.set(
+      "The save is still finishing — the run was not lost and was not marked failed. Check history again in a moment."
+      + (paired
+        ? " The LEAN comparison will start once the save lands."
+        : ""),
+    );
+  }
+
+  /** The freshest history row matching what this runner just completed, or null. */
+  private async findJustSavedStudy(): Promise<number | null> {
+    const strategyName = this.config.selectedStrategyName();
+    const symbol = this.config.effectiveSymbol();
+    if (!strategyName) return null;
+    try {
+      const runs = await firstValueFrom(this.backtestRuns.list(null, 25));
+      const matching = runs
+        .filter((run) => run.strategyName === strategyName && run.symbol === symbol)
+        .sort((a, b) => b.executedAt - a.executedAt);
+      return matching[0]?.id ?? null;
+    } catch {
+      // The re-check is best effort; a failed read just waits for the next.
+      return null;
+    }
   }
 
   /** The one reading of a LEAN result: a saved study, or a run that saved nothing. */
@@ -644,6 +701,10 @@ export class StrategyLabRunner {
     if (response.strategy_execution_id !== null) {
       this.setRunStatus("completed", "LEAN run finished", `Persisted as study #${response.strategy_execution_id}.`);
       return this.openStudy(response.strategy_execution_id);
+    }
+    if ((response.save_outcome ?? "failed") === "unknown") {
+      this.setRunStatus("completed", "LEAN run finished", "The history write is still finishing.");
+      return this.waitForStudy();
     }
     this.runError.set(
       "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",

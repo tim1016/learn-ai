@@ -27,6 +27,7 @@ from app.data_lake.path_policy import lake_subpath
 from app.lean_sidecar.lake_mount import CONTAINER_LAKE_DATA_MOUNT
 from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITIES, LaunchRequest, LaunchResponse
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
+from app.research.backtest_runs.service import SaveOutcome
 from tests._helpers.lake_fixture import seed_lake_corporate_actions, seed_lake_interest_rate, seed_lake_window
 
 pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
@@ -98,8 +99,8 @@ def orchestrator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
             is_clean=False,
         )
 
-    async def fake_persist(**_kwargs: Any) -> int:
-        return 1
+    async def fake_persist(**_kwargs: Any) -> SaveOutcome:
+        return SaveOutcome(status="saved", run_id=1)
 
     monkeypatch.setattr(service, "DEFAULT_ARTIFACTS_ROOT", artifacts_root)
     monkeypatch.setattr(service, "assert_lean_persistence_source_current", lambda: None)

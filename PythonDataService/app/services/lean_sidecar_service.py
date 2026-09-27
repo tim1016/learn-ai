@@ -86,7 +86,7 @@ from app.lean_sidecar.trusted_templates import (
     trusted_template_definition,
 )
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
-from app.research.backtest_runs.service import persist_run_payload
+from app.research.backtest_runs.service import SaveOutcome, persist_run_payload
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.lean_sidecar_persistence import (
     StaleLeanPersistenceSourceError,
@@ -118,7 +118,7 @@ async def _persist_completed_run(
     workspace: Workspace,
     manifest: RunManifest,
     response: LaunchResponse,
-) -> int | None:
+) -> SaveOutcome:
     """Persist one launched result even if the worker source changed mid-run."""
     _warn_if_persistence_source_changed(request.run_id)
     persist_payload = build_persist_payload(
@@ -323,6 +323,10 @@ class TrustedRunResult:
     # after persisting this run. ``None`` when persistence failed or was
     # skipped (e.g., launcher rejected before a result was produced).
     strategy_execution_id: int | None = None
+    # The typed save outcome (#2464) — same vocabulary as the engine
+    # response, so a caller reads one field and never mistakes a write
+    # that is still finishing for one that failed.
+    save_outcome: Literal["saved", "failed", "unknown"] = "failed"
 
 
 _ET = ZoneInfo("America/New_York")
@@ -1117,12 +1121,21 @@ async def _run_trusted_sample(
         _acknowledge_cancel_too_late()
     _emit_phase("persisting")
     _emit_log("Persisting run to history")
-    strategy_execution_id = await _persist_completed_run(
+    save = await _persist_completed_run(
         request=request,
         workspace=workspace,
         manifest=manifest,
         response=response,
     )
+    if save.status == "saved":
+        _emit_log(f"Saved study {save.run_id}")
+    elif save.status == "unknown":
+        _emit_log(
+            "Study save still finishing — the write outlasted its wait; "
+            "the run should appear in history shortly"
+        )
+    else:
+        _emit_log("Study save failed — the run was not saved to history")
 
     return TrustedRunResult(
         run_id=request.run_id,
@@ -1138,7 +1151,8 @@ async def _run_trusted_sample(
         lean_log_path=workspace.lean_log_path,
         normalized_path=normalized_path,
         normalized=normalized,
-        strategy_execution_id=strategy_execution_id,
+        strategy_execution_id=save.run_id,
+        save_outcome=save.status,
     )
 
 

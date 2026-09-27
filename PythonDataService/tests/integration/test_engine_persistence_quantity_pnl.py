@@ -213,7 +213,7 @@ def test_preparation_failure_leaves_the_completed_run_unsaved_not_failed(monkeyp
 
     monkeypatch.setattr(service, "run_sync", _record)
 
-    run_id = service.persist_engine_response_sync(
+    save = service.persist_engine_response_sync(
         response=response,
         symbol="SPY",
         start_date="2025-01-06",
@@ -223,7 +223,7 @@ def test_preparation_failure_leaves_the_completed_run_unsaved_not_failed(monkeyp
         duration_ms=1,
     )
 
-    assert run_id is None
+    assert save == service.SAVE_FAILED
     assert writes == []
 
 

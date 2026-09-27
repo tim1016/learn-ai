@@ -173,13 +173,13 @@ async def backfill_directory(artifacts_root: Path) -> list[int]:
         if payload is None:
             continue
 
-        persisted_id = await persist_run_payload(payload)
-        if persisted_id is None:
-            logger.warning("Run for %s was not persisted — skipping", workspace.name)
+        save = await persist_run_payload(payload)
+        if save.status != "saved" or save.run_id is None:
+            logger.warning("Run for %s was not persisted (%s) — skipping", workspace.name, save.status)
             continue
 
-        logger.info("Backfilled %s → run id %s", workspace.name, persisted_id)
-        persisted_ids.append(persisted_id)
+        logger.info("Backfilled %s → run id %s", workspace.name, save.run_id)
+        persisted_ids.append(save.run_id)
 
     logger.info("Backfill complete: %d/%d workspaces persisted", len(persisted_ids), len(workspaces))
     return persisted_ids

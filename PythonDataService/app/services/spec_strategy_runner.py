@@ -283,7 +283,7 @@ async def run_spec_against_bars_and_persist(
         fill_mode=fill_mode,
     )
 
-    persisted_id = await persist_engine_run(
+    save = await persist_engine_run(
         strategy_name=resolved_name,
         symbol=symbol,
         starting_cash=starting_cash,
@@ -293,6 +293,7 @@ async def run_spec_against_bars_and_persist(
         total_fees=result.total_fees,
         extra_statistics=extra_statistics,
     )
+    persisted_id = save.run_id
 
     return SpecRunResult(
         trades=result.trades,

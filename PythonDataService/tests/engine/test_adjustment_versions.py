@@ -254,6 +254,7 @@ def test_snapshot_version_is_order_independent_and_changes_when_announced_action
 async def test_run_records_the_version_it_read_in_its_saved_receipt(
     capture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, resolution: str,
 ) -> None:
+    from app.research.backtest_runs.service import SaveOutcome
     from app.schemas.engine_backtest import EngineBacktestRequest
     from app.services import engine_backtest_service as engine_service
 
@@ -263,9 +264,9 @@ async def test_run_records_the_version_it_read_in_its_saved_receipt(
     saved: list[dict] = []
     monkeypatch.setattr(engine_service._STRATEGY_REGISTRY["sma_crossover"], "supported_resolutions", {"minute", "daily"})
 
-    def save(**kwargs: object) -> int:
+    def save(**kwargs: object) -> SaveOutcome:
         saved.append(kwargs)
-        return 42
+        return SaveOutcome(status="saved", run_id=42)
 
     monkeypatch.setattr(engine_service, "persist_engine_response_sync", save)
     monkeypatch.setattr(engine_service, "_dispatch_requested_parity_companion", lambda **kwargs: None)

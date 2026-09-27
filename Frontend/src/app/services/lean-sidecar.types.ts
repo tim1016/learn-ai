@@ -121,6 +121,8 @@ export interface TrustedRunResponse {
    * disabled or the run failed before normalization.
    */
   strategy_execution_id: number | null;
+  /** Typed save outcome (#2464): `unknown` means the write may still commit. */
+  save_outcome?: "saved" | "failed" | "unknown";
 }
 
 /**

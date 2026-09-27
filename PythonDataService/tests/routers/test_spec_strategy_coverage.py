@@ -41,6 +41,7 @@ from app.engine.engine import BacktestEngine, BacktestResult
 from app.engine.strategy.spec import StrategySpec
 from app.lean_sidecar.trading_calendar import expected_sessions, is_early_close
 from app.main import app
+from app.research.backtest_runs.service import SAVE_FAILED
 from app.routers.spec_strategy import _FIXTURES_DIR, get_data_source_factory
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service
@@ -282,7 +283,7 @@ async def test_spec_and_strategy_lab_consume_identical_lake_bars_and_fingerprint
         return result
 
     monkeypatch.setattr(BacktestEngine, "run", run_and_capture)
-    monkeypatch.setattr(engine_backtest_service, "persist_engine_response_sync", lambda **kwargs: None)
+    monkeypatch.setattr(engine_backtest_service, "persist_engine_response_sync", lambda **kwargs: SAVE_FAILED)
 
     spec_result = await _post_backtest(_sma_spec("QQQ"), *WINDOW)
     lab_result = await asyncio.to_thread(

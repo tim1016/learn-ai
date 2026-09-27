@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
+import { BacktestRunsService } from "../../services/backtest-runs.service";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
 import { inputsFromBacktestJob, type StrategyInfo } from "./strategy-lab.models";
@@ -51,6 +52,7 @@ describe("StrategyLab configuration and runner", () => {
   let runner: StrategyLabRunner;
   let startJob: ReturnType<typeof vi.fn>;
   let fetchResult: ReturnType<typeof vi.fn>;
+  let listRuns: ReturnType<typeof vi.fn>;
   let refreshActive: ReturnType<typeof vi.fn>;
   let nextTradingDayOpen: ReturnType<typeof vi.fn>;
   let diagnose: ReturnType<typeof vi.fn>;
@@ -98,6 +100,10 @@ describe("StrategyLab configuration and runner", () => {
             nextTradingDayOpen,
           },
         },
+        {
+          provide: BacktestRunsService,
+          useValue: { list: listRuns },
+        },
       ],
     });
   }
@@ -106,6 +112,7 @@ describe("StrategyLab configuration and runner", () => {
     sessionStorage.clear();
     startJob = vi.fn(async () => "job-1");
     fetchResult = vi.fn();
+    listRuns = vi.fn(() => of([]));
     refreshActive = vi.fn(async () => undefined);
     navigate = vi.fn(async () => true);
     jobsById = signal(new Map<string, JobState>());
@@ -413,6 +420,101 @@ describe("StrategyLab configuration and runner", () => {
       TestBed.tick();
       await Promise.resolve();
       expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("says a save that is still finishing is finishing, re-checks history, and opens the study when it lands (#2464)", async () => {
+      // Fake timers from the start: the re-check waits are real seconds, and
+      // they must be owned by the clock this test advances.
+      vi.useFakeTimers();
+      try {
+        config.engine.set("python");
+        await runner.run();
+        fetchResult.mockResolvedValue({
+          success: true,
+          study_id: null,
+          save_outcome: "unknown",
+          total_trades: 2,
+          net_profit: 5,
+        });
+        const landed = {
+          id: 512,
+          strategyName: STRATEGY.name,
+          symbol: "SPY",
+          executedAt: 1,
+        };
+        let reads = 0;
+        listRuns.mockImplementation(() => {
+          reads += 1;
+          return of(reads < 2 ? [] : [landed]);
+        });
+        putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+        TestBed.tick();
+        await vi.waitFor(() => {
+          expect(runner.runError()).toContain("Still saving");
+        });
+        expect(runner.runError()).not.toContain("not saved");
+
+        // The re-check finds the landed row on its second look: 3 s of wait,
+        // an empty read, another 3 s, the row.
+        // One advance through every re-check wait: the first read is empty,
+        // the second lands, and the study opens — however the timers
+        // interleave with the waits.
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.waitFor(() => {
+          expect(navigate).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ queryParams: expect.objectContaining({ run: 512 }) }),
+          );
+        });
+        expect(runner.runError()).toBe("");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the confirmed-failure message for a save that failed", async () => {
+      config.engine.set("python");
+      await runner.run();
+      putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+      fetchResult.mockResolvedValue({
+        success: true,
+        study_id: null,
+        save_outcome: "failed",
+        total_trades: 0,
+        net_profit: 0,
+      });
+      TestBed.tick();
+      await vi.waitFor(() => {
+        expect(runner.runError()).toContain("not saved to history");
+      });
+    });
+
+    it("explains why a paired run's LEAN comparison is missing while its save finishes (#2464)", async () => {
+      vi.useFakeTimers();
+      try {
+        config.engine.set("both");
+        await runner.run();
+        fetchResult.mockResolvedValue({
+          success: true,
+          study_id: null,
+          save_outcome: "unknown",
+          total_trades: 1,
+          net_profit: 1,
+        });
+        listRuns.mockImplementation(() => of([]));
+        putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "completed" }));
+        TestBed.tick();
+        await vi.waitFor(() => {
+          expect(runner.runError()).toContain("LEAN comparison starts once the save lands");
+        });
+        // Exhaust the re-checks: the message stays honest — still finishing,
+        // never "not saved".
+        await vi.advanceTimersByTimeAsync(16_000);
+        expect(runner.runError()).toContain("still finishing");
+        expect(runner.runError()).not.toContain("not saved");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("reattaches to the job this tab started, not another tab's active backtest", async () => {

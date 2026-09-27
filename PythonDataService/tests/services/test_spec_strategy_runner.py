@@ -306,14 +306,15 @@ class TestRunSpecAgainstBarsStartingCash:
 class TestRunSpecAgainstBarsAndPersist:
     @pytest.mark.asyncio
     async def test_persists_engine_run_after_capturing_trades(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.research.backtest_runs.service import SaveOutcome
         from app.services import engine_persistence
 
         bars = build_minute_bars(closes_for_spy_ema(2000))
         written: list[dict] = []
 
-        async def fake_persist(payload: dict) -> int:
+        async def fake_persist(payload: dict) -> SaveOutcome:
             written.append(payload)
-            return 7
+            return SaveOutcome(status="saved", run_id=7)
 
         monkeypatch.setattr(engine_persistence, "persist_run_payload", fake_persist)
 

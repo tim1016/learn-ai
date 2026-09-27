@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.research.backtest_runs import repository as repo
@@ -34,8 +35,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def persist_run_payload_sync(payload: Mapping[str, Any]) -> int | None:
-    """Write a canonical persist payload from a worker thread; ``None`` when persistence failed."""
+@dataclass(frozen=True, slots=True)
+class SaveOutcome:
+    """The three-way result of a best-effort run save (#2464).
+
+    ``saved`` — the row committed; its parity settle may still be running.
+    ``failed`` — the write stopped (rejected payload, database error,
+    command timeout); nothing will land.
+    ``unknown`` — the caller stopped waiting before the insert committed.
+    The writer loop keeps going uncancelled, so the row may still appear;
+    a caller must never present this as "not saved".
+    """
+
+    status: Literal["saved", "failed", "unknown"]
+    run_id: int | None = None
+
+
+SAVE_FAILED = SaveOutcome(status="failed")
+SAVE_UNKNOWN = SaveOutcome(status="unknown")
+
+
+def persist_run_payload_sync(payload: Mapping[str, Any]) -> SaveOutcome:
+    """Write a canonical persist payload from a worker thread; ``SaveOutcome`` says what actually happened."""
     return _persist_sync(lambda: record_from_payload(payload), source=str(payload.get("source")))
 
 
@@ -53,8 +74,8 @@ def persist_engine_response_sync(
     requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,
     execution_config: Mapping[str, Any] | None = None,
-) -> int | None:
-    """Shape a completed engine response into its row and write it; ``None`` when persistence failed.
+) -> SaveOutcome:
+    """Shape a completed engine response into its row and write it; ``SaveOutcome`` says what actually happened.
 
     A report the pure builder refuses (no producer timestamps, a ledger that
     does not reconcile) is a persistence failure like any other: it logs and
@@ -92,7 +113,7 @@ def _persist_sync(make_record: Callable[[], BacktestRunRecord], *, source: str) 
         record = make_record()
     except Exception:
         logger.exception("[RUNS] Payload rejected, run not persisted (source=%s)", source)
-        return None
+        return SAVE_FAILED
     try:
         inserted: list[repo.InsertOutcome] = []
         outcome = run_sync(_insert_and_settle(record, inserted))
@@ -116,16 +137,16 @@ def _persist_sync(make_record: Callable[[], BacktestRunRecord], *, source: str) 
                 source,
                 exc,
             )
-            return inserted[0].run_id
+            return SaveOutcome(status="saved", run_id=inserted[0].run_id)
         logger.warning("[RUNS] Run persistence outcome unknown (source=%s): %s", source, exc)
-        return None
+        return SAVE_UNKNOWN
     except Exception:
         logger.exception("[RUNS] Run not persisted (source=%s)", source)
-        return None
-    return outcome.run_id
+        return SAVE_FAILED
+    return SaveOutcome(status="saved", run_id=outcome.run_id)
 
 
-async def persist_run_payload(payload: Mapping[str, Any]) -> int | None:
+async def persist_run_payload(payload: Mapping[str, Any]) -> SaveOutcome:
     """The coroutine form of :func:`persist_run_payload_sync`, safe on any event loop."""
     return await asyncio.to_thread(persist_run_payload_sync, payload)
 
