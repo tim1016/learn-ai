@@ -72,27 +72,26 @@ def isolated_orchestrator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
 
 async def test_a_cancel_before_anything_starts_never_creates_a_workspace(
     isolated_orchestrator: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launched: list[object] = []
 
     async def fake_post_launch(request: object) -> None:  # pragma: no cover - must not run
         launched.append(request)
 
-    service.post_launch = fake_post_launch  # type: ignore[assignment]
-    try:
-        with pytest.raises(LeanRunCancelled):
-            await run_trusted_sample(
-                _synthetic_request("cancel_pre_start"),
-                cancel_requested=lambda: True,
-            )
-    finally:
-        del service.post_launch
+    monkeypatch.setattr(service, "post_launch", fake_post_launch)
+    with pytest.raises(LeanRunCancelled):
+        await run_trusted_sample(
+            _synthetic_request("cancel_pre_start"),
+            cancel_requested=lambda: True,
+        )
 
     assert launched == []
 
 
 async def test_a_cancel_during_staging_removes_the_workspace_and_never_launches(
     isolated_orchestrator: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     flag = {"cancel": False}
     phases: list[str] = []
@@ -107,16 +106,13 @@ async def test_a_cancel_during_staging_removes_the_workspace_and_never_launches(
     async def fake_post_launch(request: object) -> None:  # pragma: no cover - must not run
         launched.append(request)
 
-    service.post_launch = fake_post_launch  # type: ignore[assignment]
-    try:
-        with pytest.raises(LeanRunCancelled) as cancelled:
-            await run_trusted_sample(
-                _synthetic_request("cancel_while_staging"),
-                on_phase=on_phase,
-                cancel_requested=lambda: flag["cancel"],
-            )
-    finally:
-        del service.post_launch
+    monkeypatch.setattr(service, "post_launch", fake_post_launch)
+    with pytest.raises(LeanRunCancelled) as cancelled:
+        await run_trusted_sample(
+            _synthetic_request("cancel_while_staging"),
+            on_phase=on_phase,
+            cancel_requested=lambda: flag["cancel"],
+        )
 
     assert "cancelled before the LEAN container launched" in str(cancelled.value)
     assert launched == []
@@ -135,6 +131,7 @@ async def test_a_cancel_during_staging_removes_the_workspace_and_never_launches(
 
 async def test_a_cancel_after_the_launch_runs_to_completion_and_is_acknowledged_once(
     isolated_orchestrator: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     flag = {"cancel": False}
     acknowledgments: list[str] = []
@@ -152,15 +149,12 @@ async def test_a_cancel_after_the_launch_runs_to_completion_and_is_acknowledged_
             log_tail="crashed",
         )
 
-    service.post_launch = slow_container  # type: ignore[assignment]
-    try:
-        result = await run_trusted_sample(
-            _synthetic_request("cancel_too_late"),
-            cancel_requested=lambda: flag["cancel"],
-            on_cancel_too_late=acknowledgments.append,
-        )
-    finally:
-        del service.post_launch
+    monkeypatch.setattr(service, "post_launch", slow_container)
+    result = await run_trusted_sample(
+        _synthetic_request("cancel_too_late"),
+        cancel_requested=lambda: flag["cancel"],
+        on_cancel_too_late=acknowledgments.append,
+    )
 
     # The finished result is kept: the acknowledgement never becomes a
     # false "cancelled", and it is delivered exactly once (the persisting
