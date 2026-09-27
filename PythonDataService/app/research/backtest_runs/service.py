@@ -48,7 +48,7 @@ def persist_engine_response_sync(
     resolution: str,
     parameters: Mapping[str, Any],
     duration_ms: int,
-    commission_per_order: float = 0.0,
+    commission_per_order: float | None = None,
     compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,

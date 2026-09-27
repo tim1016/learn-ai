@@ -97,7 +97,8 @@ function backtestPayload(): Record<string, unknown> {
     requested_engine: "both",
     fill_mode: "next_bar_open",
     initial_cash: 75_000,
-    commission_per_order: 0.35,
+    // A paired run sends no flat commission: both engines charge the pinned
+    // IBKR equity fee model (#2465).
     params: { symbol: "QQQ", lookback: 8 },
     auto_fetch: true,
     resolution: "minute",
@@ -322,7 +323,11 @@ describe("Strategy Lab Workbench", () => {
     expect(field("End date").value).toBe("2026-04-02");
     expect(field(/^lookback/).value).toBe("8");
     expect(field(/^Initial cash/).value).toBe("75000");
-    expect(field(/^Commission/).value).toBe("0.35");
+    // A paired run's fees are the pinned IBKR equity fee model — the rail
+    // explains that instead of an editable commission it would ignore (#2465).
+    expect(root.querySelector("details.advanced")?.textContent).toContain(
+      "Both engines charge the pinned IBKR equity fee model",
+    );
     expect((root.querySelector("#strategy-picker") as HTMLSelectElement).value).toBe("ema_crossover_signal");
     expect(root.querySelector(".ticker-box__identity .asset-identity__symbol")?.textContent).toContain("QQQ");
     http.verify();
@@ -813,7 +818,13 @@ describe("Strategy Lab saved configuration", () => {
     expect(root.querySelector<HTMLSelectElement>("details.advanced select")?.value).toBe("next_bar_open");
     const executionInputs = root.querySelectorAll<HTMLInputElement>("details.advanced fieldset:last-of-type input");
     expect(executionInputs[0]?.value).toBe("75000");
-    expect(executionInputs[1]?.value).toBe("0.35");
+    // The restored run is paired: its commission is the pinned IBKR equity
+    // fee model, shown as the rail's note rather than a number it never
+    // applied (#2465).
+    expect(executionInputs).toHaveLength(1);
+    expect(root.querySelector("details.advanced")?.textContent).toContain(
+      "Both engines charge the pinned IBKR equity fee model",
+    );
     http.verify();
   });
 
@@ -829,7 +840,7 @@ describe("Strategy Lab saved configuration", () => {
       parameters: { symbol: "QQQ", lookback: 8 },
       fillMode: "next_bar_open",
       initialCash: 75_000,
-      commissionPerOrder: 0.35,
+      commissionPerOrder: 0,
     });
     expect(inputs?.dataPolicy?.symbol).toBe("QQQ");
   });

@@ -40,7 +40,7 @@ REALIZED_EQUITY_ATOL = 1e-6
 def persisted_trade_net_pnl(
     *,
     trade: EngineTradeResponse,
-    commission_per_order: float,
+    commission_per_order: float | None,
     compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None,
 ) -> float:
     """Return persisted round-trip dollar P&L under the executed fee policy.
@@ -78,7 +78,10 @@ def build_engine_run_payload(
     resolution: str,
     parameters: Mapping[str, Any],
     duration_ms: int,
-    commission_per_order: float = 0.0,
+    # 0.0 keeps the legacy default for flat-commission callers; ``None`` is
+    # explicit "not applicable" — a paired run whose fees the pinned IBKR
+    # tier describes, not a number (#2465).
+    commission_per_order: float | None = 0.0,
     compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,

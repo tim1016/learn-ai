@@ -303,6 +303,17 @@ class EngineBacktestRequest(BaseModel):
             or self.force_flat_at is not None
         ):
             raise ValueError("us-equity-raw-ibkr-v1 does not permit execution overrides")
+        # The profile pins fees the same way it pins fills: a flat commission
+        # the run would ignore is a conflict at the boundary, not a default to
+        # carry (#2465). Only an explicitly supplied value can disagree —
+        # ``model_fields_set`` is exactly the set the caller named.
+        if "commission_per_order" in self.model_fields_set:
+            raise ValueError(
+                "us-equity-raw-ibkr-v1 does not permit a flat commission: both engines "
+                "charge the pinned IBKR equity fee model (IbkrEquityCommissionModel, "
+                "$0.005/share with a $1.00 minimum and a 0.5%-of-value cap); "
+                "omit commission_per_order"
+            )
         return self
 
     @model_validator(mode="after")

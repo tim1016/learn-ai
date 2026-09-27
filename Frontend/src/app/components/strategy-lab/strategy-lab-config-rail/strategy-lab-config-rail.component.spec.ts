@@ -252,6 +252,38 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(advanced.textContent).toContain("Fills and fees are defined by the aligned LEAN template.");
   });
 
+  it("shows the pinned IBKR fee model instead of an editable commission for a paired run", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("engine", "both");
+    fixture.detectChanges();
+
+    const advanced = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced disclosure is missing");
+    advanced.open = true;
+    fixture.detectChanges();
+
+    expect(advanced.textContent).not.toContain("Commission / order");
+    expect(advanced.textContent).toContain(
+      "Both engines charge the pinned IBKR equity fee model — commission is not editable.",
+    );
+  });
+
+  it("keeps the editable commission for the Python engine", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("engine", "python");
+    fixture.detectChanges();
+
+    const advanced = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced disclosure is missing");
+    advanced.open = true;
+    fixture.detectChanges();
+
+    expect(advanced.textContent).toContain("Commission / order");
+    expect(advanced.textContent).not.toContain("pinned IBKR equity fee model");
+  });
+
   it("offers the QCAlgorithm editor only when an engine that runs LEAN is selected", async () => {
     const fixture = await createRail(false, "lean");
     const requested = vi.fn();
