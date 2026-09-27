@@ -468,7 +468,12 @@ statistics artifacts before Phase 4 exposes arbitrary user source.
 ### Reproducibility manifest
 
 Before launch, the orchestrator retains catalog-admitted lake bytes in the run's
-private `workspace/data` folder (#2455), using the existing workspace mount.
+private `workspace/data` folder (#2455). All orchestrated runs mount that data
+subtree read-only over the writable workspace parent, so custom strategy code
+cannot replace and restore an input between receipt checks. Output remains
+writable. Preflight requires the launcher's `read_only_workspace_data` capability;
+an older launcher refuses before workspace creation and must be restarted on
+the updated code.
 The existing root, adjustment-mode, and pinned-image metadata proof runs under
 the metadata-bundle lock before capture. LEAN consumes these copies, so a shared
 lake file changing and then reverting during execution cannot change its inputs.

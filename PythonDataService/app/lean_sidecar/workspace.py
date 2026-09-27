@@ -2,8 +2,9 @@
 
 Every LEAN Lab run owns a fresh directory under the configured artifacts
 root. It is the **only** thing under the artifacts root the launcher
-mounts into the LEAN container, and the container's only read-write
-mount. This module is the single source of truth for what lives where.
+mounts into the LEAN container. Its parent mount is writable; the orchestrator
+requires a read-only bind over ``data/`` to protect the retained inputs.
+This module is the single source of truth for what lives where.
 
 Lake runs retain admitted inputs inside this workspace. The launcher's
 optional shared-lake mount remains available for direct launch requests;

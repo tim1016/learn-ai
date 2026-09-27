@@ -84,6 +84,10 @@ def orchestrator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
     from app.services import lean_sidecar_service as service
 
     artifacts_root = tmp_path / "artifacts"
+    from app.lean_sidecar import launcher_client
+    monkeypatch.setattr(launcher_client, "get_healthz", AsyncMock(return_value={
+        "status": "ok", "capabilities": list(LAUNCHER_CAPABILITIES),
+    }))
     artifacts_root.mkdir(parents=True)
     launch_requests: list[LaunchRequest] = []
 
@@ -194,6 +198,7 @@ async def test_lake_run_reads_an_admitted_private_snapshot(
     assert config["data-folder"] == "/lean-run/data"
 
     assert [r.mount_lake_read_only for r in orchestrator.launch_requests] == [False]
+    assert orchestrator.launch_requests[0].read_only_workspace_data
 
     manifest = _read_manifest(result.workspace_root)
     staged = manifest["staged_zip_sha256"]
@@ -587,13 +592,13 @@ async def test_a_raw_request_does_reach_the_lake_with_the_flag_on(
 
 
 @pytest.mark.asyncio
-async def test_retained_inputs_need_only_the_existing_workspace_contract(
+async def test_retained_inputs_refuse_stale_launcher_before_creating_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     orchestrator: SimpleNamespace,
     _launcher_is_stale: None,
 ) -> None:
-    """No shared mount is requested, so old lake-mount capability is unnecessary."""
+    """An old launcher must not silently drop the read-only data flag."""
     from app.config import settings
     from app.services import lean_sidecar_service as service
 
@@ -601,9 +606,10 @@ async def test_retained_inputs_need_only_the_existing_workspace_contract(
     seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
 
-    result = await service.run_trusted_sample(_request("stale-launcher-run"))
-    assert result.workspace_root.exists()
-    assert not orchestrator.launch_requests[0].mount_lake_read_only
+    with pytest.raises(service.LeanSidecarServiceError, match="workspace_data_read_only_unsupported_by_launcher"):
+        await service.run_trusted_sample(_request("stale-launcher-run"))
+    assert not (orchestrator.artifacts_root / "stale-launcher-run").exists()
+    assert not orchestrator.launch_requests
 
 
 @pytest.mark.asyncio

@@ -51,8 +51,12 @@ from app.lean_sidecar.lake_mount import (
     resolve_lake_artifacts,
     verify_lake_metadata_bundle,
 )
-from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
-from app.lean_sidecar.launcher_client import post_launch
+from app.lean_sidecar.launcher.models import (
+    LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA,
+    LaunchRequest,
+    LaunchResponse,
+)
+from app.lean_sidecar.launcher_client import LauncherCapabilityUnsupported, assert_launcher_supports, post_launch
 from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER, LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
@@ -565,11 +569,6 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
 
 async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeArtifacts:
     """Resolve lake inputs before creating a workspace; retain them before launch."""
-    from app.lean_sidecar.launcher_client import get_healthz
-
-    # Preserve the preflight transport check; a private workspace snapshot
-    # needs no lake-mount capability from the launcher.
-    await get_healthz()
     try:
         return await asyncio.to_thread(
             resolve_lake_artifacts,
@@ -929,6 +928,10 @@ async def _run_trusted_sample(
     # with the *same* id, which is not a fresh-id problem and reads like
     # one. Failing here leaves the id reusable.
     _raise_if_cancelled()
+    try:
+        await assert_launcher_supports(LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA)
+    except LauncherCapabilityUnsupported as exc:
+        raise LeanSidecarServiceError(f"workspace_data_read_only_unsupported_by_launcher: {exc}") from exc
     lake_artifacts: LakeArtifacts | None = None
     if request.data_policy.source == "polygon" and request.data_policy.provider_kind != "fixture":
         lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
@@ -1105,6 +1108,7 @@ async def _run_trusted_sample(
         # The run consumes retained workspace inputs only; no shared lake
         # mount can expose a later generation during execution.
         mount_lake_read_only=False,
+        read_only_workspace_data=True,
         price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
         # Retain the server-resolved source identity in the launch receipt.
         data_root_id=active_root_id(),

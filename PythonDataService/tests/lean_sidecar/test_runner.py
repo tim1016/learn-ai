@@ -47,6 +47,18 @@ def _allow_dummy_digest(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestBuildCommand:
+    def test_retained_data_is_read_only_inside_writable_workspace(
+        self, tmp_artifacts_root: Path, _allow_dummy_digest: None,
+    ) -> None:
+        ws = resolve_workspace("retained_data", tmp_artifacts_root)
+        ws.ensure_layout()
+        plan = build_command(ws, DUMMY_DIGEST, read_only_workspace_data=True)
+        mounts = [plan.argv[i + 1] for i, token in enumerate(plan.argv) if token == "-v"]
+        assert mounts == [
+            f"{ws.workspace_dir}:/lean-run:rw",
+            f"{ws.data_dir}:/lean-run/data:ro",
+        ]
+
     def test_contains_mandatory_security_flags(
         self,
         tmp_artifacts_root: Path,

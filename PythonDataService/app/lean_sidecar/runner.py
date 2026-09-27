@@ -404,6 +404,7 @@ def build_command(
     hardening_profile: HardeningProfile | None = None,
     allowed_image_digests: frozenset[str] | None = None,
     lake_mount: LakeMount | None = None,
+    read_only_workspace_data: bool = False,
 ) -> RunnerPlan:
     """Construct the `podman run` argv for this workspace + image.
 
@@ -527,6 +528,11 @@ def build_command(
             f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
         ]
     )
+    if read_only_workspace_data:
+        # Overlay the data subtree after the writable parent. There is no
+        # writable alias inside the container through which user code can
+        # replace and restore an input between receipt checks.
+        argv.extend(["-v", f"{workspace.data_dir}:{CONTAINER_WORKSPACE_MOUNT}/data:ro"])
     if lake_mount is not None:
         # The lake is the run's data folder in lake mode; the workspace
         # mount above stays read-write for output/, launcher/, and the
