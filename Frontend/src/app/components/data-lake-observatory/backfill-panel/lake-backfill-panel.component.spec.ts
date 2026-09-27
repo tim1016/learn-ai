@@ -97,7 +97,7 @@ async function renderPanel(options: PanelOptions = {}) {
     providers: [
       {
         provide: JobsService,
-        useValue: { startJob, cancelJob, onEvent, jobs },
+        useValue: { startJob, cancelJob, onEvent, jobs, historyTrimmed: signal(new Set<string>()) },
       },
       provideFakeVendorCatalog(alpaca),
       provideFakeTickerCatalog(lake),
