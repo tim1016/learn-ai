@@ -1,4 +1,10 @@
-"""Read-only data-lake mount for LEAN sidecar runs (flag-gated).
+"""Lake input resolution and the launcher's optional read-only lake mount.
+
+The orchestrator now retains admitted inputs in its private workspace (#2455),
+verifying the metadata bundle under its lock before copying. ``LakeArtifacts``
+describes those source files and then their retained paths. The mount design
+below documents the still-supported direct launcher request; orchestration
+does not use that shared mount or its declared-input-only tradeoff.
 
 Today a sidecar run *stages* Polygon-canonical bars: it materializes
 missing days into the policy-keyed bar store and byte-copies the day
@@ -296,11 +302,9 @@ def verify_lake_metadata_bundle(
 class LakeArtifacts:
     """Exactly which lake files this run exposes to LEAN.
 
-    Paths only, deliberately: in lake mode nothing is copied or
-    re-encoded, so the run has no use for decoded bars — LEAN decodes
-    them itself from the mount. Resolving the set is pure ``exists()``
-    checks, which keeps a long window off the "unzip every day on the
-    event loop" path the staging mode needs.
+    Paths only: the orchestrator retains admitted bytes without re-encoding
+    and LEAN decodes them itself. Resolution also validates catalog admission,
+    coverage, and adjustment versions before the private capture begins.
     """
 
     lake_root: Path

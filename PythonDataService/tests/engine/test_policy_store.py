@@ -180,3 +180,43 @@ def test_snapshot_minute_trade_zips_ignores_symlink_that_escapes_root(tmp_path: 
             adjusted=False,
             session="regular",
         )
+
+
+@pytest.mark.parametrize("receipt_kind", ["python_fixture", "lean_manifest"])
+def test_receipt_digest_and_size_come_from_one_open_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_kind: str,
+) -> None:
+    """Atomic replacement after hashing cannot mix an old digest with a new size."""
+    import hashlib
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+    from typing import Any
+
+    from app.lean_sidecar.manifest import hash_staged_files
+
+    path = tmp_path / "equity/usa/minute/spy/20260105_trade.zip"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"old")
+    replacement = path.with_suffix(".replacement")
+    replacement.write_bytes(b"a different generation")
+    original_open = Path.open
+
+    @contextmanager
+    def replace_on_close(self: Path, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        with original_open(self, *args, **kwargs) as handle:
+            yield handle
+        if self == path and replacement.exists():
+            replacement.replace(path)
+
+    monkeypatch.setattr(Path, "open", replace_on_close)
+    if receipt_kind == "python_fixture":
+        receipt = snapshot_minute_trade_zips(
+            [tmp_path], symbol="SPY", start=date(2026, 1, 5), end=date(2026, 1, 5),
+            adjusted=False, session="regular",
+        )["files"][0]
+        digest, size = receipt["sha256"], receipt["size_bytes"]
+    else:
+        receipt = hash_staged_files(tmp_path, [path])[0]
+        digest, size = receipt.sha256, receipt.size_bytes
+    assert digest == hashlib.sha256(b"old").hexdigest()
+    assert size == 3

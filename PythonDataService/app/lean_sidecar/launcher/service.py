@@ -234,6 +234,7 @@ def launch(
                 hardening_profile=HardeningProfile(request.hardening_profile),
                 allowed_image_digests=allowed_image_digests,
                 lake_mount=lake_mount,
+                read_only_workspace_data=request.read_only_workspace_data,
             )
         else:
             plan = build_command(
@@ -243,6 +244,7 @@ def launch(
                 hardening_flags=tuple(request.hardening_flags),
                 allowed_image_digests=allowed_image_digests,
                 lake_mount=lake_mount,
+                read_only_workspace_data=request.read_only_workspace_data,
             )
     except RunnerConfigurationError as e:
         # The runner itself decides which configuration is acceptable

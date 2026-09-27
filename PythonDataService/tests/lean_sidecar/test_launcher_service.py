@@ -45,6 +45,28 @@ def _make_request(run_id: str, digest: str = DUMMY_DIGEST) -> LaunchRequest:
 
 
 class TestLaunchValidation:
+    @pytest.mark.parametrize("profile", [None, "minimal"])
+    def test_launch_preserves_read_only_data_mount(
+        self, tmp_artifacts_root: Path, monkeypatch: pytest.MonkeyPatch, profile: str | None,
+    ) -> None:
+        from app.lean_sidecar.launcher import service
+        from app.lean_sidecar.runner import RunnerPlan, RunResult
+
+        ws = resolve_workspace("read_only_data", tmp_artifacts_root)
+        ws.ensure_layout()
+        plans: list[RunnerPlan] = []
+
+        def execute(plan: RunnerPlan, **_kwargs: object) -> RunResult:
+            plans.append(plan)
+            return RunResult(exit_code=1, duration_ms=1, timed_out=False, log_tail="test")
+
+        monkeypatch.setattr(service, "execute", execute)
+        request = _make_request(ws.run_id).model_copy(update={
+            "read_only_workspace_data": True, "hardening_profile": profile,
+        })
+        launch(request, artifacts_root=tmp_artifacts_root, allowed_image_digests=frozenset({DUMMY_DIGEST}))
+        assert f"{ws.data_dir}:/lean-run/data:ro" in plans[0].argv
+
     def test_pydantic_rejects_bad_run_id(self) -> None:
         with pytest.raises(ValidationError):
             _make_request("../escape")

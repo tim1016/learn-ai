@@ -19,6 +19,7 @@ contract, staging, launcher, container security shape, and manifest.
 
 from __future__ import annotations
 
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -45,6 +46,33 @@ pytestmark = [
     pytest.mark.requires_lean_image,
     pytest.mark.slow,
 ]
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_data_mount_blocks_replacement_but_allows_results(
+    tmp_artifacts_root: Path, _allow_pinned_digest_or_skip: str, read_only: bool,
+) -> None:
+    """Exercise the actual container mount with the same owning UID as LEAN."""
+    from app.lean_sidecar.runner import build_command
+
+    ws = resolve_workspace("data_mount_probe", tmp_artifacts_root)
+    ws.ensure_layout()
+    source = ws.data_dir / "input.txt"
+    source.write_text("original")
+    plan = build_command(ws, _allow_pinned_digest_or_skip, read_only_workspace_data=read_only)
+    image_index = plan.argv.index(plan.image_reference)
+    probe = (
+        'if printf replacement > /lean-run/data/input.txt; then '
+        'printf writable > /lean-run/output/probe.txt; '
+        'else printf protected > /lean-run/output/probe.txt; fi'
+    )
+    result = subprocess.run(
+        [*plan.argv[:image_index], "--entrypoint=/bin/sh", plan.image_reference, "-ec", probe],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (ws.output_dir / "probe.txt").read_text() == ("protected" if read_only else "writable")
+    assert source.read_text() == ("original" if read_only else "replacement")
 
 
 @pytest.fixture
@@ -195,10 +223,12 @@ def _assert_trusted_sample_run(ws: Workspace, response: LaunchResponse) -> None:
 
 
 class TestEndToEndTrustedSample:
+    @pytest.mark.parametrize("read_only_data", [False, True])
     def test_buy_and_hold_runs_clean(
         self,
         tmp_artifacts_root: Path,
         _allow_pinned_digest_or_skip: str,
+        read_only_data: bool,
     ) -> None:
         """Baseline E2E: launch with only the mandatory security shape.
 
@@ -213,7 +243,7 @@ class TestEndToEndTrustedSample:
         digest = _allow_pinned_digest_or_skip
         _stage_trusted_sample(ws, digest)
         response = launch(
-            _base_request(run_id, digest),
+            _base_request(run_id, digest, read_only_workspace_data=read_only_data),
             artifacts_root=tmp_artifacts_root,
         )
         _assert_trusted_sample_run(ws, response)

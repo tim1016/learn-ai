@@ -25,7 +25,7 @@ import logging
 import shutil
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -33,6 +33,8 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import active_root_id
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
@@ -43,14 +45,18 @@ from app.lean_sidecar.config import (
     runtime_provenance_for_digest,
 )
 from app.lean_sidecar.lake_mount import (
-    CONTAINER_LAKE_DATA_MOUNT,
     LakeArtifacts,
     LakeMountError,
     data_plane_lake_root,
     resolve_lake_artifacts,
+    verify_lake_metadata_bundle,
 )
-from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
-from app.lean_sidecar.launcher_client import post_launch
+from app.lean_sidecar.launcher.models import (
+    LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA,
+    LaunchRequest,
+    LaunchResponse,
+)
+from app.lean_sidecar.launcher_client import LauncherCapabilityUnsupported, assert_launcher_supports, post_launch
 from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER, LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
@@ -562,32 +568,7 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
 
 
 async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeArtifacts:
-    """Resolve the run's lake artifacts, or refuse with a typed error.
-
-    Two failure classes, both translated into
-    :class:`LeanSidecarServiceError` so the routers' existing mapping
-    applies instead of the raw exception escaping as an unstructured
-    500:
-
-    * the launcher is too old to mount the lake at all — checked first,
-      because no amount of lake coverage rescues a launcher that will
-      silently drop the mount;
-    * the lake cannot fully serve the requested window.
-
-    Called before the workspace is created, so a refusal leaves the
-    ``run_id`` unused and the operator's retry with the same id works.
-    """
-    from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITY_LAKE_MOUNT
-    from app.lean_sidecar.launcher_client import (
-        LauncherCapabilityUnsupported,
-        assert_launcher_supports,
-    )
-
-    try:
-        await assert_launcher_supports(LAUNCHER_CAPABILITY_LAKE_MOUNT)
-    except LauncherCapabilityUnsupported as e:
-        raise LeanSidecarServiceError(f"lake_mount_unsupported_by_launcher: {e}") from e
-
+    """Resolve lake inputs before creating a workspace; retain them before launch."""
     try:
         return await asyncio.to_thread(
             resolve_lake_artifacts,
@@ -604,8 +585,8 @@ def _read_compatibility_fixture(
     request: TrustedRunRequest,
 ) -> tuple[list[Path], list[tuple[date, list[TradeBar]]]]:
     """Admit and decode frozen lake inputs on a worker thread."""
-    from app.engine.data.lean_format import LeanMinuteDataReader
     from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
+    from app.research.sweep.snapshot import ManifestBoundMinuteReader
 
     store_roots = resolve_data_roots(source="polygon", adjusted=request.data_policy.adjusted)
     receipt = snapshot_minute_trade_zips(
@@ -622,7 +603,10 @@ def _read_compatibility_fixture(
         actual=receipt,
         phase="source",
     )
-    reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
+    reader = ManifestBoundMinuteReader(
+        store_roots, {item["path"]: item["sha256"] for item in receipt["files"]},
+        session=request.data_policy.session,
+    )
     bars_by_date = [
         (trading_date, reader.read_day(request.symbol, trading_date))
         for trading_date in reader.iter_dates(request.symbol, request.start_date, request.end_date)
@@ -649,10 +633,8 @@ def _stage_workspace_data(
     databases, and the empty corporate-action directories. Returns
     ``(bar_zip_paths, quote_zip_paths, daily_path)``.
 
-    A ``DATA_LAKE_ENABLED`` run bypasses this function entirely — the
-    lake mount replaces the copies — which is why the whole staging
-    sequence lives here as one named unit rather than inline in the
-    orchestrator.
+    A ``DATA_LAKE_ENABLED`` run retains the lake's admitted bytes directly
+    through ``_retain_lake_inputs`` instead of synthesizing these files.
     """
     if store_roots is not None:
         bar_zip_paths = list(
@@ -696,20 +678,47 @@ def _stage_workspace_data(
     return bar_zip_paths, quote_zip_paths, daily_path
 
 
-def _preserve_lake_statistics_input(workspace: Workspace, artifacts: LakeArtifacts) -> None:
-    """Keep this run's admitted rate file for native-statistics verification.
+def _retain_lake_inputs(
+    workspace: Workspace, artifacts: LakeArtifacts, request: TrustedRunRequest,
+) -> LakeArtifacts:
+    """Retain admitted bytes privately so shared A→B→A changes cannot reach LEAN.
 
-    LEAN still reads the lake mount. The small private copy lets the existing
-    verifier reproduce this run later without depending on a mutable lake.
+    These are run evidence, not a second historical store: every payload comes
+    from the lake's committed-byte reader, with no provider fetch or re-encode.
     """
-    from app.data_lake.admission import read_committed_bytes
+    # Preserve the launcher's former image/root proof while the caller holds
+    # the metadata-bundle lock. Catalog admission alone does not pin an image.
+    verify_lake_metadata_bundle(
+        lake_root=artifacts.lake_root, base_root=artifacts.lake_root.parent.parent,
+        expected_data_root_id=active_root_id(),
+        expected_price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
+        expected_lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+    )
+    retained_bytes = 0
 
-    if artifacts.interest_rate_path is None:
-        return
-    payload = read_committed_bytes(artifacts.interest_rate_path)
-    target = workspace.data_dir / artifacts.interest_rate_path.relative_to(artifacts.lake_root)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)
+    def retain(path: Path) -> Path:
+        nonlocal retained_bytes
+        payload = read_committed_bytes(path)
+        retained_bytes += len(payload)
+        if retained_bytes > DEFAULT_RUN_LIMITS.workspace_max_mb * 1024 * 1024:
+            raise LeanSidecarServiceError("data_snapshot_unavailable: retained inputs exceed workspace size limit")
+        target = workspace.data_dir / path.relative_to(artifacts.lake_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return target
+
+    stage_empty_corporate_action_dirs(workspace)
+    return replace(
+        artifacts, lake_root=workspace.data_dir,
+        trade_zip_paths=tuple(retain(path) for path in artifacts.trade_zip_paths),
+        quote_zip_paths=tuple(retain(path) for path in artifacts.quote_zip_paths),
+        daily_zip_path=retain(artifacts.daily_zip_path),
+        factor_file_paths=tuple(retain(path) for path in artifacts.factor_file_paths),
+        map_file_paths=tuple(retain(path) for path in artifacts.map_file_paths),
+        market_hours_path=retain(artifacts.market_hours_path),
+        symbol_properties_path=retain(artifacts.symbol_properties_path),
+        interest_rate_path=retain(artifacts.interest_rate_path) if artifacts.interest_rate_path is not None else None,
+    )
 
 
 async def run_trusted_sample(
@@ -919,6 +928,10 @@ async def _run_trusted_sample(
     # with the *same* id, which is not a fresh-id problem and reads like
     # one. Failing here leaves the id reusable.
     _raise_if_cancelled()
+    try:
+        await assert_launcher_supports(LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA)
+    except LauncherCapabilityUnsupported as exc:
+        raise LeanSidecarServiceError(f"workspace_data_read_only_unsupported_by_launcher: {exc}") from exc
     lake_artifacts: LakeArtifacts | None = None
     if request.data_policy.source == "polygon" and request.data_policy.provider_kind != "fixture":
         lake_artifacts = await _resolve_lake_artifacts_or_refuse(request)
@@ -965,7 +978,7 @@ async def _run_trusted_sample(
     store_roots: list[Path] | None = None
     # Decoded bars. Only the staging path needs them — it re-encodes
     # quote and daily zips from them — so lake mode leaves this empty
-    # rather than unzipping a window it is not going to write.
+    # because its admitted files are copied without decoding.
     bars_by_date: list[tuple[date, list[TradeBar]]] = []
     compatibility_fixture = bool(
         request.data_policy.provider_kind == "fixture"
@@ -1007,9 +1020,9 @@ async def _run_trusted_sample(
         # DATA_LAKE_ENABLED: the lake is the market-data authority. Its
         # artifacts were already resolved (and the run already refused
         # if they were not serveable) in the preflight above, before the
-        # workspace existed. Nothing to do here but record the window —
-        # no ``ensure_range``, no Polygon call, no byte-copy into the
-        # workspace. Fixture replays above are deliberately unaffected:
+        # workspace existed. Record the window here; retain the admitted
+        # bytes below without another provider call. Fixture replays above
+        # are deliberately unaffected:
         # their frozen recordings are the data authority for those runs,
         # and the lake has nothing to say about them.
         trading_dates = list(lake_artifacts.trading_dates)
@@ -1021,15 +1034,15 @@ async def _run_trusted_sample(
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
     if lake_artifacts is not None:
-        # LEAN reads these exact artifacts in
-        # place through the read-only lake mount the launcher adds, so
-        # the paths recorded here are lake paths, not workspace paths.
+        # Capture each admitted payload into the run's existing private data
+        # folder. LEAN reads that retained generation, never the mutable lake.
         try:
-            await asyncio.to_thread(_preserve_lake_statistics_input, workspace, lake_artifacts)
-        except Exception:
+            lake_artifacts = await asyncio.to_thread(_retain_lake_inputs, workspace, lake_artifacts, request)
+        except Exception as exc:
             # No container has launched and this run created the directory.
-            # A failed admission or disk copy must leave the ID reusable.
             shutil.rmtree(workspace.root)
+            if isinstance(exc, (OSError, LakeAdmissionError, LakeMountError, CatalogUnavailableError)):
+                raise LeanSidecarServiceError(f"data_snapshot_unavailable: {exc}") from exc
             raise
         bar_zip_paths = list(lake_artifacts.trade_zip_paths)
         quote_zip_paths = list(lake_artifacts.quote_zip_paths)
@@ -1058,9 +1071,8 @@ async def _run_trusted_sample(
     # and ignores this parameter.
     bar_minutes_for_config = request.data_policy.strategy_bars.multiplier
     config = LeanConfig(
-        # Lake mode re-points LEAN's data folder at the read-only lake
-        # mount; every other run keeps the staged workspace subtree.
-        data_folder=(CONTAINER_LAKE_DATA_MOUNT if lake_artifacts is not None else CONTAINER_DATA_FOLDER),
+        # Both retained lake inputs and fixture replays live in this run.
+        data_folder=CONTAINER_DATA_FOLDER,
         parameters={
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
@@ -1074,6 +1086,15 @@ async def _run_trusted_sample(
     )
     config_path = stage_lean_config(workspace, config)
 
+    snapshot_args = dict(
+        workspace=workspace, bar_zip_paths=bar_zip_paths, quote_zip_paths=quote_zip_paths,
+        daily_path=daily_path, lake_artifacts=lake_artifacts,
+    )
+    try:
+        staged_data = await asyncio.to_thread(_snapshot_staged_data, **snapshot_args)
+    except OSError as exc:
+        shutil.rmtree(workspace.root)
+        raise LeanSidecarServiceError(f"data_snapshot_unavailable: {exc}") from exc
     started_ms = now_ms_utc()
     launch_request = LaunchRequest(
         run_id=request.run_id,
@@ -1084,19 +1105,12 @@ async def _run_trusted_sample(
         wall_clock_timeout_s=DEFAULT_RUN_LIMITS.wall_clock_timeout_s,
         workspace_max_mb=DEFAULT_RUN_LIMITS.workspace_max_mb,
         log_tail_bytes=DEFAULT_RUN_LIMITS.log_tail_bytes,
-        # Ask for the lake's read-only mount only when this run actually
-        # read the lake. The launcher resolves the host path itself and
-        # rejects the launch if it has none configured.
-        mount_lake_read_only=lake_artifacts is not None,
-        # The lake is partitioned by adjustment mode (#1839), so the
-        # launcher must be told which subtree to mount or an adjusted
-        # run would silently read raw bytes.
+        # The run consumes retained workspace inputs only; no shared lake
+        # mount can expose a later generation during execution.
+        mount_lake_read_only=False,
+        read_only_workspace_data=True,
         price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
-        # The physical root this process expects the lake to be (#1879, PR C
-        # of #1861) -- the launcher verifies it against the root marker and
-        # metadata receipt already on disk before mounting. Server-resolved,
-        # never taken from the request, matching every other data_root_id
-        # default in the codebase (issue #1876's fixed design decision).
+        # Retain the server-resolved source identity in the launch receipt.
         data_root_id=active_root_id(),
         # Intentionally NOT setting hardening_profile until we have a
         # verified fix for the wide-window SIGILL. The plumbing is in
@@ -1167,6 +1181,19 @@ async def _run_trusted_sample(
         raise
     finished_ms = now_ms_utc()
 
+    # Never replace the input receipt with a later shared-file generation.
+    # Changed or deleted inputs invalidate the result but retain launch hashes
+    # in the failure manifest so the attempted run remains auditable.
+    snapshot_error: str | None = None
+    try:
+        after_run = await asyncio.to_thread(_snapshot_staged_data, **snapshot_args)
+        if after_run != staged_data:
+            snapshot_error = "data_snapshot_changed: run inputs changed during LEAN execution"
+    except OSError as exc:
+        snapshot_error = f"data_snapshot_changed: run input unavailable after LEAN execution: {exc}"
+    if snapshot_error is not None:
+        failure_reason = f"{failure_reason}; {snapshot_error}" if failure_reason else snapshot_error
+
     # Phase 3a: parse LEAN's output into typed DTOs and persist
     # them. Only attempt parsing when the container actually produced
     # output (exit_code 0); a crashed run leaves nothing useful to
@@ -1176,7 +1203,7 @@ async def _run_trusted_sample(
     # than a silent missing-result.
     normalized: NormalizedResult | None = None
     normalized_path: Path | None = None
-    if response is not None and response.exit_code == 0:
+    if response is not None and response.exit_code == 0 and snapshot_error is None:
         if _cancel_requested():
             _acknowledge_cancel_too_late()
         _emit_phase("parsing_results")
@@ -1193,9 +1220,7 @@ async def _run_trusted_sample(
     manifest = _build_manifest(
         request=request,
         workspace=workspace,
-        bar_zip_paths=bar_zip_paths,
-        quote_zip_paths=quote_zip_paths,
-        daily_path=daily_path,
+        staged_data=staged_data,
         source_path=source_path,
         config_path=config_path,
         response=response,
@@ -1208,7 +1233,6 @@ async def _run_trusted_sample(
         # staged window match (or surface that they don't).
         staged_trading_dates=trading_dates,
         failure_reason=failure_reason,
-        lake_artifacts=lake_artifacts,
     )
     write_manifest(manifest, workspace.manifest_path)
 
@@ -1221,6 +1245,8 @@ async def _run_trusted_sample(
     # ``response`` is guaranteed non-None here because the only way to
     # leave it None is via ``launcher_exc``, which we re-raised above.
     assert response is not None
+    if snapshot_error is not None:
+        raise LeanSidecarServiceError(snapshot_error)
 
     # Persist the run. This must happen AFTER the manifest is finalized so
     # workspace_path is stable. A persistence failure is logged but does NOT
@@ -1289,40 +1315,13 @@ def _build_data_policy(request: TrustedRunRequest) -> DataPolicy:
     return request.data_policy
 
 
-def _build_manifest(
-    *,
-    request: TrustedRunRequest,
-    workspace: Workspace,
-    bar_zip_paths: list[Path],
-    quote_zip_paths: list[Path],
-    daily_path: Path,
-    source_path: Path,
-    config_path: Path,
-    response: LaunchResponse | None,
-    started_ms: int,
-    finished_ms: int,
-    normalized: NormalizedResult | None,
-    staged_trading_dates: list[date],
-    failure_reason: str | None = None,
-    lake_artifacts: LakeArtifacts | None = None,
-) -> RunManifest:
-    """Construct the full reproducibility manifest from the run.
-
-    Field-order mirrors the ADR §"Reproducibility manifest" bullet
-    list so a reviewer can grep against the authority doc.
-
-    Reviewer P1.3: ``response`` is optional. When the launcher
-    rejects or is unreachable before producing a ``LaunchResponse``,
-    the orchestrator still calls this builder so a *failure manifest*
-    lands on disk. The failure manifest records every byte that was
-    actually staged + a ``failure_reason`` note so the run remains
-    auditable and shows up in the sidebar instead of vanishing.
-    """
-    # The LEAN data root of this run: the staged workspace subtree, or
-    # the lake itself when the launcher mounted it read-only. Every hash
-    # below is taken relative to whichever one LEAN actually read, so
-    # ``path_in_workspace`` means the same thing to a manifest reader in
-    # both modes.
+def _snapshot_staged_data(
+    *, workspace: Workspace, bar_zip_paths: list[Path], quote_zip_paths: list[Path],
+    daily_path: Path, lake_artifacts: LakeArtifacts | None,
+) -> StagedDataManifest:
+    """Capture run inputs before launch and verify the same generation afterward."""
+    # Both paths describe this run's private data folder. Lake artifacts
+    # have already been rebased onto their retained workspace copies.
     if lake_artifacts is None:
         data_root = workspace.data_dir
         market_hours, symbol_properties, interest_rate = _list_metadata(workspace)
@@ -1331,30 +1330,14 @@ def _build_manifest(
         market_hours = lake_artifacts.market_hours_path
         symbol_properties = lake_artifacts.symbol_properties_path
         interest_rate = lake_artifacts.interest_rate_path
-    if response is not None:
-        exit_code = response.exit_code
-        is_clean_note = f"is_clean={response.is_clean}"
-        error_cats_note = f"lean_error_categories={sorted(response.lean_errors.keys())}"
-    else:
-        exit_code = None
-        is_clean_note = "is_clean=False"
-        error_cats_note = "lean_error_categories=[]"
-    failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
     bar_zips = hash_staged_files(data_root, [*bar_zip_paths, *quote_zip_paths, daily_path])
-    # PR A hardening: flatten the staged-zip hashes into a path-keyed
-    # dict. The ``StagedDataManifest.bar_zips`` tuple is the
-    # authoritative form; this index is a convenience for consumers
-    # that want "what's the sha for this path?" without traversing
-    # the tuple.
-    staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
     # Corporate actions are inputs, not decoration: LEAN reads factor
     # and map files off the data root and they change split/dividend
     # handling, so a factor-file update must move
-    # ``input_snapshot_sha256``. Lake mode is where this bites — the
-    # mounted lake carries real files whose contents can change under a
-    # rerun. (Staging mode creates these directories empty, so the
+    # ``input_snapshot_sha256``. Lake runs retain the admitted factor and
+    # map files. (Fixture staging creates these directories empty, so the
     # staged run keeps hashing nothing, exactly as before.)
-    staged_data = StagedDataManifest(
+    return StagedDataManifest(
         corporate_action_versions=dict(lake_artifacts.corporate_action_versions) if lake_artifacts is not None else {},
         # Phase 5c: include the quote zips alongside trade + daily
         # in the manifest's staged-data hash list. Reproducibility
@@ -1378,6 +1361,44 @@ def _build_manifest(
             hash_staged_files(data_root, [interest_rate])[0] if interest_rate is not None else None
         ),
     )
+
+
+def _build_manifest(
+    *,
+    request: TrustedRunRequest,
+    workspace: Workspace,
+    staged_data: StagedDataManifest,
+    source_path: Path,
+    config_path: Path,
+    response: LaunchResponse | None,
+    started_ms: int,
+    finished_ms: int,
+    normalized: NormalizedResult | None,
+    staged_trading_dates: list[date],
+    failure_reason: str | None = None,
+) -> RunManifest:
+    """Construct the full reproducibility manifest from the run.
+
+    Field-order mirrors the ADR §"Reproducibility manifest" bullet
+    list so a reviewer can grep against the authority doc.
+
+    Reviewer P1.3: ``response`` is optional. When the launcher
+    rejects or is unreachable before producing a ``LaunchResponse``,
+    the orchestrator still calls this builder so a *failure manifest*
+    lands on disk. The failure manifest records every byte that was
+    actually staged + a ``failure_reason`` note so the run remains
+    auditable and shows up in the sidebar instead of vanishing.
+    """
+    if response is not None:
+        exit_code = response.exit_code
+        is_clean_note = f"is_clean={response.is_clean and failure_reason is None}"
+        error_cats_note = f"lean_error_categories={sorted(response.lean_errors.keys())}"
+    else:
+        exit_code = None
+        is_clean_note = "is_clean=False"
+        error_cats_note = "lean_error_categories=[]"
+    failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
+    staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in staged_data.bar_zips}
     runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
     if runtime_provenance is None:
         raise LeanSidecarServiceError(f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}")

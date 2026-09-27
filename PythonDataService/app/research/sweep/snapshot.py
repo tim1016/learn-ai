@@ -21,9 +21,9 @@ Validated against: tests/research/sweep/test_snapshot.py.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Literal
@@ -219,6 +219,14 @@ class ManifestBoundMinuteReader(LeanMinuteDataReader):
     ) -> None:
         super().__init__(data_root, session=session)
         self._manifest = dict(manifest)
+
+    def iter_dates(self, symbol: str, start: date, end: date) -> Iterator[date]:
+        """Visit receipted dates even if their file vanished before enumeration."""
+        current = start
+        while current <= end:
+            if _minute_relative(symbol, current) in self._manifest or self._zip_path(symbol, current).exists():
+                yield current
+            current += timedelta(days=1)
 
     def read_day(self, symbol: str, trading_date: date) -> list[TradeBar]:
         zip_path = self._zip_path(symbol, trading_date)

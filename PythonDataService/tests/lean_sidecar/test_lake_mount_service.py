@@ -1,14 +1,13 @@
-"""Orchestrator behavior when a run reads the lake (#1834).
+"""Orchestrator behavior when a run retains admitted lake inputs (#2455).
 
 Drives the real ``run_trusted_sample`` with only the process boundaries
 faked (the launcher HTTP call, the .NET persist call, and — for the
 flag-off comparison — the image-metadata extraction and the bar store's
 Polygon refill). No container is launched.
 
-The pair of tests is the point: same request, same window, one with the
-flag on and one with it off, so "flag on reads the lake and stages
-nothing" and "flag off is unchanged" are asserted against each other
-rather than in isolation.
+Lake runs capture catalog-admitted bytes into their private workspace;
+fixture runs keep their existing staging path. Shared-file replacement
+must never change what a launched run consumes.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -85,6 +84,10 @@ def orchestrator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
     from app.services import lean_sidecar_service as service
 
     artifacts_root = tmp_path / "artifacts"
+    from app.lean_sidecar import launcher_client
+    monkeypatch.setattr(launcher_client, "get_healthz", AsyncMock(return_value={
+        "status": "ok", "capabilities": list(LAUNCHER_CAPABILITIES),
+    }))
     artifacts_root.mkdir(parents=True)
     launch_requests: list[LaunchRequest] = []
 
@@ -110,6 +113,9 @@ def orchestrator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
     monkeypatch.setattr(service, "assert_lean_persistence_source_current", lambda: None)
     monkeypatch.setattr(service, "post_launch", fake_post_launch)
     monkeypatch.setattr(service, "_persist_completed_run", fake_persist)
+    # These orchestration tests formerly faked the launcher's metadata proof.
+    # The proof now runs during capture; dedicated tests below exercise it.
+    monkeypatch.setattr(service, "verify_lake_metadata_bundle", Mock())
     return SimpleNamespace(artifacts_root=artifacts_root, launch_requests=launch_requests)
 
 
@@ -161,7 +167,7 @@ def _read_manifest(workspace_root: Path) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_lake_run_reads_the_mount_and_stages_nothing(
+async def test_lake_run_reads_an_admitted_private_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     orchestrator: SimpleNamespace,
@@ -186,12 +192,13 @@ async def test_lake_run_reads_the_mount_and_stages_nothing(
     result = await service.run_trusted_sample(_request("lake-mode-run"))
 
     workspace_data = result.workspace_root / "workspace" / "data"
-    assert list(workspace_data.rglob("*.zip")) == [], "lake mode must stage no bar zips into the workspace"
+    assert len(list(workspace_data.rglob("*.zip"))) == 5
 
     config = _read_config(result.workspace_root)
-    assert config["data-folder"] == CONTAINER_LAKE_DATA_MOUNT
+    assert config["data-folder"] == "/lean-run/data"
 
-    assert [r.mount_lake_read_only for r in orchestrator.launch_requests] == [True]
+    assert [r.mount_lake_read_only for r in orchestrator.launch_requests] == [False]
+    assert orchestrator.launch_requests[0].read_only_workspace_data
 
     manifest = _read_manifest(result.workspace_root)
     staged = manifest["staged_zip_sha256"]
@@ -518,20 +525,7 @@ async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
     orchestrator: SimpleNamespace,
     _launcher_supports_lake_mount: None,
 ) -> None:
-    """An adjusted run mounts the lake too, asserted at the service seam.
-
-    This used to assert the opposite: before #1866 the lake's live pipeline
-    was raw-only, so an adjusted run stayed on the pre-lake staging path
-    (bug #1839 found and fixed a case where that fell through and served raw
-    bytes under an adjusted policy). #1866 made the adjustment mode a path
-    segment, so the lake now holds a real ``polygon_split_adjusted`` root and
-    an adjusted run resolves it exactly like a raw run resolves its own.
-
-    The lake here is fully serveable in the adjusted mode, so a run that
-    consulted it should succeed and mount it: ``mount_lake_read_only`` on the
-    launch request, which is what a lake-mode run sets and a staging run
-    leaves alone.
-    """
+    """Retain the adjusted root under its basis lock, without a raw fallback."""
     from app.config import settings
     from app.services import lean_sidecar_service as service
 
@@ -572,7 +566,7 @@ async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
 
     assert resolved, "an adjusted run never consulted the lake"
     assert orchestrator.launch_requests
-    assert orchestrator.launch_requests[-1].mount_lake_read_only
+    assert not orchestrator.launch_requests[-1].mount_lake_read_only
 
 
 @pytest.mark.asyncio
@@ -582,13 +576,7 @@ async def test_a_raw_request_does_reach_the_lake_with_the_flag_on(
     orchestrator: SimpleNamespace,
     _launcher_supports_lake_mount: None,
 ) -> None:
-    """The counterpart, pinning that raw resolves its own root, not the adjusted one.
-
-    Identical setup, raw policy, against a lake that only holds an adjusted
-    root: this one must still mount the lake once its own raw root is
-    seeded, and the two tests together pin that each mode resolves its own
-    root rather than one mode leaking into the other's.
-    """
+    """A raw run retains bytes from its own root, not the adjusted root."""
     from app.config import settings
     from app.services import lean_sidecar_service as service
 
@@ -600,23 +588,17 @@ async def test_a_raw_request_does_reach_the_lake_with_the_flag_on(
     await service.run_trusted_sample(_request("raw-reaches-the-lake", adjusted=False))
 
     assert orchestrator.launch_requests
-    assert orchestrator.launch_requests[-1].mount_lake_read_only
+    assert not orchestrator.launch_requests[-1].mount_lake_read_only
 
 
 @pytest.mark.asyncio
-async def test_stale_launcher_refuses_before_the_workspace_exists(
+async def test_retained_inputs_refuse_stale_launcher_before_creating_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     orchestrator: SimpleNamespace,
     _launcher_is_stale: None,
 ) -> None:
-    """A launcher that would silently drop the mount is caught up front.
-
-    Pydantic ignores unknown request fields, so a stale launcher would
-    accept ``mount_lake_read_only=True`` and run the container with no
-    lake volume — LEAN then reads an empty data folder and fails
-    somewhere that says nothing about launcher versions.
-    """
+    """An old launcher must not silently drop the read-only data flag."""
     from app.config import settings
     from app.services import lean_sidecar_service as service
 
@@ -624,12 +606,10 @@ async def test_stale_launcher_refuses_before_the_workspace_exists(
     seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
 
-    with pytest.raises(service.LeanSidecarServiceError, match="lake_mount_unsupported_by_launcher") as excinfo:
+    with pytest.raises(service.LeanSidecarServiceError, match="workspace_data_read_only_unsupported_by_launcher"):
         await service.run_trusted_sample(_request("stale-launcher-run"))
-
-    assert "Restart the launcher" in str(excinfo.value)
-    assert orchestrator.launch_requests == []
     assert not (orchestrator.artifacts_root / "stale-launcher-run").exists()
+    assert not orchestrator.launch_requests
 
 
 @pytest.mark.asyncio
@@ -640,19 +620,9 @@ async def test_unreachable_launcher_refuses_before_the_workspace_exists(
 ) -> None:
     """A launcher that is down must fail the run without consuming the ID.
 
-    Sibling of the stale-launcher case above, and the distinction is the
-    point: "reachable but too old" is a data-plane refusal
-    (``LeanSidecarServiceError``), whereas "not reachable at all" is a
-    transport failure the preflight deliberately does NOT translate — it
-    propagates as ``LauncherUnreachable`` so the router's existing
-    mapping renders a 503, rather than dressing an outage up as a lake
-    coverage problem.
-
-    That 503 mapping was already covered, but only on the non-lake
-    ``/launch`` path, where the workspace is fully staged by the time
-    the launcher is called. Reaching it from the lake preflight happens
-    *before* the workspace exists — so this pins that an outage leaves
-    the run_id reusable too.
+    The transport failure propagates as ``LauncherUnreachable`` for the
+    router's existing 503 mapping. Preflight happens before creating the
+    workspace, so an outage leaves the run ID reusable.
     """
     from app.config import settings
     from app.lean_sidecar import launcher_client
@@ -715,6 +685,56 @@ async def test_factor_files_move_the_input_snapshot(
     assert manifest_a["staged_data"]["factor_files"], "factor file present in the lake must be hashed"
     assert manifest_a["staged_data"]["map_files"], "map file present in the lake must be hashed"
     assert manifest_a["input_snapshot_sha256"] != manifest_b["input_snapshot_sha256"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["replace", "delete"])
+@pytest.mark.parametrize("relative, manifest_group", [
+    ("equity/usa/factor_files/spy.csv", "factor_files"),
+    ("equity/usa/daily/spy.zip", "bar_zips"),
+])
+async def test_retained_inputs_changed_during_launch_keep_original_receipt_and_refuse_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+    _polygon_is_off_limits: None, _launcher_supports_lake_mount: None,
+    relative: str, manifest_group: str, mutation: str,
+) -> None:
+    """A mid-run replacement must not be hashed as if LEAN consumed it."""
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,1,1\n")
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    path = lake_root / relative
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    original_launch = service.post_launch
+    persist = AsyncMock()
+    monkeypatch.setattr(service, "_persist_completed_run", persist)
+
+    async def replace_during_launch(request: LaunchRequest) -> LaunchResponse:
+        retained = orchestrator.artifacts_root / request.run_id / "workspace/data" / relative
+        assert hashlib.sha256(retained.read_bytes()).hexdigest() == original_digest
+        response = await original_launch(request)
+        if mutation == "replace":
+            replacement = retained.with_suffix(".replacement")
+            replacement.write_bytes(b"a later file generation")
+            replacement.replace(retained)
+        else:
+            retained.unlink()
+        return response.model_copy(update={"exit_code": 0, "is_clean": True})
+
+    monkeypatch.setattr(service, "post_launch", replace_during_launch)
+    request = _request("replaced-input")
+    with pytest.raises(service.LeanSidecarServiceError, match="data_snapshot_changed"):
+        await service.run_trusted_sample(request)
+    manifest = _read_manifest(orchestrator.artifacts_root / request.run_id)
+    receipt = next(item for item in manifest["staged_data"][manifest_group] if item["path_in_workspace"] == relative)
+    assert receipt["sha256"] == original_digest
+    assert any("data_snapshot_changed" in note for note in manifest["notes"])
+    assert "is_clean=False" in manifest["notes"]
+    persist.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -798,18 +818,18 @@ async def test_rate_copy_failure_leaves_run_id_reusable(
     seed_lake_window(lake, SYMBOL, WINDOW)
     seed_lake_interest_rate(lake)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(root))
-    preserve = service._preserve_lake_statistics_input
+    preserve = service._retain_lake_inputs
 
     def fail_copy(*args: Any) -> None:
         preserve(*args)
         raise OSError("rate copy interrupted")
 
-    monkeypatch.setattr(service, "_preserve_lake_statistics_input", fail_copy)
-    with pytest.raises(OSError, match="rate copy interrupted"):
+    monkeypatch.setattr(service, "_retain_lake_inputs", fail_copy)
+    with pytest.raises(service.LeanSidecarServiceError, match=r"data_snapshot_unavailable.*rate copy interrupted"):
         await service.run_trusted_sample(_request("retry-rate-copy"))
     assert not (orchestrator.artifacts_root / "retry-rate-copy").exists()
     assert not orchestrator.launch_requests
-    monkeypatch.setattr(service, "_preserve_lake_statistics_input", preserve)
+    monkeypatch.setattr(service, "_retain_lake_inputs", preserve)
     await service.run_trusted_sample(_request("retry-rate-copy"))
     assert len(orchestrator.launch_requests) == 1
 
@@ -905,3 +925,152 @@ async def test_adjusted_run_can_cancel_while_waiting_for_a_capture(
             await asyncio.wait_for(task, timeout=1)
     assert orchestrator.launch_requests == []
     assert not (orchestrator.artifacts_root / "cancel-during-capture").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relative, group", [
+    ("equity/usa/factor_files/spy.csv", "factor_files"),
+    ("equity/usa/daily/spy.zip", "bar_zips"),
+])
+async def test_lean_consumes_retained_inputs_during_shared_lake_aba(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None, relative: str, group: str,
+) -> None:
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,1,1\n")
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    path = lake_root / relative
+    original = path.read_bytes()
+    consumed: list[bytes] = []
+    original_launch = service.post_launch
+
+    async def replace_read_restore(request: LaunchRequest) -> LaunchResponse:
+        root = orchestrator.artifacts_root / request.run_id
+        config = _read_config(root)
+        actual_root = lake_root if config["data-folder"] == CONTAINER_LAKE_DATA_MOUNT else root / "workspace/data"
+        path.write_bytes(b"generation-B")
+        consumed.append((actual_root / relative).read_bytes())
+        path.write_bytes(original)
+
+        def catalog_unavailable(**_kwargs: Any) -> None:
+            from app.data_lake.catalog_client import CatalogUnavailableError
+            raise CatalogUnavailableError("catalog lost after capture")
+
+        monkeypatch.setattr(service, "resolve_lake_artifacts", catalog_unavailable)
+        return await original_launch(request)
+
+    monkeypatch.setattr(service, "post_launch", replace_read_restore)
+    result = await service.run_trusted_sample(_request("aba-input"))
+    manifest = _read_manifest(result.workspace_root)
+    receipt = next(item for item in manifest["staged_data"][group] if item["path_in_workspace"] == relative)
+    assert consumed == [original]
+    assert receipt["sha256"] == hashlib.sha256(consumed[0]).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_capture_rejects_uncommitted_generation_after_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,1,1\n")
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    resolve = service._resolve_lake_artifacts_or_refuse
+    original_launch = service.post_launch
+
+    async def promote_uncommitted(request: Any) -> Any:
+        artifacts = await resolve(request)
+        artifacts.factor_file_paths[0].write_bytes(b"20260105,0.5,1\n")
+        return artifacts
+
+    async def commit_after_launch(request: LaunchRequest) -> LaunchResponse:
+        seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,0.5,1\n")
+        return await original_launch(request)
+
+    monkeypatch.setattr(service, "_resolve_lake_artifacts_or_refuse", promote_uncommitted)
+    monkeypatch.setattr(service, "post_launch", commit_after_launch)
+    with pytest.raises(service.LeanSidecarServiceError, match="data_snapshot_unavailable"):
+        await service.run_trusted_sample(_request("uncommitted-capture"))
+    assert not orchestrator.launch_requests
+    assert not (orchestrator.artifacts_root / "uncommitted-capture").exists()
+
+
+@pytest.mark.asyncio
+async def test_prelaunch_snapshot_failure_leaves_run_id_reusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "writer"
+    seed_lake_window(write_root / lake_subpath("raw"), SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    snapshot = service._snapshot_staged_data
+
+    def unavailable(**_kwargs: Any) -> None:
+        raise OSError("input disappeared during capture")
+
+    monkeypatch.setattr(service, "_snapshot_staged_data", unavailable)
+    with pytest.raises(service.LeanSidecarServiceError, match="data_snapshot_unavailable"):
+        await service.run_trusted_sample(_request("retry-capture"))
+    assert not (orchestrator.artifacts_root / "retry-capture").exists()
+    assert not orchestrator.launch_requests
+    monkeypatch.setattr(service, "_snapshot_staged_data", snapshot)
+    await service.run_trusted_sample(_request("retry-capture"))
+    assert len(orchestrator.launch_requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["image", "root", "mode", "hash", "missing"])
+async def test_retained_inputs_preserve_metadata_identity_and_image_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None, damage: str,
+) -> None:
+    from app.config import active_root_id, settings
+    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
+    from app.lean_sidecar.lake_mount import verify_lake_metadata_bundle
+    from app.services import lean_sidecar_service as service
+    from tests._helpers.lake_fixture import seed_lean_metadata_receipt
+
+    root = tmp_path / "writer"
+    lake = root / lake_subpath("raw")
+    seed_lake_window(lake, SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(root))
+    receipt_path = seed_lean_metadata_receipt(
+        lake, data_root_id=active_root_id(), price_adjustment_mode="raw",
+        lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+    )
+    original = receipt_path.read_bytes()
+    receipt = json.loads(original)
+    if damage == "image":
+        receipt["lean_image_digest"] = "sha256:" + "f" * 64
+    elif damage == "root":
+        receipt["data_root_id"] = str(uuid4())
+    elif damage == "mode":
+        receipt["price_adjustment_mode"] = "polygon_split_adjusted"
+    elif damage == "hash":
+        receipt["files"]["market_hours"]["sha256"] = "f" * 64
+    receipt_path.write_text(json.dumps(receipt))
+    if damage == "missing":
+        receipt_path.unlink()
+    monkeypatch.setattr(service, "verify_lake_metadata_bundle", verify_lake_metadata_bundle)
+
+    with pytest.raises(service.LeanSidecarServiceError, match="lake_metadata_receipt_invalid"):
+        await service.run_trusted_sample(_request("metadata-proof"))
+    assert not orchestrator.launch_requests
+    assert not (orchestrator.artifacts_root / "metadata-proof").exists()
+
+    receipt_path.write_bytes(original)
+    await service.run_trusted_sample(_request("metadata-proof"))
+    assert len(orchestrator.launch_requests) == 1

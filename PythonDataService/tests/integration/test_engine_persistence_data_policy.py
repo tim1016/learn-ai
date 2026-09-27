@@ -15,6 +15,8 @@ schema layer.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -303,6 +305,44 @@ def test_compatibility_profile_pins_exact_shared_bar_fixture(tmp_path) -> None:
     assert request.data_policy.fixture_id.startswith("bar-store-v1-")
     assert request.data_policy.fixture_sha256 is not None
     assert len(request.data_policy.fixture_sha256) == 64
+
+
+@pytest.mark.parametrize("warmup", [False, True])
+def test_compatibility_run_refuses_bytes_replaced_after_fixture_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warmup: bool,
+) -> None:
+    """A successful receipt cannot name the old zip while the engine reads the new one."""
+    import zipfile
+
+    from app.schemas.engine_backtest import EngineBacktestRequest
+    from app.services import engine_backtest_service as service
+
+    trade_dir = tmp_path / "equity/usa/minute/spy"
+    trade_dir.mkdir(parents=True)
+    path = trade_dir / "20250113_trade.zip"
+
+    def write_price(price: int) -> None:
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("20250113_spy_minute_trade.csv", f"34200000,{price},{price},{price},{price},100\n")
+
+    write_price(1_000_000)
+    if warmup:
+        (trade_dir / "20250110_trade.zip").write_bytes(path.read_bytes())
+    monkeypatch.setattr(service, "_resolve_lean_data_roots", lambda **_: [tmp_path])
+    request = EngineBacktestRequest(
+        strategy_name="ema_crossover_signal", params={"symbol": "SPY"},
+        from_date="2025-01-13", to_date="2025-01-13", resolution="minute",
+        compatibility_profile="us-equity-raw-ibkr-v1", data_policy=_raw_policy(),
+        auto_fetch=False, save_study=False, warmup_from_date="2025-01-10" if warmup else None,
+    )
+
+    def after_pin(phase: str) -> None:
+        if phase == "running_indicators":
+            write_price(2_000_000)
+
+    response = service.execute_engine_backtest(request=request, on_phase=after_pin, on_log=lambda _: None)
+    assert response.success is False
+    assert "changed since the snapshot was taken" in response.error
 
 
 def test_mismatched_params_and_policy_symbols_are_rejected() -> None:

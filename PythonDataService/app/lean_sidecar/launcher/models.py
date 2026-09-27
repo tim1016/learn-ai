@@ -49,8 +49,11 @@ class LauncherImageReadiness(BaseModel):
 # a way that points nowhere near the real cause. An explicit capability
 # list turns that into a refusal that names the fix.
 LAUNCHER_CAPABILITY_LAKE_MOUNT = "lake_read_only_mount"
+LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA = "read_only_workspace_data"
 
-LAUNCHER_CAPABILITIES: tuple[str, ...] = (LAUNCHER_CAPABILITY_LAKE_MOUNT,)
+LAUNCHER_CAPABILITIES: tuple[str, ...] = (
+    LAUNCHER_CAPABILITY_LAKE_MOUNT, LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA,
+)
 
 
 class LauncherHealthResponse(BaseModel):
@@ -95,6 +98,10 @@ class LaunchRequest(BaseModel):
             "to prevent sandbox-widening flags like --privileged. "
             "Mutually exclusive with ``hardening_profile``."
         ),
+    )
+    read_only_workspace_data: bool = Field(
+        default=False,
+        description="Mount this run's workspace/data read-only, keeping output and project writable.",
     )
     mount_lake_read_only: bool = Field(
         default=False,

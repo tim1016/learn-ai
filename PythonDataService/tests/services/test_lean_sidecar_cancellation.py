@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -58,6 +59,7 @@ def _synthetic_request(run_id: str) -> TrustedRunRequest:
 def isolated_orchestrator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Run the orchestrator against a tmp artifacts root with the launcher pinned off."""
     monkeypatch.setattr(service, "DEFAULT_ARTIFACTS_ROOT", tmp_path)
+    monkeypatch.setattr(service, "assert_launcher_supports", AsyncMock())
     # A really-pinned digest: the manifest's runtime provenance lookup only
     # answers for digests registered in the pinned-provenance map.
     from app.lean_sidecar.config import PINNED_LEAN_RUNTIME_PROVENANCE
