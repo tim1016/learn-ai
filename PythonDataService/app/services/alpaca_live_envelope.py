@@ -38,7 +38,7 @@ _SEALED_LIMIT = "sealed at arming"
 _CONFIGURED_LIMIT = "configured in the environment"
 _DAY_PNL_BASIS = (
     "current account equity minus prior regular-session-close equity, "
-    "net of today's deposits and withdrawals"
+    "net of deposits and withdrawals after that close"
 )
 
 _ClearOutcome = Literal["cleared", "no_hold", "refused"]

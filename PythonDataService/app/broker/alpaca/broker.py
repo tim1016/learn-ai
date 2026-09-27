@@ -22,6 +22,7 @@ from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
+from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -34,8 +35,44 @@ from app.broker.contract.models import (
     PortfolioHistoryRange,
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
+from app.utils.session_anchors import et_date_at_ms
 
 _ACTIVITY_MAX_PAGES = 3
+_CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
+
+
+def _transfer_activity_may_overlap_window(
+    activity: BrokerActivity,
+    *,
+    after_ms: int,
+) -> bool:
+    """Keep every transfer row that could fall after a prior-close boundary.
+
+    Alpaca transfer rows can carry only a calendar ``date``. The adapter
+    anchors those at ET midnight, so a row on the boundary date is ambiguous:
+    it might have occurred after the close. Preserve it so the day-P&L layer
+    can fail closed instead of silently treating it as outside the window.
+    """
+    if activity.occurred_at_ms is None:
+        return True
+    return activity.occurred_at_ms >= after_ms or (
+        activity.category == "non_trade_activity"
+        and et_date_at_ms(activity.occurred_at_ms) == et_date_at_ms(after_ms)
+    )
+
+
+def _transfer_page_crossed_window(
+    activities: list[BrokerActivity],
+    *,
+    after_ms: int,
+) -> bool:
+    """Whether a newest-first page proves all later pages predate the window."""
+    if not activities:
+        return False
+    oldest = activities[-1]
+    return oldest.occurred_at_ms is not None and (
+        et_date_at_ms(oldest.occurred_at_ms) < et_date_at_ms(after_ms)
+    )
 
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
 # Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
@@ -166,6 +203,49 @@ class AlpacaBroker:
         if after_ms is None:
             payloads = await self._client.list_activities(limit=limit, **activity_filter)
             return [adapter.from_alpaca_activity(payload) for payload in payloads]
+
+        if activity_type == _CASH_TRANSFER_ACTIVITY_FILTER:
+            # The loss gate may call this history complete only after reaching
+            # the prior-close boundary. Unlike generic activity recovery, a
+            # fixed page cap would silently turn omitted transfers into P&L.
+            activities: list[BrokerActivity] = []
+            seen_activity_ids: set[str] = set()
+            page_token: str | None = None
+            while True:
+                payloads = await self._client.list_activities(
+                    limit=limit,
+                    page_token=page_token,
+                    **activity_filter,
+                )
+                mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
+                for activity in mapped:
+                    if (
+                        activity.activity_id not in seen_activity_ids
+                        and _transfer_activity_may_overlap_window(
+                            activity,
+                            after_ms=after_ms,
+                        )
+                    ):
+                        seen_activity_ids.add(activity.activity_id)
+                        activities.append(activity)
+                if len(payloads) < limit or _transfer_page_crossed_window(
+                    mapped,
+                    after_ms=after_ms,
+                ):
+                    break
+                next_page_token = payloads[-1].get("id")
+                if (
+                    not isinstance(next_page_token, str)
+                    or not next_page_token
+                    or next_page_token == page_token
+                ):
+                    raise BrokerUnavailable(
+                        "Alpaca transfer activity history was incomplete.",
+                        broker=BROKER_ID,
+                        detail="Pagination ended before the prior-close boundary.",
+                    )
+                page_token = next_page_token
+            return activities
 
         # Recovery is explicitly bounded. Alpaca's page cursor is not the
         # canonical occurred-at cursor, so follow at most this small fixed

@@ -123,7 +123,7 @@ def account_hold_envelope(
         headline = "The account is in loss hold"
         explanation = (
             "Account day P&L — current equity minus prior regular-session-close "
-            "equity, net of today's deposits and withdrawals — reached "
+            "equity, net of deposits and withdrawals after that close — reached "
             f"{loss.day_pnl_usd:.2f} USD against a loss limit of "
             f"{loss.loss_limit_usd:.2f} USD. Every ENTER on the account is refused; "
             "every EXIT still runs, so each program keeps managing its own position."

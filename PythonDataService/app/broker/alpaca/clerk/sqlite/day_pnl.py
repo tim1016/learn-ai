@@ -1,7 +1,7 @@
 """The account-wide day-P&L fact the loss hold judges (ADR 0059 D4).
 
 Formula: ``day_pnl = current_equity − prior_close_equity
-  − Σ today's cash deposits and withdrawals``.
+  − Σ cash deposits and withdrawals after that prior close``.
 Reference: ADR 0059 Decision 4, amended 2026-09-24; Alpaca Account Object
   (``last_equity`` is equity at the previous trading day's 16:00 ET close),
   https://docs.alpaca.markets/us/v1.1/docs/account-plans; Alpaca Account
@@ -25,9 +25,9 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.contract.models import BrokerActivity
+from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 
 CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
 CASH_TRANSFER_ACTIVITY_TYPES: frozenset[str] = frozenset({"CSD", "CSW"})
@@ -36,8 +36,8 @@ CASH_TRANSFER_ACTIVITY_TYPES: frozenset[str] = frozenset({"CSD", "CSW"})
 @dataclass(frozen=True)
 class DayPnl:
     day_start_ms: int
-    # The ET day's end for the window label; the figures below span
-    # [day_start_ms, now_ms], not [day_start_ms, day_end_ms].
+    # The observation instant; the figures below span
+    # (day_start_ms, day_end_ms].
     day_end_ms: int
     current_equity_usd: float
     prior_close_equity_usd: float
@@ -63,21 +63,24 @@ def day_pnl_at(
     observation: AccountObservation,
     cash_flows: Sequence[BrokerActivity],
     now_ms: int,
+    cash_flow_evidence_complete: bool = True,
 ) -> DayPnl:
     if observation.last_equity_usd is None:
         raise ValueError("day P&L needs the broker's prior-close equity")
-    day_start_ms, day_end_ms = et_day_window_ms(now_ms)
+    day_start_ms = day_pnl_window_start_ms(now_ms)
     usable_amounts = [
         activity.net_amount
         for activity in cash_flows
         if activity.activity_type in CASH_TRANSFER_ACTIVITY_TYPES
         and activity.net_amount is not None
         and math.isfinite(activity.net_amount)
+        and activity.occurred_at_ms is not None
+        and day_start_ms < activity.occurred_at_ms <= now_ms
     ]
-    cash_flows_known = len(usable_amounts) == len(cash_flows)
+    cash_flows_known = cash_flow_evidence_complete and len(usable_amounts) == len(cash_flows)
     return DayPnl(
         day_start_ms=day_start_ms,
-        day_end_ms=day_end_ms,
+        day_end_ms=now_ms,
         current_equity_usd=observation.equity_usd,
         prior_close_equity_usd=observation.last_equity_usd,
         net_cash_flow_usd=sum(usable_amounts),
@@ -86,9 +89,15 @@ def day_pnl_at(
     )
 
 
+def day_pnl_window_start_ms(now_ms: int) -> int:
+    """Return the canonical NYSE close backing Alpaca ``last_equity``."""
+    return previous_completed_session_close_ms(now_ms)
+
+
 __all__ = [
     "CASH_TRANSFER_ACTIVITY_FILTER",
     "CASH_TRANSFER_ACTIVITY_TYPES",
     "DayPnl",
     "day_pnl_at",
+    "day_pnl_window_start_ms",
 ]

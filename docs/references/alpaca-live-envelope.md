@@ -19,7 +19,7 @@ precedes either one. Neither rule ever runs inside a Signal Program
    changes no other state.
 2. **Daily loss hold.** `day_pnl` is account-wide: current broker equity minus
    broker `last_equity` at the prior regular-session close, minus signed
-   same-day deposits and withdrawals. When it breaches
+   deposits and withdrawals after that same close. When it breaches
    `min(loss_fraction × last_equity, loss_usd)` from the sealed envelope, the
    account enters loss hold — every ENTER refused `LIVE_ENVELOPE_LOSS_HOLD`,
    every EXIT still running so each program keeps managing its own open
@@ -176,18 +176,26 @@ notional cap, no symbol allowlist, no session restriction.
   the true free cash would cover; it never admits one that cash cannot.
 - **Account day P&L, the prior-close rule.**
   `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py::day_pnl_at`
-  computes `current equity − last_equity − net same-day cash flows`.
+  computes `current equity − last_equity − net cash flows after the prior
+  regular-session close`.
   Alpaca defines `last_equity` as the previous trading day's 16:00 ET equity
   ([Account Object](https://docs.alpaca.markets/us/v1.1/docs/account-plans))
   and recommends `equity - last_equity` for the account's day change
   ([Working with /account](https://docs.alpaca.markets/us/docs/working-with-account)).
-  The sync reads `TRANS` activities and subtracts signed `CSD` deposits and
-  `CSW` withdrawals, whose `net_amount` sign is part of Alpaca's activity
-  contract ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
-  Missing or non-finite transfer amounts make `DayPnl.known` false rather than
-  turning a cash movement into profit or loss. Broker equity already includes
-  every carried position and manual/external trade, so no Clerk FIFO or
-  lifetime-unrealized composition participates in this account fact.
+  The start comes from the canonical NYSE calendar, so weekends, holidays and
+  early closes cannot make the cash-flow horizon disagree with the equity
+  baseline. The sync reads the complete `TRANS` window immediately before and
+  after its account snapshot and accepts it only when both economic row sets
+  match. It subtracts signed `CSD` deposits and `CSW` withdrawals, whose
+  `net_amount` sign is part of Alpaca's activity contract
+  ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
+  The dedicated `TRANS` pagination continues until it proves the date boundary;
+  a broken cursor raises instead of returning a partial set. Missing timestamps,
+  missing or non-finite amounts, and a date-only transfer on the boundary
+  session make `DayPnl.known` false rather than turning an unclassified cash
+  movement into profit or loss. Broker equity already includes every carried
+  position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
+  composition participates in this account fact.
 - **An unreadable seal is unjudgeable, not a fallback.** `sealed` also returns
   to `None` when the arming inputs cannot be read (a corrupt ledger row, a
   binding store that will not open), and *there* the fallback would be a

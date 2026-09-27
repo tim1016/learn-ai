@@ -104,7 +104,7 @@ def test_the_operator_explanation_names_the_prior_close_cash_flow_basis() -> Non
     )
 
     assert "current equity minus prior regular-session-close equity" in envelope.explanation
-    assert "net of today's deposits and withdrawals" in envelope.explanation
+    assert "net of deposits and withdrawals after that close" in envelope.explanation
     assert "every EXIT still runs" in envelope.explanation
 
 

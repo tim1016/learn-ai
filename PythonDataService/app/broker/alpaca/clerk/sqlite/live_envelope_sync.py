@@ -37,7 +37,6 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
@@ -54,6 +53,7 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import (
     CASH_TRANSFER_ACTIVITY_FILTER,
     DayPnl,
     day_pnl_at,
+    day_pnl_window_start_ms,
 )
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -63,6 +63,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LossHoldCause,
 )
 from app.broker.contract.errors import BrokerAccountModeDisagreement, BrokerError
+from app.broker.contract.models import BrokerActivity
 from app.broker.contract.ports import BrokerReadPort
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,32 @@ def _non_finite_risk_fields(
             ("last_equity", last_equity),
         )
         if value is not None and not math.isfinite(value)
+    )
+
+
+def _cash_flow_snapshots_match(
+    before: list[BrokerActivity],
+    after: list[BrokerActivity],
+) -> bool:
+    """Whether two reads describe the same economic transfer evidence.
+
+    ``observed_at_ms`` is the local ingestion clock and can differ between
+    otherwise identical broker rows, so it is deliberately excluded.
+    """
+    if len(before) != len(after):
+        return False
+
+    def by_id(activities: list[BrokerActivity]) -> dict[str, dict[str, Any]]:
+        return {
+            activity.activity_id: activity.model_dump(exclude={"observed_at_ms"})
+            for activity in activities
+        }
+
+    before_by_id = by_id(before)
+    return (
+        len(before_by_id) == len(before)
+        and len(by_id(after)) == len(after)
+        and before_by_id == by_id(after)
     )
 
 
@@ -271,15 +298,24 @@ class LiveEnvelopeSync:
         # that the answer predated, and a second ENTER spent the same cash
         # (#2441).
         observed_at_ms = self._repo.clock()
-        day_start_ms = et_day_window_ms(observed_at_ms)[0]
-        account, positions, cash_flows = await asyncio.gather(
+        day_start_ms = day_pnl_window_start_ms(observed_at_ms)
+        cash_flows_before = await self._read.list_activities(
+            after_ms=day_start_ms,
+            limit=100,
+            activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
+        )
+        account, positions = await asyncio.gather(
             self._read.get_account(),
             self._read.list_positions(),
-            self._read.list_activities(
-                after_ms=day_start_ms,
-                limit=100,
-                activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
-            ),
+        )
+        cash_flows_after = await self._read.list_activities(
+            after_ms=day_start_ms,
+            limit=100,
+            activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
+        )
+        cash_flows_stable = _cash_flow_snapshots_match(
+            cash_flows_before,
+            cash_flows_after,
         )
         self._observed_account_id = account.account_id
         # Under simulated custody the broker's cash never moved, so the
@@ -323,8 +359,9 @@ class LiveEnvelopeSync:
                 if unjudgeable or account.last_equity is None
                 else day_pnl_at(
                     observation=observation,
-                    cash_flows=cash_flows,
+                    cash_flows=cash_flows_after,
                     now_ms=observed_at_ms,
+                    cash_flow_evidence_complete=cash_flows_stable,
                 )
             ),
             loss_limit_usd=(

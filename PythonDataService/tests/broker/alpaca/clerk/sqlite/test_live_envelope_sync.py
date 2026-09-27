@@ -43,6 +43,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -66,6 +67,7 @@ class _Read:
         last_equity: float | None = 100_000.0,
         unrealized: float = 0.0,
         cash_flows: list[BrokerActivity] | None = None,
+        cash_flow_reads: list[list[BrokerActivity]] | None = None,
         fail: bool = False,
         fail_unexpectedly: bool = False,
     ) -> None:
@@ -74,6 +76,7 @@ class _Read:
         self.last_equity = last_equity
         self.unrealized = unrealized
         self.cash_flows = [] if cash_flows is None else cash_flows
+        self.cash_flow_reads = cash_flow_reads
         self.activity_calls: list[tuple[int | None, int, str | None]] = []
         self.fail = fail
         # Not a ``BrokerError``: ``tick`` has no verdict for this, so it is
@@ -134,6 +137,9 @@ class _Read:
         activity_type: str | None = None,
     ) -> list[BrokerActivity]:
         self.activity_calls.append((after_ms, limit, activity_type))
+        if self.cash_flow_reads is not None:
+            read_index = min(len(self.activity_calls) - 1, len(self.cash_flow_reads) - 1)
+            return self.cash_flow_reads[read_index]
         return self.cash_flows
 
 
@@ -320,9 +326,28 @@ async def test_same_day_cash_transfers_are_not_counted_as_pnl(
 
     assert reading.day_pnl is not None and reading.day_pnl.known
     assert reading.day_pnl.total_usd == pytest.approx(0.0)
-    assert read.activity_calls == [
-        (reading.day_pnl.day_start_ms, 100, "TRANS")
-    ]
+    prior_close_ms = previous_completed_session_close_ms(NOON)
+    assert reading.day_pnl.day_start_ms == prior_close_ms
+    assert read.activity_calls == [(prior_close_ms, 100, "TRANS")] * 2
+
+
+async def test_a_transfer_that_straddles_the_account_read_makes_the_tick_unknown(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    deposit = _cash_flow("CSD", 10_000.0)
+    read = _Read(
+        cash=110_000.0,
+        equity=110_000.0,
+        last_equity=100_000.0,
+        cash_flow_reads=[[], [deposit]],
+    )
+    sync = make_sync(day_pnl_repo, read)
+
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.latest_observation() is None
+    assert _hold(day_pnl_repo) is None
+    assert len(read.activity_calls) == 2
 
 
 async def test_incomplete_cash_transfer_evidence_withdraws_the_observation(

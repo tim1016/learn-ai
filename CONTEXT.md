@@ -539,10 +539,11 @@ so they survive a broker change.
   at session rollover. _Avoid_: kill switch, freeze, halt, circuit breaker
 - **Account day P&L** — the cash-flow-adjusted change in broker account equity
   since the prior regular-session close: current `equity` minus
-  `last_equity`, minus today's signed deposits and withdrawals. A carried
-  position therefore contributes only today's move, while manual and external
-  trades remain inside the account-wide fact. It is unknown, not zero, when
-  the broker reports no previous-close equity or complete transfer evidence.
+  `last_equity`, minus signed deposits and withdrawals after that same close.
+  A carried position therefore contributes only the move since that close,
+  while manual and external trades remain inside the account-wide fact. It is
+  unknown, not zero, when the broker reports no previous-close equity or the
+  transfer evidence is incomplete or changes around the account snapshot.
   _Avoid_: lifetime unrealized P&L, Clerk FIFO day P&L
 - **Regulatory fee schedule** — the dated table of pass-through fees on Alpaca
   equities. Fees the broker charged are the truth; the schedule predicts them.
