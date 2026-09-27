@@ -123,6 +123,23 @@ class FactorFileReferenceError(FactorFileBuildError):
     """A planned corporate action has no positive reference close."""
 
 
+def reference_close_unpriced_reason(close: Decimal | None) -> str | None:
+    """THE one definition of an unpriced reference session (#2490).
+
+    A reference session is unpriced when its regular-session close is
+    missing — never captured, or captured behind a minute zip that cannot
+    be read (the build's caller attaches that zip's path to the cause) — or
+    when the close is not positive, which breaks the span exactly like a
+    missing close instead of failing the whole symbol. Returns the cause,
+    or ``None`` when the close prices an action.
+    """
+    if close is None:
+        return "no readable regular-session close"
+    if close <= 0:
+        return f"reference close {close} is not positive"
+    return None
+
+
 def build_factor_file_bytes(
     symbol: str,
     plan: FactorFilePlan,
@@ -477,12 +494,33 @@ class _CoveredSpanRecord(BaseModel):
         )
 
 
+class _UnpricedSessionRecord(BaseModel):
+    """One session the build could not price, and why — the span ends after it.
+
+    ``reason`` comes from :func:`reference_close_unpriced_reason` (the one
+    definition of unpriced), with the unreadable zip's path attached when
+    that is the cause, so the reader's refusal names the session AND the
+    root cause instead of a bare span list (#2490)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_open_ms_utc: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    reason: str = Field(min_length=1)
+
+    def to_session(self) -> date:
+        return trading_date_at_ms(self.session_open_ms_utc)
+
+
 class FactorCoverageRecord(BaseModel):
     """The exact, closed shape of ``<symbol>.coverage.json``.
 
     ``factor_file_sha256`` binds the record to one set of CSV bytes: a CSV
     replaced without its record (a torn publish, a hand edit, a writer
     that predates #2452) no longer matches, and so covers nothing.
+    ``unpriced_reference_sessions`` names the sessions whose closes could
+    not be read or were not positive — where the covered spans break and
+    why (#2490); a record from a writer before #2490 carries none, which
+    reads as "no named cause" rather than "no breaks".
     ``schema_version`` is the seam #2454 extends with the corporate-action
     version the file was built against.
     """
@@ -493,6 +531,7 @@ class FactorCoverageRecord(BaseModel):
     symbol: str = Field(min_length=1)
     factor_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     covered_spans: list[_CoveredSpanRecord] = Field(min_length=1)
+    unpriced_reference_sessions: list[_UnpricedSessionRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _spans_are_ordered_and_disjoint(self) -> FactorCoverageRecord:
@@ -504,8 +543,19 @@ class FactorCoverageRecord(BaseModel):
         return self
 
 
-def factor_coverage_record_bytes(symbol: str, factor_file: bytes, spans: Sequence[SessionRun]) -> bytes:
-    """Serialize the coverage record for ``factor_file``'s exact bytes."""
+def factor_coverage_record_bytes(
+    symbol: str,
+    factor_file: bytes,
+    spans: Sequence[SessionRun],
+    *,
+    unpriced: Sequence[tuple[date, str]] = (),
+) -> bytes:
+    """Serialize the coverage record for ``factor_file``'s exact bytes.
+
+    ``unpriced`` carries ``(session, cause)`` pairs from the build — each
+    one a session whose close could not be read or was not positive, where
+    a covered span ends (#2490).
+    """
     record = FactorCoverageRecord(
         symbol=symbol,
         factor_file_sha256=hashlib.sha256(factor_file).hexdigest(),
@@ -515,6 +565,10 @@ def factor_coverage_record_bytes(symbol: str, factor_file: bytes, spans: Sequenc
                 last_session_open_ms_utc=session_open_ms_utc(span.last_session),
             )
             for span in spans
+        ],
+        unpriced_reference_sessions=[
+            _UnpricedSessionRecord(session_open_ms_utc=session_open_ms_utc(d), reason=reason)
+            for d, reason in sorted(unpriced)
         ],
     )
     return (record.model_dump_json() + "\n").encode("ascii")
@@ -541,6 +595,7 @@ class RecordedFactorFile:
     rows: list[FactorRow]
     spans: tuple[SessionRun, ...]
     file_sha256: str
+    unpriced_sessions: tuple[tuple[date, str], ...] = ()
 
 
 def read_recorded_factor_file(lake_root: Path, *, market: str, symbol: str) -> RecordedFactorFile:
@@ -581,6 +636,7 @@ def read_recorded_factor_file(lake_root: Path, *, market: str, symbol: str) -> R
         rows=parse_factor_file(csv_bytes.decode("ascii")),
         spans=tuple(span.to_span() for span in record.covered_spans),
         file_sha256=file_sha256,
+        unpriced_sessions=tuple((u.to_session(), u.reason) for u in record.unpriced_reference_sessions),
     )
 
 
@@ -607,12 +663,17 @@ def read_covering_factor_rows(
     ]
     if uncovered:
         first = uncovered[0]
-        raise FactorFileNotCoveringError(
-            symbol,
+        reason = (
             f"its corporate actions cover {_render_spans(recorded.spans)}, which does not include "
             f"the sessions {first.first_session.isoformat()}..{first.last_session.isoformat()}"
-            + (f" (and {len(uncovered) - 1} more uncovered run(s))" if len(uncovered) > 1 else ""),
+            + (f" (and {len(uncovered) - 1} more uncovered run(s))" if len(uncovered) > 1 else "")
         )
+        # Name the root cause, not just the geometry (#2490): a span breaks
+        # after a session the build could not price, and the operator seeing
+        # only a span list has to go read logs to learn which session rotted.
+        if recorded.unpriced_sessions:
+            reason += "; the covered span ends after " + _render_unpriced(recorded.unpriced_sessions)
+        raise FactorFileNotCoveringError(symbol, reason)
     return recorded.rows
 
 
@@ -623,4 +684,11 @@ def _render_spans(spans: Sequence[SessionRun]) -> str:
     shown = ", ".join(f"{s.first_session.isoformat()}..{s.last_session.isoformat()}" for s in spans[:_MAX_RENDERED_SPANS])
     if len(spans) > _MAX_RENDERED_SPANS:
         return f"{shown}, and {len(spans) - _MAX_RENDERED_SPANS} more span(s)"
+    return shown
+
+
+def _render_unpriced(unpriced: Sequence[tuple[date, str]]) -> str:
+    shown = ", ".join(f"{d.isoformat()} ({why})" for d, why in unpriced[:_MAX_RENDERED_SPANS])
+    if len(unpriced) > _MAX_RENDERED_SPANS:
+        return f"{shown}, and {len(unpriced) - _MAX_RENDERED_SPANS} more session(s)"
     return shown

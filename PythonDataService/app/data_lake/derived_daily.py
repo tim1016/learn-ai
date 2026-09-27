@@ -259,11 +259,17 @@ def read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeB
 
 
 class MinuteBarReadError(Exception):
-    """A minute-trade artifact could not be read; carries which one, for the failure detail."""
+    """A minute-trade artifact could not be read; carries which one, for the failure detail.
 
-    def __init__(self, file_path: str, cause: Exception) -> None:
+    ``trading_date`` is the session the zip belongs to (#2490): the factor
+    build turns a read failure into that session's unpriced-reference cause,
+    which reaches the coverage record and the reader's refusal — not just a log.
+    """
+
+    def __init__(self, file_path: str, cause: Exception, trading_date: date | None = None) -> None:
         super().__init__(str(cause))
         self.file_path = file_path
+        self.trading_date = trading_date
 
 
 def _read_history_minute_bars(
@@ -309,7 +315,7 @@ def factor_file_reference_closes(
         try:
             bars.extend(read_minute_trade_bars(src.file_path, lake_root))
         except (LakeAdmissionError, OSError, zipfile.BadZipFile, ValueError, IndexError) as e:
-            unreadable.append(MinuteBarReadError(src.file_path, e))
+            unreadable.append(MinuteBarReadError(src.file_path, e, trading_date=src.trading_date))
     return rth_daily_closes(bars), unreadable
 
 

@@ -369,3 +369,59 @@ async def test_a_failed_factor_file_row_is_reclaimed_rather_than_waited_on(
     assert outcome.capture.status == "complete", outcome.capture.detail
     assert fake_catalog.rows[stranded]["status"] == "complete"
     assert _split_day_close_to_close_pct(outcome) == pytest.approx(0.0, abs=1e-12, rel=0)
+
+
+@respx.mock
+async def test_a_non_positive_reference_close_refuses_naming_the_session(
+    lake_root: Path, fake_catalog: FakeCatalog
+) -> None:
+    """#2490: 05-31 (the split's reference session) is rewritten on disk with
+    a zero close — a pre-validation writer or a rotted zip — and its catalog
+    sha is updated to match, so every reader still reads the day. The factor
+    rebuild must break its span after 05-31 (not fail the whole symbol), and
+    the study's refusal must name the session and the cause. On master the
+    build raised ``FactorFileReferenceError``, the capture failed, and the
+    409 named neither the session nor the cause."""
+    import hashlib
+    from decimal import Decimal
+
+    from app.engine.data.lean_format import write_lean_day_zip
+    from app.engine.data.trade_bar import TradeBar
+
+    reference = date(2024, 5, 31)  # the 06-03 split's reference session
+    _mock_provider()
+    wide = await run_materialization.materialize_symbol_history(symbol=SYMBOL, start=WIDE_START, end=WIDE_END)
+    assert wide.status == "complete", wide.detail
+
+    # Rewrite the reference session's zip with a zero close and keep the
+    # catalog row honest about the new bytes, so the day still reads (this
+    # is rot, not a gap).
+    window = session_windows_ms_utc(reference, reference)[0]
+    zero = Decimal(0)
+    zip_path = lake_root / "equity" / "usa" / "minute" / SYMBOL.lower() / f"{reference:%Y%m%d}_trade.zip"
+    write_lean_day_zip(
+        lake_root,
+        SYMBOL,
+        reference,
+        [TradeBar(symbol=SYMBOL, open=zero, high=zero, low=zero, close=zero, volume=100,
+                  start_ms=window.close_ms_utc - 60_000, end_ms=window.close_ms_utc)],
+    )
+    for row in fake_catalog.rows.values():
+        if row.get("file_path", "").endswith(f"{reference:%Y%m%d}_trade.zip"):
+            row["file_sha256"] = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+            row["file_size_bytes"] = zip_path.stat().st_size
+
+    # Force the rebuild (the recorded file predates the rot).
+    record = lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol=SYMBOL).coverage_record_path().parts)
+    record.unlink()
+
+    with pytest.raises(study.AdjustmentNotCoveredError) as refused:
+        await _study()
+
+    message = str(refused.value)
+    assert f"{reference.isoformat()} (reference close 0 is not positive)" in message, message
+    # The break, not a whole-symbol failure: the rebuild completed and the
+    # record carries the cause.
+    assert record.is_file()
+    recorded = await asyncio.to_thread(read_recorded_factor_file, lake_root, market="usa", symbol=SYMBOL)
+    assert recorded.unpriced_sessions == ((reference, "reference close 0 is not positive"),)

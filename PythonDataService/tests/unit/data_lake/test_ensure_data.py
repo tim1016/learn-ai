@@ -679,7 +679,7 @@ def test_an_unpriceable_reference_session_breaks_one_span_not_the_file(
     sources = [_minute_source(i, day, f"{i:064x}") for i, day in enumerate(_CAPTURED, start=1)]
 
     with caplog.at_level(logging.WARNING, logger="app.data_lake.ensure_data"):
-        payload, plan = _factor_file_over_captured_sessions(
+        payload, plan, unpriced = _factor_file_over_captured_sessions(
             "SPY", [_SPLIT], [_DIVIDEND], sources, lake_root=tmp_path, fallback_date=_CAPTURED[0]
         )
 
@@ -692,6 +692,57 @@ def test_an_unpriceable_reference_session_breaks_one_span_not_the_file(
     rows = parse_factor_file(payload.decode("ascii"))
     ratio = factor_multiplier_as_of(rows, date(2024, 7, 5)) / factor_multiplier_as_of(rows, date(2024, 7, 8))
     assert float(ratio) == pytest.approx(1 - 1.0 / 50, abs=1e-9, rel=0)
+    assert any(getattr(r, "action", None) == "factor_file_span_broken" for r in caplog.records)
+    # #2490: the break is returned with its cause, so the coverage record —
+    # and the reader's refusal — can name the session, not just a log line.
+    assert len(unpriced) == 1
+    session, why = unpriced[0]
+    assert session == date(2024, 7, 3)
+    if bad_day == "zip_missing":
+        assert why.startswith("unreadable minute zip equity/usa/minute/spy/20240703_trade.zip")
+    else:
+        assert why == "no readable regular-session close"
+
+
+def test_a_non_positive_reference_close_breaks_the_span_not_the_symbol(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#2490: 07-03 (the 07-05 split's reference session) closes at zero —
+    a price only a pre-validation writer or a rotted zip can leave behind
+    (the deci-cent writer and #2451's capture gate both refuse negatives).
+    On master the whole build refused (``FactorFileReferenceError`` →
+    internal_error) and the symbol could never be studied; the span now
+    breaks after 07-03 exactly like a missing close, and the cause names
+    the session."""
+    from app.data_lake.ensure_data import _factor_file_over_captured_sessions
+
+    price = "0"
+
+    for day in _CAPTURED:
+        if day != date(2024, 7, 3):
+            _write_one_bar_day(tmp_path, day, 15, 59, "100" if day < date(2024, 7, 5) else "50")
+    # 07-03 is the July-4th eve early close (13:00 ET), so the zero bar must
+    # sit inside the shortened session to be the day's close.
+    _write_one_bar_day(tmp_path, date(2024, 7, 3), 12, 59, price)
+    sources = [_minute_source(i, day, f"{i:064x}") for i, day in enumerate(_CAPTURED, start=1)]
+
+    with caplog.at_level(logging.WARNING, logger="app.data_lake.ensure_data"):
+        payload, plan, unpriced = _factor_file_over_captured_sessions(
+            "SPY", [_SPLIT], [_DIVIDEND], sources, lake_root=tmp_path, fallback_date=_CAPTURED[0]
+        )
+
+    assert plan.spans == (
+        SessionRun(date(2024, 7, 1), date(2024, 7, 3)),
+        SessionRun(date(2024, 7, 5), date(2024, 7, 8)),
+    )
+    assert plan.splits == ()
+    assert plan.dividends == (_DIVIDEND,)
+    assert len(unpriced) == 1
+    session, why = unpriced[0]
+    assert session == date(2024, 7, 3)
+    assert why.startswith(f"reference close {price} is not positive")
+    # The non-positive close must not anchor a row either.
+    assert b",0\n" not in payload and f",{price}\n" not in payload.decode("ascii")
     assert any(getattr(r, "action", None) == "factor_file_span_broken" for r in caplog.records)
 
 
@@ -725,7 +776,7 @@ def test_an_actionless_file_whose_anchor_sessions_have_no_close_anchors_on_the_n
 
     monkeypatch.setattr(derived_daily, "read_minute_trade_bars", _recording_read)
 
-    payload, plan = _factor_file_over_captured_sessions(
+    payload, plan, _unpriced = _factor_file_over_captured_sessions(
         "SPY", [], [], sources, lake_root=tmp_path, fallback_date=first
     )
 
