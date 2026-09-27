@@ -803,6 +803,10 @@ async def test_scope_verified_legacy_metadata_requires_the_exact_committed_file(
     )
 
     assert changed is (mismatch is None)
+    if mismatch is None:
+        assert await catalog_client.scope_verified_legacy_metadata(
+            artifact_id, identity.data_root_id, "polygon_split_adjusted", path, "a" * 64, 10,
+        ), "confirming an already scoped exact row must be idempotent"
     async with catalog_client.connection() as conn:
         mode = await conn.fetchval('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
     assert mode == ("polygon_split_adjusted" if mismatch is None else "raw" if mismatch == "mode" else None)

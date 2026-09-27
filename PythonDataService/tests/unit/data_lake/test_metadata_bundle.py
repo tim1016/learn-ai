@@ -374,7 +374,7 @@ class TestBundleLockTimeout:
 
     @pytest.mark.asyncio
     async def test_bundle_lock_raises_a_distinct_lock_timeout(self, tmp_path: Path, monkeypatch):
-        """_bundle_lock itself must raise MetadataBundleLockTimeout, not the
+        """metadata_bundle_lock itself must raise MetadataBundleLockTimeout, not the
         plain MetadataBundleError -- the two mean different things (lock
         contention vs. an untrustworthy on-disk bundle) and only the former
         may be swallowed into a retryable outcome by the caller."""
@@ -388,7 +388,7 @@ class TestBundleLockTimeout:
         with try_advisory_file_lock(target) as acquired:
             assert acquired is True
             with pytest.raises(metadata_bundle.MetadataBundleLockTimeout):
-                async with metadata_bundle._bundle_lock(tmp_path):
+                async with metadata_bundle.metadata_bundle_lock(tmp_path):
                     pytest.fail("must not acquire the lock while it is already held")
 
     @pytest.mark.asyncio
@@ -573,6 +573,37 @@ async def test_second_call_with_the_same_digest_is_a_pure_cache_hit(clean_artifa
     assert launcher_route.call_count == 1, "the second call must not re-extract"
     assert second.market_hours.is_reused is True
     assert second.market_hours.record.id == first.market_hours.record.id
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_legacy_metadata_in_both_trees_is_scoped_after_reclaim(
+    clean_artifacts: None, pool: None, tmp_lake: Path,
+) -> None:
+    """Scoping one legacy tree may stale its sibling; the sibling must recover."""
+    from app.data_lake.path_policy import resolve_lake_root, resolve_staging_root
+
+    route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
+        side_effect=_launcher_side_effect(tmp_lake),
+    )
+    for mode in ("raw", "polygon_split_adjusted"):
+        spec = _spec().model_copy(update={"price_adjustment_mode": mode})
+        resolve_lake_root(mode).mkdir(parents=True, exist_ok=True)
+        resolve_staging_root(mode).mkdir(parents=True, exist_ok=True)
+        outcome = await ensure_lean_metadata_bundle(spec, resolve_lake_root(mode), resolve_staging_root(mode))
+        assert outcome.market_hours.record is not None
+    async with catalog_client.connection() as conn:
+        await conn.execute('UPDATE "DataLakeArtifacts" SET "PriceAdjustmentMode" = NULL WHERE "ArtifactKind" = \'metadata\'')
+    for mode in ("raw", "polygon_split_adjusted", "raw"):
+        spec = _spec().model_copy(update={"price_adjustment_mode": mode})
+        outcome = await ensure_lean_metadata_bundle(spec, resolve_lake_root(mode), resolve_staging_root(mode))
+        for item in (outcome.market_hours, outcome.symbol_properties):
+            assert item.record is not None
+            assert item.record.price_adjustment_mode == mode
+            async with catalog_client.connection() as conn:
+                stored = await conn.fetchval('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', item.record.id)
+            assert stored == mode
+    assert route.call_count == 2, "verified legacy files must not require another extraction"
 
 
 @respx.mock

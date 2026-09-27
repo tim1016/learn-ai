@@ -175,3 +175,47 @@ artifacts. Failed historical results were preserved; successful runs are new
 rows. No subscription, live broker feed, account, or trading control changed.
 Database-destructive tests used an isolated disposable PostgreSQL container,
 not the shared development catalog.
+
+## Review follow-up
+
+PR #2523 review reproduced seven additional boundary cases; the repairs keep
+the same mathematical and admission contracts:
+
+- Releasing a saved Both fixture also restores automatic fetching for Python.
+- Preparation covers missing trade days, daily data, and required metadata,
+  and includes existing factor/map files whose committed admission failed.
+  Map publication now verifies cached bytes and reclaims failed/stale leases.
+- Both legacy metadata trees recover, including a sibling NULL-scoped row
+  reclaimed after the first tree's upgrade. Scope confirmation is idempotent
+  and still requires exact complete file identity.
+- Cancellation polls during preparation, cancels and joins its child task,
+  and stops before launch.
+- A shared metadata lock spans admission, rate copying, execution, manifest
+  hashing, and persistence. Canonical publishers use the same exclusive lock;
+  the private verifier input, mounted input, and manifest therefore retain one
+  generation. POSIX readers can overlap. This follows the existing shared-file
+  advisory-lock deployment contract, not a new distributed locking claim.
+- A rate-input admission/copy failure removes the new pre-launch workspace,
+  allowing the same run ID to be retried.
+
+The expanded bounded Python gate passed **8,595 tests**, with 20 skips and one
+expected failure, in 81.16 seconds. Catalog, metadata, and preparation tests
+passed **112 tests** on disposable PostgreSQL. The changed frontend runner
+and component suites passed **72 tests**; full Python Ruff, frontend ESLint,
+and diff checks passed. Overlapping totals are not additive.
+
+Expanded checks also exposed inherited fixture defects, reproduced against
+base commit `e08dc4ea`: cancellation tests deleted the imported launcher
+function rather than restoring it, and the real-catalog preparation fixture
+lacked the required root identity. Those fixtures are corrected separately;
+the split-refresh assertion also consumes committed bars on a worker thread,
+as the reader contract requires. No production guard was weakened.
+
+After loading the reviewed code, the actual UI restored EMA Both run 33,
+switched to standalone LEAN, and completed W6mo run **35** (20 trades,
+$2,696.8751 net closed-trade P&L, $40 fees). Its native calculation receipt
+reports a match for **66 native and 25 dashboard values**. Restoring RSI Both
+run 27 and switching to Python completed W3mo run **36** (8 trades,
+$5,125.16 net P&L, $0 fees), reproducing the prior standalone Python result.
+Cold/missing-tree behavior is covered by the deterministic writer regressions;
+these final UI runs used the existing local SPY lake.

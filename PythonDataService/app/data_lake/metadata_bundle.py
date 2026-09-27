@@ -81,7 +81,7 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
@@ -176,7 +176,7 @@ class MetadataBundleLockTimeout(MetadataBundleError):
     ``_LOCK_TIMEOUT_S``.
 
     A distinct subclass rather than the plain :class:`MetadataBundleError`
-    ``_bundle_lock`` used to raise: that base class also covers "what's on
+    ``metadata_bundle_lock`` used to raise: that base class also covers "what's on
     disk is not trustworthy" (a condition :func:`ensure_lean_metadata_bundle`
     already handles inline, by re-extracting), which is a completely
     different situation from "another caller is still holding the lock".
@@ -705,6 +705,12 @@ async def _claim_and_complete_metadata_row(
         # either way -- but this row is no longer ours to describe, so report
         # the loss rather than returning a record for someone else's row.
         return MetadataBootstrap(None, False, "lease_timeout")
+    # A stale legacy row can be reclaimed without changing its NULL scope.
+    # Bind it only after fenced completion has committed the verified bytes.
+    if not await catalog_client.scope_verified_legacy_metadata(
+        artifact_id, root_id, spec.price_adjustment_mode, file_path, entry.sha256, file_size_bytes,
+    ):
+        return MetadataBootstrap(None, False, "data_contract_mismatch", "metadata scope upgrade refused")
     await catalog_client.mark_metadata_artifacts_stale_for_path(
         data_root_id=root_id,
         price_adjustment_mode=spec.price_adjustment_mode,
@@ -884,8 +890,14 @@ async def _fail_required_metadata_rows(
 
 
 @asynccontextmanager
-async def _bundle_lock(lake_root: Path) -> AsyncIterator[None]:
-    """Serialize the whole ensure-bundle sequence per ``(root, mode)``.
+async def metadata_bundle_lock(
+    lake_root: Path, *, shared: bool = False, check_cancelled: Callable[[], None] | None = None,
+) -> AsyncIterator[None]:
+    """Pin or publish a metadata generation per ``(root, mode)``.
+
+    Writers hold the default exclusive lock for the whole ensure-bundle
+    sequence. Readers hold a shared lock from admission through execution
+    and manifest creation so the mounted bytes and recorded hashes agree.
 
     Keyed by the receipt path -- the natural "one lock per mode's lake
     root" key, matching the receipt's own one-per-``(root, mode)`` scope.
@@ -904,7 +916,10 @@ async def _bundle_lock(lake_root: Path) -> AsyncIterator[None]:
     target = receipt_path(lake_root)
     deadline = time.monotonic() + _LOCK_TIMEOUT_S
     while True:
-        with try_advisory_file_lock(target) as acquired:
+        if check_cancelled is not None:
+            check_cancelled()
+        lock = try_advisory_file_lock(target, shared=True) if shared else try_advisory_file_lock(target)
+        with lock as acquired:
             if acquired:
                 yield
                 return
@@ -942,7 +957,7 @@ async def ensure_lean_metadata_bundle(spec: DataRunSpec, lake_root: Path, stagin
     root_id = active_root_id()
 
     try:
-        async with _bundle_lock(lake_root):
+        async with metadata_bundle_lock(lake_root):
             try:
                 receipt = verify_bundle(
                     lake_root,
@@ -982,7 +997,7 @@ async def ensure_lean_metadata_bundle(spec: DataRunSpec, lake_root: Path, stagin
 
             return await _activate_catalog_from_receipt(spec, lake_root, receipt, root_id)
     except MetadataBundleLockTimeout as e3:
-        # Raised by _bundle_lock itself, before its `async with` body ever
+        # Raised by metadata_bundle_lock itself, before its `async with` body ever
         # runs -- structurally distinct from the `except MetadataBundleError`
         # above, which only wraps `verify_bundle`'s call once the lock is
         # already held. A caller polling the lock while another caller is

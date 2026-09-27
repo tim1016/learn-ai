@@ -204,6 +204,7 @@ describe("StrategyLab configuration and runner", () => {
 
   it.each(["lean", "python"] as const)("releases a restored raw Both snapshot when switching to %s", async (engine) => {
     config.engine.set("both");
+    config.range.update((range) => ({ ...range, autoFetch: false }));
     config.restoreDataPolicy({
       ...config.dataPolicy(),
       provider_kind: "fixture",
@@ -224,6 +225,10 @@ describe("StrategyLab configuration and runner", () => {
       fixture_id: null,
       fixture_sha256: null,
     }));
+    expect(config.autoFetch()).toBe(true);
+    if (engine === "python") {
+      expect(payload.backtest).toEqual(expect.objectContaining({ auto_fetch: true }));
+    }
   });
 
   it("retains the frozen receipt when rerunning Both without changing its adjustment mode", async () => {

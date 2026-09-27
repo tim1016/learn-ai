@@ -20,6 +20,7 @@ import re
 import time
 from contextvars import ContextVar
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
@@ -137,11 +138,14 @@ class FakeCatalog:
         return None
 
     async def scope_verified_legacy_metadata(
-        self, artifact_id, data_root_id, price_adjustment_mode, file_path, file_sha256, file_size_bytes,
+        self, artifact_id: int, data_root_id: UUID, price_adjustment_mode: str,
+        file_path: str, file_sha256: str, file_size_bytes: int,
     ) -> bool:
+        """Mirror the exact-file scope guard, including idempotent confirmation."""
         row = self.rows[artifact_id]
         if (row["artifact_kind"] != "metadata" or row["status"] != "complete"
-                or row["data_root_id"] != data_root_id or row["price_adjustment_mode"] is not None
+                or row["data_root_id"] != data_root_id
+                or row["price_adjustment_mode"] not in (None, price_adjustment_mode)
                 or row["file_path"] != file_path or row["file_sha256"] != file_sha256
                 or row["file_size_bytes"] != file_size_bytes):
             return False

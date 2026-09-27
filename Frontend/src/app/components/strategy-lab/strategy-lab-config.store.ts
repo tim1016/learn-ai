@@ -362,6 +362,7 @@ export class StrategyLabConfigStore {
       // a new experiment; its old frozen receipt cannot describe those bars.
       if (policy.adjusted !== adjusted && policy.source === "polygon" &&
           policy.provider_kind === "fixture" && policy.fixture_id?.startsWith("bar-store-v1-")) {
+        this.range.update((range) => ({ ...range, autoFetch: true }));
         return { ...policy, adjusted, provider_kind: "live", fixture_id: null, fixture_sha256: null };
       }
       return { ...policy, adjusted };
