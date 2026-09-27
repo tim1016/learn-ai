@@ -236,8 +236,11 @@ def seed_lake_corporate_actions(
 ) -> tuple[Path, Path]:
     """Write the symbol's factor and map files at their lake paths.
 
-    The contents are only ever hashed by the tests that use this, never
-    parsed, so the rows stay minimally plausible rather than realistic.
+    The factor contents are only ever hashed by the tests that use this,
+    never parsed, so the rows stay minimally plausible. The map's default
+    rows must span the seeded windows — the sidecar refuses a run whose
+    window exceeds the map's stated coverage (#2453), so a stub row that
+    ends before the fixture's days would fail every mount.
     Returns ``(factor_file_path, map_file_path)``.
     """
     factor = _write(
@@ -245,10 +248,12 @@ def seed_lake_corporate_actions(
         Path(*LeanFactorFilePath(market="usa", symbol=symbol).relative_path().parts),
         factor_rows.encode("ascii"),
     )
+    sym = symbol.lower()
+    default_map_rows = f"19980122,{sym},nyse\n20991231,{sym},nyse\n"
     mapping = _write(
         lake_root,
         Path(*LeanMapFilePath(market="usa", symbol=symbol).relative_path().parts),
-        (map_rows if map_rows is not None else f"19980102,{symbol.lower()}\n").encode("ascii"),
+        (map_rows if map_rows is not None else default_map_rows).encode("ascii"),
     )
     return factor, mapping
 

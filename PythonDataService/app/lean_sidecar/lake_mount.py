@@ -111,6 +111,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
+from app.data_lake.map_files import map_file_coverage
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
     LeanFactorFilePath,
@@ -429,8 +430,28 @@ def resolve_lake_artifacts(
     factor_file_paths = _existing_corporate_action_files(lake_root, safe_symbol, "factor")
     map_file_paths = _existing_corporate_action_files(lake_root, safe_symbol, "map")
     try:
-        for path in (market_hours_path, symbol_properties_path, *factor_file_paths, *map_file_paths):
+        for path in (market_hours_path, symbol_properties_path, *factor_file_paths):
             read_committed_bytes(path)
+        for path in map_file_paths:
+            payload = read_committed_bytes(path)
+            # A mounted map is load-bearing for the whole window: LEAN ends
+            # the symbol's mapping at the map's last row, so a run past it
+            # reads as a delisting (#2453). Refuse before launch — quietly
+            # mounting it is how a backtest gains a phantom exit.
+            try:
+                first_covered, last_covered = map_file_coverage(payload)
+            except ValueError as exc:
+                raise LakeMountError(
+                    f"lake_map_file_unreadable: {path.name} for {safe_symbol} does not parse as a map file ({exc})"
+                ) from exc
+            if first_covered > start or last_covered < end:
+                raise LakeMountError(
+                    f"lake_map_file_window_mismatch: {path.name} covers "
+                    f"{first_covered.isoformat()}..{last_covered.isoformat()} but the run window is "
+                    f"{start.isoformat()}..{end.isoformat()} — LEAN would read {safe_symbol} as delisted "
+                    f"after {last_covered.isoformat()}; re-run ensure_data over "
+                    f"{start.isoformat()}..{end.isoformat()} to rebuild the map"
+                )
         if interest_rate_path is not None:
             read_committed_bytes(interest_rate_path)
     except LakeAdmissionError as exc:
