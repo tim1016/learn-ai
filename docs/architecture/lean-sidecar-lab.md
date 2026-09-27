@@ -467,14 +467,22 @@ statistics artifacts before Phase 4 exposes arbitrary user source.
 
 ### Reproducibility manifest
 
-The orchestrator captures data hashes before launch and rechecks the inputs
-before normalizing or persisting a result (#2455). A changed, missing, or newly
-resolved lake input rejects the result with `data_snapshot_changed`; the failure
-manifest retains the original launch hashes. Digest and byte length come from
-one read, so atomic replacement cannot combine two file generations in one
-receipt. Python compatibility runs and LEAN's compatibility staging use the
-existing manifest-bound reader, which verifies and parses the same bytes against
-the fixture pin (including Python's warmup window).
+Before launch, the orchestrator retains catalog-admitted lake bytes in the run's
+private `workspace/data` folder (#2455), using the existing workspace mount.
+The existing root, adjustment-mode, and pinned-image metadata proof runs under
+the metadata-bundle lock before capture. LEAN consumes these copies, so a shared
+lake file changing and then reverting during execution cannot change its inputs.
+This capture does not fetch or
+re-encode data and enforces the existing workspace size limit. Failed captures
+remove the unused workspace so the same run ID can be retried.
+
+The orchestrator hashes the retained inputs before launch and rechecks them
+before normalizing or persisting a result. A changed or missing retained input
+rejects the result with `data_snapshot_changed`; the failure manifest retains
+the original launch hashes. Digest and byte length come from one read. Python
+compatibility runs and LEAN's compatibility staging use the existing
+manifest-bound reader, which verifies and parses the same bytes against the
+fixture pin (including Python's warmup window).
 
 `manifest.json` is not just a request echo. For any run that may later be used
 as audit evidence or reconciliation input, it records hashes of every input that

@@ -25,7 +25,7 @@ import logging
 import shutil
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -33,6 +33,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import active_root_id
+from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.types import polygon_mode_for
 from app.engine.data.trade_bar import TradeBar
@@ -44,11 +45,11 @@ from app.lean_sidecar.config import (
     runtime_provenance_for_digest,
 )
 from app.lean_sidecar.lake_mount import (
-    CONTAINER_LAKE_DATA_MOUNT,
     LakeArtifacts,
     LakeMountError,
     data_plane_lake_root,
     resolve_lake_artifacts,
+    verify_lake_metadata_bundle,
 )
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher_client import post_launch
@@ -563,32 +564,12 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
 
 
 async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeArtifacts:
-    """Resolve the run's lake artifacts, or refuse with a typed error.
+    """Resolve lake inputs before creating a workspace; retain them before launch."""
+    from app.lean_sidecar.launcher_client import get_healthz
 
-    Two failure classes, both translated into
-    :class:`LeanSidecarServiceError` so the routers' existing mapping
-    applies instead of the raw exception escaping as an unstructured
-    500:
-
-    * the launcher is too old to mount the lake at all — checked first,
-      because no amount of lake coverage rescues a launcher that will
-      silently drop the mount;
-    * the lake cannot fully serve the requested window.
-
-    Called before the workspace is created, so a refusal leaves the
-    ``run_id`` unused and the operator's retry with the same id works.
-    """
-    from app.lean_sidecar.launcher.models import LAUNCHER_CAPABILITY_LAKE_MOUNT
-    from app.lean_sidecar.launcher_client import (
-        LauncherCapabilityUnsupported,
-        assert_launcher_supports,
-    )
-
-    try:
-        await assert_launcher_supports(LAUNCHER_CAPABILITY_LAKE_MOUNT)
-    except LauncherCapabilityUnsupported as e:
-        raise LeanSidecarServiceError(f"lake_mount_unsupported_by_launcher: {e}") from e
-
+    # Preserve the preflight transport check; a private workspace snapshot
+    # needs no lake-mount capability from the launcher.
+    await get_healthz()
     try:
         return await asyncio.to_thread(
             resolve_lake_artifacts,
@@ -653,10 +634,8 @@ def _stage_workspace_data(
     databases, and the empty corporate-action directories. Returns
     ``(bar_zip_paths, quote_zip_paths, daily_path)``.
 
-    A ``DATA_LAKE_ENABLED`` run bypasses this function entirely — the
-    lake mount replaces the copies — which is why the whole staging
-    sequence lives here as one named unit rather than inline in the
-    orchestrator.
+    A ``DATA_LAKE_ENABLED`` run retains the lake's admitted bytes directly
+    through ``_retain_lake_inputs`` instead of synthesizing these files.
     """
     if store_roots is not None:
         bar_zip_paths = list(
@@ -700,20 +679,47 @@ def _stage_workspace_data(
     return bar_zip_paths, quote_zip_paths, daily_path
 
 
-def _preserve_lake_statistics_input(workspace: Workspace, artifacts: LakeArtifacts) -> None:
-    """Keep this run's admitted rate file for native-statistics verification.
+def _retain_lake_inputs(
+    workspace: Workspace, artifacts: LakeArtifacts, request: TrustedRunRequest,
+) -> LakeArtifacts:
+    """Retain admitted bytes privately so shared A→B→A changes cannot reach LEAN.
 
-    LEAN still reads the lake mount. The small private copy lets the existing
-    verifier reproduce this run later without depending on a mutable lake.
+    These are run evidence, not a second historical store: every payload comes
+    from the lake's committed-byte reader, with no provider fetch or re-encode.
     """
-    from app.data_lake.admission import read_committed_bytes
+    # Preserve the launcher's former image/root proof while the caller holds
+    # the metadata-bundle lock. Catalog admission alone does not pin an image.
+    verify_lake_metadata_bundle(
+        lake_root=artifacts.lake_root, base_root=artifacts.lake_root.parent.parent,
+        expected_data_root_id=active_root_id(),
+        expected_price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
+        expected_lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+    )
+    retained_bytes = 0
 
-    if artifacts.interest_rate_path is None:
-        return
-    payload = read_committed_bytes(artifacts.interest_rate_path)
-    target = workspace.data_dir / artifacts.interest_rate_path.relative_to(artifacts.lake_root)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)
+    def retain(path: Path) -> Path:
+        nonlocal retained_bytes
+        payload = read_committed_bytes(path)
+        retained_bytes += len(payload)
+        if retained_bytes > DEFAULT_RUN_LIMITS.workspace_max_mb * 1024 * 1024:
+            raise LeanSidecarServiceError("data_snapshot_unavailable: retained inputs exceed workspace size limit")
+        target = workspace.data_dir / path.relative_to(artifacts.lake_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return target
+
+    stage_empty_corporate_action_dirs(workspace)
+    return replace(
+        artifacts, lake_root=workspace.data_dir,
+        trade_zip_paths=tuple(retain(path) for path in artifacts.trade_zip_paths),
+        quote_zip_paths=tuple(retain(path) for path in artifacts.quote_zip_paths),
+        daily_zip_path=retain(artifacts.daily_zip_path),
+        factor_file_paths=tuple(retain(path) for path in artifacts.factor_file_paths),
+        map_file_paths=tuple(retain(path) for path in artifacts.map_file_paths),
+        market_hours_path=retain(artifacts.market_hours_path),
+        symbol_properties_path=retain(artifacts.symbol_properties_path),
+        interest_rate_path=retain(artifacts.interest_rate_path) if artifacts.interest_rate_path is not None else None,
+    )
 
 
 async def run_trusted_sample(
@@ -969,7 +975,7 @@ async def _run_trusted_sample(
     store_roots: list[Path] | None = None
     # Decoded bars. Only the staging path needs them — it re-encodes
     # quote and daily zips from them — so lake mode leaves this empty
-    # rather than unzipping a window it is not going to write.
+    # because its admitted files are copied without decoding.
     bars_by_date: list[tuple[date, list[TradeBar]]] = []
     compatibility_fixture = bool(
         request.data_policy.provider_kind == "fixture"
@@ -1011,9 +1017,9 @@ async def _run_trusted_sample(
         # DATA_LAKE_ENABLED: the lake is the market-data authority. Its
         # artifacts were already resolved (and the run already refused
         # if they were not serveable) in the preflight above, before the
-        # workspace existed. Nothing to do here but record the window —
-        # no ``ensure_range``, no Polygon call, no byte-copy into the
-        # workspace. Fixture replays above are deliberately unaffected:
+        # workspace existed. Record the window here; retain the admitted
+        # bytes below without another provider call. Fixture replays above
+        # are deliberately unaffected:
         # their frozen recordings are the data authority for those runs,
         # and the lake has nothing to say about them.
         trading_dates = list(lake_artifacts.trading_dates)
@@ -1025,15 +1031,15 @@ async def _run_trusted_sample(
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
     if lake_artifacts is not None:
-        # LEAN reads these exact artifacts in
-        # place through the read-only lake mount the launcher adds, so
-        # the paths recorded here are lake paths, not workspace paths.
+        # Capture each admitted payload into the run's existing private data
+        # folder. LEAN reads that retained generation, never the mutable lake.
         try:
-            await asyncio.to_thread(_preserve_lake_statistics_input, workspace, lake_artifacts)
-        except Exception:
+            lake_artifacts = await asyncio.to_thread(_retain_lake_inputs, workspace, lake_artifacts, request)
+        except Exception as exc:
             # No container has launched and this run created the directory.
-            # A failed admission or disk copy must leave the ID reusable.
             shutil.rmtree(workspace.root)
+            if isinstance(exc, (OSError, LakeAdmissionError, LakeMountError, CatalogUnavailableError)):
+                raise LeanSidecarServiceError(f"data_snapshot_unavailable: {exc}") from exc
             raise
         bar_zip_paths = list(lake_artifacts.trade_zip_paths)
         quote_zip_paths = list(lake_artifacts.quote_zip_paths)
@@ -1062,9 +1068,8 @@ async def _run_trusted_sample(
     # and ignores this parameter.
     bar_minutes_for_config = request.data_policy.strategy_bars.multiplier
     config = LeanConfig(
-        # Lake mode re-points LEAN's data folder at the read-only lake
-        # mount; every other run keeps the staged workspace subtree.
-        data_folder=(CONTAINER_LAKE_DATA_MOUNT if lake_artifacts is not None else CONTAINER_DATA_FOLDER),
+        # Both retained lake inputs and fixture replays live in this run.
+        data_folder=CONTAINER_DATA_FOLDER,
         parameters={
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
@@ -1082,7 +1087,11 @@ async def _run_trusted_sample(
         workspace=workspace, bar_zip_paths=bar_zip_paths, quote_zip_paths=quote_zip_paths,
         daily_path=daily_path, lake_artifacts=lake_artifacts,
     )
-    staged_data = await asyncio.to_thread(_snapshot_staged_data, **snapshot_args)
+    try:
+        staged_data = await asyncio.to_thread(_snapshot_staged_data, **snapshot_args)
+    except OSError as exc:
+        shutil.rmtree(workspace.root)
+        raise LeanSidecarServiceError(f"data_snapshot_unavailable: {exc}") from exc
     started_ms = now_ms_utc()
     launch_request = LaunchRequest(
         run_id=request.run_id,
@@ -1093,19 +1102,11 @@ async def _run_trusted_sample(
         wall_clock_timeout_s=DEFAULT_RUN_LIMITS.wall_clock_timeout_s,
         workspace_max_mb=DEFAULT_RUN_LIMITS.workspace_max_mb,
         log_tail_bytes=DEFAULT_RUN_LIMITS.log_tail_bytes,
-        # Ask for the lake's read-only mount only when this run actually
-        # read the lake. The launcher resolves the host path itself and
-        # rejects the launch if it has none configured.
-        mount_lake_read_only=lake_artifacts is not None,
-        # The lake is partitioned by adjustment mode (#1839), so the
-        # launcher must be told which subtree to mount or an adjusted
-        # run would silently read raw bytes.
+        # The run consumes retained workspace inputs only; no shared lake
+        # mount can expose a later generation during execution.
+        mount_lake_read_only=False,
         price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
-        # The physical root this process expects the lake to be (#1879, PR C
-        # of #1861) -- the launcher verifies it against the root marker and
-        # metadata receipt already on disk before mounting. Server-resolved,
-        # never taken from the request, matching every other data_root_id
-        # default in the codebase (issue #1876's fixed design decision).
+        # Retain the server-resolved source identity in the launch receipt.
         data_root_id=active_root_id(),
         # Intentionally NOT setting hardening_profile until we have a
         # verified fix for the wide-window SIGILL. The plumbing is in
@@ -1181,18 +1182,10 @@ async def _run_trusted_sample(
     # in the failure manifest so the attempted run remains auditable.
     snapshot_error: str | None = None
     try:
-        after_args = dict(snapshot_args)
-        if lake_artifacts is not None:
-            # Re-resolve optional factor/map inputs too: an absent file that
-            # appears mid-run is a changed input just like a replacement.
-            after_args["lake_artifacts"] = await asyncio.to_thread(
-                resolve_lake_artifacts, lake_root=lake_artifacts.lake_root,
-                symbol=request.symbol, start=request.start_date, end=request.end_date,
-            )
-        after_run = await asyncio.to_thread(_snapshot_staged_data, **after_args)
+        after_run = await asyncio.to_thread(_snapshot_staged_data, **snapshot_args)
         if after_run != staged_data:
             snapshot_error = "data_snapshot_changed: run inputs changed during LEAN execution"
-    except (OSError, LakeMountError, CatalogUnavailableError) as exc:
+    except OSError as exc:
         snapshot_error = f"data_snapshot_changed: run input unavailable after LEAN execution: {exc}"
     if snapshot_error is not None:
         failure_reason = f"{failure_reason}; {snapshot_error}" if failure_reason else snapshot_error
@@ -1323,11 +1316,8 @@ def _snapshot_staged_data(
     daily_path: Path, lake_artifacts: LakeArtifacts | None,
 ) -> StagedDataManifest:
     """Capture run inputs before launch and verify the same generation afterward."""
-    # The LEAN data root of this run: the staged workspace subtree, or
-    # the lake itself when the launcher mounted it read-only. Every hash
-    # below is taken relative to whichever one LEAN actually read, so
-    # ``path_in_workspace`` means the same thing to a manifest reader in
-    # both modes.
+    # Both paths describe this run's private data folder. Lake artifacts
+    # have already been rebased onto their retained workspace copies.
     if lake_artifacts is None:
         data_root = workspace.data_dir
         market_hours, symbol_properties, interest_rate = _list_metadata(workspace)
@@ -1340,9 +1330,8 @@ def _snapshot_staged_data(
     # Corporate actions are inputs, not decoration: LEAN reads factor
     # and map files off the data root and they change split/dividend
     # handling, so a factor-file update must move
-    # ``input_snapshot_sha256``. Lake mode is where this bites — the
-    # mounted lake carries real files whose contents can change under a
-    # rerun. (Staging mode creates these directories empty, so the
+    # ``input_snapshot_sha256``. Lake runs retain the admitted factor and
+    # map files. (Fixture staging creates these directories empty, so the
     # staged run keeps hashing nothing, exactly as before.)
     return StagedDataManifest(
         corporate_action_versions=dict(lake_artifacts.corporate_action_versions) if lake_artifacts is not None else {},

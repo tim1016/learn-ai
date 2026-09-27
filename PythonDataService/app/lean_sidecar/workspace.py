@@ -5,9 +5,9 @@ root. It is the **only** thing under the artifacts root the launcher
 mounts into the LEAN container, and the container's only read-write
 mount. This module is the single source of truth for what lives where.
 
-A ``DATA_LAKE_ENABLED`` run adds one further mount that is not a
-workspace at all: the data lake, read-only — see
-:mod:`app.lean_sidecar.lake_mount`.
+Lake runs retain admitted inputs inside this workspace. The launcher's
+optional shared-lake mount remains available for direct launch requests;
+the orchestrator uses private inputs to preserve the consumed generation.
 
 Authority: docs/architecture/lean-sidecar-lab.md §"Workspace contract".
 """
