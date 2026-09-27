@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -894,6 +894,74 @@ def _factor_file_is_recorded(lake_root: Path, row: ArtifactRecord) -> bool:
     return recorded.file_sha256 == row.file_sha256
 
 
+async def _claim_miss_reuse_refresh_or_refuse(
+    *,
+    identity: ArtifactIdentity,
+    existing: ArtifactRecord,
+    built_contract: str,
+    current_contract: Callable[[], Awaitable[str]],
+    row_is_current: Callable[[ArtifactRecord, str], Awaitable[bool]],
+    what: str,
+) -> tuple[ArtifactRecord | None, int | None, ArtifactFailure | None]:
+    """The one claim-miss protocol every source-set-keyed artifact runs (#2496).
+
+    A build that lost its claim to an existing complete row judges that row
+    against the sources as they are NOW — never against the snapshot the
+    build was derived from:
+
+    * current for the current sources → reuse the row, publish nothing;
+    * this build's snapshot is stale (its contract differs from the current
+      one) → ``lease_timeout``: the caller's retry rebuilds from the current
+      sources, and an older, narrower build never publishes over what a
+      sibling already wrote from wider sources;
+    * otherwise take the row by a compare-and-swap refresh on the contract
+      the row was read with — a sibling publishing between the read and the
+      refresh keeps its file.
+
+    Returns ``(existing, None, None)`` for reuse, ``(None,
+    new_lease_generation, None)`` for a won refresh, or ``(None, None,
+    failure)`` for a refusal. The factor-file path (#2481) and the
+    daily-trade rollup share this; there is no second copy of the pattern.
+    """
+    contract_now = await current_contract()
+    if await row_is_current(existing, contract_now):
+        return existing, None, None
+    if contract_now != built_contract:
+
+        def _stale(reason: str, detail: str) -> ArtifactFailure:
+            return ArtifactFailure(
+                artifact_kind=identity.artifact_kind,
+                symbol=identity.symbol,
+                trading_date=None,
+                data_type=identity.data_type,
+                reason=reason,
+                detail=detail,
+                attempt_count=1,
+            )
+
+        return None, None, _stale(
+            "lease_timeout",
+            f"{what} sources changed while this build ran; retry rebuilds from the current sources",
+        )
+    prior = await catalog_client.refresh_complete_artifact(
+        artifact_id=existing.id,
+        worker_id=_WORKER_ID,
+        lease_ttl_ms=_LEASE_TTL_MS,
+        expected_data_contract_hash=existing.data_contract_hash,
+    )
+    if prior is None:
+        return None, None, ArtifactFailure(
+            artifact_kind=identity.artifact_kind,
+            symbol=identity.symbol,
+            trading_date=None,
+            data_type=identity.data_type,
+            reason="lease_timeout",
+            detail=f"{what} row changed after this build read it; retry rebuilds from the current sources",
+            attempt_count=1,
+        )
+    return None, prior.new_lease_generation, None
+
+
 async def _process_factor_file_artifact(
     identity: ArtifactIdentity,
     spec: DataRunSpec,
@@ -1001,35 +1069,28 @@ async def _process_factor_file_artifact(
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
             # A sibling may have published meanwhile, from a newer source
-            # set than the one this build priced. Judge against the sources
-            # as they are now: a row current for them is reused, and a build
-            # whose snapshot is out of date publishes nothing -- its narrower
-            # file would regress the coverage the sibling just recorded.
-            # lease_timeout sends the capture back through ensure_data, which
-            # rebuilds from the current sources.
-            current_dch = _factor_file_dch(await _captured_sources(), identity.price_adjustment_mode, version)
-            if await _current(existing, current_dch):
-                return existing, None, "reused"
-            if current_dch != dch:
-                return _failure(
-                    "lease_timeout",
-                    "factor_file sources changed while this build ran; retry rebuilds from the current sources",
-                )
-            # The same judgement must hold at the refresh: a sibling can
-            # still publish between that read and this one. The refresh
-            # takes the row only while it holds the contract judged above.
-            prior = await catalog_client.refresh_complete_artifact(
-                artifact_id=existing.id,
-                worker_id=_WORKER_ID,
-                lease_ttl_ms=_LEASE_TTL_MS,
-                expected_data_contract_hash=existing.data_contract_hash,
+            # set than the one this build priced. The shared claim-miss
+            # protocol (#2496) judges the row against the sources as they
+            # are now: reuse when current, lease_timeout when this build's
+            # snapshot is stale (its narrower file would regress the
+            # coverage the sibling just recorded), else a compare-and-swap
+            # refresh that a later sibling publication still wins.
+            async def _contract_now() -> str:
+                return _factor_file_dch(await _captured_sources(), identity.price_adjustment_mode, version)
+
+            reused, new_lease_generation, miss_failure = await _claim_miss_reuse_refresh_or_refuse(
+                identity=identity,
+                existing=existing,
+                built_contract=dch,
+                current_contract=_contract_now,
+                row_is_current=_current,
+                what="factor_file",
             )
-            if prior is None:
-                return _failure(
-                    "lease_timeout",
-                    "factor_file row changed after this build read it; retry rebuilds from the current sources",
-                )
-            artifact_id, lease_generation, outcome = existing.id, prior.new_lease_generation, "refreshed"
+            if miss_failure is not None:
+                return None, miss_failure, "fetched"
+            if reused is not None:
+                return reused, None, "reused"
+            artifact_id, lease_generation, outcome = existing.id, new_lease_generation, "refreshed"
         else:
             # 'failed', 'stale', or 'fetching' under someone's lease: the same
             # reclaim protocol a minute bar's row goes through.
@@ -1487,35 +1548,50 @@ async def _process_daily_trade_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_aggregated_bar_artifact(identity)
         if existing is not None:
-            if _cache_matches(existing, dch, lake_root, adjustment_version):
-                return existing, None, "reused"  # cache hit — same source set
-            # The symbol's catalogued minute coverage has grown (or a source
-            # minute artifact's bytes changed under a day-refresh) since this
-            # daily artifact was last built. Rebuild it onto the current full
-            # set instead of refusing — see catalog_client.refresh_complete_artifact.
-            prior = await catalog_client.refresh_complete_artifact(
-                artifact_id=existing.id,
-                worker_id=_WORKER_ID,
-                lease_ttl_ms=_LEASE_TTL_MS,
-            )
-            if prior is None:
-                # Raced with another worker's own refresh/claim between the two
-                # selects above; the caller's next ensure_data call retries.
-                return (
+            # The symbol's catalogued minute coverage may have grown (or a
+            # source minute artifact's bytes changed under a day-refresh)
+            # since THIS build read its sources — including by a sibling that
+            # already published a wider daily rollup. The shared claim-miss
+            # protocol (#2496, the factor-file path's) judges the row against
+            # the sources as they are now: an older, narrower build returns
+            # lease_timeout and publishes nothing over the sibling's wider
+            # zip; the caller's retry rebuilds from the current sources.
+            async def _current_sources() -> list[ArtifactRecord]:
+                return await catalog_client.select_coverage_minute_bars(
+                    identity.market,  # type: ignore[arg-type]
+                    identity.symbol,  # type: ignore[arg-type]
+                    "trade",
                     None,
-                    ArtifactFailure(
-                        artifact_kind=identity.artifact_kind,
-                        symbol=identity.symbol,
-                        trading_date=None,
-                        data_type=identity.data_type,
-                        reason="lease_timeout",
-                        detail="daily-trade rebuild raced with another worker; retry on a later ensure_data call",
-                        attempt_count=1,
-                    ),
-                    "fetched",
+                    None,
+                    price_adjustment_mode=identity.price_adjustment_mode,  # type: ignore[arg-type]
                 )
+
+            async def _contract_now() -> str:
+                sources = await _current_sources()
+                return _daily_dch(
+                    [r.id for r in sources],
+                    [r.file_sha256 for r in sources],
+                    spec.price_adjustment_mode,
+                    adjustment_version,
+                )
+
+            async def _row_is_current(row: ArtifactRecord, contract: str) -> bool:
+                return _cache_matches(row, contract, lake_root, adjustment_version)
+
+            reused, new_lease_generation, miss_failure = await _claim_miss_reuse_refresh_or_refuse(
+                identity=identity,
+                existing=existing,
+                built_contract=dch,
+                current_contract=_contract_now,
+                row_is_current=_row_is_current,
+                what="daily-trade",
+            )
+            if miss_failure is not None:
+                return None, miss_failure, "fetched"
+            if reused is not None:
+                return reused, None, "reused"  # cache hit — same source set
             artifact_id = existing.id
-            lease_generation = prior.new_lease_generation
+            lease_generation = new_lease_generation
             outcome = "refreshed"
         else:
             return (
