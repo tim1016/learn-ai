@@ -749,6 +749,7 @@ async def run_trusted_sample(
             "lake_artifact_not_committed:", "lake_incomplete_trade_coverage:",
             "lake_missing_daily_artifact:", "lake_daily_artifact_does_not_cover_window:",
             "lake_missing_required_metadata:",
+            "lake_map_file_window_mismatch:", "lake_map_file_unreadable:",
         ))
         if (not repairable or request.data_policy.source != "polygon"
                 or request.data_policy.provider_kind == "fixture"):

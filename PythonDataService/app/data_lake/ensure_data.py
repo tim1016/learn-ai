@@ -1149,8 +1149,8 @@ async def _process_map_file_artifact(
         price_adjustment_mode=identity.price_adjustment_mode,  # type: ignore[arg-type]
     )
     captured_dates = [r.trading_date for r in captured if r.trading_date is not None]
-    coverage_start = min(spec.start_trading_date, *captured_dates)
-    coverage_end = max(spec.end_trading_date, *captured_dates)
+    coverage_start = min([spec.start_trading_date, *captured_dates])
+    coverage_end = max([spec.end_trading_date, *captured_dates])
 
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
