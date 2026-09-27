@@ -77,7 +77,19 @@ def test_coverage_rechecks_catalog_even_when_file_cache_key_is_unchanged(lake, s
     "alternative/interest-rate/usa/interest-rate.csv",
 ])
 def test_lean_preflight_refuses_every_uncommitted_input(lake, seeded_lake_catalog, relative):
-    seed_lake_corporate_actions(lake, "SPY")
+    # The factor file must parse and carry a record vouching for the window
+    # (#2480 made the mount run the canonical coverage check), or the happy
+    # path below would refuse for coverage instead of admitting.
+    from app.data_lake.factor_files import SessionRun, factor_coverage_record_bytes
+    from app.data_lake.path_policy import LeanFactorFilePath
+
+    seed_lake_corporate_actions(
+        lake, "SPY", factor_rows=f"{DAY.strftime('%Y%m%d')},1,1,100\n"
+    )
+    csv_path = lake.joinpath(*LeanFactorFilePath(market="usa", symbol="SPY").relative_path().parts)
+    lake.joinpath(*LeanFactorFilePath(market="usa", symbol="SPY").coverage_record_path().parts).write_bytes(
+        factor_coverage_record_bytes("SPY", csv_path.read_bytes(), [SessionRun(DAY, DAY)])
+    )
     seed_lake_interest_rate(lake)
     assert resolve_lake_artifacts(lake_root=lake, symbol="SPY", start=DAY, end=DAY)
     keys = [key for key in seeded_lake_catalog if key[2] == relative]
