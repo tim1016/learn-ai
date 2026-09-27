@@ -33,6 +33,7 @@ from app.data_lake.adjustment_versions import (
     verify_adjustment_receipt,
 )
 from app.data_lake.atomic import ArtifactLeaseLostError, atomic_write_and_promote, publish_artifact
+from app.data_lake.bar_validation import CorruptVendorBarsError, assert_publishable_minute_bars
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -684,6 +685,34 @@ async def _process_minute_trade_artifact(
                 data_type=identity.data_type,
                 reason="provider_no_data",
                 detail="Polygon returned no bars",
+                attempt_count=1,
+            ),
+            False,
+        )
+
+    # Validate the vendor response BEFORE anything is published (#2451): a
+    # corrupt stream (duplicate/non-monotonic timestamps, wrong-day bars,
+    # non-positive or non-finite prices, OHLC violations, negative volume)
+    # fails the capture naming the offending bars. Nothing is repaired,
+    # deduplicated or dropped — the writer stores time-of-day only, so the
+    # lake cannot detect this after publication.
+    try:
+        assert_publishable_minute_bars(
+            polygon_bars,
+            symbol=identity.symbol or "",
+            trading_date=identity.trading_date,  # type: ignore[arg-type]
+        )
+    except CorruptVendorBarsError as e:
+        await catalog_client.fail_artifact(artifact_id, "validation_failed", str(e), worker_id=_WORKER_ID, lease_generation=lease_generation)
+        return (
+            None,
+            ArtifactFailure(
+                artifact_kind=identity.artifact_kind,
+                symbol=identity.symbol,
+                trading_date=identity.trading_date,
+                data_type=identity.data_type,
+                reason="validation_failed",
+                detail=str(e),
                 attempt_count=1,
             ),
             False,
