@@ -32,6 +32,7 @@ from app.lean_sidecar.launcher.models import LaunchResponse
 from app.lean_sidecar.launcher_client import DEFAULT_LAUNCHER_URL
 from app.lean_sidecar.workspace import resolve_workspace
 from app.main import app
+from app.research.backtest_runs.service import SaveOutcome
 
 pytestmark = pytest.mark.asyncio
 
@@ -61,8 +62,8 @@ def _isolated_launcher_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LEAN_LAUNCHER_TOKEN", raising=False)
     monkeypatch.setattr(settings, "BACKEND_URL", _TEST_BACKEND_URL)
 
-    async def _persisted(payload: dict) -> int:
-        return 12345
+    async def _persisted(payload: dict) -> SaveOutcome:
+        return SaveOutcome(status="saved", run_id=12345)
 
     from app.services import lean_sidecar_service
 

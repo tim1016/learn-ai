@@ -31,7 +31,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
-from app.research.backtest_runs.service import SAVE_FAILED
 from app.data_lake import run_materialization
 from app.data_lake.ensure_data import _compute_data_availability_hash
 from app.data_lake.path_policy import lake_subpath
@@ -42,6 +41,7 @@ from app.engine.engine import BacktestEngine, BacktestResult
 from app.engine.strategy.spec import StrategySpec
 from app.lean_sidecar.trading_calendar import expected_sessions, is_early_close
 from app.main import app
+from app.research.backtest_runs.service import SAVE_FAILED
 from app.routers.spec_strategy import _FIXTURES_DIR, get_data_source_factory
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service

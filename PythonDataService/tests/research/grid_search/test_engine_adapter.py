@@ -23,11 +23,11 @@ from pydantic import ValidationError
 from app.config import settings
 from app.data_lake.path_policy import lake_subpath
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.backtest_runs.service import SAVE_FAILED
 from app.research.grid_search import engine_adapter, service
 from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange, expand_grid
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service as engine_service
-from app.research.backtest_runs.service import SAVE_FAILED
 from app.services.engine_backtest_service import execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
 
