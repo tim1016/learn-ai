@@ -76,8 +76,8 @@ def _envelope(observed: bool = True) -> LiveEnvelopeGate:
                 observed_at_ms=T0,
                 broker_cash_usd=100_000.0,
                 cash_available_usd=100_000.0,
+                equity_usd=100_000.0,
                 last_equity_usd=100_000.0,
-                unrealized_pl_usd=0.0,
                 position_count=0,
             )
         )

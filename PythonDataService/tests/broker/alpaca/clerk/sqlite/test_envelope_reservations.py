@@ -103,8 +103,8 @@ def _gate(*, cash: float = 100_000.0) -> LiveEnvelopeGate:
             observed_at_ms=T0,
             broker_cash_usd=cash,
             cash_available_usd=cash,
+            equity_usd=cash,
             last_equity_usd=cash,
-            unrealized_pl_usd=0.0,
             position_count=0,
         )
     )

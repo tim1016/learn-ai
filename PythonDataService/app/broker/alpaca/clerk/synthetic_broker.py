@@ -128,8 +128,9 @@ class SyntheticBroker:
         *,
         after_ms: int | None = None,
         limit: int = 100,
+        activity_type: str | None = None,
     ) -> list[BrokerActivity]:
-        del after_ms, limit
+        del after_ms, limit, activity_type
         return []
 
     async def list_assets(

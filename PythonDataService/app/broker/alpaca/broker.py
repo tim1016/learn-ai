@@ -158,9 +158,13 @@ class AlpacaBroker:
         *,
         after_ms: int | None = None,
         limit: int = 100,
+        activity_type: str | None = None,
     ) -> list[BrokerActivity]:
+        activity_filter = (
+            {} if activity_type is None else {"activity_type": activity_type}
+        )
         if after_ms is None:
-            payloads = await self._client.list_activities(limit=limit)
+            payloads = await self._client.list_activities(limit=limit, **activity_filter)
             return [adapter.from_alpaca_activity(payload) for payload in payloads]
 
         # Recovery is explicitly bounded. Alpaca's page cursor is not the
@@ -173,6 +177,7 @@ class AlpacaBroker:
             payloads = await self._client.list_activities(
                 limit=limit,
                 page_token=page_token,
+                **activity_filter,
             )
             for activity in (adapter.from_alpaca_activity(payload) for payload in payloads):
                 if (

@@ -96,6 +96,18 @@ def test_the_loss_hold_is_a_hold_cause_and_every_envelope_refusal_is_transient()
         assert classify_admission_refusal(code) is RefusalClass.TRANSIENT
 
 
+def test_the_operator_explanation_names_the_prior_close_cash_flow_basis() -> None:
+    envelope = account_hold_envelope(
+        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+        evidence_refs=[f"day-pnl:{CAUSE.day_start_ms}"],
+        cause_facts=CAUSE.to_mapping(),
+    )
+
+    assert "current equity minus prior regular-session-close equity" in envelope.explanation
+    assert "net of today's deposits and withdrawals" in envelope.explanation
+    assert "every EXIT still runs" in envelope.explanation
+
+
 async def test_a_raised_loss_hold_blocks_new_exposure_and_admits_every_reduction(
     repo: ClerkSqliteRepository, registered_long: tuple[str, ReductionIntent]
 ) -> None:

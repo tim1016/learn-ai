@@ -18,14 +18,13 @@ The sync raises the loss hold and never releases it: only the guarded
 operator action does (plan R6, R12).
 
 Four facts leave the account *unjudgeable* rather than merely unlucky: a
-broker snapshot with no ``last_equity`` has no loss limit to judge against
-(plan R3), an external order observed today makes the day's P&L unknowable
-(plan R5), a non-finite cash, equity or unrealized figure makes every
-loss comparison meaningless, and arming inputs this observation could not
-read leave no sealed envelope to judge against at all. None may be read as
-"nothing breached", so an unjudgeable tick withdraws the gate's observation
-and every ENTER refuses ``LIVE_ENVELOPE_UNOBSERVED`` until a judgeable one
-arrives.
+broker snapshot with no ``last_equity`` has no prior-close baseline (plan R3),
+the cash-transfer activity read is incomplete, a non-finite cash or equity
+figure makes every loss comparison meaningless, and arming inputs this
+observation could not read leave no sealed envelope to judge against at all.
+None may be read as "nothing breached", so an unjudgeable tick withdraws the
+gate's observation and every ENTER refuses ``LIVE_ENVELOPE_UNOBSERVED`` until
+a judgeable one arrives.
 """
 
 from __future__ import annotations
@@ -38,6 +37,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
@@ -50,7 +50,11 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_limit_usd,
 )
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
-from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at
+from app.broker.alpaca.clerk.sqlite.day_pnl import (
+    CASH_TRANSFER_ACTIVITY_FILTER,
+    DayPnl,
+    day_pnl_at,
+)
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
@@ -130,12 +134,12 @@ def _breach_cause(reading: EnvelopeReading) -> LossHoldCause | None:
 
 
 def _non_finite_risk_fields(
-    *, cash: float, last_equity: float | None, unrealized_pl: float
+    *, cash: float, equity: float, last_equity: float | None
 ) -> tuple[str, ...]:
     """Which risk inputs the broker reported as NaN or infinity.
 
-    ``adapter.opt_float`` is a bare ``float(value)``, so an Alpaca string like
-    ``"NaN"`` arrives here as a genuine non-finite float. A NaN makes every
+    The adapter's float conversion helpers let an Alpaca string like ``"NaN"``
+    arrive here as a genuine non-finite float. A NaN makes every
     loss comparison ``False``, which is indistinguishable from "nothing
     breached" — so a non-finite input is unjudgeable in exactly the way a
     missing ``last_equity`` is, and rides the same withdrawal.
@@ -144,8 +148,8 @@ def _non_finite_risk_fields(
         name
         for name, value in (
             ("cash", cash),
+            ("equity", equity),
             ("last_equity", last_equity),
-            ("unrealized_pl", unrealized_pl),
         )
         if value is not None and not math.isfinite(value)
     )
@@ -157,10 +161,8 @@ def _unknown_detail(reading: EnvelopeReading) -> dict[str, Any]:
     return {
         "sealed_envelope_readable": reading.seal_readable,
         "last_equity_known": reading.observation.last_equity_usd is not None,
-        "external_orders_today": None if day_pnl is None else day_pnl.external_orders_today,
-        "unfoldable_orders_today": None if day_pnl is None else day_pnl.unfoldable_orders_today,
-        "execution_coverage": None if day_pnl is None else day_pnl.execution_coverage,
-        "fee_fidelity": None if day_pnl is None else day_pnl.fee_fidelity,
+        "cash_flows_known": None if day_pnl is None else day_pnl.cash_flows_known,
+        "cash_flow_count": None if day_pnl is None else day_pnl.cash_flow_count,
     }
 
 
@@ -170,6 +172,11 @@ def _observed_detail(reading: EnvelopeReading) -> dict[str, Any]:
     return {
         "cash_available_usd": reading.observation.cash_available_usd,
         "day_pnl_usd": None if day_pnl is None else day_pnl.total_usd,
+        "current_equity_usd": None if day_pnl is None else day_pnl.current_equity_usd,
+        "prior_close_equity_usd": (
+            None if day_pnl is None else day_pnl.prior_close_equity_usd
+        ),
+        "net_cash_flow_usd": None if day_pnl is None else day_pnl.net_cash_flow_usd,
         "loss_limit_usd": reading.loss_limit_usd,
         "position_count": reading.observation.position_count,
     }
@@ -229,7 +236,7 @@ class LiveEnvelopeSync:
         self._observed_account_id: str | None = None
 
     async def observe(self) -> EnvelopeReading:
-        """One ledger read and one broker read → the day-P&L reading, and the gate's observation.
+        """One ledger refresh and one broker snapshot → day P&L and the gate observation.
 
         The ledger read comes first and is what seals the envelope, so the loss
         limit below is the newest arming record's rather than whatever the
@@ -241,11 +248,11 @@ class LiveEnvelopeSync:
 
         The observation is published only when the reading can be *judged*
         AND is not breached (ruling R-A′). A missing ``last_equity`` (plan R3),
-        an external order observed today (plan R5), or a non-finite figure in
-        cash, equity or unrealized P&L leaves the account unjudgeable, and an
-        unjudgeable account must refuse every ENTER at once rather than let one
-        be bounded against a cash figure nothing can vouch for — so such a tick
-        withdraws whatever the last one published
+        an incomplete cash-transfer activity read, or a non-finite cash or
+        equity figure leaves the account unjudgeable, and an unjudgeable
+        account must refuse every ENTER at once rather than let one be bounded
+        against a cash figure nothing can vouch for — so such a tick withdraws
+        whatever the last one published
         instead of republishing it. A *breached* reading withdraws for the
         same reason: nothing may take new exposure while the account is over
         its loss limit, so a fresh observation buys nothing, and publishing
@@ -264,11 +271,16 @@ class LiveEnvelopeSync:
         # that the answer predated, and a second ENTER spent the same cash
         # (#2441).
         observed_at_ms = self._repo.clock()
-        account, positions = await asyncio.gather(
-            self._read.get_account(), self._read.list_positions()
+        day_start_ms = et_day_window_ms(observed_at_ms)[0]
+        account, positions, cash_flows = await asyncio.gather(
+            self._read.get_account(),
+            self._read.list_positions(),
+            self._read.list_activities(
+                after_ms=day_start_ms,
+                limit=100,
+                activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
+            ),
         )
-        # The day-P&L window ends here, not at the stamp: a loss closed mid-read may be gone from positions.
-        returned_at_ms = self._repo.clock()
         self._observed_account_id = account.account_id
         # Under simulated custody the broker's cash never moved, so the
         # envelope subtracts what the Clerk's own fills would have spent
@@ -278,13 +290,12 @@ class LiveEnvelopeSync:
             if self.envelope.custody_is_simulated
             else 0.0
         )
-        unrealized_pl_usd = float(sum(position.unrealized_pl for position in positions))
         observation = AccountObservation(
             observed_at_ms=observed_at_ms,
             broker_cash_usd=account.cash,
             cash_available_usd=account.cash - spent,
+            equity_usd=account.equity,
             last_equity_usd=account.last_equity,
-            unrealized_pl_usd=unrealized_pl_usd,
             position_count=len(positions),
         )
         # Withholding both loss inputs is the whole treatment: ``breached`` is
@@ -298,8 +309,8 @@ class LiveEnvelopeSync:
             self._noted_non_finite(
                 _non_finite_risk_fields(
                     cash=account.cash,
+                    equity=account.equity,
                     last_equity=account.last_equity,
-                    unrealized_pl=unrealized_pl_usd,
                 )
             )
             or not seal_readable
@@ -309,9 +320,11 @@ class LiveEnvelopeSync:
             seal_readable=seal_readable,
             day_pnl=(
                 None
-                if unjudgeable
+                if unjudgeable or account.last_equity is None
                 else day_pnl_at(
-                    self._reader, self._repo, observation=observation, now_ms=returned_at_ms
+                    observation=observation,
+                    cash_flows=cash_flows,
+                    now_ms=observed_at_ms,
                 )
             ),
             loss_limit_usd=(

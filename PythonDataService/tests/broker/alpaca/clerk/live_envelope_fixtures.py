@@ -39,7 +39,10 @@ class _LiveBroker:
 
     ``cash``, ``unrealized`` and ``last_equity_known`` are plain attributes so
     a test can move the account between ticks, which is how the cash bound and
-    the loss hold are driven. ``buying_power`` is ``cash`` deliberately: this
+    the loss hold are driven. Current equity is ``cash + unrealized`` while
+    prior-close equity is ``cash``, so ``unrealized`` models today's account
+    move rather than becoming the calculation itself. ``buying_power`` is
+    ``cash`` deliberately: this
     slice bounds ENTERs against *cash*, and a double reporting margin buying
     power would let a wrong bound look right.
 
@@ -76,7 +79,7 @@ class _LiveBroker:
             account_status="ACTIVE",
             currency="USD",
             cash=self.cash,
-            equity=self.cash,
+            equity=self.cash + self.unrealized,
             buying_power=self.cash,
             portfolio_value=self.cash,
             long_market_value=0.0,

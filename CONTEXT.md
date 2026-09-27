@@ -533,14 +533,17 @@ so they survive a broker change.
   margin account. _Avoid_: no margin, 1× leverage, cash-only
 - **Envelope refusal** — the per-order refusal of one ENTER that would breach
   the cash bound. No other state changes.
-- **Loss hold** — the account-wide state entered when day P&L breaches the
+- **Loss hold** — the account-wide state entered when account day P&L breaches the
   daily loss limit, in which every ENTER on the account is refused and every
   EXIT still runs until a guarded operator action clears it. It does not clear
   at session rollover. _Avoid_: kill switch, freeze, halt, circuit breaker
-- **Day P&L** — Clerk-projected realized session P&L plus broker-observed
-  unrealized P&L. It is unknown, not zero, when an external order was seen
-  today, when the broker reports no previous-close equity, or when marks are
-  incomplete.
+- **Account day P&L** — the cash-flow-adjusted change in broker account equity
+  since the prior regular-session close: current `equity` minus
+  `last_equity`, minus today's signed deposits and withdrawals. A carried
+  position therefore contributes only today's move, while manual and external
+  trades remain inside the account-wide fact. It is unknown, not zero, when
+  the broker reports no previous-close equity or complete transfer evidence.
+  _Avoid_: lifetime unrealized P&L, Clerk FIFO day P&L
 - **Regulatory fee schedule** — the dated table of pass-through fees on Alpaca
   equities. Fees the broker charged are the truth; the schedule predicts them.
   _Avoid_: commission, trading fee, broker fee
@@ -1905,7 +1908,7 @@ for the account badges it hosts.
   on the client from the first bar in a buffer, which can belong to a prior
   session.
   _Avoid_: day change, Δ% as a client computation.
-- **Day P&L** — realized P&L for the session plus open P&L, computed once on the
+- **Bot day P&L** — realized P&L for the session plus open P&L, computed once on the
   backend. Adding the two already-fetched numbers on the client would be a second
   P&L authority outside the one that owns it.
 

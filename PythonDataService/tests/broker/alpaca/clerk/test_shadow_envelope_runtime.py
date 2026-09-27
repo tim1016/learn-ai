@@ -243,7 +243,7 @@ async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
     registered_running_bot: RetainedSourceBar,
 ) -> None:
-    """R3 and R5, joined: unknown at the sync ⇒ UNOBSERVED at the ENTER seam.
+    """A missing prior-close baseline refuses ENTER while EXIT still runs.
 
     Both halves are pinned on their own -- the sync answers ``unknown`` and
     withdraws, and an unobserved gate refuses -- but the chain between them is
@@ -257,13 +257,14 @@ async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
     assert await runtime.envelope_sync.tick() == "observed"
     admitted = await _enter(runtime, registered_running_bot, quantity=1)
     assert admitted.state.value == "submitted", admitted.explanation
-    flattened = await _exit(runtime, registered_running_bot, quantity=1)
-    assert flattened.state.value == "flat", flattened.explanation
 
     # No previous-close equity: there is no loss limit to judge against, so
     # the account is unjudgeable and the observation is withdrawn (plan R3).
     broker.last_equity_known = False
     assert await runtime.envelope_sync.tick() == "unknown"
+
+    flattened = await _exit(runtime, registered_running_bot, quantity=1)
+    assert flattened.state.value == "flat", flattened.explanation
 
     refused = await _enter(runtime, registered_running_bot, quantity=1, decision_id="d2")
     assert refused.state.value == "rejected"
@@ -321,16 +322,16 @@ async def test_a_second_enter_inside_one_sync_interval_is_refused_by_attributed_
     assert second.explanation.startswith("ATTRIBUTED_EXPOSURE_EXISTS:")
 
 
-async def test_the_shadow_envelope_observes_the_live_accounts_positions_not_the_synthesized_book(
+async def test_the_shadow_envelope_observes_the_live_accounts_equity_not_the_synthesized_book(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
 ) -> None:
-    """Day P&L under shadow carries the live account's unrealized P&L (plan residual), so a live loss raises the hold."""
+    """The live account's equity change, not synthetic custody, raises the hold."""
     runtime, broker = shadow_runtime
     assert runtime.envelope_sync is not None
     assert runtime.sqlite_repository is not None
 
     assert await runtime.envelope_sync.tick() == "observed"
-    assert runtime.envelope_sync.envelope.latest_observation().unrealized_pl_usd == 0.0
+    assert runtime.envelope_sync.envelope.latest_observation().equity_usd == 100_000.0
 
     broker.unrealized = -5_000.0  # limit = min(0.05 × 100,000, 5,000) = 5,000; P&L −5,000 breaches
     assert await runtime.envelope_sync.tick() == "hold_raised"

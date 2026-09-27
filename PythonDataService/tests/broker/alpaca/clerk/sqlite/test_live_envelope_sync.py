@@ -6,9 +6,9 @@ broker. The whole decision is one ``tick``, so these tests drive it directly
 rather than over a running loop: every stamp is the repository clock, pinned
 at ``NOON``, and nothing here sleeps or reads a wall clock.
 
-The seeded ledger (``day_pnl_repo``, ``seeded_open_buy``,
-``seeded_external_order_today``) comes from ``conftest``: the day-P&L suite
-judges the same one, and a second copy would be a second thing to keep true.
+The seeded ledger fixtures come from ``conftest``. They still drive simulated
+cash and external-order coverage, while the account-day-P&L basis itself is
+broker equity rather than Clerk FIFO.
 """
 
 from __future__ import annotations
@@ -37,14 +37,17 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LossHoldCause,
 )
 from app.broker.contract.errors import BrokerUnavailable
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, BrokerPosition
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    BrokerActivity,
+    BrokerOrderLeg,
+    BrokerPosition,
+)
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
     TODAY_OPEN,
-    _accept_day_pnl_enter,
-    _append_day_pnl_slice,
     _TestClock,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
@@ -59,12 +62,20 @@ class _Read:
         self,
         *,
         cash: float = 100_000.0,
+        equity: float | None = None,
         last_equity: float | None = 100_000.0,
         unrealized: float = 0.0,
+        cash_flows: list[BrokerActivity] | None = None,
         fail: bool = False,
         fail_unexpectedly: bool = False,
     ) -> None:
-        self.cash, self.last_equity, self.unrealized, self.fail = cash, last_equity, unrealized, fail
+        self.cash = cash
+        self.equity = equity
+        self.last_equity = last_equity
+        self.unrealized = unrealized
+        self.cash_flows = [] if cash_flows is None else cash_flows
+        self.activity_calls: list[tuple[int | None, int, str | None]] = []
+        self.fail = fail
         # Not a ``BrokerError``: ``tick`` has no verdict for this, so it is
         # what reaches ``run``'s own guard.
         self.fail_unexpectedly = fail_unexpectedly
@@ -81,7 +92,7 @@ class _Read:
             account_status="ACTIVE",
             currency="USD",
             cash=self.cash,
-            equity=self.cash + self.unrealized,
+            equity=self.cash + self.unrealized if self.equity is None else self.equity,
             buying_power=self.cash,
             portfolio_value=self.cash,
             long_market_value=0.0,
@@ -114,6 +125,32 @@ class _Read:
                 observed_at_ms=NOON,
             )
         ]
+
+    async def list_activities(
+        self,
+        *,
+        after_ms: int | None = None,
+        limit: int = 100,
+        activity_type: str | None = None,
+    ) -> list[BrokerActivity]:
+        self.activity_calls.append((after_ms, limit, activity_type))
+        return self.cash_flows
+
+
+def _cash_flow(activity_type: str, net_amount: float | None) -> BrokerActivity:
+    return BrokerActivity(
+        broker="alpaca",
+        activity_id=f"{activity_type}-{net_amount}",
+        activity_type=activity_type,
+        category="non_trade_activity",
+        symbol=None,
+        side=None,
+        quantity=None,
+        price=None,
+        net_amount=net_amount,
+        occurred_at_ms=TODAY_OPEN,
+        observed_at_ms=NOON,
+    )
 
 
 @pytest.fixture
@@ -214,6 +251,94 @@ async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
     assert day_pnl_repo.control_meta_snapshot().control_revision == revision
 
 
+async def test_daily_loss_is_change_since_prior_close_not_lifetime_open_pnl(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """Older open gains cannot hide that the account lost 5,000 USD today."""
+    sync = make_sync(
+        day_pnl_repo,
+        _Read(
+            cash=90_000.0,
+            equity=105_000.0,
+            last_equity=110_000.0,
+            unrealized=5_000.0,
+        ),
+    )
+
+    assert await sync.tick() == "hold_raised"
+    hold = _hold(day_pnl_repo)
+    assert hold is not None
+    cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
+    assert cause.day_pnl_usd == pytest.approx(-5_000.0)
+
+
+async def test_an_earlier_open_loss_does_not_keep_the_hold_engaged_today(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    """A position can remain down since entry while the account recovers today."""
+    sync = make_sync(
+        day_pnl_repo,
+        _Read(
+            cash=115_000.0,
+            equity=105_000.0,
+            last_equity=100_000.0,
+            unrealized=-10_000.0,
+        ),
+    )
+
+    assert await sync.tick() == "observed"
+    assert _hold(day_pnl_repo) is None
+    observation = sync.envelope.latest_observation()
+    assert observation is not None and observation.equity_usd == pytest.approx(105_000.0)
+
+
+@pytest.mark.parametrize(
+    ("equity", "activity_type", "net_amount"),
+    [
+        pytest.param(110_000.0, "CSD", 10_000.0, id="deposit"),
+        pytest.param(90_000.0, "CSW", -10_000.0, id="withdrawal"),
+    ],
+)
+async def test_same_day_cash_transfers_are_not_counted_as_pnl(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+    equity: float,
+    activity_type: str,
+    net_amount: float,
+) -> None:
+    read = _Read(
+        cash=equity,
+        equity=equity,
+        last_equity=100_000.0,
+        cash_flows=[_cash_flow(activity_type, net_amount)],
+    )
+    sync = make_sync(day_pnl_repo, read)
+
+    reading = await sync.observe()
+
+    assert reading.day_pnl is not None and reading.day_pnl.known
+    assert reading.day_pnl.total_usd == pytest.approx(0.0)
+    assert read.activity_calls == [
+        (reading.day_pnl.day_start_ms, 100, "TRANS")
+    ]
+
+
+async def test_incomplete_cash_transfer_evidence_withdraws_the_observation(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    sync = make_sync(
+        day_pnl_repo,
+        _Read(cash_flows=[_cash_flow("CSD", None)]),
+    )
+
+    assert await sync.tick() == "unknown"
+    assert sync.envelope.latest_observation() is None
+    assert _hold(day_pnl_repo) is None
+
+
 async def test_a_breached_reading_withdraws_exactly_like_an_unknown_one(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
@@ -258,25 +383,16 @@ async def test_a_hold_that_stands_over_an_unjudgeable_account_says_so(
     assert record.last_equity_known is False
 
 
-async def test_an_unknown_fact_raises_nothing(
+async def test_an_external_order_does_not_hide_the_broker_wide_equity_change(
     day_pnl_repo: ClerkSqliteRepository,
     seeded_external_order_today: None,
     make_sync: Callable[..., LiveEnvelopeSync],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """An external order observed today leaves the day's P&L unknowable (plan R5)."""
+    """Broker equity already includes activity outside the Clerk's own FIFO book."""
     sync = make_sync(day_pnl_repo, _Read(unrealized=-50_000.0))
-    with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
-        assert await sync.tick() == "unknown"
-    assert _hold(day_pnl_repo) is None
+    assert await sync.tick() == "hold_raised"
+    assert _hold(day_pnl_repo) is not None
     assert sync.envelope.fresh_observation(NOON) is None
-
-    (record,) = _sync_records(caplog)
-    assert record.action == "live_envelope_unknown"
-    assert record.last_equity_known is True
-    assert record.external_orders_today == 1
-    assert record.execution_coverage == "incomplete"
-    assert record.fee_fidelity == "reported"
 
 
 async def test_a_missing_last_equity_is_unknown(
@@ -294,8 +410,8 @@ async def test_a_missing_last_equity_is_unknown(
     ("knobs", "fields"),
     [
         ({"last_equity": float("nan")}, ["last_equity"]),
-        ({"unrealized": float("inf")}, ["unrealized_pl"]),
-        ({"cash": float("nan")}, ["cash"]),
+        ({"equity": float("inf")}, ["equity"]),
+        ({"cash": float("nan"), "equity": 100_000.0}, ["cash"]),
     ],
 )
 async def test_a_non_finite_risk_figure_withdraws_the_observation(
@@ -492,8 +608,8 @@ def _observed_gate(*, cash: float, simulated: bool) -> LiveEnvelopeGate:
             observed_at_ms=T0,
             broker_cash_usd=cash,
             cash_available_usd=cash,
+            equity_usd=cash,
             last_equity_usd=cash,
-            unrealized_pl_usd=0.0,
             position_count=0,
         )
     )
@@ -667,91 +783,3 @@ async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observat
     assert next_tick.cash_available_usd == pytest.approx(1_000.0)
     assert envelope_repo.reserved_cash_usd(seen_before_ms=next_tick.fills_seen_before_ms) == 0.0
     assert _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope).created
-
-
-def _round_trip_closed_mid_read(
-    repo: ClerkSqliteRepository,
-    clock: _TestClock,
-    *,
-    entry_price: float,
-    exit_price: float,
-) -> _FillLandsMidRead:
-    """BUY 10 at today's open; the SELL that closes it lands while the positions read is in flight.
-
-    The broker answers with no open position -- the lot is closed -- so no
-    unrealized P&L carries it, and only the realized window can.
-    """
-    accepted = _accept_day_pnl_enter(repo, decision_id="d-closed-mid-read")
-    _append_day_pnl_slice(
-        repo,
-        accepted,
-        execution_id="exec-buy-today",
-        side="BUY",
-        quantity=10.0,
-        price=entry_price,
-        occurred_at_ms=TODAY_OPEN,
-    )
-    return _FillLandsMidRead(
-        clock=clock,
-        cash=100_000.0,
-        during="positions",
-        record_fill=lambda: _append_day_pnl_slice(
-            repo,
-            accepted,
-            execution_id="exec-sell-mid-read",
-            side="SELL",
-            quantity=10.0,
-            price=exit_price,
-            occurred_at_ms=clock(),
-        ),
-    )
-
-
-async def test_the_realized_day_pnl_window_ends_when_the_reads_return(
-    day_pnl_repo: ClerkSqliteRepository,
-    day_pnl_clock: _TestClock,
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """The realized window ends at a clock read taken after the broker answered.
-
-    ``observed_at_ms`` stays the pre-read stamp -- it dates which fills the
-    cash has seen -- but a lot closed during the round trip is this reading's
-    realized P&L. The positions answer may already show it closed, and a
-    window ending at the stamp would then count the close nowhere.
-    """
-    read = _round_trip_closed_mid_read(
-        day_pnl_repo, day_pnl_clock, entry_price=100.0, exit_price=110.0
-    )
-    sync = make_sync(day_pnl_repo, read, simulated=False)
-
-    reading = await sync.observe()
-
-    assert reading.day_pnl is not None
-    assert reading.day_pnl.realized_usd == pytest.approx(100.0)
-    assert reading.observation.observed_at_ms == NOON
-
-
-async def test_a_losing_close_recorded_during_the_reads_raises_the_loss_hold(
-    day_pnl_repo: ClerkSqliteRepository,
-    day_pnl_clock: _TestClock,
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """A loss realized mid-read is judged on this tick, never published past (#2473 review).
-
-    The SELL realizes $6,000 against a $5,000 limit while the positions read
-    is in flight, and the broker answers with the position already closed.
-    With the realized window ending at the pre-read stamp the loss was in
-    neither figure: the tick published an unbreached observation and the next
-    ENTER was bounded by cash alone.
-    """
-    read = _round_trip_closed_mid_read(
-        day_pnl_repo, day_pnl_clock, entry_price=1_000.0, exit_price=400.0
-    )
-    sync = make_sync(day_pnl_repo, read, simulated=False)
-
-    assert await sync.tick() == "hold_raised"
-    hold = _hold(day_pnl_repo)
-    assert hold is not None
-    cause = LossHoldCause.from_mapping(json.loads(hold["facts_json"])["cause_facts"])
-    assert cause.day_pnl_usd == pytest.approx(-6_000.0)
-    assert sync.envelope.latest_observation() is None

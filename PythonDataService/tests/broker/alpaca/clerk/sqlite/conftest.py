@@ -510,86 +510,6 @@ def _observe_foreign_order(repo: ClerkSqliteRepository, *, observed_at_ms: int) 
 
 
 @pytest.fixture
-def seeded_round_trip(day_pnl_repo: ClerkSqliteRepository) -> None:
-    """BUY 10 @ 100 on Friday, SELL 10 @ 110 today at noon with a $0.05 fee."""
-    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-round-trip")
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-buy-friday",
-        side="BUY",
-        quantity=10.0,
-        price=100.0,
-        occurred_at_ms=YESTERDAY_NOON,
-        fee=0.0,
-        fee_fidelity="reported",
-    )
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-sell-today",
-        side="SELL",
-        quantity=10.0,
-        price=110.0,
-        occurred_at_ms=NOON,
-        fee=0.05,
-        fee_fidelity="reported",
-    )
-
-
-@pytest.fixture
-def seeded_round_trip_without_fees(day_pnl_repo: ClerkSqliteRepository) -> None:
-    """The same round trip, with no commission data on the closing fill."""
-    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-round-trip-no-fees")
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-buy-friday",
-        side="BUY",
-        quantity=10.0,
-        price=100.0,
-        occurred_at_ms=YESTERDAY_NOON,
-    )
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-sell-today",
-        side="SELL",
-        quantity=10.0,
-        price=110.0,
-        occurred_at_ms=NOON,
-    )
-
-
-@pytest.fixture
-def seeded_round_trip_closed_yesterday(day_pnl_repo: ClerkSqliteRepository) -> None:
-    """A whole round trip that opened and closed on Friday — none of it is today's."""
-    accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-closed-yesterday")
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-buy-friday-open",
-        side="BUY",
-        quantity=10.0,
-        price=100.0,
-        occurred_at_ms=YESTERDAY_OPEN,
-        fee=0.0,
-        fee_fidelity="reported",
-    )
-    _append_day_pnl_slice(
-        day_pnl_repo,
-        accepted,
-        execution_id="exec-sell-friday-noon",
-        side="SELL",
-        quantity=10.0,
-        price=110.0,
-        occurred_at_ms=YESTERDAY_NOON,
-        fee=0.0,
-        fee_fidelity="reported",
-    )
-
-
-@pytest.fixture
 def seeded_open_buy(day_pnl_repo: ClerkSqliteRepository) -> None:
     """BUY 10 @ 100 at today's open, still held — nothing realized yet."""
     accepted = _accept_day_pnl_enter(day_pnl_repo, decision_id="d-open-buy")
@@ -609,8 +529,3 @@ def seeded_open_buy(day_pnl_repo: ClerkSqliteRepository) -> None:
 @pytest.fixture
 def seeded_external_order_today(day_pnl_repo: ClerkSqliteRepository) -> None:
     _observe_foreign_order(day_pnl_repo, observed_at_ms=TODAY_OPEN)
-
-
-@pytest.fixture
-def seeded_external_order_yesterday(day_pnl_repo: ClerkSqliteRepository) -> None:
-    _observe_foreign_order(day_pnl_repo, observed_at_ms=YESTERDAY_NOON)

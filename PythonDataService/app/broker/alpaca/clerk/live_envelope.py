@@ -183,8 +183,8 @@ class AccountObservation:
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
     cash_available_usd: float
+    equity_usd: float
     last_equity_usd: float | None
-    unrealized_pl_usd: float
     position_count: int
 
     @property
