@@ -677,13 +677,61 @@ def _forward_fill_bars(df: pd.DataFrame, schedule: pd.DataFrame, session: str) -
 # ──────────────────────────────────────────────
 # OHLCV Resampling
 # ──────────────────────────────────────────────
+def _session_anchor_et(session_date: date, session: str) -> pd.Timestamp:
+    """The ET instant each bin grid of ``session_date`` starts at.
+
+    RTH: the canonical calendar's scheduled ``market_open`` — never a
+    hardcoded wall-clock, so half-days inherit the same 09:30 open and
+    their short close bounds the last bin naturally. ETH: 04:00 ET, the
+    platform's extended-session open (NYSE schedules no extended hours,
+    so this service owns the 04:00–20:00 convention it also fills bars
+    within).
+    """
+    if session == "rth":
+        open_ms = session_window_for_date(session_date).open_ms_utc
+        return pd.Timestamp(open_ms, unit="ms", tz="UTC").tz_convert(_ET)
+    return pd.Timestamp(session_date.year, session_date.month, session_date.day, 4, 0, tz=_ET)
+
+
+def _resample_intraday_session_anchored(
+    df: pd.DataFrame, minutes: int, session: str, agg_dict: dict[str, Any]
+) -> pd.DataFrame:
+    """Intraday OHLCV bins whose grid restarts at each session's open (#2459).
+
+    Every session's bins start at that session's anchor
+    (:func:`_session_anchor_et`) and step by ``minutes``, so a 4-hour
+    chart reads 09:30–13:30 / 13:30–close, an early close's grid ends
+    where the calendar ended it, and labels keep their wall-clock across
+    a DST change (a midnight-anchored absolute grid lands an hour off on
+    the far side of one). Bins with no bars never form, so there is no
+    empty-bin dropping to do.
+    """
+    et_index = df.index
+    bar_span = pd.Timedelta(minutes=minutes)
+    anchors: dict[date, pd.Timestamp] = {}
+    bins: list[tuple[date, int]] = []
+    for ts, session_date in zip(et_index, et_index.date, strict=True):
+        anchor = anchors.get(session_date)
+        if anchor is None:
+            anchor = _session_anchor_et(session_date, session)
+            anchors[session_date] = anchor
+        bins.append((session_date, (ts - anchor) // bar_span))
+    resampled = df.groupby(pd.Series(bins, index=et_index, dtype="object"), sort=True).agg(agg_dict)
+    resampled.index = pd.DatetimeIndex(
+        [anchors[session_date] + bin_idx * bar_span for session_date, bin_idx in resampled.index],
+        tz=_ET,
+    )
+    return resampled
+
+
 def _resample_bars(df: pd.DataFrame, timeframe: str, session: str) -> pd.DataFrame:
     """
     Resample 1-minute bars to target timeframe.
 
     Anchor rules:
-    - RTH intraday: anchored to 9:30 ET (NYSE session start)
-    - ETH intraday: anchored to 4:00 ET (pre-market start)
+    - RTH intraday: each session's bins start at its scheduled open, from
+      the canonical trading calendar (#2459)
+    - ETH intraday: each session's bins start at 04:00 ET (pre-market open)
     - Daily+: standard calendar alignment
     """
     if timeframe == "1m":
@@ -694,22 +742,12 @@ def _resample_bars(df: pd.DataFrame, timeframe: str, session: str) -> pd.DataFra
         raise ValueError(f"Unknown timeframe: {timeframe}")
 
     rule = tf_def["rule"]
+    minutes = tf_def["minutes"]
 
     # Convert timestamp to datetime index in ET for correct alignment
     df = df.copy()
     df["_dt"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_ET)
     df = df.set_index("_dt")
-
-    # Determine resample offset for session-start anchoring
-    offset = None
-    minutes = tf_def["minutes"]
-    if minutes < 390:  # intraday
-        if session == "rth":
-            # NYSE opens at 9:30 — 30 min offset from top-of-hour
-            offset = timedelta(minutes=30)
-        else:
-            # Pre-market starts at 4:00 — no offset needed
-            offset = timedelta(minutes=0)
 
     agg_dict: dict[str, Any] = {
         "open": "first",
@@ -733,13 +771,12 @@ def _resample_bars(df: pd.DataFrame, timeframe: str, session: str) -> pd.DataFra
     if has_synthetic:
         agg_dict["synthetic"] = "any"
 
-    if offset is not None:
-        resampled = df.resample(rule, offset=offset).agg(agg_dict)
+    if minutes < 390:  # intraday
+        resampled = _resample_intraday_session_anchored(df, minutes, session, agg_dict)
     else:
         resampled = df.resample(rule).agg(agg_dict)
-
-    # Drop empty bars (weekends, holidays)
-    resampled = resampled.dropna(subset=["open"])
+        # Drop empty bars (weekends, holidays)
+        resampled = resampled.dropna(subset=["open"])
 
     # Convert back to UTC epoch ms timestamps
     _epoch = pd.Timestamp("1970-01-01", tz="UTC")
