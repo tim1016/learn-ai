@@ -772,6 +772,8 @@ def preprocess_and_calculate(
     forward_fill: bool = False,
     fail_on_gaps: bool = True,
     trim_from_ts: int | None = None,
+    trim_to_ts: int | None = None,
+    gap_check_from_ts: int | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
     timespan: str = "minute",
@@ -782,10 +784,13 @@ def preprocess_and_calculate(
       1. Reject duplicate or non-monotonic bars
       2. Session filter (RTH or extended)
       3. Tag session column (rth/pre/post) for CSV export
-      4. Gap check (fail-fast by default)
+      4. Gap check (fail-fast by default; scoped to ``gap_check_from_ts``
+         when given — a gap inside warm-up lead-in rows the caller will trim
+         away is not the output's gap)
       5. Forward-fill gaps (optional)
       6. Calculate dynamic indicators
-      7. Trim warm-up rows (optional, by timestamp)
+      7. Trim warm-up rows (optional, by timestamp) and the exclusive
+         ``trim_to_ts`` bound
     """
     assert_canonical_bar_stream(bars, "dataset")
     df = pd.DataFrame(bars)
@@ -797,7 +802,10 @@ def preprocess_and_calculate(
         df = _tag_session_column(df, from_date, to_date)
 
     if fail_on_gaps:
-        gaps = _detect_gaps(df, timespan, multiplier)
+        gap_scope = df
+        if gap_check_from_ts is not None:
+            gap_scope = df[df["timestamp"] >= gap_check_from_ts]
+        gaps = _detect_gaps(gap_scope, timespan, multiplier)
         if gaps:
             raise ValueError(
                 f"fail_on_gaps=True: {len(gaps)} intra-day gap(s) detected. "
@@ -817,6 +825,10 @@ def preprocess_and_calculate(
         before = len(df)
         df = df[df["timestamp"] >= trim_from_ts].reset_index(drop=True)
         logger.info(f"[TRIM] Warm-up trimmed: {before} → {len(df)} rows")
+    if trim_to_ts is not None:
+        before = len(df)
+        df = df[df["timestamp"] < trim_to_ts].reset_index(drop=True)
+        logger.info(f"[TRIM] Exclusive end bound: {before} → {len(df)} rows")
 
     return df, column_meta
 

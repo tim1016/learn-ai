@@ -47,6 +47,7 @@ from app.services.dataset_service import (
     select_output_columns,
 )
 from app.services.polygon_client import PolygonClientService
+from app.utils.session_anchors import et_midnight_ms
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -130,17 +131,25 @@ def _fetch_and_process(
         logger.info(
             f"[DATASET] Warm-up: fetching from {fetch_from} (requested {request.from_date}, lookback={max_lookback})"
         )
+    # The picked session begins at ET midnight of from_date: the prior
+    # session's 19:00–20:00 ET post-market bars carry timestamps from the
+    # picked date's UTC morning (00:00–01:00/01:00–02:00 UTC), so a
+    # UTC-midnight trim would retain up to two hours of the previous
+    # session the chart never shows (#2524 review). ET midnight is
+    # DST-safe through app.utils.session_anchors.
+    et_midnight = et_midnight_ms(datetime.strptime(request.from_date, "%Y-%m-%d").date())
+    trim_from_ts = et_midnight if trim_from_ts is None else max(trim_from_ts, et_midnight)
     # The export trims to the requested start (#2457): the day-granular
     # fetch cannot split a session, so a mid-session numeric start would
     # otherwise leak the bars before it into dataset.csv. The resolver
     # floors start_ms_utc to from_date's UTC date, so it always bounds the
     # warm-up trim from above.
     if request.start_ms_utc is not None:
-        trim_from_ts = (
-            request.start_ms_utc
-            if trim_from_ts is None
-            else max(trim_from_ts, request.start_ms_utc)
-        )
+        trim_from_ts = max(trim_from_ts, request.start_ms_utc)
+    # The requested end is exclusive by contract (DatasetGenerationRequest.
+    # end_ms_utc): a mid-session end must not ship the rest of that session
+    # just because the day-granular fetch cannot split it (#2524 review).
+    trim_to_ts = request.end_ms_utc
 
     bars = fetch_bars_chunked(
         polygon_client,
@@ -205,6 +214,8 @@ def _fetch_and_process(
         forward_fill=request.forward_fill,
         fail_on_gaps=request.fail_on_gaps,
         trim_from_ts=trim_from_ts,
+        trim_to_ts=trim_to_ts,
+        gap_check_from_ts=trim_from_ts,
         from_date=request.from_date,
         to_date=request.to_date,
         timespan=request.timespan,

@@ -91,6 +91,18 @@ def _resolve_window(request: DatasetPlanRequest) -> tuple[int, int, date, date]:
         if request.end_ms_utc is not None
         else session_open_ms_utc(next_trading_day(to_date))
     )
+    if request.end_ms_utc is not None:
+        # The numeric end is EXCLUSIVE: a trailing session whose open is at
+        # or after it has zero overlap with the window, and the receipt must
+        # not count it (session list, session count, day-and-above bar
+        # estimate) as a session the run will read (#2524 review). Only
+        # scheduled sessions are considered — the calendar has no open for a
+        # holiday or weekend date.
+        scheduled = expected_sessions(from_date, to_date)
+        while scheduled and session_open_ms_utc(scheduled[-1]) >= request.end_ms_utc:
+            scheduled.pop()
+        if scheduled:
+            to_date = scheduled[-1]
     if window_end <= window_start:
         raise ValueError(
             f"resolved window is empty: window_start_ms_utc={window_start} "
