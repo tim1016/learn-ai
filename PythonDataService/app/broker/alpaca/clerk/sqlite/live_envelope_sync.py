@@ -304,10 +304,7 @@ class LiveEnvelopeSync:
             limit=100,
             activity_type=CASH_TRANSFER_ACTIVITY_FILTER,
         )
-        account, positions = await asyncio.gather(
-            self._read.get_account(),
-            self._read.list_positions(),
-        )
+        account = await self._read.get_account()
         cash_flows_after = await self._read.list_activities(
             after_ms=day_start_ms,
             limit=100,
@@ -332,7 +329,7 @@ class LiveEnvelopeSync:
             cash_available_usd=account.cash - spent,
             equity_usd=account.equity,
             last_equity_usd=account.last_equity,
-            position_count=len(positions),
+            position_count=None,
         )
         # Withholding both loss inputs is the whole treatment: ``breached`` is
         # then None, the tick withdraws on the existing path, and no new

@@ -107,6 +107,21 @@ def test_a_transfer_after_friday_close_is_in_the_tuesday_post_holiday_window() -
     assert pnl.known
 
 
+def test_after_hours_keeps_the_previous_trading_day_close_as_its_baseline() -> None:
+    after_close_ms = NOON + 5 * 60 * 60 * 1_000
+    prior_close_ms = previous_completed_session_close_ms(NOON)
+    pnl = day_pnl_at(
+        observation=_observation(current_equity=110_000.0),
+        cash_flows=[_cash_flow("CSD", 10_000.0)],
+        now_ms=after_close_ms,
+    )
+
+    assert pnl.day_start_ms == prior_close_ms
+    assert pnl.net_cash_flow_usd == pytest.approx(10_000.0)
+    assert pnl.total_usd == pytest.approx(0.0)
+    assert pnl.known
+
+
 @pytest.mark.parametrize(
     "activity",
     [

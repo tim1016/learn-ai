@@ -114,14 +114,13 @@ notional cap, no symbol allowlist, no session restriction.
   fills would have spent — to get `cash_available_usd`; under real custody the
   broker's own cash already reflects it.
 - **The observation is dated when its reads are issued** (fixed 2026-09-24,
-  #2441). `observed_at_ms` is stamped before `get_account` and
-  `list_positions` and cash-transfer activity reads go out, never when they
-  return: a broker answer is only
+  #2441). `observed_at_ms` is stamped before the bracketed cash-transfer and
+  account reads go out, never when they return: a broker answer is only
   known to be at least as recent as its request. Stamped on return, the
   observation released the reservation of a fill the Clerk recorded during
   the round trip — which the broker's answer could predate — and a second
   instance was admitted against cash the first had already spent. One slow
-  account read was enough; the parallel positions read was not the cause.
+  account read was enough.
   Freshness is aged from the same instant (it errs old by the round trip).
 - **Reservations, fills-aware.** `PythonDataService/app/broker/alpaca/clerk/sqlite/envelope_reservations.py`
   prices the part of an accepted ENTER the latest observation cannot see. A
@@ -182,9 +181,11 @@ notional cap, no symbol allowlist, no session restriction.
   ([Account Object](https://docs.alpaca.markets/us/v1.1/docs/account-plans))
   and recommends `equity - last_equity` for the account's day change
   ([Working with /account](https://docs.alpaca.markets/us/docs/working-with-account)).
-  The start comes from the canonical NYSE calendar, so weekends, holidays and
-  early closes cannot make the cash-flow horizon disagree with the equity
-  baseline. The sync reads the complete `TRANS` window immediately before and
+  The start is the canonical close of the trading day before the current ET
+  calendar day. It therefore does not advance after today's session closes,
+  and weekends, holidays, and early closes cannot make the cash-flow horizon
+  disagree with the `last_equity` baseline. The sync reads the complete
+  `TRANS` window immediately before and
   after its account snapshot and accepts it only when both economic row sets
   match. It subtracts signed `CSD` deposits and `CSW` withdrawals, whose
   `net_amount` sign is part of Alpaca's activity contract
@@ -196,6 +197,10 @@ notional cap, no symbol allowlist, no session restriction.
   movement into profit or loss. Broker equity already includes every carried
   position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
   composition participates in this account fact.
+- **Positions are not a loss input.** Current equity already includes every
+  open position. The sync therefore does not call the positions endpoint for
+  this verdict; `AccountObservation.position_count` remains `None` rather
+  than letting a diagnostic read suppress a loss hold or guarded clear.
 - **An unreadable seal is unjudgeable, not a fallback.** `sealed` also returns
   to `None` when the arming inputs cannot be read (a corrupt ledger row, a
   binding store that will not open), and *there* the fallback would be a
@@ -355,8 +360,8 @@ it to every facade authority.
   admitted for.
 - **Account day P&L under shadow is the live account's.** The sync's
   `envelope_read` is the live read port, not the shadow book, so `equity`,
-  `last_equity`, transfer activities, cash and position count describe the
-  live account. Simulated fills affect the shadow rehearsal's available-cash
+  `last_equity`, transfer activities, and cash describe the live account.
+  Simulated fills affect the shadow rehearsal's available-cash
   subtraction but do not invent broker equity.
 - **A mirror rebuild loses the reservations of still-working ENTERs.** The
   `envelope_reservations` side table is product evidence *outside* the custody

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
 CASH_TRANSFER_ACTIVITY_TYPES: frozenset[str] = frozenset({"CSD", "CSW"})
@@ -90,8 +91,15 @@ def day_pnl_at(
 
 
 def day_pnl_window_start_ms(now_ms: int) -> int:
-    """Return the canonical NYSE close backing Alpaca ``last_equity``."""
-    return previous_completed_session_close_ms(now_ms)
+    """Return the prior trading day's close backing Alpaca ``last_equity``.
+
+    Anchor the search at the current ET calendar day's midnight rather than
+    ``now_ms``. Otherwise the boundary advances to today's close during the
+    after-hours window while ``last_equity`` still describes the prior trading
+    day, splitting one P&L fact across two different horizons.
+    """
+    current_et_day_start_ms = et_midnight_ms(et_date_at_ms(now_ms))
+    return previous_completed_session_close_ms(current_et_day_start_ms)
 
 
 __all__ = [

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Literal
+from typing import Any
 
 import pytest
 
@@ -69,6 +69,7 @@ class _Read:
         cash_flows: list[BrokerActivity] | None = None,
         cash_flow_reads: list[list[BrokerActivity]] | None = None,
         fail: bool = False,
+        fail_positions: bool = False,
         fail_unexpectedly: bool = False,
     ) -> None:
         self.cash = cash
@@ -79,6 +80,7 @@ class _Read:
         self.cash_flow_reads = cash_flow_reads
         self.activity_calls: list[tuple[int | None, int, str | None]] = []
         self.fail = fail
+        self.fail_positions = fail_positions
         # Not a ``BrokerError``: ``tick`` has no verdict for this, so it is
         # what reaches ``run``'s own guard.
         self.fail_unexpectedly = fail_unexpectedly
@@ -109,6 +111,8 @@ class _Read:
         )
 
     async def list_positions(self) -> list[BrokerPosition]:
+        if self.fail_positions:
+            raise BrokerUnavailable("positions read timed out")
         if self.unrealized == 0.0:
             return []
         return [
@@ -350,6 +354,18 @@ async def test_a_transfer_that_straddles_the_account_read_makes_the_tick_unknown
     assert len(read.activity_calls) == 2
 
 
+async def test_positions_are_not_required_for_the_equity_loss_verdict(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    sync = make_sync(day_pnl_repo, _Read(fail_positions=True))
+
+    assert await sync.tick() == "observed"
+    observation = sync.envelope.latest_observation()
+    assert observation is not None
+    assert observation.position_count is None
+
+
 async def test_incomplete_cash_transfer_evidence_withdraws_the_observation(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
@@ -586,11 +602,9 @@ READ_LEG_MS = FILL_VISIBILITY_GRACE_MS + 1_000
 class _FillLandsMidRead(_LiveBroker):
     """The live account, answering the snapshot it took before a fill the Clerk records meanwhile.
 
-    ``during`` names the read whose round trip the fill lands inside. The
-    broker's answer is built first -- the pre-fill cash -- and only then does
-    the clock move and the Clerk record the fill, so the response returns
-    after the fill carrying a figure that does not include it. The fill lands
-    once, on the first round trip of that read.
+    The account answer is built first -- the pre-fill cash -- and only then
+    does the clock move and the Clerk record the fill, so the response returns
+    after the fill carrying a figure that does not include it.
     """
 
     def __init__(
@@ -598,31 +612,25 @@ class _FillLandsMidRead(_LiveBroker):
         *,
         clock: _TestClock,
         cash: float,
-        during: Literal["account", "positions"],
         record_fill: Callable[[], None],
     ) -> None:
         super().__init__(now_ms=clock(), cash=cash)
         self._clock = clock
-        self._during: str | None = during
+        self._fill_pending = True
         self._record_fill = record_fill
 
-    def _in_flight(self, read: str) -> None:
-        if read != self._during:
+    def _record_in_flight_fill(self) -> None:
+        if not self._fill_pending:
             return
-        self._during = None
+        self._fill_pending = False
         self._clock.advance(READ_LEG_MS)
         self._record_fill()
         self._clock.advance(READ_LEG_MS)
 
     async def get_account(self) -> BrokerAccountSnapshot:
         snapshot = await super().get_account()
-        self._in_flight("account")
+        self._record_in_flight_fill()
         return snapshot
-
-    async def list_positions(self) -> list[BrokerPosition]:
-        positions = await super().list_positions()
-        self._in_flight("positions")
-        return positions
 
 
 def _observed_gate(*, cash: float, simulated: bool) -> LiveEnvelopeGate:
@@ -670,28 +678,18 @@ def _fill_all_ten(
     )
 
 
-@pytest.mark.parametrize(
-    "during",
-    [
-        pytest.param("positions", id="codex-fill-while-positions-read"),
-        pytest.param("account", id="fill-inside-the-single-account-read"),
-    ],
-)
 async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     envelope_repo: ClerkSqliteRepository,
     envelope_clock: _TestClock,
     two_active_instances: tuple[tuple[str, str], tuple[str, str]],
     make_sync: Callable[..., LiveEnvelopeSync],
-    during: Literal["account", "positions"],
 ) -> None:
     """Two instances share $1,000, and the first's $1,000 fill lands mid-read.
 
     The broker answers $1,000 -- its snapshot predates the fill -- so only the
     first ENTER's reservation stands between the second instance and cash
-    already spent. Codex (#2415 finding A1) reproduced the admission with the
-    fill inside the parallel positions read; the single-read variant shows the
-    parallel read is not the cause. One account round trip is enough, because
-    the fault was the stamp.
+    already spent. One account round trip is enough, because the fault was the
+    stamp; the positions endpoint is no longer part of this equity-only verdict.
     """
     first_instance, second_instance = two_active_instances
     first = _enter(
@@ -703,7 +701,6 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     read = _FillLandsMidRead(
         clock=envelope_clock,
         cash=1_000.0,
-        during=during,
         record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
     )
     sync = make_sync(envelope_repo, read, simulated=False)
@@ -789,7 +786,6 @@ async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observat
     read = _FillLandsMidRead(
         clock=envelope_clock,
         cash=2_000.0,
-        during="account",
         record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
     )
     sync = make_sync(envelope_repo, read, simulated=True)

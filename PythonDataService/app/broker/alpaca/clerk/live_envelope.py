@@ -185,7 +185,10 @@ class AccountObservation:
     cash_available_usd: float
     equity_usd: float
     last_equity_usd: float | None
-    position_count: int
+    # Diagnostic only; the equity loss verdict never depends on the positions
+    # endpoint, so the sync leaves this unknown rather than coupling safety to
+    # a second broker surface.
+    position_count: int | None
 
     @property
     def fills_seen_before_ms(self) -> int:
