@@ -113,7 +113,7 @@ def _polygon_payload(ticker: str) -> dict:
     }
 
 
-def _responder(payload: dict, *, latency_s: float):
+def _responder(payload_for_request, *, latency_s: float):
     """A respx side effect that actually suspends the caller.
 
     ``mock(return_value=…)`` returns without ever awaiting, so two coroutines
@@ -121,19 +121,49 @@ def _responder(payload: dict, *, latency_s: float):
     that thinks it proved concurrency has proved sequential cache reuse. A
     non-zero ``latency_s`` puts a real suspension point inside the request, so
     the second ensure runs while the first is still mid-fetch.
+
+    ``payload_for_request`` builds the response body from the requested range
+    so bars carry the ET date of the day being captured — the lake rejects
+    wrong-day vendor bars (#2451), and a canned 2024-05-20 payload served to
+    a 2024-05-21 fetch would fail that validation.
     """
 
     async def _respond(request: httpx.Request) -> httpx.Response:
         if latency_s:
             await asyncio.sleep(latency_s)
-        return httpx.Response(200, json=payload)
+        return httpx.Response(200, json=payload_for_request(request))
 
     return _respond
 
 
+def _session_payload(request: httpx.Request, ticker: str) -> dict:
+    """A clean 390-bar session stamped for the capture day in the request URL."""
+    match = re.search(r"/range/1/minute/(\d{4}-\d{2}-\d{2})/", str(request.url))
+    if match is None:
+        raise AssertionError(f"unexpected aggregate URL: {request.url}")
+    day_offset_ms = (date.fromisoformat(match.group(1)) - TRADING_DAY).days * 86_400_000
+    return {
+        "ticker": ticker,
+        "status": "OK",
+        "results": [
+            {
+                "v": 1000,
+                "vw": 500.0,
+                "o": 500.0,
+                "c": 500.05,
+                "h": 500.10,
+                "l": 499.95,
+                "t": BAR_START_MS + day_offset_ms + i * 60_000,
+                "n": 10,
+            }
+            for i in range(390)
+        ],
+    }
+
+
 def _mock_polygon(ticker: str = "SPY", *, latency_s: float = 0.0):
     return respx.get(url__regex=rf"https://api\.polygon\.io/v2/aggs/ticker/{ticker}/range/1/minute/.*").mock(
-        side_effect=_responder(_polygon_payload(ticker), latency_s=latency_s)
+        side_effect=_responder(lambda request: _session_payload(request, ticker), latency_s=latency_s)
     )
 
 

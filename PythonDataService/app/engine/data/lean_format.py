@@ -161,6 +161,17 @@ def _parse_csv_bytes(
             continue
         parts = line.split(",")
         if len(parts) != 6:
+            # Deliberate skip, not silent repair (#2451): a wrong-width row
+            # is not a bar any run will read, but failing the whole file
+            # here would turn one corrupt row into "every session in this
+            # zip is unreadable" — for a daily history zip that hides the
+            # symbol's entire past, and availability (#2489) treats
+            # unreadable as un-backfillable. Skipping keeps the per-session
+            # truth: a session whose rows are all unparseable reads empty
+            # and the availability calendar reports it missing (and
+            # backfillable) instead. The lake's publication gate
+            # (app.data_lake.bar_validation) is what stops corrupt rows
+            # from entering managed lake files at all.
             continue
         ms, o, h, l, c, v = parts
         # Bar start time: midnight + ms
@@ -363,6 +374,8 @@ def _parse_daily_csv_bytes(
             continue
         parts = line.split(",")
         if len(parts) != 6:
+            # Same deliberate skip as the minute parser — see the
+            # justification there (#2451).
             continue
         ts, o, h, l, c, v = parts
         # ts is "YYYYMMDD HH:MM"; splitting on space gives date | time.
