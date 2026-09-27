@@ -355,9 +355,16 @@ export class StrategyLabConfigStore {
     this.configurationWarning.set(null);
     if (engine !== "lean") this.customLeanSource.set(null);
     this.engine.set(engine);
-    this.restoredDataPolicy.update((policy) => policy === null ? null : {
-      ...policy,
-      adjusted: engine !== "both",
+    this.restoredDataPolicy.update((policy) => {
+      if (policy === null) return null;
+      const adjusted = engine !== "both";
+      // A Both snapshot hashes one adjustment tree. Changing the tree starts
+      // a new experiment; its old frozen receipt cannot describe those bars.
+      if (policy.adjusted !== adjusted && policy.source === "polygon" &&
+          policy.provider_kind === "fixture" && policy.fixture_id?.startsWith("bar-store-v1-")) {
+        return { ...policy, adjusted, provider_kind: "live", fixture_id: null, fixture_sha256: null };
+      }
+      return { ...policy, adjusted };
     });
     if (this.restoredDataPolicy() !== null) this.reconcileHistoricalSelection();
   }

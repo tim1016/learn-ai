@@ -220,6 +220,30 @@ async def select_complete_metadata_artifact(
     )
 
 
+async def scope_verified_legacy_metadata(
+    artifact_id: int, data_root_id: UUID, price_adjustment_mode: str,
+    file_path: str, file_sha256: str, file_size_bytes: int,
+) -> bool:
+    """Bind a legacy null-mode row after the metadata bundle verifies its bytes.
+
+    The caller selected this row by its mode-bound data-contract hash. Never
+    adopt a sibling mode, uncommitted publication, or a different file version.
+    """
+    async with connection() as conn:
+        row = await conn.fetchrow(
+            '''
+            UPDATE "DataLakeArtifacts" SET "PriceAdjustmentMode" = $3
+             WHERE "Id" = $1 AND "DataRootId" = $2
+               AND "ArtifactKind" = 'metadata' AND "Status" = 'complete'
+               AND "PriceAdjustmentMode" IS NULL
+               AND "FilePath" = $4 AND "FileSha256" = $5 AND "FileSizeBytes" = $6
+            RETURNING "Id"
+            ''',
+            artifact_id, data_root_id, price_adjustment_mode, file_path, file_sha256, file_size_bytes,
+        )
+    return row is not None
+
+
 async def select_complete_corp_action_artifact(
     identity: ArtifactIdentity,
 ) -> ArtifactRecord | None:

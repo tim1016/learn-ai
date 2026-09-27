@@ -16,12 +16,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
+import respx
 
 from app.data_lake.path_policy import lake_subpath
 from app.lean_sidecar.lake_mount import CONTAINER_LAKE_DATA_MOUNT
@@ -332,6 +336,118 @@ async def test_a_fixture_replay_never_consults_the_lake_even_when_it_has_no_cove
 
 
 @pytest.mark.asyncio
+async def test_compatibility_fixture_reads_committed_lake_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    seeded_lake_catalog: dict,
+) -> None:
+    from app.config import settings
+    from app.data_lake.admission import LakeAdmissionError
+    from app.engine.data.policy_store import snapshot_minute_trade_zips
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    monkeypatch.setattr(service, "stage_lean_metadata_from_image", lambda *_a, **_k: None)
+    receipt = await asyncio.to_thread(
+        snapshot_minute_trade_zips, [lake_root], symbol=SYMBOL,
+        start=DAY_ONE, end=DAY_TWO, adjusted=False, session="regular",
+    )
+    request = _request("committed-compatibility")
+    request = replace(request, data_policy=replace(
+        request.data_policy, provider_kind="fixture", fixture_id=receipt["fixture_id"],
+        fixture_sha256=receipt["fixture_sha256"],
+    ))
+
+    result = await service.run_trusted_sample(request)
+
+    assert len(orchestrator.launch_requests) == 1
+
+    assert not orchestrator.launch_requests[0].mount_lake_read_only
+    manifest = _read_manifest(result.workspace_root)
+    assert manifest["data_policy"]["fixture_sha256"] == receipt["fixture_sha256"]
+    for file in receipt["files"]:
+        staged = result.workspace_root / "workspace" / "data" / file["path"]
+        assert hashlib.sha256(staged.read_bytes()).hexdigest() == file["sha256"]
+
+    # The thread boundary must not turn a frozen hash into an admission bypass.
+    seeded_lake_catalog.clear()
+    request = replace(request, run_id="uncommitted-compatibility")
+    with pytest.raises(LakeAdmissionError, match="committed"):
+        await service.run_trusted_sample(request)
+    assert len(orchestrator.launch_requests) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("damage", ["quote_receipts", "quote_files", "metadata_scope", "both"])
+async def test_lake_run_repairs_legacy_inputs_from_verified_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+    damage: str,
+) -> None:
+    from app.data_lake import ensure_data as pipeline
+    from app.data_lake.adjustment_versions import companion_path
+    from app.data_lake.polygon_fetcher import PolygonBar
+    from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
+    from app.services import lean_sidecar_service as service
+    from tests._helpers.fake_lake_catalog import install_fake_catalog, mock_launcher, point_lake_writer_at_tmp
+
+    point_lake_writer_at_tmp(tmp_path, monkeypatch)
+    catalog = install_fake_catalog(monkeypatch)
+    mock_launcher()
+    fetches: list[date] = []
+
+    async def bars(*, start: date, **_kwargs: Any) -> list[PolygonBar]:
+        fetches.append(start)
+        return [PolygonBar(t_ms=session_open_ms_utc(start), open=100, high=101, low=99,
+                           close=100, volume=100, vwap=100, n=1)]
+
+    monkeypatch.setattr(pipeline, "fetch_minute_trade_aggregates", bars)
+    monkeypatch.setattr(pipeline, "fetch_splits", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pipeline, "fetch_dividends", AsyncMock(return_value=[]))
+    captured = await pipeline.ensure_data(DataRunSpec(
+        request_id=uuid4(), run_type="lean_lab", symbols=[SYMBOL],
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(DAY_ONE),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(DAY_TWO),
+        data_types=["trade", "quote"], price_adjustment_mode="polygon_split_adjusted",
+        include_factor_files=False, include_map_files=False,
+        lean_image_digest=service.PINNED_LEAN_IMAGE_DIGEST,
+    ))
+    assert captured.overall_status == "complete"
+    root = Path(captured.lean_data_root_path)
+    quotes = [r for r in captured.artifacts if r.data_type == "quote"]
+    assert len(quotes) == 2
+    if damage != "metadata_scope":
+        for record in quotes:
+            companion_path(root / record.file_path).unlink()
+            catalog.rows[record.id]["corporate_action_version"] = None
+            if damage == "quote_files":
+                (root / record.file_path).unlink()
+    if damage in {"metadata_scope", "both"}:
+        for row in catalog.rows.values():
+            if row["artifact_kind"] == "metadata":
+                row["price_adjustment_mode"] = None
+    fetches.clear()
+
+    # This must exercise the real writer before acquiring the run's adjusted
+    # read lock; nesting ensure_data's capture lock would deadlock the run.
+    result = await asyncio.wait_for(
+        service.run_trusted_sample(_request("repair-adjusted-quotes", adjusted=True)), timeout=5,
+    )
+
+    assert len(orchestrator.launch_requests) == 1
+    assert fetches == [], "synthetic quotes must reuse the admitted trade bars"
+    assert _read_manifest(result.workspace_root)["staged_data"]["corporate_action_versions"] == captured.corporate_action_versions
+    assert all(companion_path(root / record.file_path).exists() for record in quotes)
+
+
+@pytest.mark.asyncio
 async def test_an_adjusted_request_also_reaches_the_lake_with_the_flag_on(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -575,6 +691,33 @@ async def test_interest_rate_file_moves_the_input_snapshot(
         "interest-rate file present in the lake must be hashed"
     )
     assert manifest_a["input_snapshot_sha256"] != manifest_b["input_snapshot_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_lake_run_preserves_its_rate_input_for_statistics_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator: SimpleNamespace,
+    _launcher_supports_lake_mount: None,
+) -> None:
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    source = seed_lake_interest_rate(lake_root)
+    original = source.read_bytes()
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+
+    result = await service.run_trusted_sample(_request("lake-rate-verification"))
+
+    recorded = _read_manifest(result.workspace_root)["staged_data"]["interest_rate_database"]
+    verification_input = result.workspace_root / "workspace" / "data" / recorded["path_in_workspace"]
+    assert verification_input.read_bytes() == original
+    assert hashlib.sha256(verification_input.read_bytes()).hexdigest() == recorded["sha256"]
+    seed_lake_interest_rate(lake_root, rows="date,rate\n20260105,0.01\n")
+    assert verification_input.read_bytes() == original, "historical verification must retain this run's input"
 
 
 @pytest.mark.asyncio

@@ -136,6 +136,18 @@ class FakeCatalog:
     async def init_pool(self) -> None:
         return None
 
+    async def scope_verified_legacy_metadata(
+        self, artifact_id, data_root_id, price_adjustment_mode, file_path, file_sha256, file_size_bytes,
+    ) -> bool:
+        row = self.rows[artifact_id]
+        if (row["artifact_kind"] != "metadata" or row["status"] != "complete"
+                or row["data_root_id"] != data_root_id or row["price_adjustment_mode"] is not None
+                or row["file_path"] != file_path or row["file_sha256"] != file_sha256
+                or row["file_size_bytes"] != file_size_bytes):
+            return False
+        row["price_adjustment_mode"] = price_adjustment_mode
+        return True
+
     async def claim_metadata_artifact(
         self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path
     ) -> int | None:
@@ -523,6 +535,7 @@ def mock_launcher(*, latency_s: float = 0.0):
 #: Every ``catalog_client`` function :class:`FakeCatalog` stands in for.
 FAKE_CATALOG_FUNCTIONS: tuple[str, ...] = (
     "has_committed_file_receipt",
+    "scope_verified_legacy_metadata",
     "init_pool",
     "claim_metadata_artifact",
     "select_complete_metadata_artifact",

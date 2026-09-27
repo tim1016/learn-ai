@@ -668,13 +668,23 @@ async def _claim_and_complete_metadata_row(
 
     claim = await _claim_or_reclaim_metadata_row(dch=dch, file_path=file_path, identity=identity, root_id=root_id)
     if claim.existing is not None:
+        existing = claim.existing
+        if existing.price_adjustment_mode != spec.price_adjustment_mode:
+            # Older bootstraps included the mode in the contract hash but
+            # stored NULL on the row. The verified bundle is the authority
+            # for upgrading it; readers must keep refusing unscoped receipts.
+            if existing.price_adjustment_mode is not None or not await catalog_client.scope_verified_legacy_metadata(
+                existing.id, root_id, spec.price_adjustment_mode, file_path, entry.sha256, file_size_bytes,
+            ):
+                return MetadataBootstrap(None, False, "data_contract_mismatch", "metadata scope upgrade refused")
+            existing = existing.model_copy(update={"price_adjustment_mode": spec.price_adjustment_mode})
         await catalog_client.mark_metadata_artifacts_stale_for_path(
             data_root_id=root_id,
             price_adjustment_mode=spec.price_adjustment_mode,
             file_path=file_path,
-            keep_artifact_id=claim.existing.id,
+            keep_artifact_id=existing.id,
         )
-        return MetadataBootstrap(claim.existing, True, None)
+        return MetadataBootstrap(existing, True, None)
     if claim.artifact_id is None:
         return MetadataBootstrap(None, False, claim.failure_reason)
     artifact_id = claim.artifact_id
