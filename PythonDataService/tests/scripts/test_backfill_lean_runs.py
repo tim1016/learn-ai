@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.research.backtest_runs.service import SAVE_FAILED, SaveOutcome
 from app.scripts import backfill_lean_runs
 from app.scripts.backfill_lean_runs import (
     _algorithm_name_from_manifest,
@@ -183,13 +184,20 @@ class TestBuildPayloadForWorkspace:
 class TestBackfillDirectory:
     @staticmethod
     def _recording_persist(monkeypatch: pytest.MonkeyPatch, ids: list[int | None]) -> list[dict]:
-        """Stand in for the repository write: hand back ``ids`` in order, remember every payload."""
+        """Stand in for the repository write: hand back ``ids`` in order, remember every payload.
+
+        An ``id`` of ``None`` means the fake write failed — the typed
+        outcome the real writer returns for it (#2464).
+        """
         written: list[dict] = []
         remaining = iter(ids)
 
-        async def fake_persist(payload: dict) -> int | None:
+        async def fake_persist(payload: dict) -> SaveOutcome:
             written.append(payload)
-            return next(remaining)
+            run_id = next(remaining)
+            if run_id is None:
+                return SAVE_FAILED
+            return SaveOutcome(status="saved", run_id=run_id)
 
         monkeypatch.setattr(backfill_lean_runs, "persist_run_payload", fake_persist)
         return written

@@ -31,6 +31,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
+from app.research.backtest_runs.service import SAVE_FAILED
 from app.data_lake import run_materialization
 from app.data_lake.ensure_data import _compute_data_availability_hash
 from app.data_lake.path_policy import lake_subpath
@@ -282,7 +283,7 @@ async def test_spec_and_strategy_lab_consume_identical_lake_bars_and_fingerprint
         return result
 
     monkeypatch.setattr(BacktestEngine, "run", run_and_capture)
-    monkeypatch.setattr(engine_backtest_service, "persist_engine_response_sync", lambda **kwargs: None)
+    monkeypatch.setattr(engine_backtest_service, "persist_engine_response_sync", lambda **kwargs: SAVE_FAILED)
 
     spec_result = await _post_backtest(_sma_spec("QQQ"), *WINDOW)
     lab_result = await asyncio.to_thread(

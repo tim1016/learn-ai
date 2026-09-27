@@ -27,6 +27,7 @@ from app.research.grid_search import engine_adapter, service
 from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange, expand_grid
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service as engine_service
+from app.research.backtest_runs.service import SAVE_FAILED
 from app.services.engine_backtest_service import execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
 
@@ -43,7 +44,7 @@ def lake(tmp_path: Path, monkeypatch) -> Path:
     lake_dir = write_root / lake_subpath("polygon_split_adjusted")
     lake_dir.mkdir(parents=True)
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    monkeypatch.setattr(engine_service, "persist_engine_response_sync", lambda **kwargs: None)
+    monkeypatch.setattr(engine_service, "persist_engine_response_sync", lambda **kwargs: SAVE_FAILED)
     for day in SESSIONS:
         seed_store_day(lake_dir, "SPY", day)
     return lake_dir

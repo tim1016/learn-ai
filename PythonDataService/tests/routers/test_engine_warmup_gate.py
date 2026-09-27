@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.data_lake.path_policy import lake_subpath
+from app.research.backtest_runs.service import SaveOutcome
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service as engine_service
 from app.services.engine_backtest_service import execute_engine_backtest
@@ -56,7 +57,7 @@ def recorded_persistence(monkeypatch) -> dict[str, list]:
 
     def _save(**kwargs):
         calls["save"].append(kwargs)
-        return 42
+        return SaveOutcome(status="saved", run_id=42)
 
     monkeypatch.setattr(engine_service, "persist_engine_response_sync", _save)
     monkeypatch.setattr(
