@@ -13,6 +13,13 @@ never cash. The shadow book fills at submit while the sweep records the
 fill later, so a filled order with no fill row is the common case there,
 not a corner.
 
+Each part prices at what it costs, not at one number (#2442). A recorded
+fill the observation cannot see reserves its *actual* cost — fill price ×
+quantity plus any reported fee — because that is the cash the broker
+already took at the fill's own price. Only quantity no recorded fill names
+prices at the reservation's ``reference_price`` (the decision price the
+ENTER was admitted against), which is an estimate, never the fill's cost.
+
 Corrections fold at their restated size. Each order contributes its
 *effective* fills — the head of every correction chain, whatever its
 ``event_kind`` — at the effective quantity, resolved through the canonical
@@ -65,15 +72,17 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, seen_before_ms: int) -> float
 
     A fill recorded strictly before ``seen_before_ms`` counts as seen; one
     recorded at it or later stays reserved. Every reservation is summed; a
-    dead order with no fill at or after ``seen_before_ms`` contributes zero on
-    its own arithmetic; a filled order with no recorded fill contributes its
-    whole notional. Nothing is pruned on ``orders.updated_at_ms``:
-    ``EXECUTION_SLICE_FILLED`` writes a fill without touching ``orders``, and
-    the websocket's acknowledgement is skipped when the snapshot has not
-    moved, so a dead order's ``updated_at_ms`` can sit *before* an observation
-    that has not seen its fills. Only a fill's own ``recorded_at_ms`` can say
-    what an observation could have seen — and for a corrected execution that
-    is the *root's* ``recorded_at_ms``, which ``roots`` supplies.
+    dead order reserves only its unseen recorded fills, each at that fill's
+    actual cost (price × quantity plus reported fee); a live order reserves
+    its unseen recorded fills at their actual cost plus its unrecorded
+    remainder at the reservation's reference price. Nothing is pruned on
+    ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill
+    without touching ``orders``, and the websocket's acknowledgement is
+    skipped when the snapshot has not moved, so a dead order's
+    ``updated_at_ms`` can sit *before* an observation that has not seen its
+    fills. Only a fill's own ``recorded_at_ms`` can say what an observation
+    could have seen — and for a corrected execution that is the *root's*
+    ``recorded_at_ms``, which ``roots`` supplies.
     """
     # Imported here, not at module scope: ``repository`` imports this module,
     # and ``economic_projection`` imports ``repository``. The canonical CTE
@@ -89,7 +98,9 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, seen_before_ms: int) -> float
         "COALESCE(SUM(CASE WHEN COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) < ? "
         "  THEN f.qty ELSE 0 END), 0) AS filled_before, "
         "COALESCE(SUM(CASE WHEN COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) >= ? "
-        "  THEN f.qty ELSE 0 END), 0) AS filled_after "
+        "  THEN f.qty ELSE 0 END), 0) AS filled_after, "
+        "COALESCE(SUM(CASE WHEN COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) >= ? "
+        "  THEN f.price * f.qty + COALESCE(f.fee, 0) ELSE 0 END), 0) AS unseen_fill_cost "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
         "LEFT JOIN fills f ON f.order_ref = o.order_ref "
@@ -97,15 +108,20 @@ def reserved_cash_usd(conn: sqlite3.Connection, *, seen_before_ms: int) -> float
         "                  WHERE s.superseded_execution_ref = f.execution_id) "
         "LEFT JOIN roots r2 ON r2.effective_fill_id = f.fill_id "
         "GROUP BY r.effect_operation_id",
-        (seen_before_ms, seen_before_ms),
+        (seen_before_ms, seen_before_ms, seen_before_ms),
     ).fetchall()
     total = 0.0
     for row in rows:
-        dead = row["state"] in _DEAD_ORDER_STATES
-        open_quantity = (
-            row["filled_after"] if dead else max(0.0, row["quantity"] - row["filled_before"])
-        )
-        total += open_quantity * row["reference_price"]
+        if row["state"] in _DEAD_ORDER_STATES:
+            # A dead order's unrecorded remainder is cancelled quantity; only
+            # its unseen fills spent cash, at the price each fill itself names.
+            total += row["unseen_fill_cost"]
+            continue
+        # A working or filled order's recorded-but-unseen fills spent cash at
+        # their own price; the remainder no fill names is an estimate priced
+        # at the decision price the ENTER was admitted against.
+        unrecorded = max(0.0, row["quantity"] - row["filled_before"] - row["filled_after"])
+        total += row["unseen_fill_cost"] + unrecorded * row["reference_price"]
     return total
 
 

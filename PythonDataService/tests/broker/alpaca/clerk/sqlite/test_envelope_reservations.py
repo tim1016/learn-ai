@@ -501,6 +501,8 @@ def _append_slice(
     execution_id: str,
     quantity: float,
     source_event_at_ms: int,
+    price: float = 100.0,
+    fee: float | None = None,
 ) -> None:
     """One websocket execution slice with a broker identity a correction can name."""
     facts = ExecutionSliceFilledFacts(
@@ -508,9 +510,9 @@ def _append_slice(
         symbol="SPY",
         side="BUY",
         slice_qty=quantity,
-        slice_price=100.0,
-        fee=None,
-        fee_fidelity="not_reported",
+        slice_price=price,
+        fee=fee,
+        fee_fidelity="reported" if fee is not None else "not_reported",
         evidence_source="websocket",
         source_event_at_ms=source_event_at_ms,
     )
@@ -649,6 +651,136 @@ def test_a_corrected_fill_reserves_at_its_restated_size(
         is None
     )
     assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(expected)
+
+
+def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    active_instance: tuple[str, str],
+) -> None:
+    """The #2442 acceptance case: admitted at a 100 close, filled at 101.
+
+    A recorded fill the observation cannot see is cash the broker already
+    took at the fill's own price, so the reservation carries the actual cost
+    — fill price x quantity plus the reported fee — not the decision-bar
+    close the ENTER was admitted against, until the next observation that can
+    see the fill supersedes it.
+    """
+    sid, run_id = active_instance
+    accepted = accept_enter(
+        envelope_repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=sid,
+        decision_id="d1",
+        lifecycle_run_id=run_id,
+        leg=_leg(quantity=10),
+        envelope=_gate(),
+        reference_price=100.0,
+    )
+    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+
+    envelope_clock.value = T3_TRAILING_FILL
+    _append_slice(
+        envelope_repo,
+        accepted,
+        execution_id="exec-filled-at-101",
+        quantity=10.0,
+        price=101.0,
+        fee=1.25,
+        source_event_at_ms=T3_TRAILING_FILL,
+    )
+
+    # The observation at T2 cannot see a fill recorded at T3: reserve the
+    # 1,011.25 the fill actually cost, not the 1,000 the close estimated.
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(
+        1_011.25
+    )
+
+    # The next broker read supersedes it: once the fill counts as seen, the
+    # filled order reserves nothing.
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T3_TRAILING_FILL + 1) == pytest.approx(
+        0.0
+    )
+
+
+def test_a_working_order_blends_actual_fill_cost_with_the_decision_price(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    active_instance: tuple[str, str],
+) -> None:
+    """Only quantity with no recorded fill prices at the reference price.
+
+    A partially filled working order's recorded-but-unseen units cost what
+    the fill says (4 x 102 + the 0.50 fee); the units no execution names yet
+    have no price but the decision close the ENTER was admitted against.
+    """
+    sid, run_id = active_instance
+    accepted = accept_enter(
+        envelope_repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=sid,
+        decision_id="d1",
+        lifecycle_run_id=run_id,
+        leg=_leg(quantity=10),
+        envelope=_gate(),
+        reference_price=100.0,
+    )
+    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+
+    envelope_clock.value = T3_TRAILING_FILL
+    _append_slice(
+        envelope_repo,
+        accepted,
+        execution_id="exec-partial-at-102",
+        quantity=4.0,
+        price=102.0,
+        fee=0.50,
+        source_event_at_ms=T3_TRAILING_FILL,
+    )
+
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(
+        4.0 * 102.0 + 0.50 + 6.0 * 100.0
+    )
+
+
+def test_a_dead_order_prices_its_unseen_fill_at_cost(
+    envelope_repo: ClerkSqliteRepository,
+    envelope_clock: _TestClock,
+    active_instance: tuple[str, str],
+) -> None:
+    """A canceled order's post-observation fill is spent cash at the fill price.
+
+    Same shape as the parametrized dead-order case above, at a fill price the
+    reference price does not predict: the recorded fill is actual spend, not
+    an estimate.
+    """
+    sid, run_id = active_instance
+    accepted = accept_enter(
+        envelope_repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=sid,
+        decision_id="d1",
+        lifecycle_run_id=run_id,
+        leg=_leg(quantity=10),
+        envelope=_gate(),
+        reference_price=100.0,
+    )
+    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+
+    envelope_clock.value = T3_TRAILING_FILL
+    fold_order_evidence(
+        envelope_repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_observed_order(
+            accepted.order_ref,
+            status="canceled",
+            filled_quantity=3.0,
+            filled_avg_price=101.0,
+            source_event_at_ms=T3_TRAILING_FILL,
+        ),
+    )
+
+    assert envelope_repo.reserved_cash_usd(seen_before_ms=T2_OBSERVATION) == pytest.approx(303.0)
 
 
 def test_reservations_sum_across_instances(
