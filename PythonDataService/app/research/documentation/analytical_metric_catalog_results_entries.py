@@ -11,7 +11,7 @@ from typing import Final
 
 from app.services.run_verdict_service import VERDICT_POLICY_DOCUMENTATION
 
-from .analytical_metric_catalog import MetricCategory, MetricVariant, ValueState
+from .analytical_metric_catalog import PLATFORM_DAILY_RETURN_CONVENTION, MetricCategory, MetricVariant, ValueState
 
 _PLATFORM_UNAVAILABLE = ValueState(
     state="unavailable",
@@ -435,7 +435,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "Sortino ratio",
         "Annualized mean return divided by annualized downside deviation of the platform's daily marked-equity returns.",
         category="statistical_confidence",
-        input_series="Daily returns resampled from the run's marked equity curve, in every mode (compatibility pairs included, owner decision #2424); the closed-trade ledger basis feeds the engine-parity statistics (``lean_statistics``) and the LEAN companion row's own headline, never the Python run's headline numbers.",
+        input_series="Daily returns resampled from the run's marked equity curve, in every mode (compatibility pairs included, owner decision #2424); the closed-trade ledger basis feeds the engine-parity statistics (``lean_statistics``) and the LEAN companion row's own headline, never the Python run's headline numbers. " + PLATFORM_DAILY_RETURN_CONVENTION,
         units="ratio",
         formatting="two decimal places",
         canonical_symbol="PythonDataService/app/engine/results/statistics.py::_sortino",
@@ -491,7 +491,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "Annual volatility",
         "Annualized standard deviation of the platform's daily marked-equity returns.",
         category="statistical_confidence",
-        input_series="Daily returns resampled from the run's marked equity curve, in every mode (compatibility pairs included, owner decision #2424); the closed-trade ledger basis feeds the engine-parity statistics (``lean_statistics``) and the LEAN companion row's own headline, never the Python run's headline numbers.",
+        input_series="Daily returns resampled from the run's marked equity curve, in every mode (compatibility pairs included, owner decision #2424); the closed-trade ledger basis feeds the engine-parity statistics (``lean_statistics``) and the LEAN companion row's own headline, never the Python run's headline numbers. " + PLATFORM_DAILY_RETURN_CONVENTION,
         units="fraction",
         formatting="percentage, two decimal places",
         canonical_symbol="PythonDataService/app/engine/results/statistics.py",
@@ -537,7 +537,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "Probabilistic Sharpe",
         "Platform probability that its unannualized Sharpe exceeds zero under the documented return-vector contract.",
         category="statistical_confidence",
-        input_series="Daily returns resampled from the run's marked equity curve, in every mode (compatibility pairs included, owner decision #2424); the closed-trade ledger basis feeds the engine-parity statistics (``lean_statistics``) and the LEAN companion row's own headline, never the Python run's headline numbers.",
+        input_series="Daily returns resampled from the run's marked equity curve, in every mode (compatibility pairs included, owner decision #2424); the closed-trade ledger basis feeds the engine-parity statistics (``lean_statistics``) and the LEAN companion row's own headline, never the Python run's headline numbers. " + PLATFORM_DAILY_RETURN_CONVENTION,
         units="probability",
         formatting="percentage, two decimal places",
         canonical_symbol="PythonDataService/app/engine/results/statistics.py::_probabilistic_sharpe_ratio",

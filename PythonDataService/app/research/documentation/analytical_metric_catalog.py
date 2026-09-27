@@ -134,6 +134,13 @@ class AnalyticalMetricCatalog(BaseModel):
         return self
 
 
+PLATFORM_DAILY_RETURN_CONVENTION = (
+    "The first evaluated session's return is measured from evaluation starting capital to its last marked equity; "
+    "later returns compare successive ET session closes. This deliberately differs from the LEAN-port "
+    "Day-0/Day-1 skip; native LEAN statistics retain their own convention."
+)
+
+
 PLATFORM_SHARPE_VARIANT = MetricVariant(
     metric_id="sharpe",
     variant_id="sharpe.platform.v1",
@@ -156,7 +163,7 @@ PLATFORM_SHARPE_VARIANT = MetricVariant(
     ),
     input_series=(
         "Daily returns resampled from the recorded equity curve; without that curve, per-trade returns from "
-        "the reconstructed all-in trade curve."
+        "the reconstructed all-in trade curve. " + PLATFORM_DAILY_RETURN_CONVENTION
     ),
     units="ratio",
     output_scale="annualized ratio",

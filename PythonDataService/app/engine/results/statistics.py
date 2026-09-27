@@ -6,6 +6,14 @@ Canonical implementation: this file. The former .NET backtest duplicates were re
 Validated against: `PythonDataService/tests/test_statistics.py::TestMaxDrawdown` and
 `PythonDataService/tests/fixtures/test_engine_stats_extended_fixtures.py::TestENG002MaxDrawdown`.
 
+Platform daily returns include the first evaluated session: its final marked
+equity is compared with evaluation starting capital, then subsequent session
+closes are compared with the preceding close (issue #2448). Sharpe, Sortino,
+volatility and PSR share this vector. This intentionally differs from the
+LEAN-port ``lean_statistics.py`` convention that skips Day 0 and Day 1;
+the LEAN oracle and formula fixtures are unchanged. Validated against
+``tests/test_statistics.py::TestPortfolioStatisticsWithCurve``.
+
 Computes per-trade and per-period metrics from a trade log. Kept
 independent from the core engine loop so the same module can be reused
 for:
@@ -391,10 +399,17 @@ def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
     return list(daily_values.values())
 
 
-def _daily_returns(daily_equity: Sequence[float]) -> list[float]:
-    if len(daily_equity) < 2:
-        return []
-    return [(daily_equity[i] / daily_equity[i - 1]) - 1.0 for i in range(1, len(daily_equity))]
+def _daily_returns(daily_equity: Sequence[float], *, initial_cash: float) -> list[float]:
+    """Session returns anchored to evaluation capital, including session one.
+
+    Formula: r_1 = E_1 / initial_cash - 1; r_t = E_t / E_(t-1) - 1.
+    Reference: platform sampling convention, issue #2448; unlike LEAN's
+      Day-0/Day-1 skip, no evaluated session is discarded.
+    Canonical implementation: this file, using _returns_from_curve.
+    Validated against: tests/test_statistics.py::TestDailyReturns and
+      TestPortfolioStatisticsWithCurve::test_first_session_return_starts_at_evaluation_capital.
+    """
+    return _returns_from_curve([initial_cash, *daily_equity])
 
 
 def _fill_times_are_admissible(trade: _TradeLike) -> bool:
@@ -574,7 +589,7 @@ def compute_portfolio_statistics(
         max_dd = _max_drawdown(curve)
 
         daily_equity = _resample_to_daily(equity_curve)
-        daily_rets = _daily_returns(daily_equity)
+        daily_rets = _daily_returns(daily_equity, initial_cash=initial_cash)
         sharpe = _sharpe(daily_rets, TRADING_DAYS_PER_YEAR)
         sortino = _sortino(daily_rets, TRADING_DAYS_PER_YEAR)
 
@@ -661,7 +676,7 @@ def summarize(
         equity_curve=equity_curve,
     )
     if equity_curve:
-        metric_returns = _daily_returns(_resample_to_daily(equity_curve))
+        metric_returns = _daily_returns(_resample_to_daily(equity_curve), initial_cash=initial_cash)
         periods_per_year = TRADING_DAYS_PER_YEAR
     else:
         metric_returns = [float(trade.pnl_pct) for trade in trades]
