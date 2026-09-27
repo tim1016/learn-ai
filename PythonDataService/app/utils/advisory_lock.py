@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 @contextmanager
-def _advisory_file_lock(target: Path, *, blocking: bool) -> Iterator[bool]:
+def _advisory_file_lock(target: Path, *, blocking: bool, shared: bool = False) -> Iterator[bool]:
     """Acquire one sibling lock, or report contention for a non-blocking caller."""
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,9 @@ def _advisory_file_lock(target: Path, *, blocking: bool) -> Iterator[bool]:
         else:
             import fcntl
 
-            flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+            flags = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+            if not blocking:
+                flags |= fcntl.LOCK_NB
             try:
                 fcntl.flock(handle.fileno(), flags)
             except OSError:
@@ -68,7 +70,7 @@ def advisory_file_lock(target: Path) -> Iterator[None]:
 
 
 @contextmanager
-def try_advisory_file_lock(target: Path) -> Iterator[bool]:
+def try_advisory_file_lock(target: Path, *, shared: bool = False) -> Iterator[bool]:
     """Try to serialize a transaction without blocking an async event loop.
 
     A caller that receives ``False`` must treat the related work as owned by
@@ -76,7 +78,10 @@ def try_advisory_file_lock(target: Path) -> Iterator[bool]:
     ``True`` result, and is released automatically if the owning process
     crashes.  That makes it suitable for a durable action record whose
     callback may await a slow external system.
+
+    Shared readers may coexist on POSIX but exclude publishers using the
+    default exclusive lock. Windows conservatively serializes all callers.
     """
 
-    with _advisory_file_lock(target, blocking=False) as acquired:
+    with _advisory_file_lock(target, blocking=False, shared=shared) as acquired:
         yield acquired

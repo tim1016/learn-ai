@@ -202,6 +202,53 @@ describe("StrategyLab configuration and runner", () => {
     expect(config.selectedStrategyName()).toBe(STRATEGY.name);
   });
 
+  it.each(["lean", "python"] as const)("releases a restored raw Both snapshot when switching to %s", async (engine) => {
+    config.engine.set("both");
+    config.range.update((range) => ({ ...range, autoFetch: false }));
+    config.restoreDataPolicy({
+      ...config.dataPolicy(),
+      provider_kind: "fixture",
+      fixture_id: "bar-store-v1-raw-snapshot",
+      fixture_sha256: "raw-snapshot-hash",
+    });
+
+    config.changeEngine(engine);
+    await runner.run();
+
+    const [, payload] = startJob.mock.calls[0] as [string, {
+      request?: { data_policy: unknown };
+      backtest?: { data_policy: unknown };
+    }];
+    expect((payload.request ?? payload.backtest)?.data_policy).toEqual(expect.objectContaining({
+      adjusted: true,
+      provider_kind: "live",
+      fixture_id: null,
+      fixture_sha256: null,
+    }));
+    expect(config.autoFetch()).toBe(true);
+    if (engine === "python") {
+      expect(payload.backtest).toEqual(expect.objectContaining({ auto_fetch: true }));
+    }
+  });
+
+  it("retains the frozen receipt when rerunning Both without changing its adjustment mode", async () => {
+    config.engine.set("both");
+    const policy = {
+      ...config.dataPolicy(),
+      provider_kind: "fixture" as const,
+      fixture_id: "bar-store-v1-raw-snapshot",
+      fixture_sha256: "raw-snapshot-hash",
+    };
+    config.restoreDataPolicy(policy);
+
+    config.changeEngine("both");
+    await runner.run();
+
+    expect(startJob).toHaveBeenCalledWith("engine_backtest", expect.objectContaining({
+      backtest: expect.objectContaining({ data_policy: policy }),
+    }));
+  });
+
   it("resolves configurable strategy cadence from registry metadata instead of strategy names", () => {
     const strategy = {
       ...STRATEGY,

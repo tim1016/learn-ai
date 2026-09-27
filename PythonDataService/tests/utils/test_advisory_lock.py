@@ -61,3 +61,21 @@ def test_try_lock_succeeds_once_the_holder_releases(tmp_path: Path) -> None:
 
     with try_advisory_file_lock(target) as acquired:
         assert acquired is True
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows conservatively serializes readers")
+def test_shared_readers_coexist_and_exclude_a_publisher(tmp_path: Path) -> None:
+    """Metadata readers can overlap, while neither permits a generation swap."""
+    target = tmp_path / "metadata"
+    with try_advisory_file_lock(target, shared=True) as first:
+        assert first
+        with try_advisory_file_lock(target, shared=True) as second:
+            assert second
+            with try_advisory_file_lock(target) as writer:
+                assert not writer
+        with try_advisory_file_lock(target) as writer:
+            assert not writer
+    with try_advisory_file_lock(target) as writer:
+        assert writer
+        with try_advisory_file_lock(target, shared=True) as reader:
+            assert not reader

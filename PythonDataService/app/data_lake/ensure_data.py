@@ -1090,20 +1090,29 @@ async def _process_map_file_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
-            return existing, None, True  # cache hit
-        return (
-            None,
-            ArtifactFailure(
-                artifact_kind=identity.artifact_kind,
-                symbol=identity.symbol,
-                trading_date=None,
-                data_type=None,
-                reason="lease_timeout",
-                detail="map_file in-flight elsewhere; polling not implemented in Slice 1c",
-                attempt_count=1,
-            ),
-            False,
-        )
+            path = resolve_lake_root(spec.price_adjustment_mode) / existing.file_path
+            if (existing.data_contract_hash == dch and path.is_file()
+                    and hashlib.sha256(path.read_bytes()).hexdigest() == existing.file_sha256):
+                return existing, None, True
+            prior = await catalog_client.refresh_complete_artifact(
+                artifact_id=existing.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,
+                expected_data_contract_hash=existing.data_contract_hash,
+            )
+            reclaim = (
+                catalog_client.ReclaimRefused("lease_timeout", "map_file changed before refresh", 1)
+                if prior is None else catalog_client.ReclaimedLease(existing.id, prior.new_lease_generation)
+            )
+        else:
+            reclaim = await catalog_client.reclaim_after_lost_claim(
+                lambda: catalog_client.select_corp_action_claim_state(identity),
+                worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS, max_retries=_MAX_CLAIM_RETRIES,
+            )
+        if isinstance(reclaim, catalog_client.ReclaimRefused):
+            return None, ArtifactFailure(
+                artifact_kind=identity.artifact_kind, symbol=identity.symbol, trading_date=None, data_type=None,
+                reason=reclaim.reason, detail=reclaim.detail, attempt_count=reclaim.attempt_count,
+            ), False
+        artifact_id, lease_generation = reclaim.artifact_id, reclaim.lease_generation
 
     api_key = settings.POLYGON_API_KEY
     try:
@@ -1145,6 +1154,7 @@ async def _process_map_file_artifact(
         row_count=len(events),
         first_bar_start_ms=0,
         last_bar_start_ms=0,
+        data_contract_hash=dch,
     )
     if lease_failure is not None:
         return None, lease_failure, False

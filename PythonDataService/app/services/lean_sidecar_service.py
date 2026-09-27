@@ -24,6 +24,7 @@ import asyncio
 import logging
 import shutil
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -599,6 +600,39 @@ async def _resolve_lake_artifacts_or_refuse(request: TrustedRunRequest) -> LakeA
         raise LeanSidecarServiceError(str(e)) from e
 
 
+def _read_compatibility_fixture(
+    request: TrustedRunRequest,
+) -> tuple[list[Path], list[tuple[date, list[TradeBar]]]]:
+    """Admit and decode frozen lake inputs on a worker thread."""
+    from app.engine.data.lean_format import LeanMinuteDataReader
+    from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
+
+    store_roots = resolve_data_roots(source="polygon", adjusted=request.data_policy.adjusted)
+    receipt = snapshot_minute_trade_zips(
+        store_roots,
+        symbol=request.symbol,
+        start=request.start_date,
+        end=request.end_date,
+        adjusted=request.data_policy.adjusted,
+        session=request.data_policy.session,
+    )
+    _assert_compatibility_fixture_receipt(
+        expected_id=request.data_policy.fixture_id,
+        expected_sha256=request.data_policy.fixture_sha256,
+        actual=receipt,
+        phase="source",
+    )
+    reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
+    bars_by_date = [
+        (trading_date, reader.read_day(request.symbol, trading_date))
+        for trading_date in reader.iter_dates(request.symbol, request.start_date, request.end_date)
+    ]
+    bars_by_date = [(trading_date, bars) for trading_date, bars in bars_by_date if bars]
+    if not bars_by_date:
+        raise LeanSidecarServiceError(f"compatibility_fixture_empty: {request.data_policy.fixture_id}")
+    return store_roots, bars_by_date
+
+
 def _stage_workspace_data(
     *,
     request: TrustedRunRequest,
@@ -662,6 +696,22 @@ def _stage_workspace_data(
     return bar_zip_paths, quote_zip_paths, daily_path
 
 
+def _preserve_lake_statistics_input(workspace: Workspace, artifacts: LakeArtifacts) -> None:
+    """Keep this run's admitted rate file for native-statistics verification.
+
+    LEAN still reads the lake mount. The small private copy lets the existing
+    verifier reproduce this run later without depending on a mutable lake.
+    """
+    from app.data_lake.admission import read_committed_bytes
+
+    if artifacts.interest_rate_path is None:
+        return
+    payload = read_committed_bytes(artifacts.interest_rate_path)
+    target = workspace.data_dir / artifacts.interest_rate_path.relative_to(artifacts.lake_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+
+
 async def run_trusted_sample(
     request: TrustedRunRequest,
     *,
@@ -670,25 +720,106 @@ async def run_trusted_sample(
     cancel_requested: Callable[[], bool] | None = None,
     on_cancel_too_late: Callable[[str], None] | None = None,
 ) -> TrustedRunResult:
-    """Pin adjusted lake inputs for the whole external-engine read window."""
+    """Prepare legacy derived inputs once, then apply the full launch preflight.
+
+    A ready lake remains read-only. Missing quotes or obsolete adjustment
+    receipts are repaired by the canonical writer, outside the adjusted run's
+    capture lock. Frozen compatibility inputs must never be refreshed here.
+    """
+    async def run() -> TrustedRunResult:
+        return await _run_with_pinned_lake(
+            request, on_phase=on_phase, on_log=on_log,
+            cancel_requested=cancel_requested, on_cancel_too_late=on_cancel_too_late,
+        )
+
+    try:
+        return await run()
+    except LeanSidecarServiceError as exc:
+        repairable = str(exc).startswith((
+            "lake_incomplete_quote_coverage:", "lake_adjustment_version_mismatch:",
+            "lake_artifact_not_committed:", "lake_incomplete_trade_coverage:",
+            "lake_missing_daily_artifact:", "lake_daily_artifact_does_not_cover_window:",
+            "lake_missing_required_metadata:",
+        ))
+        if (not repairable or request.data_policy.source != "polygon"
+                or request.data_policy.provider_kind == "fixture"):
+            raise
+
+    from uuid import uuid4
+
+    from app.data_lake.ensure_data import ensure_data
+    from app.data_lake.path_policy import LeanFactorFilePath, LeanMapFilePath
+    from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
+
+    if cancel_requested is not None and cancel_requested():
+        raise LeanRunCancelled(f"run {request.run_id} cancelled before preparing lake inputs")
+    if on_log is not None:
+        on_log("Preparing derived quote files and adjustment records from the lake's trade bars")
+    root = data_plane_lake_root(polygon_mode_for(request.data_policy.adjusted))
+    spec = DataRunSpec(
+        request_id=uuid4(), run_type="lean_lab", requester=request.run_id, symbols=[request.symbol],
+        start_trading_date_ms=trading_date_to_calendar_anchor_ms(request.start_date),
+        end_trading_date_ms=trading_date_to_calendar_anchor_ms(request.end_date),
+        data_types=["trade", "quote"],
+        price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
+        include_factor_files=(root / LeanFactorFilePath("usa", request.symbol).relative_path()).is_file(),
+        include_map_files=(root / LeanMapFilePath("usa", request.symbol).relative_path()).is_file(),
+        lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
+    )
+    preparation = asyncio.create_task(ensure_data(spec))
+    try:
+        while not preparation.done():
+            await asyncio.wait({preparation}, timeout=_CANCEL_ACK_POLL_SECONDS)
+            if cancel_requested is not None and cancel_requested():
+                raise LeanRunCancelled(f"run {request.run_id} cancelled while preparing lake inputs")
+        result = preparation.result()
+    finally:
+        # Cancel and join so provider I/O and capture/catalog locks cannot
+        # outlive a cancelled job. Atomic publication remains fenced.
+        if not preparation.done():
+            preparation.cancel()
+        await asyncio.gather(preparation, return_exceptions=True)
+    if result.overall_status != "complete":
+        detail = "; ".join(f"{failure.reason}: {failure.detail}" for failure in result.failures)
+        raise LeanSidecarServiceError(f"lake_preparation_incomplete: {detail}")
+    # Reacquire the adjusted read lock and revalidate every artifact before
+    # launch. A failed repair never creates a workspace or burns the run ID.
+    return await run()
+
+
+async def _run_with_pinned_lake(
+    request: TrustedRunRequest,
+    *,
+    on_phase: Callable[[str], None] | None = None,
+    on_log: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    on_cancel_too_late: Callable[[str], None] | None = None,
+) -> TrustedRunResult:
+    """Pin adjusted bars and metadata through execution and manifest hashing."""
     from app.data_lake.adjustment_versions import AdjustmentVersionError, capture_lock
+    from app.data_lake.metadata_bundle import MetadataBundleLockTimeout, metadata_bundle_lock
 
     def check_cancelled() -> None:
         if cancel_requested is not None and cancel_requested():
             raise LeanRunCancelled(f"run {request.run_id} cancelled before the LEAN container launched")
 
-    if (request.data_policy.source == "polygon" and request.data_policy.adjusted
-            and request.data_policy.provider_kind != "fixture"):
-        root = data_plane_lake_root(polygon_mode_for(True))
+    if request.data_policy.source == "polygon" and request.data_policy.provider_kind != "fixture":
+        root = data_plane_lake_root(polygon_mode_for(request.data_policy.adjusted))
         try:
-            async with capture_lock(
-                root, [request.symbol], DEFAULT_RUN_LIMITS.wall_clock_timeout_s, check_cancelled=check_cancelled,
-            ):
+            async with AsyncExitStack() as locks:
+                # Match the writer's acquisition order: symbol, then bundle.
+                if request.data_policy.adjusted:
+                    await locks.enter_async_context(capture_lock(
+                        root, [request.symbol], DEFAULT_RUN_LIMITS.wall_clock_timeout_s, check_cancelled=check_cancelled,
+                    ))
+                await locks.enter_async_context(metadata_bundle_lock(
+                    root, shared=True, check_cancelled=check_cancelled,
+                ))
                 return await _run_trusted_sample(
                     request, on_phase=on_phase, on_log=on_log,
                     cancel_requested=cancel_requested, on_cancel_too_late=on_cancel_too_late,
                 )
-        except AdjustmentVersionError as exc:
+        except (AdjustmentVersionError, MetadataBundleLockTimeout) as exc:
             raise LeanSidecarServiceError(str(exc)) from exc
     return await _run_trusted_sample(
         request, on_phase=on_phase, on_log=on_log,
@@ -846,32 +977,7 @@ async def _run_trusted_sample(
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
         bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
     elif data_source == "polygon" and compatibility_fixture:
-        from app.engine.data.lean_format import LeanMinuteDataReader
-        from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
-
-        store_roots = resolve_data_roots(source="polygon", adjusted=request.data_policy.adjusted)
-        receipt = snapshot_minute_trade_zips(
-            store_roots,
-            symbol=request.symbol,
-            start=request.start_date,
-            end=request.end_date,
-            adjusted=request.data_policy.adjusted,
-            session=request.data_policy.session,
-        )
-        _assert_compatibility_fixture_receipt(
-            expected_id=request.data_policy.fixture_id,
-            expected_sha256=request.data_policy.fixture_sha256,
-            actual=receipt,
-            phase="source",
-        )
-        reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
-        bars_by_date = [
-            (trading_date, reader.read_day(request.symbol, trading_date))
-            for trading_date in reader.iter_dates(request.symbol, request.start_date, request.end_date)
-        ]
-        bars_by_date = [(trading_date, bars) for trading_date, bars in bars_by_date if bars]
-        if not bars_by_date:
-            raise LeanSidecarServiceError(f"compatibility_fixture_empty: {request.data_policy.fixture_id}")
+        store_roots, bars_by_date = await asyncio.to_thread(_read_compatibility_fixture, request)
         trading_dates = [d for d, _ in bars_by_date]
     elif data_source == "polygon" and request.data_policy.provider_kind == "fixture":
         # Fixture replay (parity tests / freshness canary): stage the
@@ -915,9 +1021,16 @@ async def _run_trusted_sample(
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
     if lake_artifacts is not None:
-        # Lake mode stages nothing: LEAN reads these exact artifacts in
+        # LEAN reads these exact artifacts in
         # place through the read-only lake mount the launcher adds, so
         # the paths recorded here are lake paths, not workspace paths.
+        try:
+            await asyncio.to_thread(_preserve_lake_statistics_input, workspace, lake_artifacts)
+        except Exception:
+            # No container has launched and this run created the directory.
+            # A failed admission or disk copy must leave the ID reusable.
+            shutil.rmtree(workspace.root)
+            raise
         bar_zip_paths = list(lake_artifacts.trade_zip_paths)
         quote_zip_paths = list(lake_artifacts.quote_zip_paths)
         daily_path = lake_artifacts.daily_zip_path

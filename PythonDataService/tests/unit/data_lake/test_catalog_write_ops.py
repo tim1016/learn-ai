@@ -781,6 +781,37 @@ async def _complete_metadata_row(identity: ArtifactIdentity, dch: str, file_path
     return artifact_id
 
 
+@pytest.mark.parametrize("mismatch", [None, "root", "hash", "size", "path", "mode", "status"])
+async def test_scope_verified_legacy_metadata_requires_the_exact_committed_file(
+    clean_artifacts: None, pool: None, mismatch: str | None,
+) -> None:
+    identity = _metadata_identity()
+    path = "market-hours/market-hours-database.json"
+    artifact_id = await _complete_metadata_row(identity, "c" * 64, path)
+    if mismatch in {"mode", "status"}:
+        async with catalog_client.connection() as conn:
+            if mismatch == "mode":
+                await conn.execute('UPDATE "DataLakeArtifacts" SET "PriceAdjustmentMode" = \'raw\' WHERE "Id" = $1', artifact_id)
+            else:
+                await conn.execute('UPDATE "DataLakeArtifacts" SET "Status" = \'fetching\' WHERE "Id" = $1', artifact_id)
+
+    changed = await catalog_client.scope_verified_legacy_metadata(
+        artifact_id, uuid4() if mismatch == "root" else identity.data_root_id, "polygon_split_adjusted",
+        "other.csv" if mismatch == "path" else path,
+        "b" * 64 if mismatch == "hash" else "a" * 64,
+        11 if mismatch == "size" else 10,
+    )
+
+    assert changed is (mismatch is None)
+    if mismatch is None:
+        assert await catalog_client.scope_verified_legacy_metadata(
+            artifact_id, identity.data_root_id, "polygon_split_adjusted", path, "a" * 64, 10,
+        ), "confirming an already scoped exact row must be idempotent"
+    async with catalog_client.connection() as conn:
+        mode = await conn.fetchval('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
+    assert mode == ("polygon_split_adjusted" if mismatch is None else "raw" if mismatch == "mode" else None)
+
+
 async def test_mark_metadata_artifacts_stale_for_path_stales_only_the_same_root_and_mode(clean_artifacts, pool):
     root_id = _metadata_identity().data_root_id
     file_path = "market-hours/market-hours-database.json"

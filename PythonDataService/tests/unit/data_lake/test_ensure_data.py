@@ -12,6 +12,7 @@ Tests updated to mock the launcher endpoint + corp-action endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -91,6 +92,9 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
+    from app.data_lake.root_identity import active_root_id, init_empty_root
+
+    init_empty_root(write_root, active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
@@ -1173,7 +1177,8 @@ async def test_split_refresh_commits_one_version_to_the_real_catalog(clean_artif
     assert {r.corporate_action_version for r in records} == {latest.corporate_action_versions["NVDA"]}
     root = Path(latest.lean_data_root_path)
     for reader in (LeanMinuteDataReader(root), LeanDailyDataReader(root)):
-        assert {b.close for b in reader.iter_bars("NVDA", before, after)} == {Decimal(10)}
+        captured = await asyncio.to_thread(list, reader.iter_bars("NVDA", before, after))
+        assert {b.close for b in captured} == {Decimal(10)}
     reused = await ensure_data(request)
     assert reused.corporate_action_versions == latest.corporate_action_versions
     assert reused.fetched_artifact_count == 0
