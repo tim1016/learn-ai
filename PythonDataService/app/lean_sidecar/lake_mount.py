@@ -117,6 +117,11 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
+# ``app.data_lake.factor_files`` is deliberately NOT imported here, unlike
+# the config-free ``map_files`` above: it pulls in ``app.data_lake.types``
+# and with it ``app.config``, which the standalone launcher cannot import
+# (see the ``app.config`` note below). The factor reader is imported inside
+# ``resolve_lake_artifacts``, which the launcher never calls.
 from app.data_lake.map_files import map_file_coverage
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
@@ -433,8 +438,25 @@ def resolve_lake_artifacts(
 
     factor_file_paths = _existing_corporate_action_files(lake_root, safe_symbol, "factor")
     map_file_paths = _existing_corporate_action_files(lake_root, safe_symbol, "map")
+    if not factor_file_paths:
+        # Absence is uncovered (#2480 review): a symbol that first entered
+        # the lake through a chart or Python-engine capture (both build bars
+        # without factor files) would otherwise mount with no corporate
+        # action data at all, and a run spanning a split shows phantom P&L.
+        # The run path's repair builds the file before the remount.
+        raise LakeMountError(
+            f"lake_factor_file_missing: {safe_symbol} has no factor file under {lake_root}; "
+            f"LEAN would run {start.isoformat()}..{end.isoformat()} with no corporate-action "
+            "data — build it with ensure_data (include_factor_files) over the lake's "
+            "captured sessions"
+        )
+    # Imported here, not at module scope: the factor reader pulls in
+    # ``app.config`` through ``app.data_lake.types``, which the standalone
+    # launcher cannot import (see the ``app.config`` note above).
+    from app.data_lake.factor_files import FactorFileNotCoveringError, read_covering_factor_rows
+
     try:
-        for path in (market_hours_path, symbol_properties_path, *factor_file_paths):
+        for path in (market_hours_path, symbol_properties_path):
             read_committed_bytes(path)
         for path in map_file_paths:
             payload = read_committed_bytes(path)
@@ -456,6 +478,36 @@ def resolve_lake_artifacts(
                     f"after {last_covered.isoformat()}; re-run ensure_data over "
                     f"{start.isoformat()}..{end.isoformat()} to rebuild the map"
                 )
+        for path in factor_file_paths:
+            # Admission first, as for every other mounted file: an
+            # uncommitted factor file is lake_artifact_not_committed, the
+            # same refusal class the preflight contract names.
+            read_committed_bytes(path)
+            # Then the canonical coverage check the return study runs —
+            # there is no second copy (#2480). It refuses a record that does
+            # not vouch for THIS run's sessions: a file written before the
+            # window's sessions were captured can miss a split inside the
+            # window, and mounting it silently is how LEAN shows a phantom
+            # loss with no split event. The run path repairs this refusal by
+            # rebuilding the file over the lake's current captured sessions
+            # (lean_sidecar_service.run_trusted_sample); one the rebuild
+            # cannot fix is re-refused with the uncovered sessions — and,
+            # since #2490, the unpriced sessions — named.
+            try:
+                read_covering_factor_rows(
+                    lake_root, market="usa", symbol=safe_symbol, sessions=required_sessions
+                )
+            except FactorFileNotCoveringError as exc:
+                raise LakeMountError(
+                    f"lake_factor_file_not_covering: {safe_symbol} {path.name}: {exc.reason}. "
+                    f"Rebuild it over the lake's captured sessions with ensure_data "
+                    f"(include_factor_files) for {start.isoformat()}..{end.isoformat()}."
+                ) from exc
+            except ValueError as exc:
+                raise LakeMountError(
+                    f"lake_factor_file_unreadable: {safe_symbol} {path.name} is vouched for by "
+                    f"its coverage record but does not parse ({exc}); rebuild it with ensure_data"
+                ) from exc
         if interest_rate_path is not None:
             read_committed_bytes(interest_rate_path)
     except LakeAdmissionError as exc:

@@ -231,23 +231,38 @@ def seed_lake_corporate_actions(
     lake_root: Path,
     symbol: str,
     *,
-    factor_rows: str = "20260105,1,1\n",
+    factor_rows: str = "20260105,1,1,100\n20260106,1,1,100\n",
     map_rows: str | None = None,
+    with_coverage_record: bool = True,
 ) -> tuple[Path, Path]:
     """Write the symbol's factor and map files at their lake paths.
 
-    The factor contents are only ever hashed by the tests that use this,
-    never parsed, so the rows stay minimally plausible. The map's default
-    rows must span the seeded windows — the sidecar refuses a run whose
-    window exceeds the map's stated coverage (#2453), so a stub row that
-    ends before the fixture's days would fail every mount.
-    Returns ``(factor_file_path, map_file_path)``.
+    A lake-mode mount parses the factor CSV and checks its coverage record
+    (#2480: a missing or non-covering factor file refuses the run), so the
+    default rows are well-formed four-column ones and a coverage record
+    vouching for the exact bytes over a wide span is written beside them.
+    Tests that want a factor file the mount will refuse pass
+    ``with_coverage_record=False`` or rows the record cannot vouch for. The
+    map's default rows span the seeded windows for the same reason
+    (#2453). Returns ``(factor_file_path, map_file_path)``.
     """
-    factor = _write(
+    factor_path = _write(
         lake_root,
         Path(*LeanFactorFilePath(market="usa", symbol=symbol).relative_path().parts),
         factor_rows.encode("ascii"),
     )
+    if with_coverage_record:
+        from app.data_lake.factor_files import SessionRun, factor_coverage_record_bytes
+
+        _write(
+            lake_root,
+            Path(*LeanFactorFilePath(market="usa", symbol=symbol).coverage_record_path().parts),
+            factor_coverage_record_bytes(
+                symbol,
+                factor_path.read_bytes(),
+                [SessionRun(date(1998, 1, 22), date(2099, 12, 31))],
+            ),
+        )
     sym = symbol.lower()
     default_map_rows = f"19980122,{sym},nyse\n20991231,{sym},nyse\n"
     mapping = _write(
@@ -255,7 +270,7 @@ def seed_lake_corporate_actions(
         Path(*LeanMapFilePath(market="usa", symbol=symbol).relative_path().parts),
         (map_rows if map_rows is not None else default_map_rows).encode("ascii"),
     )
-    return factor, mapping
+    return factor_path, mapping
 
 
 def seed_lake_window(
@@ -266,13 +281,21 @@ def seed_lake_window(
     count: int = 390,
     with_quote: bool = True,
     with_metadata: bool = True,
+    with_corporate_actions: bool = True,
 ) -> list[Path]:
-    """Seed a complete, runnable fixture lake; returns the trade zips."""
+    """Seed a complete, runnable fixture lake; returns the trade zips.
+
+    Corporate actions (factor file + record, map file) are seeded by
+    default: a lake-mode mount refuses to run a symbol with no factor file
+    (#2480), so a "runnable" fixture lake carries one.
+    """
     trade_paths = [
         seed_lake_minute_day(lake_root, symbol, trading_date, count=count, with_quote=with_quote)[0]
         for trading_date in trading_dates
     ]
     seed_lake_daily(lake_root, symbol, trading_dates, count=count)
+    if with_corporate_actions:
+        seed_lake_corporate_actions(lake_root, symbol)
     if with_metadata:
         seed_lake_metadata(lake_root)
     return trade_paths
