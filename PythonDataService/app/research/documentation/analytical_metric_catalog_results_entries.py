@@ -96,7 +96,7 @@ _PLATFORM_TRADER_CAUTION: Final[dict[str, str]] = {
 
 
 # metric_ids whose numeric value is actually asserted by
-# strategy-metric-help-golden-v1.json (see tests/fixtures/test_strategy_metric_help_golden.py
+# strategy-metric-help-golden-v2.json (see tests/fixtures/test_strategy_metric_help_golden.py
 # for the exact PortfolioStatistics/TradeStatistics field each key checks).
 # Every other platform metric_id -- including Backtest Evidence Grade
 # sub-scores and raw result statistics like total_fees or cagr -- is not
@@ -149,7 +149,7 @@ def _evidence_for(metric_id: str, canonical_symbol: str) -> tuple[tuple[str, ...
             "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
         )
     fixture_or_receipt = (
-        "contracts/fixtures/strategy-metric-help-golden-v1.json"
+        "contracts/fixtures/strategy-metric-help-golden-v2.json"
         if metric_id in _STRATEGY_METRIC_HELP_GOLDEN_METRIC_IDS
         else None
     )

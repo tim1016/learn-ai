@@ -408,7 +408,12 @@ def _daily_returns(daily_equity: Sequence[float], *, initial_cash: float) -> lis
     Canonical implementation: this file, using _returns_from_curve.
     Validated against: tests/test_statistics.py::TestDailyReturns and
       TestPortfolioStatisticsWithCurve::test_first_session_return_starts_at_evaluation_capital.
+
+    Nonpositive starting capital cannot define a percentage-return series.
+    Keep absolute P&L available, but leave its daily-return metrics unavailable.
     """
+    if initial_cash <= 0:
+        return []
     return _returns_from_curve([initial_cash, *daily_equity])
 
 

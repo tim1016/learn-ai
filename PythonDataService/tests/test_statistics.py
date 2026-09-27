@@ -49,6 +49,37 @@ class FakeTrade:
     is_synthetic_exit: bool = False
 
 
+@pytest.mark.parametrize("initial_cash", [0.0, -100.0])
+def test_nonpositive_capital_preserves_pnl_without_undefined_return_metrics(
+    initial_cash: float,
+) -> None:
+    curve = [
+        EquityPoint(timestamp_ms=1704211200000, equity=90.0),
+        EquityPoint(timestamp_ms=1704297600000, equity=100.0),
+    ]
+    portfolio = compute_portfolio_statistics(
+        initial_cash=initial_cash, final_equity=100.0, trades=[], equity_curve=curve,
+    )
+    stats = summarize(
+        initial_cash=initial_cash, final_equity=100.0, trades=[], equity_curve=curve,
+    )
+
+    assert portfolio.net_profit == pytest.approx(100.0 - initial_cash, abs=1e-9, rel=0)
+    assert portfolio.net_profit_pct == 0.0
+    assert portfolio.sharpe_ratio is None
+    assert portfolio.sortino_ratio is None
+    assert stats["net_profit"] == pytest.approx(portfolio.net_profit, abs=1e-9, rel=0)
+    for metric in ("sharpe_ratio", "sortino_ratio", "annual_standard_deviation", "probabilistic_sharpe_ratio"):
+        assert stats[metric] is None, metric
+
+
+@pytest.mark.parametrize("initial_cash", [0.0, -100.0])
+def test_nonpositive_capital_without_curve_retains_equity_validation(initial_cash: float) -> None:
+    for calculate in (compute_portfolio_statistics, summarize):
+        with pytest.raises(ValueError, match="equity at timestamp 0 must be greater than zero"):
+            calculate(initial_cash=initial_cash, final_equity=100.0, trades=[], equity_curve=[])
+
+
 def _make_trades() -> list[FakeTrade]:
     """Frozen set of 10 trades with known outcomes."""
     base = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
