@@ -81,7 +81,11 @@ class PolygonBar:
     """One minute bar from Polygon /v2/aggs.
 
     t_ms is the bar's start time in UTC ms (Polygon's `t` field). Prices are
-    raw floats from the JSON. Volume is an int.
+    raw floats from the JSON. Volume keeps the vendor's raw number — int
+    when the JSON carried an int, float when it carried a fraction — so the
+    lake's publication gate can reject a fractional ``v`` instead of
+    silently truncating it (#2527 review); validated captures always pass
+    it on as an int.
     """
 
     t_ms: int
@@ -89,7 +93,7 @@ class PolygonBar:
     high: float
     low: float
     close: float
-    volume: int
+    volume: int | float
     vwap: float
     n: int  # number of trades aggregated
 
@@ -169,7 +173,10 @@ async def fetch_aggregate_bars(
                         high=float(r["h"]),
                         low=float(r["l"]),
                         close=float(r["c"]),
-                        volume=int(r["v"]),
+                        # Raw number preserved: a fractional volume is vendor
+                        # corruption the lake's publication gate must see,
+                        # not silently truncate (#2527 review).
+                        volume=r["v"],
                         vwap=float(r.get("vw", 0.0)),
                         n=int(r.get("n", 0)),
                     )

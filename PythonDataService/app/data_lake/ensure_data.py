@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+import zipfile
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -32,8 +33,13 @@ from app.data_lake.adjustment_versions import (
     current_snapshot_path,
     verify_adjustment_receipt,
 )
+from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.atomic import ArtifactLeaseLostError, atomic_write_and_promote, publish_artifact
-from app.data_lake.bar_validation import CorruptVendorBarsError, assert_publishable_minute_bars
+from app.data_lake.bar_validation import (
+    CorruptVendorBarsError,
+    assert_publishable_minute_bars,
+    assert_publishable_stored_minute_bars,
+)
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -461,6 +467,49 @@ def _cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, version: str 
         return False  # Missing/invalid evidence is rebuilt, never blessed in place.
 
 
+async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) -> bool:
+    """Does a contract-matching cache hit still hold contract-valid bars?
+
+    The legacy gate #2527's review asked for: minute artifacts published
+    before bar validation existed carry the same data contract as validated
+    ones, so byte-and-contract equality alone would keep a corrupt
+    pre-validation row reusable forever. Re-validating the stored bars
+    through the same contract (`assert_publishable_stored_minute_bars`)
+    rebuilds only the rows that are actually corrupt — no provider refetch
+    for the honest lake. An unreadable zip is also not a cache hit; the
+    refresh path re-fetches it.
+    """
+    if cached.trading_date is None:
+        return True
+    lake_root = resolve_lake_root(spec.price_adjustment_mode)
+
+    def _validate() -> None:
+        assert_publishable_stored_minute_bars(
+            read_minute_trade_bars(cached.file_path, lake_root),
+            symbol=cached.symbol or "",
+            trading_date=cached.trading_date,  # type: ignore[arg-type]
+        )
+
+    try:
+        await asyncio.to_thread(_validate)
+    except (CorruptVendorBarsError, ValueError, OSError, zipfile.BadZipFile, IndexError):
+        logger.warning(
+            "data_lake.ensure_data: cached minute artifact for %s %s fails the publication "
+            "contract; rebuilding it",
+            cached.symbol,
+            cached.trading_date,
+            extra={
+                "symbol": cached.symbol,
+                "trading_date": cached.trading_date.isoformat() if cached.trading_date else None,
+                "action": "rebuild_legacy_invalid_minute_artifact",
+            },
+        )
+        return False
+    except LakeAdmissionError:
+        return False  # Unverifiable bytes are the refresh path's problem, not a hit.
+    return True
+
+
 def _is_minute_trade(identity: ArtifactIdentity) -> bool:
     return (
         identity.artifact_kind == "time_series_bars"
@@ -543,7 +592,8 @@ async def _process_minute_trade_artifact(
         )
         if existing:
             cached = existing[0]
-            if _cache_matches(cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version):
+            if _cache_matches(cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version) \
+                    and await _cached_bars_still_valid(cached, spec):
                 return cached, None, True
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=cached.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,
