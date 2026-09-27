@@ -110,7 +110,7 @@ def test_platform_headline_entries_carry_their_own_authored_category() -> None:
 
 
 def test_platform_headline_fixture_receipt_is_only_claimed_for_covered_metrics() -> None:
-    # strategy-metric-help-golden-v1.json only asserts these 7 platform
+    # strategy-metric-help-golden-v2.json only asserts these 7 platform
     # concepts (see tests/fixtures/test_strategy_metric_help_golden.py);
     # citing it for e.g. total_fees or cagr would claim a receipt the fixture
     # doesn't actually cover.
@@ -119,7 +119,7 @@ def test_platform_headline_fixture_receipt_is_only_claimed_for_covered_metrics()
 
     for metric_id, entry in entries.items():
         if metric_id in golden_covered:
-            assert entry.fixture_or_receipt == "contracts/fixtures/strategy-metric-help-golden-v1.json", metric_id
+            assert entry.fixture_or_receipt == "contracts/fixtures/strategy-metric-help-golden-v2.json", metric_id
         elif entry.canonical_symbol.startswith(("Backend/", "PythonDataService/app/engine/results/equity_downsample.py")) or any(
             marker in entry.canonical_symbol for marker in ("engine_validation_analytics.py", "run_verdict_service.py")
         ):

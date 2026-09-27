@@ -8,8 +8,9 @@ statistics dict matches expected values.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -46,6 +47,37 @@ class FakeTrade:
     # Mirrors ``LoggedTrade.is_synthetic_exit`` — the engine's terminal
     # forced-close label, which ``validate_trade_log`` reads.
     is_synthetic_exit: bool = False
+
+
+@pytest.mark.parametrize("initial_cash", [0.0, -100.0])
+def test_nonpositive_capital_preserves_pnl_without_undefined_return_metrics(
+    initial_cash: float,
+) -> None:
+    curve = [
+        EquityPoint(timestamp_ms=1704211200000, equity=90.0),
+        EquityPoint(timestamp_ms=1704297600000, equity=100.0),
+    ]
+    portfolio = compute_portfolio_statistics(
+        initial_cash=initial_cash, final_equity=100.0, trades=[], equity_curve=curve,
+    )
+    stats = summarize(
+        initial_cash=initial_cash, final_equity=100.0, trades=[], equity_curve=curve,
+    )
+
+    assert portfolio.net_profit == pytest.approx(100.0 - initial_cash, abs=1e-9, rel=0)
+    assert portfolio.net_profit_pct == 0.0
+    assert portfolio.sharpe_ratio is None
+    assert portfolio.sortino_ratio is None
+    assert stats["net_profit"] == pytest.approx(portfolio.net_profit, abs=1e-9, rel=0)
+    for metric in ("sharpe_ratio", "sortino_ratio", "annual_standard_deviation", "probabilistic_sharpe_ratio"):
+        assert stats[metric] is None, metric
+
+
+@pytest.mark.parametrize("initial_cash", [0.0, -100.0])
+def test_nonpositive_capital_without_curve_retains_equity_validation(initial_cash: float) -> None:
+    for calculate in (compute_portfolio_statistics, summarize):
+        with pytest.raises(ValueError, match="equity at timestamp 0 must be greater than zero"):
+            calculate(initial_cash=initial_cash, final_equity=100.0, trades=[], equity_curve=[])
 
 
 def _make_trades() -> list[FakeTrade]:
@@ -292,13 +324,19 @@ class TestResampleToDaily:
 
 class TestDailyReturns:
     def test_basic(self) -> None:
-        rets = _daily_returns([100.0, 110.0, 105.0])
+        rets = _daily_returns([110.0, 105.0], initial_cash=100.0)
         assert len(rets) == 2
         assert abs(rets[0] - 0.1) < 1e-10
         assert abs(rets[1] - (-5 / 110)) < 1e-10
 
     def test_single_value(self) -> None:
-        assert _daily_returns([100.0]) == []
+        assert _daily_returns([90.0], initial_cash=100.0) == pytest.approx([-0.1], abs=1e-9, rel=0)
+
+    def test_empty(self) -> None:
+        assert _daily_returns([], initial_cash=100.0) == []
+
+    def test_flat_first_session_is_one_observation(self) -> None:
+        assert _daily_returns([100.0, 110.0], initial_cash=100.0) == pytest.approx([0.0, 0.1], abs=1e-9, rel=0)
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +371,23 @@ class TestTradeStatistics:
 # Unit tests: portfolio statistics with equity curve
 # ---------------------------------------------------------------------------
 class TestPortfolioStatisticsWithCurve:
+    def test_first_session_return_starts_at_evaluation_capital(self) -> None:
+        """Four +/-10% sessions include day one's move, not just later closes."""
+        from app.lean_sidecar.trading_calendar import session_close_ms_utc
+
+        days = [date(2024, 1, day) for day in (2, 3, 4, 5)]
+        curve = [
+            EquityPoint(session_close_ms_utc(days[0]) - 60_000, 105.0),
+            *[EquityPoint(session_close_ms_utc(day), value)
+              for day, value in zip(days, (110.0, 99.0, 108.9, 98.01), strict=True)],
+        ]
+        stats = summarize(100.0, 98.01, [], trading_days=4, equity_curve=curve)
+
+        assert stats["sharpe_ratio"] == pytest.approx(0.0, abs=1e-9, rel=0)
+        assert stats["sortino_ratio"] == pytest.approx(0.0, abs=1e-9, rel=0)
+        assert stats["annual_standard_deviation"] == pytest.approx(math.sqrt(3.36), abs=1e-9, rel=0)
+        assert stats["probabilistic_sharpe_ratio"] == pytest.approx(0.5, abs=1e-10, rel=0)
+
     def test_uses_real_curve(self) -> None:
         trades = _make_trades()
         curve = _make_equity_curve()

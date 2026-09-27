@@ -134,6 +134,14 @@ class AnalyticalMetricCatalog(BaseModel):
         return self
 
 
+PLATFORM_DAILY_RETURN_CONVENTION = (
+    "The first evaluated session's return is measured from evaluation starting capital to its last marked equity; "
+    "later returns compare successive ET session closes. This deliberately differs from the LEAN-port "
+    "Day-0/Day-1 skip; native LEAN statistics retain their own convention."
+    " With nonpositive evaluation capital, daily-return metrics are unavailable."
+)
+
+
 PLATFORM_SHARPE_VARIANT = MetricVariant(
     metric_id="sharpe",
     variant_id="sharpe.platform.v1",
@@ -156,7 +164,7 @@ PLATFORM_SHARPE_VARIANT = MetricVariant(
     ),
     input_series=(
         "Daily returns resampled from the recorded equity curve; without that curve, per-trade returns from "
-        "the reconstructed all-in trade curve."
+        "the reconstructed all-in trade curve. " + PLATFORM_DAILY_RETURN_CONVENTION
     ),
     units="ratio",
     output_scale="annualized ratio",
@@ -185,7 +193,7 @@ PLATFORM_SHARPE_VARIANT = MetricVariant(
         "PythonDataService/tests/fixtures/test_strategy_metric_help_golden.py::test_strategy_metric_help_matches_canonical_golden_values",
         "PythonDataService/tests/test_statistics.py",
     ),
-    fixture_or_receipt="contracts/fixtures/strategy-metric-help-golden-v1.json",
+    fixture_or_receipt="contracts/fixtures/strategy-metric-help-golden-v2.json",
     numerical_tolerance="absolute=1e-12, relative=0",
     results_surfaces=("Strategy Lab Results summary",),
     verdict_membership="Platform verdict policy may consume its platform metric; this entry does not define a grade.",
