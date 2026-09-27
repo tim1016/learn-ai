@@ -165,6 +165,48 @@ import os  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
 
+from app.engine.data.availability import MissingSessionsError, check_availability  # noqa: E402
+from app.lean_sidecar.trading_calendar import expected_sessions  # noqa: E402
+from tests._helpers.lean_store import seed_store_day  # noqa: E402
+
+
+def test_cli_refuses_a_window_the_lean_folders_do_not_cover_naming_the_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A partially covered window never builds a prediction set (#2488).
+
+    The reader silently skips a session with no zip, so generation over a
+    holed window would otherwise write a complete-looking artifact from a
+    partial series. The default LEAN provider shares the canonical Spec
+    preflight: ``MissingSessionsError`` names the gap, the CLI reports it
+    on stderr with a non-zero exit, and no artifact directory appears.
+    """
+    from app.research.ml.generate_prediction_set import main
+
+    window = (Date(2024, 11, 25), Date(2024, 12, 6))
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("LEAN_DATA_CACHE", raising=False)
+    for day in expected_sessions(*window):
+        if day < Date(2024, 12, 2):
+            seed_store_day(tmp_path, "TEST", day)
+
+    exit_code = main(
+        [
+            "--rule", "rsi_14_centered",
+            "--symbol", "TEST",
+            "--start", window[0].isoformat(),
+            "--end", window[1].isoformat(),
+            "--resolution-minutes", "15",
+            "--artifacts-root", str(tmp_path / "artifacts"),
+        ]
+    )
+
+    assert exit_code != 0
+    stderr = capsys.readouterr().err
+    assert str(MissingSessionsError(check_availability([tmp_path], "TEST", *window))) in stderr
+    assert "missing 2024-12-02..2024-12-06" in stderr
+    assert not (tmp_path / "artifacts").exists()
+
 
 @pytest.mark.slow
 def test_cli_generates_real_artifact_for_one_day(tmp_path: Path) -> None:
