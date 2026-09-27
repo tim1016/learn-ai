@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterable
 from datetime import date as Date
 from pathlib import Path
 
+from app.engine.data.availability import MissingSessionsError, check_availability
 from app.research.ml.artifact import (
     ChunkRef,
     PredictionSetManifest,
@@ -135,13 +136,19 @@ def generate_prediction_set(
 def _default_lean_bars_provider(
     *, symbol: str, start: Date, end: Date, resolution_minutes: int
 ) -> Iterable[tuple[float, int]]:
-    """Yield ``(close, timestamp_ms)`` for each bar the engine will see.
+    """Yield ``(close, timestamp_ms)`` for each bar the engine will see, once the window is admitted.
 
     Constructs a ``LeanMinuteDataReader`` from ``LEAN_DATA_ROOT`` /
     ``LEAN_DATA_CACHE`` and drives the same ``TradeBarConsolidator``
     configuration the engine uses internally via
     :func:`app.research.ml.coverage.iter_consolidated_bars`. This makes
     the artifact's bar clock identical to the engine's at run time.
+
+    The reader skips a session with no zip without a word, so the window
+    is checked first against the canonical calendar — the reader must
+    read bars for every scheduled session in it, or ``MissingSessionsError``
+    names the gaps and any unreadable file (#2488), the same preflight
+    the Spec data-source materializer runs (#2445).
     """
     # Imported lazily so the module stays importable without LEAN configured
     # (tests inject a synthetic provider via ``bars_provider=...``).
@@ -156,6 +163,9 @@ def _default_lean_bars_provider(
         raise RuntimeError(
             "No LEAN data roots configured (set LEAN_DATA_ROOT or LEAN_DATA_CACHE)"
         )
+    coverage = check_availability(roots, symbol, start, end, resolution="minute")
+    if not coverage.is_complete:
+        raise MissingSessionsError(coverage)
     reader = LeanMinuteDataReader(roots)
 
     for bar in iter_consolidated_bars(
@@ -182,15 +192,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    set_id = generate_prediction_set(
-        rule=args.rule,
-        symbol=args.symbol,
-        start=args.start,
-        end=args.end,
-        resolution_minutes=args.resolution_minutes,
-        artifacts_root=args.artifacts_root,
-        bars_provider=_default_lean_bars_provider,
-    )
+    try:
+        set_id = generate_prediction_set(
+            rule=args.rule,
+            symbol=args.symbol,
+            start=args.start,
+            end=args.end,
+            resolution_minutes=args.resolution_minutes,
+            artifacts_root=args.artifacts_root,
+            bars_provider=_default_lean_bars_provider,
+        )
+    except MissingSessionsError as exc:
+        # An expected refusal, not a crash: the canonical message already
+        # names the symbol, the missing session ranges, and any unreadable
+        # file (#2488).
+        print(str(exc), file=sys.stderr)
+        return 1
     print(set_id)
     return 0
 
