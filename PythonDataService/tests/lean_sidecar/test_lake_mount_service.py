@@ -397,6 +397,7 @@ async def test_compatibility_fixture_reads_committed_lake_off_event_loop(
 @pytest.mark.parametrize("damage", [
     "quote_receipts", "quote_files", "metadata_scope", "both", "both_trees",
     "trade_files", "daily_file", "required_metadata", "factor_receipt", "map_receipt", "map_bytes",
+    "map_window", "map_unreadable",
 ])
 async def test_lake_run_repairs_legacy_inputs_from_verified_sources(
     tmp_path: Path,
@@ -466,9 +467,28 @@ async def test_lake_run_repairs_legacy_inputs_from_verified_sources(
                 row["status"] = "failed"
     if damage == "map_bytes":
         (root / "equity/usa/map_files/spy.csv").write_text("uncommitted replacement\n")
+    if damage in {"map_window", "map_unreadable"}:
+        # These bytes have a valid catalog receipt, so the semantic map
+        # refusal (not the admission hash check) must trigger preparation.
+        payload = (b"20260105,spy,nyse\n20260105,spy,nyse\n" if damage == "map_window"
+                   else b"not a map file\n")
+        (root / "equity/usa/map_files/spy.csv").write_bytes(payload)
+        for row in catalog.rows.values():
+            if row["artifact_kind"] == "map_file":
+                row.update(file_sha256=hashlib.sha256(payload).hexdigest(), file_size_bytes=len(payload))
     if damage == "both_trees":
         await service.run_trusted_sample(_request("repair-raw-metadata"))
     fetches.clear()
+    if damage in {"map_window", "map_unreadable"}:
+        ensure = pipeline.ensure_data
+
+        async def prepare_map(repair_spec: DataRunSpec) -> Any:
+            assert repair_spec.include_map_files
+            assert not (orchestrator.artifacts_root / "repair-adjusted-quotes").exists()
+            assert orchestrator.launch_requests == []
+            return await ensure(repair_spec)
+
+        monkeypatch.setattr(pipeline, "ensure_data", prepare_map)
 
     # This must exercise the real writer before acquiring the run's adjusted
     # read lock; nesting ensure_data's capture lock would deadlock the run.
@@ -480,6 +500,10 @@ async def test_lake_run_repairs_legacy_inputs_from_verified_sources(
     assert fetches == ([DAY_ONE] if damage == "trade_files" else []), "reuse admitted trade bars"
     assert _read_manifest(result.workspace_root)["staged_data"]["corporate_action_versions"] == captured.corporate_action_versions
     assert all(companion_path(root / record.file_path).exists() for record in quotes)
+    if damage in {"map_window", "map_unreadable"}:
+        from app.data_lake.map_files import map_file_coverage
+
+        assert map_file_coverage((root / "equity/usa/map_files/spy.csv").read_bytes()) == (DAY_ONE, DAY_TWO)
 
 
 @pytest.mark.asyncio

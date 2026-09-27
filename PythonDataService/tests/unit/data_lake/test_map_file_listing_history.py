@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -24,6 +25,7 @@ from app.data_lake.types import DataRunSpec
 from tests._helpers.fake_lake_catalog import (
     FakeCatalog,
     install_fake_catalog,
+    mock_launcher,
     point_lake_writer_at_tmp,
 )
 
@@ -102,6 +104,46 @@ def _map_file(tmp_lake: Path) -> Path:
 def _map_row_dates(tmp_lake: Path) -> list[str]:
     body = _map_file(tmp_lake).read_bytes().decode("ascii").strip().split("\n")
     return [row.split(",")[0] for row in body]
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start,end,expected_skipped,expected_bar_failures", [
+    (date(2024, 5, 25), date(2024, 5, 26), 2, 0),
+    (date(2024, 5, 27), date(2024, 5, 27), 1, 0),
+    (NARROW_START, NARROW_END, 0, 2),
+])
+async def test_capture_without_complete_minutes_finishes_map_claim(
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    start: date,
+    end: date,
+    expected_skipped: int,
+    expected_bar_failures: int,
+) -> None:
+    """Non-sessions and provider failures still return a structured result."""
+    from app.data_lake import ensure_data as pipeline
+    from app.data_lake.map_files import map_file_coverage
+    from app.data_lake.polygon_fetcher import PolygonFetchError
+
+    mock_launcher()
+    _mock_ticker_events()
+    fetch = AsyncMock(side_effect=PolygonFetchError("minute fetch unavailable"))
+    monkeypatch.setattr(pipeline, "fetch_minute_trade_aggregates", fetch)
+    spec = _spec(start, end).model_copy(update={"include_map_files": True})
+
+    result = await pipeline.ensure_data(spec)
+
+    assert result.overall_status == "partial"
+    assert len(result.skipped_non_sessions) == expected_skipped
+    assert sum(f.reason == "provider_api_error" for f in result.failures) == expected_bar_failures
+    assert fetch.await_count == expected_bar_failures
+    assert any(f.reason == "internal_error" and "no complete minute-trade sources" in f.detail
+               for f in result.failures)
+    assert map_file_coverage(_map_file(tmp_lake).read_bytes()) == (start, end)
+    assert [r for r in result.artifacts if r.artifact_kind == "map_file"]
+    assert all(row["status"] != "fetching" for row in fake_catalog.rows.values())
 
 
 @respx.mock
