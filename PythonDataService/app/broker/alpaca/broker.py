@@ -74,6 +74,14 @@ def _transfer_page_crossed_window(
         et_date_at_ms(oldest.occurred_at_ms) < et_date_at_ms(after_ms)
     )
 
+
+def _same_activity_evidence(left: BrokerActivity, right: BrokerActivity) -> bool:
+    """Compare broker-authored content, excluding only local ingestion time."""
+    return left.model_dump(exclude={"observed_at_ms"}) == right.model_dump(
+        exclude={"observed_at_ms"}
+    )
+
+
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
 # Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
@@ -209,24 +217,42 @@ class AlpacaBroker:
             # the prior-close boundary. Unlike generic activity recovery, a
             # fixed page cap would silently turn omitted transfers into P&L.
             activities: list[BrokerActivity] = []
-            seen_activity_ids: set[str] = set()
+            seen_activities: dict[str, BrokerActivity] = {}
+            issued_page_tokens: set[str | None] = set()
             page_token: str | None = None
             while True:
+                issued_page_tokens.add(page_token)
                 payloads = await self._client.list_activities(
                     limit=limit,
                     page_token=page_token,
                     **activity_filter,
                 )
-                mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
+                try:
+                    mapped = [adapter.from_alpaca_activity(payload) for payload in payloads]
+                except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                    raise BrokerUnavailable(
+                        "Alpaca transfer activity evidence was malformed.",
+                        broker=BROKER_ID,
+                        detail="A transfer row could not be mapped to the broker contract.",
+                    ) from exc
                 for activity in mapped:
-                    if (
-                        activity.activity_id not in seen_activity_ids
-                        and _transfer_activity_may_overlap_window(
-                            activity,
-                            after_ms=after_ms,
-                        )
+                    previous = seen_activities.get(activity.activity_id)
+                    if previous is not None:
+                        if not _same_activity_evidence(previous, activity):
+                            raise BrokerUnavailable(
+                                "Alpaca transfer activity history contains a conflicting duplicate.",
+                                broker=BROKER_ID,
+                                detail=(
+                                    "One activity id carried different economic evidence "
+                                    "across pages."
+                                ),
+                            )
+                        continue
+                    seen_activities[activity.activity_id] = activity
+                    if _transfer_activity_may_overlap_window(
+                        activity,
+                        after_ms=after_ms,
                     ):
-                        seen_activity_ids.add(activity.activity_id)
                         activities.append(activity)
                 if len(payloads) < limit or _transfer_page_crossed_window(
                     mapped,
@@ -237,7 +263,7 @@ class AlpacaBroker:
                 if (
                     not isinstance(next_page_token, str)
                     or not next_page_token
-                    or next_page_token == page_token
+                    or next_page_token in issued_page_tokens
                 ):
                     raise BrokerUnavailable(
                         "Alpaca transfer activity history was incomplete.",

@@ -191,10 +191,13 @@ notional cap, no symbol allowlist, no session restriction.
   `net_amount` sign is part of Alpaca's activity contract
   ([Account Activities](https://docs.alpaca.markets/us/docs/account-activities)).
   The dedicated `TRANS` pagination continues until it proves the date boundary;
-  a broken cursor raises instead of returning a partial set. Missing timestamps,
-  missing or non-finite amounts, and a date-only transfer on the boundary
-  session make `DayPnl.known` false rather than turning an unclassified cash
-  movement into profit or loss. Broker equity already includes every carried
+  a missing, repeated, or cyclic cursor raises instead of returning a partial
+  set. Rows that cannot be mapped and duplicate activity ids carrying different
+  economic evidence also make the read unavailable; economically identical
+  duplicates are collapsed. Missing timestamps, missing or non-finite amounts,
+  and a date-only transfer on the boundary session make `DayPnl.known` false
+  rather than turning an unclassified cash movement into profit or loss.
+  Broker equity already includes every carried
   position and manual/external trade, so no Clerk FIFO or lifetime-unrealized
   composition participates in this account fact.
 - **Positions are not a loss input.** Current equity already includes every

@@ -43,6 +43,25 @@ class _ActivitiesClient:
         return self.pages[page_token]
 
 
+class _BoundedActivitiesClient(_ActivitiesClient):
+    """A cycling fake that fails the test instead of hanging forever."""
+
+    async def list_activities(
+        self,
+        *,
+        limit: int,
+        page_token: str | None = None,
+        activity_type: str | None = None,
+    ) -> list[dict]:
+        if len(self.page_tokens) >= 3:
+            raise AssertionError("the broker followed a repeated transfer cursor")
+        return await super().list_activities(
+            limit=limit,
+            page_token=page_token,
+            activity_type=activity_type,
+        )
+
+
 def test_trade_activity_maps_to_trade_category(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
@@ -243,3 +262,100 @@ async def test_transfer_cursor_rejects_a_repeated_page_before_the_boundary(
             limit=1,
             activity_type="TRANS",
         )
+
+
+async def test_transfer_cursor_rejects_a_multi_page_cycle(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    activity_a = {**non_trade, "id": "A", "activity_type": "CSD"}
+    activity_b = {**non_trade, "id": "B", "activity_type": "CSD"}
+    client = _BoundedActivitiesClient(
+        {
+            None: [activity_a],
+            "A": [activity_b],
+            "B": [activity_a],
+        }
+    )
+    broker = AlpacaBroker(client=client)  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerUnavailable, match="history was incomplete"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=1,
+            activity_type="TRANS",
+        )
+
+
+async def test_transfer_cursor_translates_a_malformed_row_to_unavailable_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    malformed = {
+        key: value
+        for key, value in {**non_trade, "activity_type": "CSD"}.items()
+        if key != "id"
+    }
+    broker = AlpacaBroker(
+        client=_ActivitiesClient({None: [malformed]})  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BrokerUnavailable, match="evidence was malformed"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=25,
+            activity_type="TRANS",
+        )
+
+
+async def test_transfer_cursor_rejects_conflicting_duplicate_activity_ids(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    first = {
+        **non_trade,
+        "id": "duplicate",
+        "activity_type": "CSD",
+        "net_amount": "100.00",
+    }
+    cursor = {**non_trade, "id": "cursor", "activity_type": "CSD"}
+    conflicting = {**first, "net_amount": "200.00"}
+    broker = AlpacaBroker(
+        client=_ActivitiesClient(  # type: ignore[arg-type]
+            {
+                None: [first, cursor],
+                "cursor": [conflicting],
+            }
+        )
+    )
+
+    with pytest.raises(BrokerUnavailable, match="conflicting duplicate"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=2,
+            activity_type="TRANS",
+        )
+
+
+async def test_transfer_cursor_deduplicates_equivalent_activity_ids(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    first = {**non_trade, "id": "duplicate", "activity_type": "CSD"}
+    cursor = {**non_trade, "id": "cursor", "activity_type": "CSD"}
+    broker = AlpacaBroker(
+        client=_ActivitiesClient(  # type: ignore[arg-type]
+            {
+                None: [first, cursor],
+                "cursor": [first],
+            }
+        )
+    )
+
+    activities = await broker.list_activities(
+        after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+        limit=2,
+        activity_type="TRANS",
+    )
+
+    assert [activity.activity_id for activity in activities] == ["duplicate", "cursor"]
