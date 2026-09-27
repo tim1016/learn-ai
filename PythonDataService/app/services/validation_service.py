@@ -1,4 +1,13 @@
-"""Validation service: compare pandas-ta generated data against TradingView CSV exports."""
+"""Validation service: compare pandas-ta generated data against TradingView CSV exports.
+
+A report grades the comparison only when the evidence is sound (#2461):
+rows must pair one-to-one on a shared, unique time column, and enough of
+the aligned rows must carry comparable values. Anything less is said
+apart — an invalid comparison (duplicate time keys), an unverified one
+(rows paired by position), or insufficient comparable evidence (coverage
+below the minimum this module names) — never a grade over what was
+actually compared.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +25,13 @@ _EXACT = 0.001
 _CLOSE = 0.01
 _OK = 0.1
 
+# The overall grade is shown only when at least this share of the aligned
+# rows × common fields was actually compared; the report names this minimum.
+_MIN_COVERAGE_PCT = 80.0
+
+# Carried columns that are never compared as indicator fields.
+_SKIP_COLS = {"unix_ts", "iso_time", "open", "high", "low", "close", "volume", "vwap", "transactions"}
+
 
 def generate_validation_report(
     our_csv_bytes: bytes,
@@ -28,22 +44,40 @@ def generate_validation_report(
     """
     our_df = pd.read_csv(io.BytesIO(our_csv_bytes))
     tv_df = pd.read_csv(io.BytesIO(tv_csv_bytes))
+    our_total = len(our_df)
+    tv_total = len(tv_df)
 
     # Determine common indicator columns (exclude time/ohlcv)
-    skip_cols = {"unix_ts", "iso_time", "open", "high", "low", "close", "volume", "vwap", "transactions"}
-    our_ind_cols = [c for c in our_df.columns if c not in skip_cols]
-    tv_ind_cols = [c for c in tv_df.columns if c not in skip_cols]
+    our_ind_cols = [c for c in our_df.columns if c not in _SKIP_COLS]
+    tv_ind_cols = [c for c in tv_df.columns if c not in _SKIP_COLS]
 
-    # Try to align by timestamp
+    # Align by the shared time column; a repeated time value in either file
+    # makes one-to-one pairing impossible, so the comparison is invalid
+    # before any numbers are computed (#2461).
+    time_col: str | None = None
     if "unix_ts" in our_df.columns and "unix_ts" in tv_df.columns:
-        merged = our_df.merge(tv_df, on="unix_ts", suffixes=("_ours", "_tv"), how="inner")
-        align_method = "unix_ts"
+        time_col = "unix_ts"
     elif "iso_time" in our_df.columns and "iso_time" in tv_df.columns:
-        merged = our_df.merge(tv_df, on="iso_time", suffixes=("_ours", "_tv"), how="inner")
-        align_method = "iso_time"
+        time_col = "iso_time"
+
+    if time_col is not None:
+        our_dupes = int(our_df[time_col].duplicated().sum())
+        tv_dupes = int(tv_df[time_col].duplicated().sum())
+        if our_dupes or tv_dupes:
+            return _build_invalid_report(
+                ticker=ticker,
+                time_col=time_col,
+                our_dupes=our_dupes,
+                tv_dupes=tv_dupes,
+                our_total=our_total,
+                tv_total=tv_total,
+            )
+        merged = our_df.merge(tv_df, on=time_col, suffixes=("_ours", "_tv"), how="inner")
+        align_method = time_col
     else:
-        # Positional alignment
-        min_len = min(len(our_df), len(tv_df))
+        # No shared time column: pair rows by position. The per-field numbers
+        # below are a diagnostic, never a graded verdict (#2461).
+        min_len = min(our_total, tv_total)
         merged = pd.concat(
             [
                 our_df.head(min_len).add_suffix("_ours"),
@@ -53,9 +87,8 @@ def generate_validation_report(
         )
         align_method = "positional"
 
-    matched_rows = len(merged)
-    our_total = len(our_df)
-    tv_total = len(tv_df)
+    aligned_rows = len(merged)
+    matched_rows = aligned_rows
 
     # Find common fields to compare
     common_fields = _find_common_fields(our_ind_cols, tv_ind_cols, merged.columns.tolist())
@@ -71,18 +104,26 @@ def generate_validation_report(
         our_vals = pd.to_numeric(merged[our_col], errors="coerce")
         tv_vals = pd.to_numeric(merged[tv_col], errors="coerce")
 
-        both_valid = our_vals.notna() & tv_vals.notna()
+        our_present = our_vals.notna()
+        tv_present = tv_vals.notna()
+        both_valid = our_present & tv_present
         valid_count = int(both_valid.sum())
+        missing_ours = int((~our_present & tv_present).sum())
+        missing_tv = int((our_present & ~tv_present).sum())
+        missing_both = int((~our_present & ~tv_present).sum())
+
+        field_report: dict[str, Any] = {
+            "field": display_name,
+            "aligned": aligned_rows,
+            "compared": valid_count,
+            "missing_ours": missing_ours,
+            "missing_tv": missing_tv,
+            "missing_both": missing_both,
+            "coverage_pct": round(valid_count / aligned_rows * 100, 1) if aligned_rows else 0.0,
+        }
+        field_reports.append(field_report)
 
         if valid_count == 0:
-            field_reports.append(
-                {
-                    "field": display_name,
-                    "valid_pairs": 0,
-                    "our_nans": int(our_vals.isna().sum()),
-                    "tv_nans": int(tv_vals.isna().sum()),
-                }
-            )
             continue
 
         diff = (our_vals[both_valid] - tv_vals[both_valid]).abs()
@@ -92,17 +133,20 @@ def generate_validation_report(
         close_count = int(((pct_diff >= _EXACT) & (pct_diff < _CLOSE)).sum())
         ok_count = int(((pct_diff >= _CLOSE) & (pct_diff < _OK)).sum())
         bad_count = int((pct_diff >= _OK).sum())
-
-        mean_abs_diff = float(diff.mean())
-        max_abs_diff = float(diff.max())
-        mean_pct_diff = float(pct_diff.mean())
-        max_pct_diff = float(pct_diff.max())
+        field_report.update(
+            exact=exact_count,
+            close=close_count,
+            ok=ok_count,
+            divergent=bad_count,
+            mean_abs_diff=float(diff.mean()),
+            max_abs_diff=float(diff.max()),
+            mean_pct_diff=float(pct_diff.mean()),
+            max_pct_diff=float(pct_diff.max()),
+        )
 
         # Find top divergence points
         top_idx = pct_diff.nlargest(5).index
         for idx in top_idx:
-            ts_col = "unix_ts" if "unix_ts" in merged.columns else "unix_ts_ours"
-            merged.loc[idx, ts_col] if ts_col in merged.columns else idx
             iso_col = "iso_time" if "iso_time" in merged.columns else "iso_time_ours"
             iso_val = merged.loc[idx, iso_col] if iso_col in merged.columns else ""
 
@@ -117,28 +161,38 @@ def generate_validation_report(
                 }
             )
 
-        field_reports.append(
-            {
-                "field": display_name,
-                "valid_pairs": valid_count,
-                "our_nans": int(our_vals.isna().sum()),
-                "tv_nans": int(tv_vals.isna().sum()),
-                "exact": exact_count,
-                "close": close_count,
-                "ok": ok_count,
-                "divergent": bad_count,
-                "exact_pct": round(exact_count / valid_count * 100, 2),
-                "close_pct": round((exact_count + close_count) / valid_count * 100, 2),
-                "mean_abs_diff": mean_abs_diff,
-                "max_abs_diff": max_abs_diff,
-                "mean_pct_diff": mean_pct_diff,
-                "max_pct_diff": max_pct_diff,
-            }
-        )
-
     # Sort divergence points by pct_diff descending
     all_divergence_points.sort(key=lambda x: x["pct_diff"], reverse=True)
     top_divergences = all_divergence_points[:20]
+
+    # The overall grade appears only when the evidence permits one (#2461).
+    total_compared = sum(r["compared"] for r in field_reports)
+    total_comparable = aligned_rows * len(field_reports)
+    overall_coverage_pct: float | None = None
+    grade_line: str
+    if align_method == "positional":
+        grade_line = (
+            "withheld — **unverified comparison**: the files share no time column, so rows "
+            "were paired by position. The per-field numbers below are a diagnostic, not a verdict."
+        )
+    elif not field_reports:
+        grade_line = "withheld — the files share no comparable indicator field"
+    else:
+        overall_coverage_pct = total_compared / total_comparable * 100
+        if overall_coverage_pct < _MIN_COVERAGE_PCT:
+            grade_line = (
+                f"withheld — insufficient comparable evidence: {overall_coverage_pct:.1f}% overall "
+                f"coverage is below the {_MIN_COVERAGE_PCT:.0f}% minimum"
+            )
+        else:
+            # Coverage ≥ _MIN_COVERAGE_PCT > 0 guarantees total_compared > 0.
+            exact_pct = sum(r.get("exact", 0) for r in field_reports) / total_compared * 100
+            ok_pct = (
+                sum(r.get("exact", 0) + r.get("close", 0) + r.get("ok", 0) for r in field_reports)
+                / total_compared
+                * 100
+            )
+            grade_line = _grade(exact_pct, ok_pct)
 
     # Build markdown
     md = _build_markdown(
@@ -151,6 +205,8 @@ def generate_validation_report(
         top_divergences=top_divergences,
         our_cols=our_ind_cols,
         tv_cols=tv_ind_cols,
+        grade_line=grade_line,
+        overall_coverage_pct=overall_coverage_pct,
     )
 
     return md
@@ -190,7 +246,48 @@ def _find_common_fields(
     return pairs
 
 
+def _shared_markdown_header(ticker: str) -> list[str]:
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return [
+        f"# Validation Report — {ticker}",
+        "",
+        f"**Generated:** {now}  ",
+        "**Comparison:** pandas-ta (Polygon.io) vs TradingView CSV export  ",
+    ]
+
+
+def _build_invalid_report(
+    *,
+    ticker: str,
+    time_col: str,
+    our_dupes: int,
+    tv_dupes: int,
+    our_total: int,
+    tv_total: int,
+) -> str:
+    """The duplicate-time-keys refusal: no numbers, no grade (#2461)."""
+    lines = _shared_markdown_header(ticker)
+    lines += [
+        "**Alignment:** refused",
+        "",
+        "## Comparison invalid",
+        "",
+        f"Time values repeat within a file, so rows cannot pair one-to-one on "
+        f"`{time_col}` and no comparison number would be trustworthy. Nothing was graded.",
+        "",
+        "| File | Rows | Duplicate time values |",
+        "|------|-----:|----------------------:|",
+        f"| pandas-ta (ours) | {our_total:,} | {our_dupes:,} |",
+        f"| TradingView | {tv_total:,} | {tv_dupes:,} |",
+        "",
+        f"De-duplicate the `{time_col}` values in the flagged file(s) and re-run.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _build_markdown(
+    *,
     ticker: str,
     our_total: int,
     tv_total: int,
@@ -200,15 +297,12 @@ def _build_markdown(
     top_divergences: list[dict[str, Any]],
     our_cols: list[str],
     tv_cols: list[str],
+    grade_line: str,
+    overall_coverage_pct: float | None,
 ) -> str:
     """Build the full markdown validation report."""
-    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-
-    lines = [
-        f"# Validation Report — {ticker}",
-        "",
-        f"**Generated:** {now}  ",
-        "**Comparison:** pandas-ta (Polygon.io) vs TradingView CSV export  ",
+    lines = _shared_markdown_header(ticker)
+    lines += [
         f"**Alignment:** {align_method}  ",
         "",
         "---",
@@ -220,38 +314,37 @@ def _build_markdown(
         f"| pandas-ta rows | {our_total:,} |",
         f"| TradingView rows | {tv_total:,} |",
         f"| Matched (aligned) rows | {matched_rows:,} |",
-        f"| Unmatched pandas-ta rows | {our_total - matched_rows:,} |",
-        f"| Unmatched TradingView rows | {tv_total - matched_rows:,} |",
-        f"| Match rate | {matched_rows / max(our_total, 1) * 100:.1f}% |",
+        f"| Unmatched pandas-ta rows | {max(our_total - matched_rows, 0):,} |",
+        f"| Unmatched TradingView rows | {max(tv_total - matched_rows, 0):,} |",
+        f"| Match rate | {min(matched_rows / max(our_total, 1) * 100, 100.0):.1f}% |",
         "",
     ]
 
     # Overall grade
-    total_valid = sum(r.get("valid_pairs", 0) for r in field_reports)
+    total_compared = sum(r["compared"] for r in field_reports)
     total_exact = sum(r.get("exact", 0) for r in field_reports)
     total_close = sum(r.get("close", 0) for r in field_reports)
     total_ok = sum(r.get("ok", 0) for r in field_reports)
     total_bad = sum(r.get("divergent", 0) for r in field_reports)
-
-    if total_valid > 0:
-        overall_exact_pct = total_exact / total_valid * 100
-        overall_ok_pct = (total_exact + total_close + total_ok) / total_valid * 100
-    else:
-        overall_exact_pct = 0
-        overall_ok_pct = 0
 
     lines += [
         "## 2. Overall Accuracy",
         "",
         "| Classification | Count | Percentage |",
         "|---------------|------:|----------:|",
-        f"| Exact match (< {_EXACT}%) | {total_exact:,} | {total_exact / max(total_valid, 1) * 100:.2f}% |",
-        f"| Close match (< {_CLOSE}%) | {total_close:,} | {total_close / max(total_valid, 1) * 100:.2f}% |",
-        f"| Acceptable (< {_OK}%) | {total_ok:,} | {total_ok / max(total_valid, 1) * 100:.2f}% |",
-        f"| **Divergent (≥ {_OK}%)** | **{total_bad:,}** | **{total_bad / max(total_valid, 1) * 100:.2f}%** |",
-        f"| **Total compared** | **{total_valid:,}** | |",
+        f"| Exact match (< {_EXACT}%) | {total_exact:,} | {total_exact / max(total_compared, 1) * 100:.2f}% |",
+        f"| Close match (< {_CLOSE}%) | {total_close:,} | {total_close / max(total_compared, 1) * 100:.2f}% |",
+        f"| Acceptable (< {_OK}%) | {total_ok:,} | {total_ok / max(total_compared, 1) * 100:.2f}% |",
+        f"| **Divergent (≥ {_OK}%)** | **{total_bad:,}** | **{total_bad / max(total_compared, 1) * 100:.2f}%** |",
+        f"| **Total compared** | **{total_compared:,}** | |",
+    ]
+    if overall_coverage_pct is not None:
+        lines.append(
+            f"| **Overall coverage** | **{total_compared:,} of {matched_rows * len(field_reports):,} pairs** | **{overall_coverage_pct:.1f}%** |"
+        )
+    lines += [
         "",
-        f"> **Overall grade:** {_grade(overall_exact_pct, overall_ok_pct)}",
+        f"> **Overall grade:** {grade_line}",
         "",
     ]
 
@@ -259,17 +352,26 @@ def _build_markdown(
     lines += [
         "## 3. Per-Field Accuracy",
         "",
-        "| Field | Pairs | Exact | Close | OK | Divergent | Mean %Diff | Max %Diff | Max |Diff| |",
-        "|-------|------:|------:|------:|---:|----------:|-----------:|----------:|----------:|",
+        "| Field | Aligned | Compared | Coverage | Missing (ours) | Missing (TradingView) | Missing (both) | Exact | Close | OK | Divergent | Mean %Diff | Max %Diff | Max |Diff| |",
+        "|-------|--------:|---------:|---------:|---------------:|----------------------:|---------------:|------:|------:|---:|----------:|-----------:|----------:|----------:|",
     ]
 
     for r in sorted(field_reports, key=lambda x: x.get("max_pct_diff", 0), reverse=True):
-        if r.get("valid_pairs", 0) == 0:
-            lines.append(f"| {r['field']} | 0 | — | — | — | — | — | — | — |")
+        if r["compared"] == 0:
+            lines.append(
+                f"| {r['field']} | {r['aligned']:,} | 0 | {r['coverage_pct']:.1f}% "
+                f"| {r['missing_ours']:,} | {r['missing_tv']:,} | {r['missing_both']:,} "
+                f"| — | — | — | — | — | — | — |"
+            )
             continue
         lines.append(
             f"| {r['field']} "
-            f"| {r['valid_pairs']:,} "
+            f"| {r['aligned']:,} "
+            f"| {r['compared']:,} "
+            f"| {r['coverage_pct']:.1f}% "
+            f"| {r['missing_ours']:,} "
+            f"| {r['missing_tv']:,} "
+            f"| {r['missing_both']:,} "
             f"| {r['exact']:,} "
             f"| {r['close']:,} "
             f"| {r['ok']:,} "
