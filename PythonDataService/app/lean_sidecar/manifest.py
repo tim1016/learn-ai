@@ -336,11 +336,12 @@ def hash_staged_files(root: Path, paths: Iterable[Path]) -> tuple[StagedDataFile
     out: list[StagedDataFile] = []
     for p in ordered:
         rel = p.relative_to(root).as_posix()
+        payload = p.read_bytes()
         out.append(
             StagedDataFile(
                 path_in_workspace=rel,
-                sha256=sha256_file(p),
-                size_bytes=p.stat().st_size,
+                sha256=sha256_bytes(payload),
+                size_bytes=len(payload),
             )
         )
     return tuple(out)

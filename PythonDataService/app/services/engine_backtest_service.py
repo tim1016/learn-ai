@@ -376,8 +376,8 @@ def _build_backtest_engine(
 def _pin_compatibility_fixture(
     request: EngineBacktestRequest,
     data_roots: list[Path],
-) -> None:
-    """Freeze the exact minute-zip bytes consumed by a compatibility pair."""
+) -> dict[str, str] | None:
+    """Receipt the minute zips and return the manifest that binds their reads."""
     if request.compatibility_profile != COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
         return
     if request.data_policy is None or request.from_date is None or request.to_date is None:
@@ -388,7 +388,7 @@ def _pin_compatibility_fixture(
     receipt = snapshot_minute_trade_zips(
         data_roots,
         symbol=request.data_policy.symbol,
-        start=_parse_iso_date(request.from_date, "from_date"),
+        start=_parse_iso_date(request.warmup_from_date or request.from_date, "data_start"),
         end=_parse_iso_date(request.to_date, "to_date"),
         adjusted=request.data_policy.adjusted,
         session=request.data_policy.session,
@@ -396,6 +396,7 @@ def _pin_compatibility_fixture(
     request.data_policy.provider_kind = "fixture"
     request.data_policy.fixture_id = str(receipt["fixture_id"])
     request.data_policy.fixture_sha256 = str(receipt["fixture_sha256"])
+    return {item["path"]: item["sha256"] for item in receipt["files"]}
 
 
 def _materialize_missing_bars(
@@ -612,7 +613,13 @@ def _execute_engine_backtest_core(
                 return _failed_backtest_response(request, f"auto_fetch failed: {exc}")
 
     try:
-        _pin_compatibility_fixture(request, data_roots)
+        fixture_manifest = _pin_compatibility_fixture(request, data_roots)
+        if fixture_manifest is not None:
+            if data_manifest is not None and any(
+                data_manifest.get(path) != digest for path, digest in fixture_manifest.items()
+            ):
+                raise ValueError("compatibility fixture differs from the supplied data snapshot")
+            data_manifest = data_manifest if data_manifest is not None else fixture_manifest
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

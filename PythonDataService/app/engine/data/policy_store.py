@@ -122,12 +122,13 @@ def snapshot_minute_trade_zips(
                 source = candidate
                 break
         if source is not None:
+            payload = source.read_bytes()
             files.append(
                 {
                     "trading_date": current.isoformat(),
                     "path": (logical_root / filename).as_posix(),
-                    "sha256": _sha256_file(source),
-                    "size_bytes": source.stat().st_size,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
                 }
             )
         current += timedelta(days=1)
@@ -147,14 +148,6 @@ def snapshot_minute_trade_zips(
         "fixture_id": f"{COMPATIBILITY_FIXTURE_ID_PREFIX}{digest[:16]}",
         "fixture_sha256": digest,
     }
-
-
-def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while block := handle.read(chunk_size):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _safe_symbol(symbol: str) -> str:

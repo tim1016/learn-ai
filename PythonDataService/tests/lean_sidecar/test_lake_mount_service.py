@@ -718,6 +718,55 @@ async def test_factor_files_move_the_input_snapshot(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["replace", "delete"])
+@pytest.mark.parametrize("relative, manifest_group", [
+    ("equity/usa/factor_files/spy.csv", "factor_files"),
+    ("equity/usa/daily/spy.zip", "bar_zips"),
+])
+async def test_inputs_replaced_during_launch_keep_original_receipt_and_refuse_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, orchestrator: SimpleNamespace,
+    _polygon_is_off_limits: None, _launcher_supports_lake_mount: None,
+    relative: str, manifest_group: str, mutation: str,
+) -> None:
+    """A mid-run replacement must not be hashed as if LEAN consumed it."""
+    from app.config import settings
+    from app.services import lean_sidecar_service as service
+
+    write_root = tmp_path / "lean-data-writer"
+    lake_root = write_root / lake_subpath("raw")
+    seed_lake_window(lake_root, SYMBOL, WINDOW)
+    seed_lake_corporate_actions(lake_root, SYMBOL, factor_rows="20260105,1,1\n")
+    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
+    path = lake_root / relative
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    original_launch = service.post_launch
+    persist = AsyncMock()
+    monkeypatch.setattr(service, "_persist_completed_run", persist)
+
+    async def replace_during_launch(request: LaunchRequest) -> LaunchResponse:
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
+        response = await original_launch(request)
+        if mutation == "replace":
+            replacement = path.with_suffix(".replacement")
+            replacement.write_bytes(b"a later file generation")
+            replacement.replace(path)
+        else:
+            path.unlink()
+        return response.model_copy(update={"exit_code": 0, "is_clean": True})
+
+    monkeypatch.setattr(service, "post_launch", replace_during_launch)
+    request = _request("replaced-input")
+    with pytest.raises(service.LeanSidecarServiceError, match="data_snapshot_changed"):
+        await service.run_trusted_sample(request)
+    manifest = _read_manifest(orchestrator.artifacts_root / request.run_id)
+    receipt = next(item for item in manifest["staged_data"][manifest_group] if item["path_in_workspace"] == relative)
+    assert receipt["sha256"] == original_digest
+    assert any("data_snapshot_changed" in note for note in manifest["notes"])
+    assert "is_clean=False" in manifest["notes"]
+    persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_interest_rate_file_moves_the_input_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

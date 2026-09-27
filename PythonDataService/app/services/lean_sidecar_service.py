@@ -604,8 +604,8 @@ def _read_compatibility_fixture(
     request: TrustedRunRequest,
 ) -> tuple[list[Path], list[tuple[date, list[TradeBar]]]]:
     """Admit and decode frozen lake inputs on a worker thread."""
-    from app.engine.data.lean_format import LeanMinuteDataReader
     from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
+    from app.research.sweep.snapshot import ManifestBoundMinuteReader
 
     store_roots = resolve_data_roots(source="polygon", adjusted=request.data_policy.adjusted)
     receipt = snapshot_minute_trade_zips(
@@ -622,7 +622,10 @@ def _read_compatibility_fixture(
         actual=receipt,
         phase="source",
     )
-    reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
+    reader = ManifestBoundMinuteReader(
+        store_roots, {item["path"]: item["sha256"] for item in receipt["files"]},
+        session=request.data_policy.session,
+    )
     bars_by_date = [
         (trading_date, reader.read_day(request.symbol, trading_date))
         for trading_date in reader.iter_dates(request.symbol, request.start_date, request.end_date)
@@ -1074,6 +1077,11 @@ async def _run_trusted_sample(
     )
     config_path = stage_lean_config(workspace, config)
 
+    snapshot_args = dict(
+        workspace=workspace, bar_zip_paths=bar_zip_paths, quote_zip_paths=quote_zip_paths,
+        daily_path=daily_path, lake_artifacts=lake_artifacts,
+    )
+    staged_data = await asyncio.to_thread(_snapshot_staged_data, **snapshot_args)
     started_ms = now_ms_utc()
     launch_request = LaunchRequest(
         run_id=request.run_id,
@@ -1167,6 +1175,27 @@ async def _run_trusted_sample(
         raise
     finished_ms = now_ms_utc()
 
+    # Never replace the input receipt with a later shared-file generation.
+    # Changed or deleted inputs invalidate the result but retain launch hashes
+    # in the failure manifest so the attempted run remains auditable.
+    snapshot_error: str | None = None
+    try:
+        after_args = dict(snapshot_args)
+        if lake_artifacts is not None:
+            # Re-resolve optional factor/map inputs too: an absent file that
+            # appears mid-run is a changed input just like a replacement.
+            after_args["lake_artifacts"] = await asyncio.to_thread(
+                resolve_lake_artifacts, lake_root=lake_artifacts.lake_root,
+                symbol=request.symbol, start=request.start_date, end=request.end_date,
+            )
+        after_run = await asyncio.to_thread(_snapshot_staged_data, **after_args)
+        if after_run != staged_data:
+            snapshot_error = "data_snapshot_changed: run inputs changed during LEAN execution"
+    except (OSError, LakeMountError) as exc:
+        snapshot_error = f"data_snapshot_changed: run input unavailable after LEAN execution: {exc}"
+    if snapshot_error is not None:
+        failure_reason = f"{failure_reason}; {snapshot_error}" if failure_reason else snapshot_error
+
     # Phase 3a: parse LEAN's output into typed DTOs and persist
     # them. Only attempt parsing when the container actually produced
     # output (exit_code 0); a crashed run leaves nothing useful to
@@ -1176,7 +1205,7 @@ async def _run_trusted_sample(
     # than a silent missing-result.
     normalized: NormalizedResult | None = None
     normalized_path: Path | None = None
-    if response is not None and response.exit_code == 0:
+    if response is not None and response.exit_code == 0 and snapshot_error is None:
         if _cancel_requested():
             _acknowledge_cancel_too_late()
         _emit_phase("parsing_results")
@@ -1193,9 +1222,7 @@ async def _run_trusted_sample(
     manifest = _build_manifest(
         request=request,
         workspace=workspace,
-        bar_zip_paths=bar_zip_paths,
-        quote_zip_paths=quote_zip_paths,
-        daily_path=daily_path,
+        staged_data=staged_data,
         source_path=source_path,
         config_path=config_path,
         response=response,
@@ -1208,7 +1235,6 @@ async def _run_trusted_sample(
         # staged window match (or surface that they don't).
         staged_trading_dates=trading_dates,
         failure_reason=failure_reason,
-        lake_artifacts=lake_artifacts,
     )
     write_manifest(manifest, workspace.manifest_path)
 
@@ -1221,6 +1247,8 @@ async def _run_trusted_sample(
     # ``response`` is guaranteed non-None here because the only way to
     # leave it None is via ``launcher_exc``, which we re-raised above.
     assert response is not None
+    if snapshot_error is not None:
+        raise LeanSidecarServiceError(snapshot_error)
 
     # Persist the run. This must happen AFTER the manifest is finalized so
     # workspace_path is stable. A persistence failure is logged but does NOT
@@ -1289,35 +1317,11 @@ def _build_data_policy(request: TrustedRunRequest) -> DataPolicy:
     return request.data_policy
 
 
-def _build_manifest(
-    *,
-    request: TrustedRunRequest,
-    workspace: Workspace,
-    bar_zip_paths: list[Path],
-    quote_zip_paths: list[Path],
-    daily_path: Path,
-    source_path: Path,
-    config_path: Path,
-    response: LaunchResponse | None,
-    started_ms: int,
-    finished_ms: int,
-    normalized: NormalizedResult | None,
-    staged_trading_dates: list[date],
-    failure_reason: str | None = None,
-    lake_artifacts: LakeArtifacts | None = None,
-) -> RunManifest:
-    """Construct the full reproducibility manifest from the run.
-
-    Field-order mirrors the ADR §"Reproducibility manifest" bullet
-    list so a reviewer can grep against the authority doc.
-
-    Reviewer P1.3: ``response`` is optional. When the launcher
-    rejects or is unreachable before producing a ``LaunchResponse``,
-    the orchestrator still calls this builder so a *failure manifest*
-    lands on disk. The failure manifest records every byte that was
-    actually staged + a ``failure_reason`` note so the run remains
-    auditable and shows up in the sidebar instead of vanishing.
-    """
+def _snapshot_staged_data(
+    *, workspace: Workspace, bar_zip_paths: list[Path], quote_zip_paths: list[Path],
+    daily_path: Path, lake_artifacts: LakeArtifacts | None,
+) -> StagedDataManifest:
+    """Capture run inputs before launch and verify the same generation afterward."""
     # The LEAN data root of this run: the staged workspace subtree, or
     # the lake itself when the launcher mounted it read-only. Every hash
     # below is taken relative to whichever one LEAN actually read, so
@@ -1331,22 +1335,7 @@ def _build_manifest(
         market_hours = lake_artifacts.market_hours_path
         symbol_properties = lake_artifacts.symbol_properties_path
         interest_rate = lake_artifacts.interest_rate_path
-    if response is not None:
-        exit_code = response.exit_code
-        is_clean_note = f"is_clean={response.is_clean}"
-        error_cats_note = f"lean_error_categories={sorted(response.lean_errors.keys())}"
-    else:
-        exit_code = None
-        is_clean_note = "is_clean=False"
-        error_cats_note = "lean_error_categories=[]"
-    failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
     bar_zips = hash_staged_files(data_root, [*bar_zip_paths, *quote_zip_paths, daily_path])
-    # PR A hardening: flatten the staged-zip hashes into a path-keyed
-    # dict. The ``StagedDataManifest.bar_zips`` tuple is the
-    # authoritative form; this index is a convenience for consumers
-    # that want "what's the sha for this path?" without traversing
-    # the tuple.
-    staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
     # Corporate actions are inputs, not decoration: LEAN reads factor
     # and map files off the data root and they change split/dividend
     # handling, so a factor-file update must move
@@ -1354,7 +1343,7 @@ def _build_manifest(
     # mounted lake carries real files whose contents can change under a
     # rerun. (Staging mode creates these directories empty, so the
     # staged run keeps hashing nothing, exactly as before.)
-    staged_data = StagedDataManifest(
+    return StagedDataManifest(
         corporate_action_versions=dict(lake_artifacts.corporate_action_versions) if lake_artifacts is not None else {},
         # Phase 5c: include the quote zips alongside trade + daily
         # in the manifest's staged-data hash list. Reproducibility
@@ -1378,6 +1367,44 @@ def _build_manifest(
             hash_staged_files(data_root, [interest_rate])[0] if interest_rate is not None else None
         ),
     )
+
+
+def _build_manifest(
+    *,
+    request: TrustedRunRequest,
+    workspace: Workspace,
+    staged_data: StagedDataManifest,
+    source_path: Path,
+    config_path: Path,
+    response: LaunchResponse | None,
+    started_ms: int,
+    finished_ms: int,
+    normalized: NormalizedResult | None,
+    staged_trading_dates: list[date],
+    failure_reason: str | None = None,
+) -> RunManifest:
+    """Construct the full reproducibility manifest from the run.
+
+    Field-order mirrors the ADR §"Reproducibility manifest" bullet
+    list so a reviewer can grep against the authority doc.
+
+    Reviewer P1.3: ``response`` is optional. When the launcher
+    rejects or is unreachable before producing a ``LaunchResponse``,
+    the orchestrator still calls this builder so a *failure manifest*
+    lands on disk. The failure manifest records every byte that was
+    actually staged + a ``failure_reason`` note so the run remains
+    auditable and shows up in the sidebar instead of vanishing.
+    """
+    if response is not None:
+        exit_code = response.exit_code
+        is_clean_note = f"is_clean={response.is_clean and failure_reason is None}"
+        error_cats_note = f"lean_error_categories={sorted(response.lean_errors.keys())}"
+    else:
+        exit_code = None
+        is_clean_note = "is_clean=False"
+        error_cats_note = "lean_error_categories=[]"
+    failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
+    staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in staged_data.bar_zips}
     runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
     if runtime_provenance is None:
         raise LeanSidecarServiceError(f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}")
