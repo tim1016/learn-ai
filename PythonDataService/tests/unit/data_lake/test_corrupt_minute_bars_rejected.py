@@ -9,16 +9,19 @@ the corrupt bytes.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from app.data_lake.ensure_data import ensure_data
+from app.data_lake import catalog_client
+from app.data_lake.ensure_data import _minute_trade_dch, ensure_data, minute_bar_identity
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import _build_engine_run_spec
 from app.engine.data.lean_format import LeanMinuteDataReader
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from tests._helpers.fake_lake_catalog import (
     FakeCatalog,
     install_fake_catalog,
@@ -203,3 +206,95 @@ def test_reader_parses_well_formed_rows_as_before() -> None:
 
     assert len(bars) == 2
     assert bars[0].volume == 1000
+
+
+# ── #2527 review follow-ups ─────────────────────────────────────────
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_fractional_volume_fails_the_capture_not_truncates(fake_catalog: FakeCatalog, tmp_lake) -> None:
+    """A vendor ``v: 1.5`` used to be truncated to 1 by the fetcher's int()
+    cast and published; the raw number is preserved and the contract rejects
+    it (#2527 review)."""
+    bars = [_bar(i) for i in range(5)]
+    raw = [{**b, "v": 1.5} for b in bars]
+    await _assert_corrupt_capture_failed(
+        _payload(raw), fake_catalog, tmp_lake, "volume=1.5 is not an integer"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_an_unrepresentable_timestamp_is_a_validation_failure(
+    fake_catalog: FakeCatalog, tmp_lake
+) -> None:
+    """A t_ms outside datetime's range used to raise ValueError inside the
+    validator before CorruptVendorBarsError could be built, aborting the
+    capture with the claim stranded; it is now an offending bar (#2527
+    review)."""
+    bars = [_bar(i) for i in range(3)]
+    raw = [{**b, "t": 9_223_372_036_854_775_807} for b in bars[:1]] + bars[1:]
+    await _assert_corrupt_capture_failed(
+        _payload(raw), fake_catalog, tmp_lake, "is not a representable instant"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_legacy_corrupt_cache_hit_is_revalidated_and_rebuilt(
+    fake_catalog: FakeCatalog, tmp_lake
+) -> None:
+    """A pre-validation artifact (complete row, honest sha, corrupt bytes)
+    must not stay reusable behind its matching contract: the cache hit
+    re-validates the stored bars and the corrupt day rebuilds from the
+    provider (#2527 review)."""
+    import hashlib
+
+    from app.engine.data.lean_format import write_lean_day_zip
+    from app.engine.data.trade_bar import TradeBar
+
+    window = session_windows_ms_utc(TRADING_DAY, TRADING_DAY)[0]
+    price = Decimal("100")
+    write_lean_day_zip(
+        tmp_lake / lake_subpath("raw"),
+        "SPY",
+        TRADING_DAY,
+        [
+            TradeBar(symbol="SPY", open=price, high=price, low=price, close=price, volume=10,
+                     start_ms=window.open_ms_utc, end_ms=window.open_ms_utc + 60_000),
+            TradeBar(symbol="SPY", open=price, high=price, low=price, close=price, volume=10,
+                     start_ms=window.open_ms_utc, end_ms=window.open_ms_utc + 60_000),  # duplicate
+        ],
+    )
+    zip_path = tmp_lake / lake_subpath("raw") / "equity/usa/minute/spy" / f"{TRADING_DAY:%Y%m%d}_trade.zip"
+    payload = zip_path.read_bytes()
+    spec = _build_engine_run_spec(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="seed")
+    identity = minute_bar_identity(spec, symbol="SPY", trading_date=TRADING_DAY, data_type="trade")
+    artifact_id = await fake_catalog.claim_minute_bar(
+        identity=identity,
+        worker_id="legacy-writer",
+        lease_ttl_ms=60_000,
+        data_contract_hash=_minute_trade_dch(spec.price_adjustment_mode),
+        file_path=f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip",
+    )
+    assert artifact_id is not None
+    assert await fake_catalog.complete_artifact(
+        artifact_id,
+        row_count=2,
+        first_bar_start_ms=window.open_ms_utc,
+        last_bar_start_ms=window.open_ms_utc,
+        file_size_bytes=len(payload),
+        file_sha256=hashlib.sha256(payload).hexdigest(),
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+    )
+
+    mock_launcher()
+    polygon = _mock_polygon_with(_payload([_bar(i) for i in range(390)]))
+    result = await _capture_one_day()
+
+    assert result.overall_status == "complete", result.failures
+    minute = [a for a in result.artifacts if a.resolution == "minute"]
+    assert len(minute) == 1
+    assert minute[0].row_count == 390, "the corrupt legacy cache hit must be rebuilt, not reused"
+    assert polygon.call_count == 1

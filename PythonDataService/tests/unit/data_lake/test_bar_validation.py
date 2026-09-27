@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from app.data_lake.bar_validation import (
     CorruptVendorBarsError,
     assert_publishable_minute_bars,
+    assert_publishable_stored_minute_bars,
 )
 from app.data_lake.polygon_fetcher import PolygonBar
 
@@ -84,3 +86,32 @@ def test_validator_accepts_premarket_of_the_requested_session() -> None:
     assert_publishable_minute_bars(
         [_pb(t_ms=BAR_START_MS - 90 * 60_000), _pb(0)], symbol="SPY", trading_date=TRADING_DAY
     )
+
+
+def test_stored_bars_validate_through_the_same_contract() -> None:
+    """The legacy cache-hit gate reuses the publication contract verbatim:
+    a stored duplicate timestamp is the same refusal (#2527 review)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.data_lake.lean_writer import MinuteTradeBar
+
+    et = ZoneInfo("America/New_York")
+    start = datetime(2024, 5, 20, 9, 30, tzinfo=et)
+    bar = MinuteTradeBar(bar_start_et=start, open=Decimal("100"), high=Decimal("100"),
+                         low=Decimal("100"), close=Decimal("100"), volume=10)
+    duplicate = MinuteTradeBar(bar_start_et=start, open=Decimal("100"), high=Decimal("100"),
+                               low=Decimal("100"), close=Decimal("100"), volume=10)
+    with pytest.raises(CorruptVendorBarsError, match="duplicate timestamp"):
+        assert_publishable_stored_minute_bars(
+            [bar, duplicate], symbol="SPY", trading_date=TRADING_DAY
+        )
+
+
+def test_stored_fractional_volume_cannot_exist_but_raw_vendor_volume_can() -> None:
+    """A fractional volume survives the fetcher now (raw number); the vendor
+    stream's contract rejects it."""
+    with pytest.raises(CorruptVendorBarsError, match=r"volume=1\.5 is not an integer"):
+        assert_publishable_minute_bars(
+            [_pb(0, volume=1.5)], symbol="SPY", trading_date=TRADING_DAY
+        )

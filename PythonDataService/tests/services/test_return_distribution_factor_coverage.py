@@ -375,13 +375,17 @@ async def test_a_failed_factor_file_row_is_reclaimed_rather_than_waited_on(
 async def test_a_non_positive_reference_close_refuses_naming_the_session(
     lake_root: Path, fake_catalog: FakeCatalog
 ) -> None:
-    """#2490: 05-31 (the split's reference session) is rewritten on disk with
-    a zero close — a pre-validation writer or a rotted zip — and its catalog
-    sha is updated to match, so every reader still reads the day. The factor
-    rebuild must break its span after 05-31 (not fail the whole symbol), and
-    the study's refusal must name the session and the cause. On master the
-    build raised ``FactorFileReferenceError``, the capture failed, and the
-    409 named neither the session nor the cause."""
+    """#2490, then #2527's review: the reference session's zip is rewritten
+    on disk with a zero close (a pre-validation writer's rot), its catalog
+    sha/size kept honest so every reader still sees the day. The build-level
+    contract stays — a non-positive close breaks the span, never the symbol
+    (tests/unit/data_lake/test_ensure_data.py) — but the capture path now
+    re-validates cached bars through the same contract, so this rot is
+    self-healing: the cache hit is refused, the day is refetched clean, the
+    factor file prices the split, and the study runs adjusted. Before #2490
+    the build raised FactorFileReferenceError and the whole symbol failed;
+    between #2490 and the re-validation the study refused naming the session
+    and the cause."""
     import hashlib
     from decimal import Decimal
 
@@ -394,8 +398,7 @@ async def test_a_non_positive_reference_close_refuses_naming_the_session(
     assert wide.status == "complete", wide.detail
 
     # Rewrite the reference session's zip with a zero close and keep the
-    # catalog row honest about the new bytes, so the day still reads (this
-    # is rot, not a gap).
+    # catalog row honest about the new bytes, so the day still reads.
     window = session_windows_ms_utc(reference, reference)[0]
     zero = Decimal(0)
     zip_path = lake_root / "equity" / "usa" / "minute" / SYMBOL.lower() / f"{reference:%Y%m%d}_trade.zip"
@@ -411,17 +414,15 @@ async def test_a_non_positive_reference_close_refuses_naming_the_session(
             row["file_sha256"] = hashlib.sha256(zip_path.read_bytes()).hexdigest()
             row["file_size_bytes"] = zip_path.stat().st_size
 
-    # Force the rebuild (the recorded file predates the rot).
+    # Force the factor rebuild (the recorded file predates the rot).
     record = lake_root.joinpath(*LeanFactorFilePath(market="usa", symbol=SYMBOL).coverage_record_path().parts)
     record.unlink()
 
-    with pytest.raises(study.AdjustmentNotCoveredError) as refused:
-        await _study()
+    outcome = await _study()
 
-    message = str(refused.value)
-    assert f"{reference.isoformat()} (reference close 0 is not positive)" in message, message
-    # The break, not a whole-symbol failure: the rebuild completed and the
-    # record carries the cause.
-    assert record.is_file()
-    recorded = await asyncio.to_thread(read_recorded_factor_file, lake_root, market="usa", symbol=SYMBOL)
-    assert recorded.unpriced_sessions == ((reference, "reference close 0 is not positive"),)
+    # The corrupt cache hit was refused and the day refetched clean, so the
+    # split is priced and the study is adjusted — never a phantom failure of
+    # the whole symbol, never an unadjusted -50%% labelled adjusted.
+    assert outcome.capture.status == "complete", outcome.capture.detail
+    assert outcome.result.adjustment == "split_and_dividend"
+    assert _split_day_close_to_close_pct(outcome) == pytest.approx(0.0, abs=1e-12, rel=0)
