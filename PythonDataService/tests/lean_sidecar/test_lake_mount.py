@@ -50,6 +50,7 @@ from app.lean_sidecar.runner import (
 from app.lean_sidecar.staging import stage_minute_zips_from_store
 from app.lean_sidecar.workspace import SymbolValidationError, resolve_workspace
 from tests._helpers.lake_fixture import (
+    seed_lake_corporate_actions,
     seed_lake_daily,
     seed_lake_interest_rate,
     seed_lake_metadata,
@@ -738,6 +739,51 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
 
         assert "backfill" in str(exc_info.value)
         assert "no provider call" in str(exc_info.value)
+
+    def test_a_map_shorter_than_the_run_window_is_refused_naming_the_delisting(self, tmp_path: Path) -> None:
+        """#2453: a map that ends before the run's last session would make
+        LEAN treat the symbol as delisted mid-run. The mount refuses before
+        launch and names the map's coverage, the run window, and the remedy."""
+        lake_root = tmp_path / lake_subpath("raw")
+        seed_lake_window(lake_root, "SPY", WINDOW)
+        seed_lake_corporate_actions(
+            lake_root,
+            "SPY",
+            map_rows=f"19980122,spy,nyse\n{DAY_ONE.strftime('%Y%m%d')},spy,nyse\n",  # ends one session short
+        )
+
+        with pytest.raises(LakeMountError, match="lake_map_file_window_mismatch") as exc_info:
+            resolve_lake_artifacts(
+                lake_root=lake_root,
+                symbol="SPY",
+                start=DAY_ONE,
+                end=DAY_TWO,
+            )
+
+        message = str(exc_info.value)
+        assert f"covers 1998-01-22..{DAY_ONE.isoformat()}" in message
+        assert f"run window is {DAY_ONE.isoformat()}..{DAY_TWO.isoformat()}" in message
+        assert f"delisted after {DAY_ONE.isoformat()}" in message
+        assert "re-run ensure_data" in message
+
+    def test_a_map_spanning_the_run_window_mounts_unchanged(self, tmp_path: Path) -> None:
+        """A map whose stated coverage contains the run window mounts as before."""
+        lake_root = tmp_path / lake_subpath("raw")
+        seed_lake_window(lake_root, "SPY", WINDOW)
+        _factor, map_path = seed_lake_corporate_actions(
+            lake_root,
+            "SPY",
+            map_rows="19980122,spy,nyse\n20991231,spy,nyse\n",
+        )
+
+        artifacts = resolve_lake_artifacts(
+            lake_root=lake_root,
+            symbol="SPY",
+            start=DAY_ONE,
+            end=DAY_TWO,
+        )
+
+        assert artifacts.map_file_paths == (map_path,)
 
 
 def test_lake_artifacts_are_immutable(fixture_lake: Path) -> None:

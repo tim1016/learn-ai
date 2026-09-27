@@ -53,7 +53,7 @@ from app.data_lake.factor_files import (
     reference_close_unpriced_reason,
 )
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
-from app.data_lake.map_files import build_map_file_bytes
+from app.data_lake.map_files import build_map_file_bytes, map_file_coverage
 from app.data_lake.metadata_bundle import ensure_lean_metadata_bundle
 from app.data_lake.path_policy import (
     LeanDailyBarPath,
@@ -1134,12 +1134,42 @@ async def _process_map_file_artifact(
         file_path=file_path,
     )
     lease_generation = catalog_client.INITIAL_LEASE_GENERATION
+    # The map describes the symbol's listing history as the lake knows it:
+    # the union of every captured session and the window this run asked for
+    # (#2453). Widening a window extends the map; it must never leave a map
+    # ending at an older window's end, which LEAN reads as a mid-run
+    # delisting. The union is order-independent by construction, so the map
+    # no longer depends on which window happened to be requested first.
+    captured = await catalog_client.select_coverage_minute_bars(
+        market=identity.market,  # type: ignore[arg-type]
+        symbol=identity.symbol,  # type: ignore[arg-type]
+        data_type="trade",
+        start_trading_date=None,
+        end_trading_date=None,
+        price_adjustment_mode=identity.price_adjustment_mode,  # type: ignore[arg-type]
+    )
+    captured_dates = [r.trading_date for r in captured if r.trading_date is not None]
+    coverage_start = min(spec.start_trading_date, *captured_dates)
+    coverage_end = max(spec.end_trading_date, *captured_dates)
+
     if artifact_id is None:
         existing = await catalog_client.select_complete_corp_action_artifact(identity)
         if existing is not None:
             path = resolve_lake_root(spec.price_adjustment_mode) / existing.file_path
-            if (existing.data_contract_hash == dch and path.is_file()
-                    and hashlib.sha256(path.read_bytes()).hexdigest() == existing.file_sha256):
+            reusable = False
+            if existing.data_contract_hash == dch and path.is_file():
+                existing_payload = path.read_bytes()
+                reusable = hashlib.sha256(existing_payload).hexdigest() == existing.file_sha256
+                if reusable:
+                    # Cache validity is the coverage the file itself states,
+                    # not just byte equality: a map written for a narrower
+                    # window is a cache miss however fresh its bytes are.
+                    try:
+                        first, last = map_file_coverage(existing_payload)
+                        reusable = first <= coverage_start and last >= coverage_end
+                    except ValueError:
+                        reusable = False
+            if reusable:
                 return existing, None, True
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=existing.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,
@@ -1183,8 +1213,8 @@ async def _process_map_file_artifact(
     payload = build_map_file_bytes(
         symbol=identity.symbol or "",
         events=events,
-        history_start=spec.start_trading_date,
-        history_end=spec.end_trading_date,
+        history_start=coverage_start,
+        history_end=coverage_end,
         exchange="nyse",
     )
     lake_root, staging_root = _writable_lake_roots(spec)

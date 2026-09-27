@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.data_lake.map_files import build_map_file_bytes
+import pytest
+
+from app.data_lake.map_files import build_map_file_bytes, map_file_coverage
 from app.data_lake.polygon_ticker_events import TickerEvent
 
 
@@ -44,3 +46,26 @@ def test_build_is_deterministic():
     a = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
     b = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
     assert a == b
+
+
+# ── map_file_coverage — the one parser of a map's stated span (#2453) ──
+
+
+def test_coverage_reads_first_and_last_row_dates():
+    payload = b"20100101,spy,nyse\n20240520,spy,nyse\n20260521,spy,nyse\n"
+    assert map_file_coverage(payload) == (date(2010, 1, 1), date(2026, 5, 21))
+
+
+def test_coverage_round_trips_the_builder():
+    payload = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
+    assert map_file_coverage(payload) == (date(2010, 1, 1), date(2026, 5, 21))
+
+
+def test_coverage_rejects_disordered_rows():
+    with pytest.raises(ValueError, match="non-decreasing"):
+        map_file_coverage(b"20260521,spy,nyse\n20100101,spy,nyse\n")
+
+
+def test_coverage_rejects_a_single_row():
+    with pytest.raises(ValueError, match="at least two rows"):
+        map_file_coverage(b"20100101,spy,nyse\n")
