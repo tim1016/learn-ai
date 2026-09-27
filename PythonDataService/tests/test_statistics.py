@@ -355,7 +355,7 @@ class TestPortfolioStatisticsWithCurve:
         assert stats["sharpe_ratio"] == pytest.approx(0.0, abs=1e-9, rel=0)
         assert stats["sortino_ratio"] == pytest.approx(0.0, abs=1e-9, rel=0)
         assert stats["annual_standard_deviation"] == pytest.approx(math.sqrt(3.36), abs=1e-9, rel=0)
-        assert stats["probabilistic_sharpe_ratio"] == pytest.approx(0.5, abs=1e-9, rel=0)
+        assert stats["probabilistic_sharpe_ratio"] == pytest.approx(0.5, abs=1e-10, rel=0)
 
     def test_uses_real_curve(self) -> None:
         trades = _make_trades()
