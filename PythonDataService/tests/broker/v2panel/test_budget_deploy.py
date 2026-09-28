@@ -244,3 +244,59 @@ def test_budget_preview_refuses_post_observation_fill_without_mutating_risk(auth
     assert preview.review_token is None
     assert repo.custody_transitions() == before
     assert gate.latest_observation() == observation
+
+
+async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_binding(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2550 review: Deploy commits the private authority's budget before the runner
+    records the binding. A crash in between must leave the committed command
+    recoverable from that authority's own durable evidence, not a 404 forever.
+    Its recovery only releases: the orphaned run stops and the command fails."""
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+    from app.services.bot_runner import BotTaskRegistry
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
+    sid = "crashed-before-binding"
+    clock = _TestClock(NOON)
+    binding = BrokerBotBinding(
+        strategy_instance_id=sid, strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY", mode="dry_run",
+        quantity=1, action_plan=alpaca_v1_action_plan("SPY"), run_id="run-1", created_at_ms=0,
+        sealed_account_id=f"sim:{sid}", exit_terms=TERMS, budget_consent=DeployBudgetConsent(
+            committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic"),
+    )
+    primary_repo = ClerkSqliteRepository.initialize(account_id="PARENT", artifacts_root=tmp_path / "primary", clock=clock)
+
+    def registry() -> BotTaskRegistry:
+        return BotTaskRegistry(tmp_path, feed_resolver=lambda: None, now_ms=clock, boot_recovery_required=False)
+
+    try:
+        # The Deploy that crashed: its private authority committed the budget
+        # and run, then the process died before record_launch wrote a binding.
+        deploying = registry()
+        authority = deploying._authority_for(binding)
+        await authority.ensure_recoverable()
+        runtime = get_clerk_runtime(f"sim:{sid}")
+        runtime.clerk._quote_source = lambda symbol, now: SimpleNamespace(ask=100)
+        await runtime.clerk.register_strategy_run(binding)
+        await authority.release_if_unused()
+        assert get_clerk_runtime(f"sim:{sid}") is None
+
+        recovered = registry()
+        assert recovered.bindings_for_broker("alpaca") == []
+        monkeypatch.setattr(budget_deploy, "_primary", lambda account: SimpleNamespace(sqlite_repository=primary_repo))
+        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: recovered)
+
+        receipt = await budget_deploy.command_receipt("PARENT", sid)
+
+        assert receipt is not None
+        assert receipt.status == "failed" and receipt.world == "synthetic" and receipt.committed_usd == "500.00"
+        assert receipt.run_id == f"{sid}:run-1"
+        # A read composes nothing that outlives it and records no binding.
+        assert get_clerk_runtime(f"sim:{sid}") is None
+        assert recovered.bindings_for_broker("alpaca") == []
+        # An identity no private authority ever held still reads the primary.
+        assert await budget_deploy.command_receipt("PARENT", "never-deployed") is None
+    finally:
+        await close_synthetic_clerk_runtimes()
+        primary_repo.close()

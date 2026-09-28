@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
@@ -166,14 +167,29 @@ class SyntheticRuntimeAccess:
                 self.owner = None
 
 
+@dataclass(frozen=True)
+class UnboundDryRunIdentity:
+    """A Dry Run found by its private authority's own activation, not a binding.
+
+    Deploy commits the ``sim:<strategy-instance>`` budget and run before the
+    runner records the binding, so a crash between the two leaves this
+    identity as the only index. It carries no consent: its authority is only
+    ever opened for a projection of sealed custody, never to activate, admit
+    or launch.
+    """
+
+    strategy_instance_id: str
+    budget_consent: None = None
+
+
 @dataclass
 class SyntheticBindingAuthority(BindingAuthority):
     """A deterministic ``sim:<strategy-instance>`` sealed custody authority."""
 
-    binding: BrokerBotBinding
+    binding: BrokerBotBinding | UnboundDryRunIdentity
     artifacts_root: Path
     lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo]
-    runtime_in_use: Callable[[BrokerBotBinding], bool]
+    runtime_in_use: Callable[[str], bool]
     brokers: dict[str, SyntheticBroker]
     account_id: str = field(init=False)
     clock: Clock = now_ms_utc
@@ -231,7 +247,7 @@ class SyntheticBindingAuthority(BindingAuthority):
 
     async def release_if_unused(self) -> None:
         async with self.runtime_access.hold():
-            if self.runtime_in_use(self.binding):
+            if self.runtime_in_use(self.binding.strategy_instance_id):
                 return
             runtime = get_clerk_runtime(self.account_id)
             if runtime is not None:
@@ -331,22 +347,14 @@ class BindingAuthoritySelector:
     lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo]
     real_projector: AlpacaLifecycleProjector
     external_start_guard: Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None
-    runtime_in_use: Callable[[BrokerBotBinding], bool]
+    runtime_in_use: Callable[[str], bool]
     synthetic_brokers: dict[str, SyntheticBroker] = field(default_factory=dict)
     synthetic_runtime_access: dict[str, SyntheticRuntimeAccess] = field(default_factory=dict)
     clock: Clock = now_ms_utc
 
     def for_binding(self, binding: BrokerBotBinding) -> BindingAuthority:
         if binding.mode == "dry_run":
-            return SyntheticBindingAuthority(
-                binding=binding,
-                artifacts_root=self.artifacts_root,
-                lifecycle_repo_for=self.lifecycle_repo_for,
-                runtime_in_use=self.runtime_in_use,
-                brokers=self.synthetic_brokers,
-                clock=self.clock,
-                runtime_access=self.synthetic_runtime_access.setdefault(binding.strategy_instance_id, SyntheticRuntimeAccess()),
-            )
+            return self._synthetic(binding)
         return PrimaryAccountBindingAuthority(
             binding=binding,
             projector=self.real_projector,
@@ -355,11 +363,30 @@ class BindingAuthoritySelector:
             custody_kind=primary_custody_kind,
         )
 
+    def for_unbound_dry_run(self, strategy_instance_id: str) -> SyntheticBindingAuthority | None:
+        """The private authority a Deploy activated before recording its binding, if any."""
+        activation = SyntheticActivationStore(self.artifacts_root).latest(
+            synthetic_account_id_for_strategy(strategy_instance_id)
+        )
+        return None if activation is None else self._synthetic(UnboundDryRunIdentity(strategy_instance_id))
+
+    def _synthetic(self, identity: BrokerBotBinding | UnboundDryRunIdentity) -> SyntheticBindingAuthority:
+        return SyntheticBindingAuthority(
+            binding=identity,
+            artifacts_root=self.artifacts_root,
+            lifecycle_repo_for=self.lifecycle_repo_for,
+            runtime_in_use=self.runtime_in_use,
+            brokers=self.synthetic_brokers,
+            clock=self.clock,
+            runtime_access=self.synthetic_runtime_access.setdefault(identity.strategy_instance_id, SyntheticRuntimeAccess()),
+        )
+
 
 __all__ = [
     "BindingAuthority",
     "BindingAuthoritySelector",
     "PrimaryAccountBindingAuthority",
     "SyntheticBindingAuthority",
+    "UnboundDryRunIdentity",
     "primary_custody_kind",
 ]

@@ -200,11 +200,24 @@ async def _deployment_runtime(account_id: str, sid: str) -> AsyncIterator[Active
             # Reuse the same durable-authority reader as the bot panel. A
             # stopped Dry Run releases its process runtime, not its receipt.
             async with registry.synthetic_runtime_for_projection(binding) as runtime:
-                if runtime.sqlite_repository is None:
-                    raise BudgetUnavailable("Dry Run custody recovery is unavailable. Restore it before recovering this command.")
-                yield runtime
+                yield _recoverable_dry_run(runtime)
             return
+        assert primary.sqlite_repository is not None
+        if binding is None and primary.sqlite_repository.deployment_budget(sid) is None:
+            # A Dry Run commits in its private authority before the launch
+            # records a binding; a crash in between leaves that authority's own
+            # activation as the only way to find the committed command.
+            async with registry.unbound_synthetic_runtime_for_projection(sid) as runtime:
+                if runtime is not None:
+                    yield _recoverable_dry_run(runtime)
+                    return
     yield primary
+
+
+def _recoverable_dry_run(runtime: ActiveClerkRuntime) -> ActiveClerkRuntime:
+    if runtime.sqlite_repository is None:
+        raise BudgetUnavailable("Dry Run custody recovery is unavailable. Restore it before recovering this command.")
+    return runtime
 
 
 async def command_receipt(account_id: str, sid: str, request: AlpacaPaperDeployRequest | None = None) -> BudgetDeployCommandReceipt | None:

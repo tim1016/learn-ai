@@ -1726,6 +1726,27 @@ class BotTaskRegistry:
                 )
             yield runtime
 
+    @asynccontextmanager
+    async def unbound_synthetic_runtime_for_projection(
+        self,
+        strategy_instance_id: str,
+    ) -> AsyncIterator[ActiveClerkRuntime | None]:
+        """Project the Dry Run authority a Deploy committed before recording its binding.
+
+        Deploy commits the private ``sim:`` authority's budget and run before
+        the launch writes the binding, so a crash in between leaves only that
+        authority's own activation to find it by. The read opens its sealed
+        store projection-only -- never activating, admitting or launching --
+        and yields ``None`` when no private authority was ever activated for
+        this identity.
+        """
+        authority = self._authorities.for_unbound_dry_run(strategy_instance_id)
+        if authority is None:
+            yield None
+            return
+        async with authority.runtime_for_projection() as runtime:
+            yield runtime
+
     async def _recover_synthetic_authorities_for_boot(self) -> None:
         """Compose each already-activated Dry Run authority before boot repair."""
         for binding in self._bindings.list_for_broker("alpaca"):
@@ -1745,10 +1766,10 @@ class BotTaskRegistry:
             binding=binding,
         )
 
-    def _synthetic_runtime_in_use(self, binding: BrokerBotBinding) -> bool:
+    def _synthetic_runtime_in_use(self, strategy_instance_id: str) -> bool:
         """Keep a deterministic per-instance runtime only while its task owns it."""
         return any(
-            managed.binding.strategy_instance_id == binding.strategy_instance_id
+            managed.binding.strategy_instance_id == strategy_instance_id
             and not managed.task.done()
             for managed in self._bots.values()
         )
