@@ -14,8 +14,6 @@ import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
 
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaLaneModeChipComponent } from '../alpaca-desk/alpaca-lane-mode-chip.component';
-import { AlpacaAccountSwitcherComponent } from './alpaca-account-switcher.component';
-import { LENS_QUERY_PARAM } from '../../../shared/lens/lens';
 import {
   ACCOUNT_WORKSPACE_TABS,
   accountWorkspaceLocation,
@@ -78,7 +76,6 @@ type WorkspaceAccountStatus =
   selector: 'app-alpaca-account-workspace',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AlpacaAccountSwitcherComponent,
     AlpacaLaneModeChipComponent,
     AuthoredUsdPipe,
     ReceiptLabelPipe,
@@ -100,9 +97,6 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly routeParams = toSignal(this.route.paramMap, {
     initialValue: this.route.snapshot.paramMap,
-  });
-  private readonly queryParams = toSignal(this.route.queryParamMap, {
-    initialValue: this.route.snapshot.queryParamMap,
   });
 
   /** The rendered route owns lane identity — the same stance
@@ -164,17 +158,27 @@ export class AlpacaAccountWorkspaceComponent {
     () => this.fleetDirectory.lane('alpaca', this.clerkId()) ?? null,
   );
 
-  /** The lens perspective the switcher carries to the chosen account. Read
-   * from the URL, not from the stored preference: only a perspective the
-   * operator addressed is one to keep across a move. */
-  protected readonly lens = computed(() => this.queryParams().get(LENS_QUERY_PARAM));
+  /** The account's name (ADR 0064 Decision 5), or `null` while the directory
+   * has not resolved this lane — a bad deep link fails in place (FR-096).
+   * The top-bar pills are the way to another account (PRD #2560 D4). */
+  protected readonly accountName = computed(() =>
+    this.fleetDirectory.displayNameOf('alpaca', this.clerkId()),
+  );
 
-  /** The mode chip, from the same server-owned verdict the shell's account
-   * badge renders — including the Shadow authority and, on a live lane, how
-   * many instances are armed. */
+  /** The mode badge, from the same server-owned verdict the top-bar pill
+   * renders — worded one way (PRD #2560 D4). */
   protected readonly modeChip = computed(() =>
     verdictModeChip(this.liveVerdicts.stateFor(this.clerkId())),
   );
+
+  /** The lane colour the workspace is framed in (PRD #2560 D4): its header
+   * wash, frame and tab underline. `null` until the mode is read, so a cold
+   * or undetermined load is framed neutrally rather than in a guessed
+   * colour; the badge words the mode, so colour is never the only carrier. */
+  protected readonly laneTone = computed(() => {
+    const tone = this.modeChip().tone;
+    return tone === 'live' || tone === 'paper' || tone === 'shadow' ? tone : null;
+  });
 
   /** What the header says in place of this account's own facts when the lane
    * has no account to read them from — the Configuration and not-ready tabs of

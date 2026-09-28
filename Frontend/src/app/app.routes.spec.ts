@@ -300,6 +300,25 @@ describe('routes', () => {
     });
 
     it.each([
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall&lens=trader', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity'],
+      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1'],
+      ['/brokers/alpaca/clerks/clrk_spec/settings?lens=operator', '/brokers/alpaca/clerks/clrk_spec/settings'],
+      ['/brokers/alpaca?lens=operator', '/brokers/alpaca'],
+      ['/brokers/alpaca?surface=bots&lens=operator', '/brokers/alpaca'],
+    ])('drops the retired ?lens= from %s and lands on %s', async (url, landed) => {
+      // The Trader/Operator lens is gone (PRD #2560 D2): an old link still
+      // opens the page it named, with everything else it carried.
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(url);
+
+      expect(router.url).toBe(landed);
+    });
+
+    it.each([
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'Home'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/deploy', 'Deploy'],
       ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', 'Activity'],

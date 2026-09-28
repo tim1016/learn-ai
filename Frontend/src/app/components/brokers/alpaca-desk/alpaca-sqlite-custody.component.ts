@@ -110,7 +110,6 @@ export class AlpacaSqliteCustodyComponent {
    * combined with `target` only at the moment a command is minted
    * (`newCommandTarget`), never used to re-derive `target` itself. */
   readonly fence = input.required<LaneFence>();
-  protected readonly operatorLensQuery = { lens: 'operator' } as const;
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   readonly projectionInvalidated = output();

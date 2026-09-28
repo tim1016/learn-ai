@@ -1,3 +1,6 @@
-<span class="lane-mode-chip lane-mode-chip--{{ chip().tone }}">
+<span
+  class="lane-mode-chip lane-mode-chip--{{ chip().tone }}"
+  [class.lane-mode-chip--badge]="variant() === 'badge'"
+>
   {{ chip().mode }}
 </span>

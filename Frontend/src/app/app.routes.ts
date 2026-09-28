@@ -1,7 +1,7 @@
 import { inject } from "@angular/core";
 import { Router, Routes, type RedirectFunction, type Route } from "@angular/router";
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
-import { homeRedirectGuard } from "./fleet/home-redirect.guard";
+import { dropRetiredLensGuard, homeRedirectGuard } from "./fleet/home-redirect.guard";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
 const loadBrokerLaneUnavailable = () =>
@@ -359,6 +359,10 @@ export const routes: Routes = [
     // tabs. Each tab now owns whatever inset its own content wants.
     path: 'brokers/alpaca/clerks/:clerkId',
     data: { fullBleed: true, broker: 'alpaca' },
+    // The Trader/Operator lens is retired (PRD #2560 D2): an old link's
+    // `?lens=` is dropped, on entry and on every move inside the workspace.
+    canActivate: [dropRetiredLensGuard],
+    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
     loadComponent: () =>
       import(
         './components/brokers/alpaca-workspace/alpaca-account-workspace.component'

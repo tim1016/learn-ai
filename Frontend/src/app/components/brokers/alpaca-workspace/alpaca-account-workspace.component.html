@@ -1,8 +1,17 @@
-<div class="account-workspace">
+<div class="account-workspace" [attr.data-lane]="laneTone()">
   <header class="account-workspace__header">
-    <app-alpaca-account-switcher [location]="location()" [lens]="lens()" />
+    <h1 class="account-workspace__name">
+      @if (accountName(); as name) {
+        {{ name.name }}
+        @if (name.disambiguator; as label) {
+          <span class="account-workspace__lane-label">({{ label }})</span>
+        }
+      } @else {
+        Account lane unresolved
+      }
+    </h1>
 
-    <app-alpaca-lane-mode-chip [chip]="modeChip()" />
+    <app-alpaca-lane-mode-chip [chip]="modeChip()" variant="badge" />
 
     @if (accountStatus(); as status) {
       <span class="account-workspace__fact">

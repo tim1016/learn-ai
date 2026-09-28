@@ -7,9 +7,7 @@ import {
   accountWorkspaceEntryRoute,
   accountWorkspaceFixRoute,
   accountWorkspaceHomeRoute,
-  accountWorkspaceLens,
   accountWorkspaceLocation,
-  accountWorkspaceSwitchRoute,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
   type AccountWorkspaceLocation,
@@ -84,16 +82,6 @@ describe('accountWorkspaceLocation', () => {
       expect(accountWorkspaceLocation(url)).toEqual({ ...LOCATION, botSid: 'sid-1' });
     }
     expect(accountWorkspaceLocation(`${WORKSPACE}/bots/sid%2F1`)?.botSid).toBe('sid/1');
-  });
-});
-
-describe('accountWorkspaceLens', () => {
-  it('reads the lens perspective a URL names', () => {
-    expect(accountWorkspaceLens(`${WORKSPACE}?lens=operator`)).toBe('operator');
-  });
-
-  it('names none when the URL carries no lens', () => {
-    expect(accountWorkspaceLens(WORKSPACE)).toBeNull();
   });
 });
 
@@ -175,49 +163,6 @@ describe('the links Home hands out', () => {
   });
 });
 
-describe('accountWorkspaceSwitchRoute', () => {
-  const target = { clerkId: 'clrk_live', accountId: 'PA_LIVE' };
-
-  it.each([
-    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE']],
-    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'activity']],
-    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'deploy']],
-    ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
-  ])('lands on the same %s tab of the chosen account', (tab, expected) => {
-    expect(accountWorkspaceSwitchRoute({ ...LOCATION, tab }, target, null).commands).toEqual(expected);
-  });
-
-  it("lands on the chosen account's Home from a bot's page", () => {
-    // The chosen account need not run this bot, so the bot's page itself is
-    // never carried across (ADR 0064 Decision 4).
-    const from: AccountWorkspaceLocation = { ...LOCATION, botSid: 'sid-1' };
-
-    expect(accountWorkspaceSwitchRoute(from, target, null).commands).toEqual([
-      '/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE',
-    ]);
-  });
-
-  it.each([
-    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
-    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
-    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'home']],
-  ])('lands the %s tab on an unconfirmed account in place', (tab, expected) => {
-    const unbound = { clerkId: 'clrk_live', accountId: null };
-
-    expect(accountWorkspaceSwitchRoute({ ...LOCATION, tab }, unbound, null).commands).toEqual(expected);
-  });
-
-  it('carries the lens perspective across, and nothing else', () => {
-    expect(accountWorkspaceSwitchRoute(LOCATION, target, 'operator').queryParams).toEqual({
-      lens: 'operator',
-    });
-    // An open Deploy form, a Wall view and a selected timeline are all
-    // `?`-addressed workspace state. The switch builds its query rather than
-    // merging, so none of them can retarget at the other account.
-    expect(accountWorkspaceSwitchRoute(LOCATION, target, null).queryParams).toEqual({});
-  });
-});
-
 describe('accountWorkspaceEntryRoute', () => {
   it('opens a confirmed account on its own Home', () => {
     expect(accountWorkspaceEntryRoute(LOCATION)).toEqual([
@@ -235,27 +180,45 @@ describe('accountWorkspaceEntryRoute', () => {
 describe('accountWorkspaceBadgeRoute', () => {
   const target = { broker: 'alpaca', clerkId: 'clrk_live', accountId: 'PA_LIVE' };
 
-  it.each([['home' as const], ['activity' as const], ['deploy' as const], ['settings' as const]])(
-    'keeps the %s tab when the badge is clicked from inside a workspace',
-    (tab) => {
-      const from: AccountWorkspaceLocation = { ...LOCATION, tab };
+  it.each([
+    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE']],
+    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'activity']],
+    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE', 'deploy']],
+    ['settings' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
+  ])('keeps the %s tab when a pill is clicked from inside a workspace', (tab, expected) => {
+    expect(accountWorkspaceBadgeRoute({ ...LOCATION, tab }, target).commands).toEqual(expected);
+  });
 
-      // A badge is the account switcher reached from the top bar: identical
-      // behaviour, not a second answer to the same question.
-      expect(accountWorkspaceBadgeRoute(from, target, null)).toEqual(
-        accountWorkspaceSwitchRoute(from, target, null),
-      );
-    },
-  );
+  it("lands on the chosen account's Home from a bot's page", () => {
+    // The chosen account need not run this bot, so the bot's page itself is
+    // never carried across (ADR 0064 Decision 4).
+    const from: AccountWorkspaceLocation = { ...LOCATION, botSid: 'sid-1' };
 
-  it('carries the lens across a switch made from a badge, exactly as the switcher does', () => {
-    expect(accountWorkspaceBadgeRoute(LOCATION, target, 'operator').queryParams).toEqual({
-      lens: 'operator',
-    });
+    expect(accountWorkspaceBadgeRoute(from, target).commands).toEqual([
+      '/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE',
+    ]);
+  });
+
+  it.each([
+    ['activity' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
+    ['deploy' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']],
+    ['home' as const, ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'home']],
+  ])('lands the %s tab on an unconfirmed account in place', (tab, expected) => {
+    const unbound = { ...target, accountId: null };
+
+    expect(accountWorkspaceBadgeRoute({ ...LOCATION, tab }, unbound).commands).toEqual(expected);
+  });
+
+  it('carries nothing that was open over the workspace, and no retired lens', () => {
+    // An open Deploy form, a Wall view and a selected timeline are all
+    // `?`-addressed workspace state, and `?lens=` is retired (PRD #2560).
+    // The pill builds an empty query rather than merging, so none of them
+    // can retarget at the other account.
+    expect(accountWorkspaceBadgeRoute(LOCATION, target).queryParams).toEqual({});
   });
 
   it("lands on the chosen account's Home from outside any workspace", () => {
-    expect(accountWorkspaceBadgeRoute(null, target, null)).toEqual({
+    expect(accountWorkspaceBadgeRoute(null, target)).toEqual({
       commands: ['/brokers', 'alpaca', 'clerks', 'clrk_live', 'accounts', 'PA_LIVE'],
       queryParams: {},
     });
@@ -263,7 +226,7 @@ describe('accountWorkspaceBadgeRoute', () => {
 
   it('lands on Settings from outside a workspace when the account is unconfirmed', () => {
     expect(
-      accountWorkspaceBadgeRoute(null, { ...target, accountId: null }, null).commands,
+      accountWorkspaceBadgeRoute(null, { ...target, accountId: null }).commands,
     ).toEqual(['/brokers', 'alpaca', 'clerks', 'clrk_live', 'settings']);
   });
 
@@ -271,11 +234,10 @@ describe('accountWorkspaceBadgeRoute', () => {
     const link = accountWorkspaceBadgeRoute(
       LOCATION,
       { broker: 'webull', clerkId: 'clrk_wb', accountId: 'WB1' },
-      'operator',
     );
 
     expect(link.commands).toEqual(['/brokers', 'webull', 'clerks', 'clrk_wb', 'accounts', 'WB1']);
-    expect(link.queryParams).toEqual({ lens: 'operator' });
+    expect(link.queryParams).toEqual({});
   });
 });
 

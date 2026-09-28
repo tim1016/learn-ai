@@ -17,4 +17,7 @@ import type { LaneModeChip } from '../../../services/alpaca-live-verdict.service
 })
 export class AlpacaLaneModeChipComponent {
   readonly chip = input.required<LaneModeChip>();
+  /** `badge` is the workspace header's mode badge (PRD #2560 D4): the same
+   * words, filled with the lane colour. */
+  readonly variant = input<'chip' | 'badge'>('chip');
 }

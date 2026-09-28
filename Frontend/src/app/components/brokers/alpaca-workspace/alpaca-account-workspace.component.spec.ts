@@ -513,7 +513,7 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       await vi.waitFor(() => expect(document.activeElement).toBe(workspaceBody()));
     });
 
-    it('moves into the tab body after an account switch', async () => {
+    it('moves into the tab body after a move to another account', async () => {
       const { view, router } = await renderWorkspace({
         directory: provideFleetDirectory({
           observed_at_ms: 1,
@@ -579,104 +579,50 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(getAccount).toHaveBeenCalledTimes(1);
   });
 
-  describe('the account switcher', () => {
-    const LIVE_CLERK_ID = 'clrk_live';
-    const LIVE_ACCOUNT_ID = 'acct-live';
-    const LIVE_URL = `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/accounts/${LIVE_ACCOUNT_ID}`;
-
-    /** Paper and Live side by side — the fleet an operator actually switches
-     * between. */
-    function twoLaneDirectory() {
-      return provideFleetDirectory({
-        observed_at_ms: 1,
-        clerks: [
-          testLane(),
-          testLane({
-            clerk_id: LIVE_CLERK_ID,
-            display_label: 'Live',
-            provider_summary: {
-              ...testLane().provider_summary,
-              confirmed_account_id: LIVE_ACCOUNT_ID,
-            },
-          }),
-        ],
-      });
+  describe('the lane frame (PRD #2560 D4)', () => {
+    function frame(): HTMLElement {
+      const element = document.querySelector<HTMLElement>('.account-workspace');
+      if (element === null) throw new Error('the workspace frame did not render');
+      return element;
     }
-
-    async function openSwitcher(url: string) {
-      const rendered = await renderWorkspace({ url, directory: twoLaneDirectory() });
-      fireEvent.click(await screen.findByRole('button', { name: /Paper/ }));
-      return rendered;
-    }
-
-    it('lists every Alpaca account by name, with its mode beside the name', async () => {
-      await openSwitcher(WORKSPACE_URL);
-
-      // ADR 0064 Decision 5: the name and the Paper/Live mode are two facts,
-      // never folded into one string.
-      const live = screen.getByRole('link', { name: /^Live/ });
-      expect(live.textContent).toContain('Live');
-      expect(live.textContent).toContain('PAPER · practice money');
-      expect(screen.getByRole('link', { name: /^Paper/ }).getAttribute('aria-current')).toBe('true');
-    });
 
     it.each([
-      [WORKSPACE_URL, LIVE_URL, 'Home'],
-      [`${LANE_URL}/settings`, `/brokers/alpaca/clerks/${LIVE_CLERK_ID}/settings`, 'Settings'],
-      [`${WORKSPACE_URL}/activity`, `${LIVE_URL}/activity`, 'Activity'],
-      [`${WORKSPACE_URL}/deploy`, `${LIVE_URL}/deploy`, 'Deploy'],
-    ])('lands on the same tab of the chosen account, from %s', async (url, expected) => {
-      await openSwitcher(url);
+      ['live', fakeVerdictState('live'), 'LIVE · real money'],
+      ['paper', fakeVerdictState('paper'), 'PAPER · practice money'],
+      ['shadow', fakeVerdictState('shadow', { clerk_authority: 'shadow' }), 'SHADOW · simulated fills on your live account'],
+    ])('frames the %s workspace in its lane colour, with the mode worded in its badge', async (lane, verdict, mode) => {
+      await renderWorkspace({ verdict });
 
-      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(expected);
+      // The colour is never the only carrier: the badge words the mode.
+      expect(await screen.findByText(mode)).toBeTruthy();
+      expect(frame().getAttribute('data-lane')).toBe(lane);
     });
 
-    it("lands on the chosen account's Home from a bot's page", async () => {
-      // The chosen account need not run this bot, so the bot's page itself is
-      // never carried across (ADR 0064 Decision 4).
-      await openSwitcher(`${WORKSPACE_URL}/bots/sid-1`);
+    it('frames a cold load neutrally, never in a guessed lane colour', async () => {
+      await renderWorkspace({ verdict: UNPOLLED_LANE_STATE });
 
-      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(LIVE_URL);
+      expect(await screen.findByText('Reading account mode…')).toBeTruthy();
+      expect(frame().hasAttribute('data-lane')).toBe(false);
     });
 
-    it('carries the lens perspective across', async () => {
-      await openSwitcher(`${WORKSPACE_URL}?lens=operator`);
-
-      expect(screen.getByRole('link', { name: /^Live/ }).getAttribute('href')).toBe(
-        `${LIVE_URL}?lens=operator`,
-      );
-    });
-
-    it('is keyboard operable, and hands the keyboard back when dismissed', async () => {
-      await openSwitcher(WORKSPACE_URL);
-      const trigger = screen.getByRole('button', { name: /Paper/ });
-      expect(trigger.getAttribute('aria-expanded')).toBe('true');
-
-      fireEvent.keyDown(screen.getByRole('link', { name: /^Live/ }), { key: 'Escape' });
-
-      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
-      expect(document.activeElement).toBe(trigger);
-    });
-
-    it('closes on a click outside it', async () => {
-      // The click-outside listener is attached while the list is open and torn
-      // down with it, rather than sitting on the host for the whole session —
-      // this pins that the dismissal still works from that shorter life.
-      await openSwitcher(WORKSPACE_URL);
-      const trigger = screen.getByRole('button', { name: /Paper/ });
-      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('true'));
-
-      fireEvent.click(document.body);
-
-      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
-    });
-
-    it('has no detectable accessibility violations while open', async () => {
-      await openSwitcher(WORKSPACE_URL);
-
-      const results = await axe.run(document.body, {
-        rules: { 'color-contrast': { enabled: false } },
+    it('has no account dropdown: the top-bar pills switch accounts', async () => {
+      await renderWorkspace({
+        directory: provideFleetDirectory({
+          observed_at_ms: 1,
+          clerks: [testLane(), testLane({ clerk_id: 'clrk_live', display_label: 'Live' })],
+        }),
       });
+
+      expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Paper/ })).toBeNull();
+      expect(screen.queryByRole('link', { name: /^Live/ })).toBeNull();
+    });
+
+    it('has no detectable accessibility violations on the Live frame', async () => {
+      await renderWorkspace({ verdict: fakeVerdictState('live') });
+      await screen.findByText('LIVE · real money');
+
+      const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
 
       expect(results.violations).toEqual([]);
     });

@@ -46,3 +46,26 @@
   border-color: #ffb020;
   background: rgba(122, 61, 0, 0.85);
 }
+
+/* The header's mode badge: the lane colour fills it and the words sit on it
+   in the canvas colour (contrast ≥ 4.5:1 for all three lane tokens). A
+   mode not yet read, or undetermined, keeps its own treatment above. */
+.lane-mode-chip--badge {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.lane-mode-chip--badge.lane-mode-chip--live {
+  color: var(--bg-canvas);
+  background: var(--lane-live);
+}
+
+.lane-mode-chip--badge.lane-mode-chip--paper {
+  color: var(--bg-canvas);
+  background: var(--lane-paper);
+}
+
+.lane-mode-chip--badge.lane-mode-chip--shadow {
+  color: var(--bg-canvas);
+  background: var(--lane-shadow);
+}
