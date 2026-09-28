@@ -308,12 +308,6 @@ async def test_deploy_view_is_closed_paper_only_contract(
             "availability": "available",
             "explanation": "Orders route only to the selected Alpaca paper account through the Clerk.",
         },
-        {
-            "mode": "live",
-            "label": "Live",
-            "availability": "planned",
-            "explanation": "Live is unavailable on a paper account. Select a live account to deploy real-money bots.",
-        },
     ]
     assert [row["preset"] for row in body["sizing_options"]] == [
         "safe_canary",
