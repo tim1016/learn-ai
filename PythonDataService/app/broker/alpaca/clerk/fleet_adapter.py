@@ -30,7 +30,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.8"
+_ADAPTER_VERSION = "alpaca-fleet.9"
 
 
 def _op(
