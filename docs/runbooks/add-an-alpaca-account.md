@@ -431,13 +431,16 @@ previously refused, reissue it after fixing the stated cause. Never treat
 1. Select the account card and click **Deploy a bot** in the account header.
 2. Choose a strategy. **Accepted evidence** means its validation passed; it
    does not mean this account has permission to run it.
-3. If access is Off, use **Review & enable Paper** or **Review & enable Shadow**.
-   Review the exact strategy, account, and evidence, then confirm. This records
-   permission only; it does not launch anything. Repeat per strategy/account.
+3. If the strategy is not yet allowed on the account, click **Allow on Paper**
+   (or **Allow on Shadow**) below the strategy. Review the exact strategy, and
+   the account and evidence under **Details**, then click
+   **Yes, allow on Paper** (or **Yes, allow on Shadow**); the line then reads
+   "Allowed on this Paper account". This records permission only; it does not
+   launch anything. Repeat per strategy/account.
 4. Choose **Paper** on a Paper lane, **Shadow** before Live graduation, or
    **Live** afterward. Use the instrument picker and review the exact strategy
    parameters. An uncovered configuration offers **Use qualified configuration**
-   or **Try in Dry Run**; these choices remain explicit.
+   or **Try other settings in Dry Run**; these choices remain explicit.
 5. For an existing authority still using old grants, open Settings and use
    **Switch to budgets** (it asks you to confirm, because it cannot be undone).
    Apply a **Daily loss limit** there. This
