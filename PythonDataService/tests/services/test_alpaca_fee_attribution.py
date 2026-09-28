@@ -244,3 +244,25 @@ def test_simulated_settled_fees_already_in_cash_are_not_claimed_twice() -> None:
     result = _attribute([_fill("a")], simulated=True, session_ended=True, settlement_at_ms=100)
     assert result.unobserved_cash_claim(cash_seen_before_ms=1000) == D("0.03")
     assert result.unobserved_cash_claim(cash_seen_before_ms=1000, modelled_fees_seen_before_ms=101) == 0
+
+
+def test_fee_authority_imports_first_without_loading_custody_runtime() -> None:
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+from app.services.alpaca_fee_attribution import attribute_session_fees
+assert callable(attribute_session_fees)
+assert 'app.broker.alpaca.clerk.active_authority' not in sys.modules
+from app.broker.alpaca.clerk import get_alpaca_clerk, reset_alpaca_clerk_for_testing, set_alpaca_clerk
+from app.broker.alpaca.clerk import active_authority
+assert get_alpaca_clerk is active_authority.get_alpaca_clerk
+assert reset_alpaca_clerk_for_testing is active_authority.reset_alpaca_clerk_for_testing
+assert set_alpaca_clerk is active_authority.set_alpaca_clerk
+"""],
+        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
