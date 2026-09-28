@@ -76,7 +76,7 @@ def record_fee_evidence(
             if (
                 current_rows == prior_rows
                 and prior.history_complete == history_complete
-                and checked_at_ms - prior.checked_at_ms < 30_000
+                and 0 <= checked_at_ms - prior.checked_at_ms < 30_000
             ):
                 return False
         repo.append_transition(

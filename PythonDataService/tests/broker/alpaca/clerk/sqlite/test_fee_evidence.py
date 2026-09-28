@@ -161,3 +161,31 @@ def test_future_checked_time_is_not_fresh_risk_evidence(day_pnl_repo) -> None:
     result = custody_fee_attribution(day_pnl_repo._conn, now_ms=NOON)
     assert not result.known
     assert any("stale" in reason for reason in result.unresolved)
+    # A fresh delivery after a clock correction must replace the bad freshness
+    # stamp, even though its economic rows are unchanged.
+    assert record_fee_evidence(day_pnl_repo, [], checked_at_ms=NOON, history_complete=True)
+    assert custody_fee_attribution(day_pnl_repo._conn, now_ms=NOON).known
+
+
+def test_corrected_fill_reprices_original_fee_day(day_pnl_repo) -> None:
+    from app.broker.alpaca.clerk.sqlite.facts import ExecutionCorrectedFacts
+    from tests.broker.alpaca.clerk.sqlite.test_folds_execution import _correction_transition
+
+    repo = day_pnl_repo
+    accepted = _accept_day_pnl_enter(repo, decision_id="corrected-fee")
+    _append_day_pnl_slice(repo, accepted, execution_id="old", side="BUY", quantity=0.125, price=400, occurred_at_ms=YESTERDAY_NOON)
+    record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
+    assert custody_fee_attribution(repo._conn, now_ms=NOON).total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.01")
+    correction = ExecutionCorrectedFacts(execution_id="corrected", superseded_execution_ref="old", symbol="SPY", side="BUY", corrected_qty=4000, corrected_price=400, why="provider corrected quantity")
+    assert repo.append_execution_correction_or_raise(
+        correction=_correction_transition(repo, accepted=accepted, facts=correction, source_event_at_ms=NOON),
+        build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
+    ) == "appended"
+    revised = custody_fee_attribution(repo._conn, now_ms=NOON)
+    assert revised.known and revised.total_for(f"bot:{DAY_PNL_SID}") == Decimal("0.02")
+    from datetime import date
+
+    from app.utils.session_anchors import et_midnight_ms
+
+    today = custody_fee_attribution(repo._conn, now_ms=NOON, from_ms=et_midnight_ms(date(2026, 9, 8)), to_ms=NOON)
+    assert today.known and not today.shares

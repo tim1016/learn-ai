@@ -337,6 +337,11 @@
       "path_template": "/accounts/{account_id}/custody/transactions",
       "requires_account": true
     },
+    "fee_attribution_read": {
+      "method": "GET",
+      "path_template": "/fees/attribution",
+      "requires_account": false
+    },
     "gallery_snapshot": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/gallery/snapshot",

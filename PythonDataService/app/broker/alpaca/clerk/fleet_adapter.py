@@ -113,6 +113,13 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path="/api/brokers/alpaca/activities",
         ),
         _op(
+            "fee_attribution_read",
+            "GET",
+            "/fees/attribution",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/fees/attribution",
+        ),
+        _op(
             "portfolio_history_read",
             "GET",
             "/portfolio-history",

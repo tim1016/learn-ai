@@ -1,6 +1,7 @@
 """Wire shape of one session's predicted-vs-observed fee reconciliation (ADR 0059 D6).
 
-Money crosses this boundary as ``float`` USD (the model is ``Decimal`` inside);
+The legacy session comparison uses ``float`` USD. Deployment fee attribution
+preserves Decimal USD as strings at the boundary;
 every instant is ``int64 ms UTC``. ``session_open_ms`` is the trading date's
 ET session-open anchor; the fill window is the ET calendar day around it.
 """
@@ -56,3 +57,26 @@ class SessionFeeReconciliation(BaseModel):
     why: str
     unpinned_components: list[str]
     observed_at_ms: EpochMs
+
+
+class DeploymentFeeRow(BaseModel):
+    """Server-owned fee totals; decimal USD is preserved on the wire."""
+
+    subject_id: str
+    strategy_instance_id: str | None
+    label: str
+    estimated_usd: str
+    modelled_settled_usd: str
+    observed_usd: str
+    total_usd: str
+
+
+class DeploymentFeeAttribution(BaseModel):
+    account_id: str | None
+    observed_at_ms: EpochMs
+    authority_revision: int | None
+    available: bool
+    known: bool
+    rows: list[DeploymentFeeRow]
+    account_unattributed_usd: str | None
+    messages: list[str]

@@ -75,7 +75,7 @@ from app.schemas.account_pnl_attribution import (
     AccountPnlReconciliationResponse,
     PortfolioHistoryProofResponse,
 )
-from app.schemas.alpaca_fee_reconciliation import SessionFeeReconciliation
+from app.schemas.alpaca_fee_reconciliation import DeploymentFeeAttribution, SessionFeeReconciliation
 from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
@@ -105,7 +105,7 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
-from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
+from app.services.alpaca_fee_reconciliation import deployment_fee_attribution, session_fee_reconciliation
 from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
 from app.services.alpaca_live_verdict import (
     alpaca_live_verdict,
@@ -369,6 +369,14 @@ async def list_activities(
         broker,
         lambda port: port.list_activities(after_ms=after_ms, limit=limit),
     )
+
+
+@router.get("/{broker}/fees/attribution", response_model=DeploymentFeeAttribution)
+async def get_deployment_fee_attribution(broker: str, strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=96)) -> DeploymentFeeAttribution:
+    """Canonical lifetime fee evidence, including stopped deployment ownership."""
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Fee attribution is available for Alpaca accounts.")
+    return await _run(broker, lambda _port: deployment_fee_attribution(strategy_instance_id))
 
 
 @router.get(

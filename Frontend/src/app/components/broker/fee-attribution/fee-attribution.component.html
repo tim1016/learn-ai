@@ -1,0 +1,34 @@
+@if (target()) {
+  <section class="fee-evidence" aria-label="Deployment fees" aria-live="polite">
+    <h3>Fees</h3>
+    @if (fees.isLoading()) {
+      <p>Reading account fee evidence…</p>
+    } @else if (fees.error()) {
+      <p>Fee evidence is unavailable. Refresh to retry.</p>
+    } @else if (view(); as report) {
+      @for (message of report.messages; track message) {
+        <p role="status">{{ message }}</p>
+      }
+      @if (report.account_unattributed_usd !== null && !report.known) {
+        <p>Account charges awaiting attribution: {{ report.account_unattributed_usd | currency:'USD' }}</p>
+      }
+      @for (row of rows(); track row.subject_id) {
+        <div class="fee-row">
+          <strong>{{ row.label }}</strong>
+          <dl>
+            <dt>Estimated, awaiting settlement</dt><dd>{{ row.estimated_usd | currency:'USD' }}</dd>
+            <dt>Modelled settled</dt><dd>{{ row.modelled_settled_usd | currency:'USD' }}</dd>
+            <dt>Observed broker charges</dt><dd>{{ row.observed_usd | currency:'USD' }}</dd>
+            <dt>Total attributed fees</dt><dd>{{ row.total_usd | currency:'USD' }}</dd>
+          </dl>
+        </div>
+      } @empty {
+        @if (report.available && report.known) {
+          <p>No fee-bearing activity has been recorded.</p>
+        }
+      }
+      <p>Observed settlement replaces estimates. Stopped deployments retain their fee history.</p>
+    }
+    <button type="button" (click)="fees.reload()" [disabled]="fees.isLoading()">Refresh fee evidence</button>
+  </section>
+}

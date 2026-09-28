@@ -82,6 +82,7 @@
     @case ('trader') {
       <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
         <app-trader-lens
+          [target]="target()"
           [panel]="panelData"
           [tickerQuote]="tickerQuote()"
           [profile]="profileData"

@@ -172,6 +172,13 @@ export class BrokersService {
     );
   }
 
+  getFeeAttribution(target: ResourceTarget, strategyInstanceId: string | null = null): Promise<components['schemas']['DeploymentFeeAttribution']> {
+    return firstValueFrom(this.http.get<components['schemas']['DeploymentFeeAttribution']>(
+      operationUrl('fee_attribution_read', target),
+      { params: strategyInstanceId === null ? {} : { strategy_instance_id: strategyInstanceId } },
+    ));
+  }
+
   /** Broker-owned account equity history; values are rendered without local P&L math. */
   getPortfolioHistory(
     target: ResourceTarget,

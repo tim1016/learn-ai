@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
+from app.broker.alpaca.clerk.money import money_context
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     SqliteEconomicProjectionReader,
@@ -31,6 +32,8 @@ from app.broker.alpaca.regulatory_fees import (
 from app.broker.contract.models import BrokerActivity, OrderSide
 from app.broker.contract.ports import BrokerReadPort
 from app.schemas.alpaca_fee_reconciliation import (
+    DeploymentFeeAttribution,
+    DeploymentFeeRow,
     FeeReconciliationVerdict,
     PredictedSessionFees,
     SessionFeeReconciliation,
@@ -128,7 +131,7 @@ def _frame(
         fill_window_end_ms=window_end_ms,
         fill_count=len(fills),
         sell_fill_count=sum(1 for fill in fills if fill.side == OrderSide.SELL),
-        observed_activity_count=len(fee_rows),
+        observed_activity_count=len({row.activity_id for row in fee_rows}),
         observed_at_ms=now_ms,
     )
 
@@ -146,7 +149,13 @@ def _observed_total(fee_rows: Sequence[BrokerActivity]) -> Decimal | None:
     """The day's charge as a positive amount, or ``None`` when it cannot be known."""
     if not fee_rows or any(row.net_amount is None for row in fee_rows):
         return None
-    return -sum((Decimal(str(row.net_amount)) for row in fee_rows), _ZERO)
+    unique: dict[str, BrokerActivity] = {}
+    for row in fee_rows:
+        prior = unique.get(row.activity_id)
+        if prior is not None and (prior.net_amount, prior.native_order_id) != (row.net_amount, row.native_order_id):
+            return None
+        unique[row.activity_id] = row
+    return -sum((Decimal(str(row.net_amount)) for row in unique.values()), _ZERO)
 
 
 def _unobserved_reason(
@@ -366,3 +375,48 @@ async def session_fee_reconciliation(
         fee_activities=activities,
         now_ms=observed_at_ms,
     )
+
+
+async def deployment_fee_attribution(strategy_instance_id: str | None = None) -> DeploymentFeeAttribution:
+    """Account/deployment UI uses exactly the custody fee projection."""
+    if strategy_instance_id is not None:
+        from app.services.bot_runner import get_bot_task_registry
+        from app.services.broker_v2_panel.panel_data_source import _panel_authority_for_binding
+
+        registry = get_bot_task_registry()
+        if registry is not None:
+            binding = registry.binding_for_control("alpaca", strategy_instance_id)
+            async with _panel_authority_for_binding(registry, binding) as selected:
+                if selected is not None:
+                    return await asyncio.to_thread(_deployment_fee_view, selected)
+    clerk = active_sqlite_facade("alpaca") if strategy_instance_id is None else None
+    if clerk is None:
+        return DeploymentFeeAttribution(account_id=None, observed_at_ms=now_ms_utc(), authority_revision=None,
+            available=False, known=False, rows=[], account_unattributed_usd=None,
+            messages=["Fee evidence is unavailable while the account Clerk is offline."])
+    return await asyncio.to_thread(_deployment_fee_view, clerk)
+
+
+@money_context()
+def _deployment_fee_view(clerk: SqliteAlpacaClerkFacade) -> DeploymentFeeAttribution:
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
+
+    repo = clerk.repository
+    with repo._write_lock:
+        now = repo.clock()
+        projection = custody_fee_attribution(repo._conn, now_ms=now)
+        meta = repo.control_meta_snapshot()
+        config = {row["subject_id"]: (row["strategy_instance_id"], row["display_name"]) for row in repo._conn.execute(
+            "SELECT s.subject_id, s.strategy_instance_id, c.display_name FROM custody_subjects s LEFT JOIN bot_config c ON c.strategy_instance_id = s.strategy_instance_id"
+        )}
+        rows = []
+        for subject in sorted({share.subject_id for share in projection.shares}):
+            sid, label = config.get(subject, (None, None))
+            amounts = {state: sum((share.amount for share in projection.shares if share.subject_id == subject and share.state == state), Decimal(0)) for state in ("estimated", "modelled_settled", "observed")}
+            rows.append(DeploymentFeeRow(subject_id=subject, strategy_instance_id=sid,
+                label=label or ("External activity" if subject.startswith("external:") else "Manual activity"),
+                estimated_usd=str(amounts["estimated"]), modelled_settled_usd=str(amounts["modelled_settled"]),
+                observed_usd=str(amounts["observed"]), total_usd=str(projection.total_for(subject))))
+        return DeploymentFeeAttribution(account_id=repo.account_id, observed_at_ms=now, authority_revision=meta.control_revision,
+            available=True, known=projection.known, rows=rows, account_unattributed_usd=str(projection.unattributed),
+            messages=list(projection.unresolved))

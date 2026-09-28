@@ -27,6 +27,9 @@
 
   <aside class="trader-rail" aria-label="Trader summary">
     <app-trader-metrics [panel]="panel()" />
+    @if (target()) {
+      <app-fee-attribution [target]="target()" [strategyInstanceId]="panel().strategy_instance_id" />
+    }
 
     @if (isBrokerExecution()) {
       <app-trades-today-list

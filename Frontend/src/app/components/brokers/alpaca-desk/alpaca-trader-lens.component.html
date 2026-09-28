@@ -21,6 +21,7 @@
     @case ('today') {
       <div class="today-workspace">
         <app-alpaca-positions-table />
+        <app-fee-attribution [target]="accountData.target()" />
         <app-alpaca-trader-activity-table
           [activities]="activities()"
           [unavailable]="activitiesUnavailable()"

@@ -13697,6 +13697,135 @@
         "title": "DeflatedSharpeResponse",
         "type": "object"
       },
+      "DeploymentFeeAttribution": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_unattributed_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Unattributed Usd"
+          },
+          "authority_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Revision"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "known": {
+            "title": "Known",
+            "type": "boolean"
+          },
+          "messages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentFeeRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "observed_at_ms",
+          "authority_revision",
+          "available",
+          "known",
+          "rows",
+          "account_unattributed_usd",
+          "messages"
+        ],
+        "title": "DeploymentFeeAttribution",
+        "type": "object"
+      },
+      "DeploymentFeeRow": {
+        "description": "Server-owned fee totals; decimal USD is preserved on the wire.",
+        "properties": {
+          "estimated_usd": {
+            "title": "Estimated Usd",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "modelled_settled_usd": {
+            "title": "Modelled Settled Usd",
+            "type": "string"
+          },
+          "observed_usd": {
+            "title": "Observed Usd",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "total_usd": {
+            "title": "Total Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_id",
+          "strategy_instance_id",
+          "label",
+          "estimated_usd",
+          "modelled_settled_usd",
+          "observed_usd",
+          "total_usd"
+        ],
+        "title": "DeploymentFeeRow",
+        "type": "object"
+      },
       "DesignateGoldenRunRequest": {
         "properties": {
           "command_id": {
@@ -42593,6 +42722,7 @@
           "EXIT_TERMS_UPGRADE_COMPLETED",
           "EXTERNAL_ORDER_ACKNOWLEDGED",
           "EXTERNAL_ORDER_OBSERVED",
+          "FEE_EVIDENCE_OBSERVED",
           "MANUAL_ORDER_ACCEPTED",
           "MANUAL_ORDER_CANCELED",
           "MANUAL_ORDER_CANCEL_ACCEPTED",
@@ -62495,6 +62625,72 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/fees/attribution": {
+      "get": {
+        "description": "Fleet-routed GET /fees/attribution (account_read).",
+        "operationId": "fleet_fee_attribution_read_api_brokers__broker__clerks__clerk_id__fees_attribution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Fee Attribution Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/lane/account-quiet": {
       "get": {
         "description": "Fleet-routed GET /lane/account-quiet (custody_read).",
@@ -63242,6 +63438,83 @@
           }
         },
         "summary": "Get Clock Evidence",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/fees/attribution": {
+      "get": {
+        "description": "Canonical lifetime fee evidence, including stopped deployment ownership.",
+        "operationId": "get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentFeeAttribution"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deployment Fee Attribution",
         "tags": [
           "brokers-v2"
         ]
