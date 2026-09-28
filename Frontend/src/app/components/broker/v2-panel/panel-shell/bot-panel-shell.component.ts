@@ -56,6 +56,7 @@ import {
   type ResourceTarget,
   withCommand,
 } from '../../../../fleet/resource-target';
+import { accountWorkspaceTabRoute } from '../../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
   fencedTarget,
@@ -551,11 +552,14 @@ export class BotPanelShellComponent {
     const target = fencedTarget(this.target(), fence);
     const sid = this.sid();
     if (action.action_id === 'open_custody_timeline') {
-      void this.router.navigate([
-        '/brokers', target.broker, 'clerks', target.clerkId, 'accounts', this.requiredAccountId(target),
-      ], {
-        queryParams: this.custodyTimelineQuery(action, sid),
-      });
+      // Activity's "Order records and recovery" fold opens on arrival at
+      // this bot's timeline (`sqliteTimelineQueryFromParams`).
+      const activity = accountWorkspaceTabRoute({
+        broker: target.broker, clerkId: target.clerkId, accountId: this.requiredAccountId(target),
+      }, 'activity');
+      if (activity !== null) {
+        void this.router.navigate([...activity], { queryParams: this.custodyTimelineQuery(action, sid) });
+      }
       return;
     }
     if (action.action_id === 'recover_exact_execution_evidence') {

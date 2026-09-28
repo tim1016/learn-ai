@@ -13,7 +13,7 @@ import type {
 } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
-import { BrokersService } from '../../../../services/brokers.service';
+import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
@@ -1086,7 +1086,7 @@ describe('BotPanelShellComponent', () => {
     );
   });
 
-  it('deep-links the Account Desk with one exact, non-cross-correlated evidence identity', async () => {
+  it('opens this bot’s order records on Activity with one exact, non-cross-correlated evidence identity', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(custodyTimelineSnapshot());
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1103,14 +1103,13 @@ describe('BotPanelShellComponent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
+    const queryParams = { timelineBot: 'sid-001', timelineUncertaintyId: 'uncertainty:17' };
     expect(navigate).toHaveBeenLastCalledWith(
-      ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'DUM284968'], {
-      queryParams: {
-        timelineBot: 'sid-001',
-        timelineUncertaintyId: 'uncertainty:17',
-      },
-      },
+      ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'DUM284968', 'activity'], { queryParams },
     );
+    // Exactly the query Activity reads to open its records fold on this bot.
+    expect(sqliteTimelineQueryFromParams(new URLSearchParams(queryParams)))
+      .toEqual(expect.objectContaining({ strategyInstanceId: 'sid-001', uncertaintyId: 'uncertainty:17' }));
   });
 
   it('renders the server-authored stale-plan refusal and refreshes without confirmation', async () => {
