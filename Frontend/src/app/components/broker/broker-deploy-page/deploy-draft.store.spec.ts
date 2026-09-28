@@ -19,7 +19,7 @@ describe('the Deploy draft', () => {
 
     expect(first.submissionKey).not.toBe(second.submissionKey);
     expect(first.submissionKey).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
-    expect(first).toMatchObject({ amount: '', submittedContent: null, replaces: null, editing: { what: false, how: false } });
+    expect(first).toMatchObject({ amount: '', outcomeUnknown: false, replaces: null, editing: { what: false, how: false } });
     expect(first.settings.executionMode).toBeNull();
   });
 

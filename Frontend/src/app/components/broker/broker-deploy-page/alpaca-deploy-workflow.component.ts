@@ -98,13 +98,12 @@ const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
  * what that submission recorded instead of starting a second bot. */
 const SUBMISSION_PARAM = 'submission';
 
-/** The Deploy refusals that settle nothing about the key's first Deploy: a
- * second copy while it is being sent, and the key resent with other
- * settings. Like a lost response, each leaves its outcome to be read. */
-const SUBMISSION_UNSETTLED_REASONS: ReadonlySet<string> = new Set([
-  'deploy_submission_in_flight',
-  'deploy_submission_settings_conflict',
-]);
+/** A Deploy refusal the backend marks as settling its submission key: it
+ * started nothing under the key, so the form may move to a new one. Every
+ * other failure of a sent Deploy leaves its outcome to be read. */
+function settlesSubmission(error: unknown): boolean {
+  return error instanceof HttpErrorResponse && error.error?.detail?.submission_settled === true;
+}
 
 /** What Confirm says about a Deploy that no receipt answered for. */
 function deployNotice(
@@ -231,8 +230,9 @@ type DeploySubmission = DeploySubmissionBody & { budget: DeploymentBudgetInput }
  * keyboard. Money renders only the backend's previewed `money_after`, and
  * consent binds to the preview's review token and Live phrase. The backend
  * names the bot (#2551): each Deploy carries an opaque submission key, kept
- * with the settings it was first sent with, so a retry — a double click, a
- * lost response, a reload — returns the same bot. The form is kept per
+ * from the moment it is sent until its receipt or a backend answer that
+ * settles it, so a retry — a double click, a lost response, a reload, an
+ * edit — never starts a second bot. The form is kept per
  * account for the session (H9); Deploy again (`?from=<sid>`) pre-fills
  * everything but money and consent.
  */
@@ -399,15 +399,15 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly amount = signal('');
   /** The opaque idempotency input of the next Deploy (#2551). */
   private readonly submissionKey = signal<string>(crypto.randomUUID());
-  /** The settings `submissionKey` was first sent with; a Deploy with any
-   * other settings mints a new key rather than reuse one the backend would
-   * refuse as a conflict — unless that Deploy's outcome is unknown. */
-  private readonly submittedContent = signal<string | null>(null);
-  /** A Deploy went out under `submissionKey` and no answer settled it (a lost
-   * response, or "already being sent"). The key is kept whatever the form now
-   * says until its status read answers (PRD #2560 stories 63, 66). */
+  /** A Deploy went out under `submissionKey` and nothing has settled it yet:
+   * set as it is sent, and cleared only by its receipt or by an answer the
+   * backend marks as settling the key (a settled refusal, or a status read of
+   * `not_committed` or no record). Until then the key is kept whatever the
+   * form now says (PRD #2560 stories 63, 66). */
   protected readonly outcomeUnknown = signal(false);
   protected readonly checkingStatus = signal(false);
+  /** The unknown outcome is offered its status read once no Deploy is on its way. */
+  protected readonly canCheckStatus = computed(() => this.outcomeUnknown() && !this.submitting());
   /** The `?submission=` this page last wrote, just before sending it. */
   private readonly writtenKey = signal<string | null>(null);
   protected readonly editing = signal<DeployStepEditing>({ what: false, how: false });
@@ -881,7 +881,7 @@ export class AlpacaDeployWorkflowComponent {
   /** What Confirm says went wrong: the last answer, or — back on a form
    * whose Deploy got none — that its outcome is still unknown. */
   protected readonly confirmError = computed(() =>
-    this.submitError() ?? (this.outcomeUnknown() ? UNKNOWN_OUTCOME : null),
+    this.submitError() ?? (this.canCheckStatus() ? UNKNOWN_OUTCOME : null),
   );
   protected readonly shownReceipt = computed(() => {
     const own = this.receipt();
@@ -935,7 +935,6 @@ export class AlpacaDeployWorkflowComponent {
         settings: settingsOf(this.ticket()),
         amount: this.amount(),
         submissionKey: this.submissionKey(),
-        submittedContent: this.submittedContent(),
         outcomeUnknown: this.outcomeUnknown(),
         editing: this.editing(),
         replaces: this.replaces(),
@@ -1073,7 +1072,6 @@ export class AlpacaDeployWorkflowComponent {
     this.ticket.set(ticketOf(draft.settings));
     this.amount.set(draft.amount);
     this.submissionKey.set(draft.submissionKey);
-    this.submittedContent.set(draft.submittedContent);
     this.outcomeUnknown.set(draft.outcomeUnknown);
     this.editing.set(draft.editing);
     this.replaces.set(draft.replaces);
@@ -1090,7 +1088,7 @@ export class AlpacaDeployWorkflowComponent {
   private freshDraft(settings: DeployTicketSettings, replaces: string | null = null): DeployDraft {
     const fresh = { ...freshDeployDraft(settings), replaces };
     return this.outcomeUnknown()
-      ? { ...fresh, submissionKey: this.submissionKey(), submittedContent: this.submittedContent(), outcomeUnknown: true }
+      ? { ...fresh, submissionKey: this.submissionKey(), outcomeUnknown: true }
       : fresh;
   }
 
@@ -1357,7 +1355,7 @@ export class AlpacaDeployWorkflowComponent {
     this.submitError.set(null);
     this.admissionDecision.set(null);
     const settings = { ...this.deployBody(this.ticket(), strategy, mode), budget };
-    const submission = this.submissionFor(settings, view.account_id);
+    const submission = this.submissionFor(settings);
     const commandTarget = this.commandTargetFor(submission, view.account_id);
     let refused = false;
     let sent = false;
@@ -1375,17 +1373,19 @@ export class AlpacaDeployWorkflowComponent {
       // outcome for this key stays the authority on what was committed.
       await this.writeSubmissionParam(submission.submission_key);
       if (!this.submissionStillCurrent(settings)) return;
+      // Pinned from the moment it is sent, so leaving mid-send keeps it too.
+      this.outcomeUnknown.set(true);
       sent = true;
       this.acceptReceipt(await this.panelService.deployBudgetBot(commandTarget, submission));
     } catch (error) {
       refused = true;
       const decision = this.admissionFromError(error);
       if (decision) this.admissionDecision.set(decision);
-      const failure = this.toDeployError(error);
-      this.submitError.set(failure);
-      // An answer that does not settle this key keeps it for the status read;
-      // a definite refusal frees the form to mint a new one on an edit.
-      if (sent) this.outcomeUnknown.set(failure.outcome === 'unknown');
+      // Only an answer the backend marks as settling the key frees it; any
+      // other failure of a sent Deploy leaves its outcome to the status read.
+      const settled = sent && settlesSubmission(error);
+      this.submitError.set(this.toDeployError(error, sent && !settled));
+      if (settled) this.releaseSubmission();
       if (error instanceof HttpErrorResponse && error.status === 409
         && ['clerk_binding_generation_conflict', 'clerk_routing_epoch_conflict'].includes(error.error?.detail?.reason ?? error.error?.detail?.reason_code)) {
         this.frozenCommand.set(null);
@@ -1407,18 +1407,16 @@ export class AlpacaDeployWorkflowComponent {
     // The next Deploy from this form is a new bot: a new key, and fresh
     // money and consent. Its settings stay for a twin.
     this.submissionKey.set(crypto.randomUUID());
-    this.submittedContent.set(null);
     this.amount.set('');
     this.replaces.set(null);
     this.focusAfterRender(() => this.receiptPanel()?.focus());
   }
 
-  /** The sent Deploy is known not to have committed, so nothing was set
-   * aside: the next Deploy is a new submission under a new key. */
+  /** The backend said nothing started under the sent key, so nothing was
+   * set aside: the next Deploy is a new submission under a new key. */
   private releaseSubmission(): void {
     this.outcomeUnknown.set(false);
     this.submissionKey.set(crypto.randomUUID());
-    this.submittedContent.set(null);
     this.frozenCommand.set(null);
   }
 
@@ -1530,26 +1528,16 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   /**
-   * The Deploy command for these settings, under the submission key the
-   * backend dedupes on (#2551).
+   * The Deploy command for these settings, under the form's submission key,
+   * which the backend dedupes on (#2551).
    *
-   * The key is reused only for exactly the settings it was first sent with —
-   * the same content the backend's fingerprint hashes (never the review
-   * token or typed phrase, which prove the click rather than describe the
-   * bot). Other settings under the same key would be refused as a conflict,
-   * so they mint a new key: a new bot, by the owner's own changed choice.
-   * Not while that Deploy's outcome is unknown: a new key then could start a
-   * second bot beside one that committed, so the key stays and the backend
-   * answers for it.
+   * The key never changes here, whatever the settings: once sent it is kept
+   * until its receipt, or an answer the backend marks as settling it, frees
+   * the form (`acceptReceipt`, `releaseSubmission`). Other settings under a
+   * key still unsettled are refused by the backend and send the owner to its
+   * status read — never to a second bot beside one that may have started.
    */
-  private submissionFor(settings: DeployBotBody & { budget: DeploymentBudgetInput }, accountId: string): DeploySubmission {
-    const content = canonicalJson({
-      account: accountId,
-      settings: { ...settings, budget: { amount_usd: settings.budget.amount_usd, risk_revision: settings.budget.risk_revision } },
-    });
-    const prior = this.submittedContent();
-    if (prior !== null && prior !== content && !this.outcomeUnknown()) this.submissionKey.set(crypto.randomUUID());
-    this.submittedContent.set(content);
+  private submissionFor(settings: DeployBotBody & { budget: DeploymentBudgetInput }): DeploySubmission {
     const replaces = this.replaces();
     return {
       ...settings,
@@ -1632,7 +1620,9 @@ export class AlpacaDeployWorkflowComponent {
     this.ticketForm.quantity().markAsTouched();
   }
 
-  private toDeployError(error: unknown): DeployError {
+  /** A failed Deploy in the backend's words. `unsettled` — a sent Deploy the
+   * answer did not settle — is an unknown outcome whatever the refusal says. */
+  private toDeployError(error: unknown, unsettled: boolean): DeployError {
     if (error instanceof HttpErrorResponse) {
       const detail = error.error?.detail as {
         outcome?: 'conflict' | 'blocked' | 'unknown';
@@ -1641,10 +1631,9 @@ export class AlpacaDeployWorkflowComponent {
         message?: string;
         why?: string | null;
         next_action?: string | null;
-        reason_code?: string | null;
       } | undefined;
       if (detail?.message) {
-        const outcome = SUBMISSION_UNSETTLED_REASONS.has(detail.reason_code ?? '')
+        const outcome = unsettled
           ? 'unknown'
           : detail.outcome ?? (error.status === 409 ? 'conflict' : 'blocked');
         return {

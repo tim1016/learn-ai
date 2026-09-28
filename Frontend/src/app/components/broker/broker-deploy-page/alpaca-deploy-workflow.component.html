@@ -165,7 +165,7 @@
             [checksObservedAtMs]="view.evaluated_at_ms"
             [admissionDecision]="admissionDecision()"
             [submitError]="confirmError()"
-            [canCheckStatus]="outcomeUnknown()"
+            [canCheckStatus]="canCheckStatus()"
             [checkingStatus]="checkingStatus()"
             [confirmationText]="review?.confirmation_text ?? null"
             [(consent)]="liveConsent"

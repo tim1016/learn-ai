@@ -544,15 +544,21 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(firstTarget).toMatchObject({ clerkId: 'clrk_spec', accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
   });
 
-  it('mints a new submission key when the settings change after a Deploy was refused', async () => {
+  it('mints a new submission key after a refusal the backend marks as settling it', async () => {
     const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({
       status: 409,
-      error: { detail: { outcome: 'conflict', message: 'The budget is more than this account can set aside.', why: null, next_action: null } },
+      error: { detail: {
+        outcome: 'conflict', message: 'Deployment budget is unavailable.', why: 'The budget is more than this account can set aside.',
+        next_action: 'Review the current budget and account evidence, then retry.', admission: null, reason_code: null,
+        submission_settled: true,
+      } },
     }));
     const { fixture } = await renderWorkflow(service);
     await chooseMoney('1000.00');
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
+    await screen.findByText('The budget is more than this account can set aside.');
+    expect(screen.queryByRole('button', { name: 'Check deployment status' })).toBeNull();
 
     await chooseMoney('1200.00');
     await fixture.whenStable();
@@ -562,7 +568,88 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(submittedBody(service, 1).submission_key).not.toBe(submittedBody(service, 0).submission_key);
     expect(service.deployBudgetBot.mock.calls[1][0].idempotencyKey)
       .not.toBe(service.deployBudgetBot.mock.calls[0][0].idempotencyKey);
-    expect(screen.queryByRole('button', { name: 'Check deployment status' })).toBeNull();
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+  });
+
+  // Each of these is a refusal the backend leaves unsettled: the first bot
+  // may have started, or the key's earlier Deploy could not be read. The
+  // page keeps the key, says the outcome is unknown in the backend's words,
+  // and offers the status read (B2-3).
+  it.each([
+    {
+      kind: 'the outcome-not-readable 409',
+      status: 409,
+      detail: {
+        outcome: 'conflict', message: 'Deployment budget is unavailable.',
+        why: 'Deployment outcome is not yet readable. Recover this command before trying again.',
+        next_action: 'Review the current budget and account evidence, then retry.', admission: null, reason_code: null,
+        submission_settled: false,
+      },
+    },
+    {
+      kind: 'the custody-read 409',
+      status: 409,
+      detail: {
+        outcome: 'conflict', message: 'Deployment budget is unavailable.',
+        why: 'Deployment command evidence is unavailable. Resolve custody recovery before continuing.',
+        next_action: 'Review the current budget and account evidence, then retry.', admission: null, reason_code: null,
+        submission_settled: false,
+      },
+    },
+    {
+      kind: 'the runner’s 503',
+      status: 503,
+      detail: {
+        outcome: 'blocked', message: 'The bot runner is not available.',
+        why: 'The service is still starting or has shut down.',
+        next_action: 'Wait for the data plane to become healthy, then refresh.', admission: null, reason_code: null,
+        submission_settled: false,
+      },
+    },
+  ])('keeps the submission key after $kind, even when the amount changes', async ({ status, detail }) => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status, error: { detail } }));
+    await lostThenEdited(service);
+
+    const refusal = screen.getByRole('alert', { name: 'Outcome unknown' });
+    expect(within(refusal).getByText(detail.message)).toBeTruthy();
+    expect(within(refusal).getByText(detail.why)).toBeTruthy();
+    expect(within(refusal).getByText(`Next: ${detail.next_action}`)).toBeTruthy();
+    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
+  });
+
+  it('keeps the submission key of a Deploy still being sent when the owner leaves and returns', async () => {
+    const service = mockService();
+    service.deployBudgetBot.mockReturnValueOnce(new Promise(() => undefined));
+    const { fixture } = await render(DeployHostComponent, {
+      providers: [
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+    });
+    await screen.findByRole('heading', { name: 'What' });
+    await fixture.whenStable();
+    await chooseMoney('1000.00');
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
+
+    fixture.componentInstance.shown.set(false);
+    await fixture.whenStable();
+    fixture.componentInstance.shown.set(true);
+    await fixture.whenStable();
+    await screen.findByRole('heading', { name: 'What' });
+
+    const refusal = await screen.findByRole('alert', { name: 'Outcome unknown' });
+    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    await chooseMoney('1200.00');
+    await fixture.whenStable();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
   });
 
   it('keeps the submission key after a lost response, even when the amount changes (stories 63, 66)', async () => {
@@ -1399,7 +1486,13 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
-  it('distinguishes a changed-account conflict from an unknown outcome', async () => {
+  // A Start refused after the bot was named is not settled by the backend,
+  // so it is an unknown outcome with its status read; only the settled
+  // marker lets the same conflict read as one.
+  it.each([
+    { settled: true, title: 'The account changed before Deploy', offersCheck: false },
+    { settled: false, title: 'Outcome unknown', offersCheck: true },
+  ])('words a sent Deploy’s conflict as “$title” when its key is settled: $settled', async ({ settled, title, offersCheck }) => {
     const refusedAdmission = {
       ...ADMISSION, allowed: false, reason_code: 'CUSTODY_HOLD_ACTIVE',
       explanation: 'The account entered a hold after the preview.', next_step: 'Clear the hold before Start.',
@@ -1409,17 +1502,18 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
       error: { detail: {
         outcome: 'conflict', receipt_id: 'deploy-conflict-1', recorded_at_ms: 1_700_000_000_002,
         message: 'Deployment readiness changed.', why: 'The account entered a hold after the page loaded.',
-        next_action: 'Reload and clear the hold.', admission: refusedAdmission,
+        next_action: 'Reload and clear the hold.', admission: refusedAdmission, submission_settled: settled,
       } },
     });
     await renderWorkflow(mockService(DEPLOY_VIEW, error));
     await chooseMoney();
     fireEvent.click(deployButton());
 
-    const refusal = await screen.findByRole('alert', { name: 'The account changed before Deploy' });
+    const refusal = await screen.findByRole('alert', { name: title });
     expect(within(refusal).getByText('The account entered a hold after the page loaded.')).toBeTruthy();
     expect(within(refusal).getByText('deploy-conflict-1')).toBeTruthy();
     expect(within(refusal).getByText(refusedAdmission.explanation)).toBeTruthy();
+    expect(within(refusal).queryByRole('button', { name: 'Check deployment status' }) !== null).toBe(offersCheck);
   });
 
   it('blocks resubmission, not just the banner, when the account rebinds under a frozen preview', async () => {
