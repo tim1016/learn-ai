@@ -178,11 +178,30 @@ class DeploymentBudgetPreview(BaseModel):
     money_after: AccountMoneyView | None = None
 
 
+class BudgetStatementLine(BaseModel):
+    """One line of a bot's money statement, worded and valued by Python."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str
+    amount_usd: str
+    # The statement's running total (the bot's balance), set apart when shown.
+    total: bool = False
+
+
 class DeploymentBudgetView(BaseModel):
-    """All dollars are authored by Python, including display rounding."""
+    """All dollars are authored by Python, including display rounding.
+
+    ``headline`` and ``detail`` say where this bot's money stands in the
+    owner's words -- holding a position is a normal state, never worded as a
+    fault (hurdle H25). ``statement`` is the bot's money as the owner reads
+    it, in order: a running bot's budget, results, balance and where the
+    balance is; a stopped bot's balance and what was released and what is
+    still held. It is empty unless ``state`` is ``ready``.
+    """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: Literal["ready", "unavailable", "legacy"]
+    headline: str
     detail: str
     strategy_instance_id: str
     world: AuthorityKind
@@ -199,6 +218,9 @@ class DeploymentBudgetView(BaseModel):
     observed_at_ms: EpochMs | None = None
     # This bot's slice, shaded exactly as its segment on the account's bar.
     parts: MoneyParts | None = None
+    statement: tuple[BudgetStatementLine, ...] = ()
+    # The fine print under the statement, when there is any.
+    note: str | None = None
 
 
 class BudgetDeployCommandReceipt(BaseModel):

@@ -9880,6 +9880,7 @@ export interface components {
             clerk: components["schemas"]["ClerkCard"];
             /** Execution Policy */
             execution_policy: string;
+            exit_terms?: components["schemas"]["ExitTerms"] | null;
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -9901,7 +9902,8 @@ export interface components {
             mode: "log_only" | "dry_run" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
-            primary_action_by_lens: components["schemas"]["PrimaryActionByLens"];
+            /** Primary Action */
+            primary_action: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -10560,6 +10562,21 @@ export interface components {
              * @enum {string}
              */
             world: "real_paper" | "real_live" | "shadow" | "synthetic";
+        };
+        /**
+         * BudgetStatementLine
+         * @description One line of a bot's money statement, worded and valued by Python.
+         */
+        BudgetStatementLine: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Label */
+            label: string;
+            /**
+             * Total
+             * @default false
+             */
+            total?: boolean;
         };
         /**
          * BuildFromCsvRequest
@@ -13943,6 +13960,13 @@ export interface components {
         /**
          * DeploymentBudgetView
          * @description All dollars are authored by Python, including display rounding.
+         *
+         *     ``headline`` and ``detail`` say where this bot's money stands in the
+         *     owner's words -- holding a position is a normal state, never worded as a
+         *     fault (hurdle H25). ``statement`` is the bot's money as the owner reads
+         *     it, in order: a running bot's budget, results, balance and where the
+         *     balance is; a stopped bot's balance and what was released and what is
+         *     still held. It is empty unless ``state`` is ``ready``.
          */
         DeploymentBudgetView: {
             /** Committed Usd */
@@ -13958,6 +13982,10 @@ export interface components {
             fees_usd?: string | null;
             /** Free Usd */
             free_usd?: string | null;
+            /** Headline */
+            headline: string;
+            /** Note */
+            note?: string | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
             /** Outstanding Cash Usd */
@@ -13978,6 +14006,11 @@ export interface components {
              * @enum {string}
              */
             state: "ready" | "unavailable" | "legacy";
+            /**
+             * Statement
+             * @default []
+             */
+            statement?: components["schemas"]["BudgetStatementLine"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /**
@@ -15046,6 +15079,23 @@ export interface components {
              * @enum {string}
              */
             rule?: "fixed_bar_count_countdown" | "level_true";
+        };
+        /**
+         * ExitTerms
+         * @description Immutable stored terms; an upgraded registration may retain an unset allowance.
+         */
+        ExitTerms: {
+            /** Band Multiple */
+            band_multiple: number;
+            /** Exit Allowance Bps */
+            exit_allowance_bps: number | null;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "deployed" | "backfilled";
+            /** Spread Cap Bps */
+            spread_cap_bps: number;
         };
         /**
          * ExitTermsInput
@@ -21175,28 +21225,6 @@ export interface components {
             theta: number;
             /** Vega */
             vega: number;
-        };
-        /**
-         * PrimaryActionByLens
-         * @description The one backend-selected banner action for each lens (issue #1665).
-         *
-         *     ``trader`` is restricted to the closed
-         *     ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-         *     (``stop``); an Operator-only recovery
-         *     capability can never reach it. ``operator`` also considers those same
-         *     lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
-         *     action takes precedence when one is available — the audience-aware
-         *     precedence rule authored once by
-         *     ``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).
-         *     Either reference is ``None``, never a guess, when nothing currently
-         *     qualifies; the frontend renders no banner action in that case rather than
-         *     deriving one from ``health``.
-         */
-        PrimaryActionByLens: {
-            /** Operator */
-            operator: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
-            /** Trader */
-            trader: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
         };
         /** ProfileCloneRequest */
         ProfileCloneRequest: {

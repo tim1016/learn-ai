@@ -18,7 +18,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.v2panel.vocabulary import (
-    TRADER_LIFECYCLE_ACTION_IDS,
     ActionId,
     ChannelState,
     DesiredState,
@@ -38,6 +37,7 @@ from app.schemas.account_authority import (
     account_authority_agrees,
 )
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
+from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -395,28 +395,6 @@ class TransactionRail(BaseModel):
     stations: list[StationView]
 
 
-class PrimaryActionByLens(BaseModel):
-    """The one backend-selected banner action for each lens (issue #1665).
-
-    ``trader`` is restricted to the closed
-    ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-    (``stop``); an Operator-only recovery
-    capability can never reach it. ``operator`` also considers those same
-    lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
-    action takes precedence when one is available — the audience-aware
-    precedence rule authored once by
-    ``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).
-    Either reference is ``None``, never a guess, when nothing currently
-    qualifies; the frontend renders no banner action in that case rather than
-    deriving one from ``health``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    trader: ActionId | None
-    operator: ActionId | None
-
-
 class MissionVerdictView(BaseModel):
     """Backend-authored answer to whether this bot can perform its mission now."""
 
@@ -639,9 +617,15 @@ class BotPanelView(BaseModel):
     journal_tail_ref: str
     journal_tail_seq: int | None
     actions: list[PanelAction]
-    # The one backend-selected banner action per lens (issue #1665). Neither
-    # Angular banner may derive a primary action from ``health`` any more.
-    primary_action_by_lens: PrimaryActionByLens
+    # The one backend-selected command for this bot's page (issue #1665; the
+    # per-lens pair collapsed to one with the lens itself, PRD #2560 D2).
+    # ``None``, never a guess, when nothing qualifies: the page then derives
+    # no primary command from ``health``. Authored by
+    # ``panel_projection_service.select_primary_action``.
+    primary_action: ActionId | None
+    # This bot's sealed exit terms (PRD #2504), or ``None`` for a bot whose
+    # custody holds no seal (a pre-seal or non-SQLite registration).
+    exit_terms: ExitTerms | None = None
     readiness_checks: list[ReadinessCheckView]
     # Server-authored presentation aggregate. Consumers render these counts
     # verbatim so every surface reports the same command-gate posture.
@@ -658,29 +642,15 @@ class BotPanelView(BaseModel):
     open_pnl: float | None
 
     @model_validator(mode="after")
-    def _primary_action_by_lens_is_coherent(self) -> BotPanelView:
-        """Fail closed on a dangling or audience-incompatible reference.
-
-        Every non-``None`` lens reference must name an action present in
-        ``actions`` (no dangling reference), and the Trader reference must
-        additionally be one of the closed Trader-visible lifecycle action ids
-        — an Operator-only recovery capability can never become the Trader
-        banner's primary command (issue #1665).
-        """
-        action_ids = {action.action_id for action in self.actions}
-        trader_ref = self.primary_action_by_lens.trader
-        if trader_ref is not None and (
-            trader_ref not in TRADER_LIFECYCLE_ACTION_IDS or trader_ref not in action_ids
-        ):
+    def _primary_action_is_presented(self) -> BotPanelView:
+        """Fail closed on a dangling reference: the primary command must be
+        one of the presented ``actions`` (issue #1665)."""
+        if self.primary_action is not None and self.primary_action not in {
+            action.action_id for action in self.actions
+        }:
             raise ValueError(
-                f"primary_action_by_lens.trader={trader_ref!r} must reference a "
-                "Trader-visible lifecycle action present in `actions`"
-            )
-        operator_ref = self.primary_action_by_lens.operator
-        if operator_ref is not None and operator_ref not in action_ids:
-            raise ValueError(
-                f"primary_action_by_lens.operator={operator_ref!r} must reference "
-                "an action present in `actions`"
+                f"primary_action={self.primary_action!r} must reference an action "
+                "present in `actions`"
             )
         return self
 

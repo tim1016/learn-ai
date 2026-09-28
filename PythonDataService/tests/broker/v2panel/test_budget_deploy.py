@@ -34,7 +34,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
 @pytest.mark.parametrize(("model", "field", "payload"), [
     (DeploymentBudgetPreview, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", custody_account_id="PAPER")),
-    (DeploymentBudgetView, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", strategy_instance_id="bot")),
+    (DeploymentBudgetView, "observed_at_ms", dict(state="ready", headline="Ready", detail="Ready", world="real_paper", strategy_instance_id="bot")),
     (BudgetDeployCommandReceipt, "recorded_at_ms", dict(
         status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
         run_id="run", account_id="PAPER", world="real_paper", committed_usd="100.00", message="Pending",
@@ -506,3 +506,136 @@ def test_money_that_does_not_add_up_is_withheld_loudly_and_deploy_still_previews
     assert view.state == "unavailable" and "does not add up" in view.detail and view.segments == ()
     assert any(getattr(record, "action", None) == "account_money_unconserved" for record in caplog.records)
     assert preview.state == "ready" and preview.money_after is not None and preview.money_after.state == "unavailable"
+
+
+# ── This bot's money: the bot page's statement (PRD #2560 slice 3) ──────────
+
+
+def _statement(view: DeploymentBudgetView) -> list[tuple[str, str, bool]]:
+    return [(line.label, line.amount_usd, line.total) for line in view.statement]
+
+
+def test_a_running_bot_reads_its_money_as_a_statement(authority: tuple) -> None:
+    _, runtime, _ = _committed_view(authority)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert (view.headline, view.entry_eligible) == ("Ready for its next entry", True)
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "200.00", True),
+        ("In shares, at cost", "0.00", False),
+        ("Waiting in entry orders", "0.00", False),
+        ("Free to trade", "200.00", False),
+        # One SPY at $100.001 plus its modelled BUY fee costs $100.02.
+        ("Short of its next entry", "0.00", False),
+    ]
+    assert view.note == "The budget limits new entries. Market fills and losses can go past it."
+
+
+def test_a_bot_short_of_its_next_entry_says_by_how_much(authority: tuple) -> None:
+    _, runtime, _ = _committed_view(authority)
+    _publish_book(("SPY", 200))
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.headline == "Its next entry waits" and "200.01 USD" in view.detail
+    assert _statement(view)[-1] == ("Short of its next entry", "0.01", False)
+
+
+def test_holding_a_position_reads_as_holding_never_as_a_fault(authority: tuple) -> None:
+    """Hurdle H25: a bot simply holding its position read "Budget or account
+    risk unavailable" and "a fresh ENTER waits for a proved EXIT to flat"."""
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="holding",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="holding-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and not view.entry_eligible
+    assert (view.headline, view.detail) in {
+        ("Holding its position", "Its next entry waits until this position is sold."),
+        ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),
+    }
+    words = f"{view.headline} {view.detail}".lower()
+    assert all(fault not in words for fault in ("unavailable", "enter ", "exit ", "clerk"))
+    assert ("In shares, at cost", "100.00", False) in _statement(view)
+    assert ("Free to trade", "100.00", False) in _statement(view)
+
+
+def test_a_dry_run_bot_shows_its_own_money_after_a_fill_without_account_evidence(tmp_path) -> None:
+    """Hurdle H27: once a Dry Run's simulated buy filled, every figure read
+    "Unknown" under "Fresh account evidence ... unavailable". Its money is its
+    committed starting cash less what its fills spent: no mark and no account
+    observation is needed to show it."""
+    from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
+    from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_SID
+    from tests.broker.alpaca.clerk.sqlite.test_simulated_account import _deploy, _enter, _fill
+
+    repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=_TestClock(NOON))
+    try:
+        projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=Decimal(1000))
+        gate = _deploy(repo, projection, cents=100_000)
+        _fill(repo, _enter(repo, gate), key="simulated-buy", side="BUY", quantity=2, price=100)
+        # No price has arrived since the fill and no observation is published:
+        # the feed is down, or the bot is stopped.
+        runtime = SimpleNamespace(account_authority_kind="synthetic", sqlite_repository=repo,
+                                  envelope_sync=SimpleNamespace(envelope=LiveEnvelopeGate(values=None, custody_is_simulated=True)))
+
+        view = budget_deploy._budget_view(runtime, DAY_PNL_SID)
+    finally:
+        repo.close()
+
+    assert view.state == "ready" and view.world == "synthetic"
+    assert "account evidence" not in view.detail.lower()
+    # The simulated BUY of 2 carries its modelled CAT fee, a cent at most.
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "1000.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "-0.01", False),
+        ("Balance", "999.99", True),
+        ("In shares, at cost", "200.00", False),
+        ("Waiting in entry orders", "0.00", False),
+        ("Free to trade", "799.99", False),
+    ]
+
+
+def test_a_stopped_bot_statement_shows_what_was_released_and_what_is_still_held(authority: tuple) -> None:
+    from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+
+    repo, runtime, gate = _committed_view(authority)
+    accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="view", decision_id="held",
+                           lifecycle_run_id="view-run", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+                           reference_price=100, envelope=gate)
+    _append_slice(repo, accepted, execution_id="held-fill", quantity=1, price=100, source_event_at_ms=NOON, fee=0)
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="view", lifecycle_run_id="view-run", clock=repo.clock)
+    # Cash observed after the fill, so its cost is in cash and nothing waits.
+    repo.clock.advance(10_000)
+    gate.publish(replace(gate.latest_observation(), observed_at_ms=repo.clock(), cash_available_usd=900))
+
+    view = budget_deploy._budget_view(runtime, "view")
+
+    assert view.state == "ready" and not view.entry_eligible
+    assert view.headline == "Stopped · still holds shares"
+    assert view.detail == "Its free budget was released when it stopped. The money in its shares comes back when they are sold."
+    assert _statement(view) == [
+        ("Budget set aside at deploy", "200.00", False),
+        ("Realized gains and losses", "0.00", False),
+        ("Fees", "0.00", False),
+        ("Balance", "200.00", True),
+        ("Released at stop", "100.00", False),
+        ("Still in shares, at cost", "100.00", False),
+        ("Waiting on orders, fills or fees", "0.00", False),
+    ]
+    assert view.note is None

@@ -40,6 +40,7 @@ from app.services.source_bar_ledger import SourceBarLedger, SourceBarLedgerCorru
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.services.alpaca_fee_attribution import FeeAttribution
 
 BASELINE_KIND = "SIMULATION_SESSION_BASELINE"
 
@@ -72,6 +73,45 @@ def fold_simulation_baseline(conn: sqlite3.Connection, payload: dict[str, Any]) 
     SimulationBaseline.model_validate_json(payload["facts_json"])
 
 
+def _committed_starting_cash(conn: sqlite3.Connection) -> Decimal | None:
+    """A private Dry Run's durable starting cash: its one committed budget."""
+    rows = conn.execute("SELECT committed_cents FROM deployment_budgets").fetchall()
+    if len(rows) > 1:
+        raise SimulationEvidenceUnavailable("A private Dry Run has conflicting starting-cash commitments.")
+    return Decimal(rows[0][0]) / 100 if rows else None
+
+
+def _cash_after_fills(capital: Decimal, records: tuple[FillRecord, ...], fees: FeeAttribution) -> Decimal:
+    """The one simulated cash formula: capital - net fill spending - settled modelled fees."""
+    spending = sum((notional(fill.quantity, fill.fill_price) * (1 if fill.side is OrderSide.BUY else -1) for fill in records), ZERO)
+    settled = sum((share.amount for share in fees.shares if share.state == "modelled_settled"), ZERO)
+    return capital - spending - settled
+
+
+@money_context()
+def private_dry_run_cash(repo: ClerkSqliteRepository, *, now_ms: int) -> Decimal:
+    """A private Dry Run's own cash now, valued without any price (hurdle H27).
+
+    Cash is the committed starting cash less what its fills spent and its
+    settled modelled fees -- the same formula ``observe`` publishes -- and it
+    needs no mark: only equity and open P&L do. So a Dry Run's own money
+    stays readable while its prices are stale, its feed is down, or it is
+    stopped with no running observation. Every recorded fill and fee is
+    inside this cash; the caller reads budgets as seen before ``now_ms + 1``.
+    """
+    if not repo.account_id.startswith("sim:"):
+        raise ValueError("Only a private Dry Run has its own starting cash")
+    with repo._write_lock:
+        capital = _committed_starting_cash(repo._conn)
+        if capital is None:
+            raise SimulationEvidenceUnavailable("This Dry Run has no committed starting cash.")
+        records = effective_fill_records(repo._conn, account_id=repo.account_id)
+        fees = custody_fee_attribution(repo._conn, now_ms=now_ms, simulated_fill_cutoff_ms=now_ms)
+        if not fees.known:
+            raise SimulationEvidenceUnavailable("Simulated execution or modelled fee evidence is incomplete: " + "; ".join(fees.unresolved))
+        return _cash_after_fills(capital, records, fees)
+
+
 class SimulatedAccountProjection:
     def __init__(self, *, repo: ClerkSqliteRepository, artifacts_root: Path, initial_cash: Decimal | None = None) -> None:
         if not repo.account_id.startswith(("sim:", "shadow:")):
@@ -80,11 +120,9 @@ class SimulatedAccountProjection:
         self.initial_cash = initial_cash
 
     def _private_cash(self) -> tuple[Decimal, bool]:
-        rows = self.repo._conn.execute("SELECT committed_cents FROM deployment_budgets").fetchall()
-        if len(rows) > 1:
-            raise SimulationEvidenceUnavailable("A private Dry Run has conflicting starting-cash commitments.")
-        if rows:
-            return Decimal(rows[0][0]) / 100, True
+        committed = _committed_starting_cash(self.repo._conn)
+        if committed is not None:
+            return committed, True
         if self.initial_cash is None:
             raise SimulationEvidenceUnavailable("Choose simulated starting cash before deploying this Dry Run.")
         return normalize_money(self.initial_cash), False
@@ -220,10 +258,8 @@ class SimulatedAccountProjection:
             if fifo.open_pnl is None:
                 raise SimulationEvidenceUnavailable("Simulated open P&L cannot be valued from current price evidence.")
             baseline = self._baseline(records, capital=capital, now_ms=now_ms, persist=persist)
-            spending = sum((notional(fill.quantity, fill.fill_price) * (1 if fill.side is OrderSide.BUY else -1) for fill in records), ZERO)
-            settled = sum((share.amount for share in fees.shares if share.state == "modelled_settled"), ZERO)
             accrued = sum((share.amount for share in fees.shares), ZERO)
-            cash = capital - spending - settled
+            cash = _cash_after_fills(capital, records, fees)
             return AccountObservation(
                 observed_at_ms=observed_at_ms, broker_cash_usd=float(capital), cash_available_usd=cash,
                 last_equity_usd=float(baseline.equity_usd), unrealized_pl_usd=fifo.open_pnl,
