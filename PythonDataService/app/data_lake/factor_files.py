@@ -571,7 +571,11 @@ def factor_coverage_record_bytes(
             for d, reason in sorted(unpriced)
         ],
     )
-    return (record.model_dump_json() + "\n").encode("ascii")
+    # UTF-8, not ASCII: a reason can carry the offending path or exception
+    # verbatim, and a Unicode lake-root path in it must not turn the
+    # recoverable unpriced-session path into a UnicodeEncodeError after the
+    # artifact is claimed (#2530 review).
+    return (record.model_dump_json() + "\n").encode("utf-8")
 
 
 class FactorFileNotCoveringError(Exception):
@@ -671,10 +675,34 @@ def read_covering_factor_rows(
         # Name the root cause, not just the geometry (#2490): a span breaks
         # after a session the build could not price, and the operator seeing
         # only a span list has to go read logs to learn which session rotted.
+        # The causes THAT EXPLAIN THIS refusal come first (#2530 review) — a
+        # request crossing only the fourth break must hear about the fourth
+        # break, not three unrelated earlier dates.
         if recorded.unpriced_sessions:
-            reason += "; the covered span ends after " + _render_unpriced(recorded.unpriced_sessions)
+            reason += "; the covered span ends after " + _render_unpriced(
+                _relevant_unpriced(recorded.unpriced_sessions, first)
+            )
         raise FactorFileNotCoveringError(symbol, reason)
     return recorded.rows
+
+
+def _relevant_unpriced(
+    unpriced: Sequence[tuple[date, str]], first_uncovered: SessionRun
+) -> list[tuple[date, str]]:
+    """Order unpriced sessions by how much they explain ``first_uncovered``.
+
+    Sessions inside the uncovered run's extent come first, then earlier
+    breaks nearest-first — the span ending just before the run is the one
+    that broke it — and only then older history.
+    """
+    inside = [u for u in unpriced if first_uncovered.first_session <= u[0] <= first_uncovered.last_session]
+    earlier = sorted(
+        (u for u in unpriced if u[0] < first_uncovered.first_session),
+        key=lambda u: u[0],
+        reverse=True,
+    )
+    later = sorted(u for u in unpriced if u[0] > first_uncovered.last_session)
+    return [*inside, *earlier, *later]
 
 
 _MAX_RENDERED_SPANS = 3

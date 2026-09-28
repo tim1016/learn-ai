@@ -14,9 +14,14 @@ precedes either one. Neither rule ever runs inside a Signal Program
 1. **Cash bound.** An ENTER is admitted only if its own notional plus every
    working ENTER's unfilled notional does not exceed broker-observed cash.
    The bound is `cash`, not `buying_power`, so a cash account and a Reg T
-   margin account are admitted identically and an Intraday Margin Deficit is
-   impossible by construction. A refusal (`LIVE_ENVELOPE_CASH_EXCEEDED`)
-   changes no other state.
+   margin account are admitted identically. The check is an estimate at the
+   decision price, not a guarantee (amended 2026-09-27, #2442; it formerly
+   claimed an Intraday Margin Deficit was impossible by construction): a
+   regular-session market ENTER is priced at its decision bar's close and can
+   fill above it, while an extended-hours entry is a day limit genuinely
+   bounded by its limit price, and a recorded fill reserves its actual cost
+   until the next broker read supersedes it. A refusal
+   (`LIVE_ENVELOPE_CASH_EXCEEDED`) changes no other state.
 2. **Daily loss hold.** `day_pnl` is account-wide: current broker equity minus
    broker `last_equity` at the prior regular-session close, minus signed
    deposits and withdrawals after that same close. When it breaches
@@ -126,12 +131,18 @@ notional cap, no symbol allowlist, no session restriction.
   prices the part of an accepted ENTER the latest observation cannot see. A
   fill counts as seen only when the Clerk recorded it before the observation's
   `fills_seen_before_ms` (`observed_at_ms − FILL_VISIBILITY_GRACE_MS`, a
-  property of `AccountObservation`). A working *or filled* order
-  reserves its quantity minus its seen fills; a dead order (canceled/expired/
-  rejected/replaced) reserves only its unseen fills, because its unrecorded
-  remainder is cancelled quantity, never cash. Corrections fold at their
-  restated size: only the head of each correction chain counts (resolved
-  through `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
+  property of `AccountObservation`). Each part prices at what it costs
+  (fixed 2026-09-27, #2442): a recorded-but-unseen fill reserves its actual
+  cost — fill price × quantity plus any reported fee — because that is the
+  cash the broker already took at the fill's own price; only quantity no
+  recorded fill names prices at the reservation's reference price (the
+  decision price the ENTER was admitted against). A working *or filled*
+  order reserves its unseen fills at cost plus its unrecorded remainder at
+  the reference price; a dead order (canceled/expired/rejected/replaced)
+  reserves only its unseen fills, because its unrecorded remainder is
+  cancelled quantity, never cash. Corrections fold at their restated size:
+  only the head of each correction chain counts (resolved through
+  `economic_projection.py::EFFECTIVE_FILL_LINEAGE_CTE`), dated by the
   *root* execution's `recorded_at_ms`, because the broker's cash at that
   instant already reflected the true quantity however late the Clerk recorded
   the restatement. `reserved_cash_usd(seen_before_ms=...)`, which admission
@@ -366,10 +377,14 @@ it to every facade authority.
 
 ## Residuals
 
-- **Market slippage above the decision close.** A market ENTER is bound
-  against `reference_price` — the decision bar's close — not its eventual
-  fill price. A fill above that close spends more cash than the bound
-  admitted for.
+- **Market slippage above the decision close, decision-to-fill only.** A
+  market ENTER is admitted against `reference_price` — the decision bar's
+  close — not its eventual fill price, so a fill above that close spends more
+  cash than the bound admitted for. The reservation itself no longer
+  under-states the spend (fixed 2026-09-27, #2442): once a fill is recorded,
+  it reserves at its actual cost until the next broker read supersedes it.
+  What remains estimated is the decision-to-fill window and the
+  not-yet-recorded remainder of a filled order, both priced at the reference.
 - **Account day P&L under shadow is the live account's.** The sync's
   `envelope_read` is the live read port, not the shadow book, so `equity`,
   `last_equity`, transfer activities, and cash describe the live account.

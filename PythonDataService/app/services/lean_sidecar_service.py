@@ -750,6 +750,13 @@ async def run_trusted_sample(
             "lake_missing_daily_artifact:", "lake_daily_artifact_does_not_cover_window:",
             "lake_missing_required_metadata:",
             "lake_map_file_window_mismatch:", "lake_map_file_unreadable:",
+            # #2480: a factor file that is missing, does not cover the run's
+            # sessions, or does not parse is (re)built over the lake's
+            # current captured sessions below — the repair spec always asks
+            # for factor files, so the ensure builds one when absent and
+            # refreshes it (and its coverage record) before the remount
+            # re-runs the canonical check.
+            "lake_factor_file_missing:", "lake_factor_file_not_covering:", "lake_factor_file_unreadable:",
         ))
         if (not repairable or request.data_policy.source != "polygon"
                 or request.data_policy.provider_kind == "fixture"):
@@ -758,7 +765,7 @@ async def run_trusted_sample(
     from uuid import uuid4
 
     from app.data_lake.ensure_data import ensure_data
-    from app.data_lake.path_policy import LeanFactorFilePath, LeanMapFilePath
+    from app.data_lake.path_policy import LeanMapFilePath
     from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 
     if cancel_requested is not None and cancel_requested():
@@ -772,7 +779,11 @@ async def run_trusted_sample(
         end_trading_date_ms=trading_date_to_calendar_anchor_ms(request.end_date),
         data_types=["trade", "quote"],
         price_adjustment_mode=polygon_mode_for(request.data_policy.adjusted),
-        include_factor_files=(root / LeanFactorFilePath("usa", request.symbol).relative_path()).is_file(),
+        # Always ask for the factor file (#2480 review): the mount refuses a
+        # run whose factor file is absent, so the repair must BUILD one for a
+        # symbol that entered the lake through a capture that skipped factor
+        # files — not merely refresh a file that already exists.
+        include_factor_files=True,
         include_map_files=(root / LeanMapFilePath("usa", request.symbol).relative_path()).is_file(),
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
     )

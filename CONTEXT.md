@@ -530,7 +530,11 @@ so they survive a broker change.
 - **Cash bound** — the envelope rule that a new ENTER's notional plus every
   working ENTER's unfilled notional may not exceed broker-observed cash. It
   reads cash, not buying power, so it is the same on a cash account and a
-  margin account. _Avoid_: no margin, 1× leverage, cash-only
+  margin account. The notional is priced at the decision price — an estimate
+  for a regular-session market entry, whose fill can be above it, and a true
+  bound for an extended-hours limit at its limit price; a recorded fill
+  reserves its actual cost (fill price × quantity plus reported fees) until
+  the next broker read supersedes it. _Avoid_: no margin, 1× leverage, cash-only
 - **Envelope refusal** — the per-order refusal of one ENTER that would breach
   the cash bound. No other state changes.
 - **Loss hold** — the account-wide state entered when account day P&L breaches the
