@@ -419,6 +419,11 @@ class ClerkSqliteRepositoryReadApi:
                 for order in reads.external_orders(self._conn)
             ]
 
+    def external_order_resources(self: ClerkSqliteRepository) -> tuple[ExternalOrderResource, ...]:
+        """Retained external evidence, including current lifecycle proof for reconciliation."""
+        with self._write_lock:
+            return tuple(reads.external_orders(self._conn))
+
     def external_orders_observed_since(self: ClerkSqliteRepository, *, since_ms: int) -> int:
         """Count foreign orders observed at or after ``since_ms`` (ADR 0059 D4)."""
         with self._write_lock:

@@ -315,3 +315,90 @@ def test_external_fill_coverage_has_no_quantity_epsilon(tmp_path: Path, recorded
             repo.account_budget(cash=1000, seen_before_ms=NOON)
     finally:
         repo.close()
+
+
+@pytest.mark.parametrize("filled", [0, 3])
+async def test_reconcile_refreshes_old_reviewed_gtc_cancellation_and_retains_exact_debit(tmp_path: Path, filled: int) -> None:
+    from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+    from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
+    from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+    from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        external = observe_external_order(repo, order=_external_order())
+        acknowledge_external_order(repo, external_order_id=external.external_order_id, operator="owner")
+        with pytest.raises(BudgetUnavailable, match="external order"):
+            repo.account_budget(cash=1000, seen_before_ms=NOON)
+        terminal = _external_order(state="canceled", filled=filled, observed_at=NOON)
+        trade = _FakeTrade(lookup_result=terminal)
+        # This GTC was submitted yesterday. It is absent from today's open
+        # snapshot; exact identity lookup must supply its cancellation proof.
+        await reconcile_account(repo, read=_FakeRead(), trade=trade, pricing=UNPRICEABLE_RECOVERY,
+            trigger="OPERATOR_RECONCILE_NOW")
+        assert trade.lookup_calls == ["console-order"]
+        assert repo.external_order(external.external_order_id).broker_state == "canceled"
+        if filled:
+            with pytest.raises(BudgetUnavailable, match="Reconcile account executions"):
+                repo.account_budget(cash=1000, seen_before_ms=NOON)
+            record_fee_evidence(repo, [_external_fill(quantity=filled)], checked_at_ms=NOON, history_complete=True)
+        budget = repo.account_budget(cash=1000, seen_before_ms=NOON)
+        assert budget.order_claims == Decimal(filled * 100)
+        # Confirmed terminal evidence is retained; a second pass needs no
+        # lookup and cannot forget the debit before a newer cash observation.
+        await reconcile_account(repo, read=_FakeRead(), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+        assert trade.lookup_calls == ["console-order"]
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON) == budget
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("answer", ["absent", "unavailable", "wrong_identity"])
+async def test_external_refresh_requires_positive_matching_order_proof(tmp_path: Path, answer: str) -> None:
+    from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+    from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
+    from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+    from app.broker.contract.errors import BrokerUnavailable
+    from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade
+
+    repo = _new_budget_repo(tmp_path)
+    try:
+        external = observe_external_order(repo, order=_external_order())
+        acknowledge_external_order(repo, external_order_id=external.external_order_id, operator="owner")
+        trade = _FakeTrade(lookup_absent=answer == "absent",
+            lookup_error=BrokerUnavailable("offline") if answer == "unavailable" else None,
+            lookup_result=_external_order(state="canceled").model_copy(update={"order_id": "other"}))
+        await reconcile_account(repo, read=_FakeRead(), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+        assert trade.lookup_calls == ["console-order"]
+        assert repo.external_order(external.external_order_id).broker_state == "accepted"
+        with pytest.raises(BudgetUnavailable, match="external order"):
+            repo.account_budget(cash=1000, seen_before_ms=NOON)
+        retry = _FakeTrade(lookup_result=_external_order(state="canceled", observed_at=NOON))
+        await reconcile_account(repo, read=_FakeRead(), trade=retry, pricing=UNPRICEABLE_RECOVERY)
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON).available == 1000
+    finally:
+        repo.close()
+
+
+async def test_external_lookup_cannot_overwrite_a_fill_arriving_during_its_read(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+    from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+    from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade
+
+    repo = _new_budget_repo(tmp_path)
+
+    class FillDuringLookup(_FakeTrade):
+        async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+            observe_external_order(repo, order=_external_order(state="filled", filled=6, observed_at=NOON))
+            return await super().get_order_by_client_order_id(client_order_id)
+
+    try:
+        external = observe_external_order(repo, order=_external_order())
+        trade = FillDuringLookup(lookup_result=_external_order(state="canceled", observed_at=NOON))
+        await reconcile_account(repo, read=_FakeRead(), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+        assert repo.external_order(external.external_order_id).broker_state == "filled"
+        record_fee_evidence(repo, [_external_fill()], checked_at_ms=NOON, history_complete=True)
+        assert repo.account_budget(cash=1000, seen_before_ms=NOON).order_claims == 600
+    finally:
+        repo.close()

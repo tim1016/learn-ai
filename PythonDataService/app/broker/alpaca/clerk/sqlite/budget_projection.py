@@ -65,8 +65,8 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
     for order in external_orders(conn):
         if order.broker_state not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES or order.filled_quantity is None:
             raise BudgetUnavailable(
-                "A reviewed external order still has a working or unknown cash obligation. "
-                "Resolve it at Alpaca and refresh account order evidence before assigning or spending a budget."
+                "An external order still has a working or unknown cash obligation. "
+                "Resolve it at Alpaca, then choose Reconcile now before assigning or spending a budget."
             )
         if quantities.get(order.broker_order_id, ZERO) != normalize_money(order.filled_quantity):
             raise BudgetUnavailable(
