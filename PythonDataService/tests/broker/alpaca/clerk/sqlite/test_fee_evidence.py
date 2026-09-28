@@ -149,6 +149,9 @@ def test_truncated_and_stale_reads_fail_closed_instead_of_zero(day_pnl_repo) -> 
     assert repo.fee_attribution(now_ms=NOON).known
     stale = repo.fee_attribution(now_ms=NOON + FEE_EVIDENCE_MAX_AGE_MS + 1)
     assert not stale.known and any("stale" in reason for reason in stale.unresolved)
+    # No control performs "Refresh account evidence"; the reason names the cause only.
+    assert "Account fee evidence is missing or stale." in stale.unresolved
+    assert not any("Refresh" in reason for reason in stale.unresolved)
 
 
 def test_fee_projection_is_rebuilt_from_original_evidence(tmp_path) -> None:

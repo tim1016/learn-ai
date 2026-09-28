@@ -453,7 +453,7 @@ def custody_fee_attribution(
         or evidence_checked_at_ms is None
         or not 0 <= now_ms - evidence_checked_at_ms <= FEE_EVIDENCE_MAX_AGE_MS
     ):
-        unresolved.append("Account fee evidence is missing or stale. Refresh account evidence before deploying.")
+        unresolved.append("Account fee evidence is missing or stale.")
     for day in sorted(
         set(grouped)
         | {day for day, rows in by_date.items() if any(row.activity_type == "FEE" for row in rows.values())}
