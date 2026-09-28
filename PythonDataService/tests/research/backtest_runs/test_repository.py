@@ -76,6 +76,7 @@ async def test_an_engine_run_survives_a_write_then_read_round_trip_with_every_fi
     assert json.loads(run.validation_analytics_json) == json.loads(payload["validation_analytics_json"])
     assert json.loads(run.insight_summary_json) == {"total": 1}
     assert json.loads(run.metric_documentation_json) == json.loads(payload["metric_documentation_json"])
+    assert json.loads(run.evidence_provenance_json)["daily_return_convention"] == "initial_capital_first_session/v1"
     assert run.parity_group_id is None and run.notes is None
     assert run.trades_truncated is False and run.parity_verdicts == ()
     [persisted] = run.trades

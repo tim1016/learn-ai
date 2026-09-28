@@ -8,9 +8,6 @@ stale POST is a 409.
 
 Lifecycle semantics (§12) drive the enablement:
 
-- ``resume`` — creates a new run after the runner's typed Resume admission.
-- ``pause`` — holds bar evaluation on the current live run.
-- ``continue`` — releases a paused live run without changing its run id.
 - ``stop``   — running bot; stops signals + cancels working entries, exposure
                untouched.
 - ``flatten_stop`` — running/exposed bot, only when the broker supports flatten.
@@ -31,7 +28,6 @@ from app.broker.v2panel.action_policy import ActionGuardContext, build_actions_f
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ClerkCard, PanelAction
-from app.schemas.run_admission import RunAdmissionDecision
 
 
 def strategy_runtime_missing(strategy_key: str) -> bool:
@@ -56,7 +52,6 @@ def build_actions(
     working_order_count: int,
     account_working_order_count: int,
     account_expected_exposure: dict[str, float],
-    resume_admission: RunAdmissionDecision | None,
     symbol_unresolvable: bool = False,
 ) -> list[PanelAction]:
     """Build the closed presented-action set for one bot (§11, §12).
@@ -74,13 +69,11 @@ def build_actions(
     ctx = ActionGuardContext(
         running=status.running,
         phase=status.phase,
-        desired_state=status.desired_state,
         hold_active=clerk.hold_active,
         freeze_active=clerk.freeze_active,
         reconciliation_verdict=clerk.reconciliation_verdict,
         outstanding_intents=clerk.outstanding_intents,
         has_exposure=has_exposure,
-        resume_admission=resume_admission,
         flatten_supported=flatten_supported,
         account_id=account_id,
         strategy_instance_id=status.strategy_instance_id,
@@ -102,10 +95,7 @@ def build_roster_action(
     exposure: dict[str, float],
     account_id: str,
 ) -> PanelAction | None:
-    """Present only Stop in the roster; exact Resume belongs in the bot panel.
-
-    Resume requires request-specific runner and Clerk admission. The catalog
-    intentionally does not approximate that decision across every row.
+    """Present Stop in the roster; new trading goes through Deploy.
     """
     if status.phase == "RETIRED":
         return None
@@ -117,13 +107,11 @@ def build_roster_action(
         ctx = ActionGuardContext(
             running=True,
             phase=status.phase,
-            desired_state=status.desired_state,
             hold_active=True,
             freeze_active=True,
             reconciliation_verdict=None,
             outstanding_intents=0,
             has_exposure=False,
-            resume_admission=None,
             flatten_supported=flatten_supported,
             account_id=account_id,
             strategy_instance_id=status.strategy_instance_id,
@@ -147,7 +135,6 @@ def build_roster_action(
             working_order_count=0,
             account_working_order_count=0,
             account_expected_exposure={},
-            resume_admission=None,
         )
     return next(
         (action for action in actions if action.action_id == "stop"),

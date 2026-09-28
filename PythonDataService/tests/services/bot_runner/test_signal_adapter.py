@@ -1,5 +1,5 @@
 """Live signal-adapter tests: ``strategy_evaluations()`` and
-``PauseAwareFeed`` driven directly, without a ``BotTaskRegistry``.
+``DecisionFenceFeed`` driven directly, without a ``BotTaskRegistry``.
 
 Split from ``tests/services/test_bot_runner.py`` (issue #1737).
 """
@@ -21,7 +21,7 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     alpaca_v1_action_plan,
 )
-from app.services.bot_runtime import PauseAwareFeed
+from app.services.bot_runtime import DecisionFenceFeed
 from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
 from tests._helpers.bot_runner.custody import _T0
 from tests._helpers.bot_runner.doubles import _FakeFeed
@@ -299,7 +299,7 @@ async def test_pause_aware_feed_progresses_bars_in_observe_only_mode() -> None:
     source = _QueueFeed()
     gate = asyncio.Event()
     gate.set()
-    feed = PauseAwareFeed(source, gate)
+    feed = DecisionFenceFeed(source, gate)
     stream = feed.stream_bars("SPY")
 
     await source.queue.put(_bar(0))
@@ -317,8 +317,8 @@ async def test_pause_aware_feed_progresses_bars_in_observe_only_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pause_mode_is_captured_at_the_decision_bar_not_sampled_after_continue() -> None:
-    """A Continue after the raw close cannot release its paused EMA candidate."""
+async def test_stop_fence_mode_is_captured_at_the_decision_bar() -> None:
+    """A changed gate after a raw close cannot release an already fenced candidate."""
 
     gate = asyncio.Event()
     gate.set()
@@ -339,7 +339,7 @@ async def test_pause_mode_is_captured_at_the_decision_bar_not_sampled_after_cont
                 yield bar
 
     binding = BrokerBotBinding(
-        strategy_instance_id="ema-pause-mode-test",
+        strategy_instance_id="ema-stop-fence-test",
         strategy_key="ema_crossover_signal",
         broker="alpaca",
         symbol="SPY",
@@ -348,20 +348,20 @@ async def test_pause_mode_is_captured_at_the_decision_bar_not_sampled_after_cont
         run_id="run-001",
         created_at_ms=_T0,
     )
-    paused_enter: list[StrategyEvaluation] = []
+    fenced_enter: list[StrategyEvaluation] = []
     decided_intents: list[SignalIntentKind] = []
-    feed = PauseAwareFeed(
+    feed = DecisionFenceFeed(
         _ModeBoundaryFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
         gate,
     )
 
     async for evaluation in strategy_evaluations(binding, feed):
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY and evaluation.intents:
-            paused_enter.append(evaluation)
+            fenced_enter.append(evaluation)
         elif evaluation.intents:
             decided_intents.extend(intent.kind for intent in evaluation.intents)
         if evaluation.settle_stage is not None:
             evaluation.settle_stage(Settlement.COMMIT)
 
-    assert [evaluation.intents[0].kind for evaluation in paused_enter] == [SignalIntentKind.ENTER]
+    assert [evaluation.intents[0].kind for evaluation in fenced_enter] == [SignalIntentKind.ENTER]
     assert decided_intents == []

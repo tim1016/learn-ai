@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
+from app.schemas.deployment_budget import DeploymentBudgetInput
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
@@ -137,6 +138,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     # see `_validated_catalog_strategy_key` for exactly what "defined" means.
     strategy_key: str = Field(min_length=1, max_length=128)
     exit_terms: ExitTermsInput
+    budget: DeploymentBudgetInput | None = None
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"
@@ -192,6 +194,15 @@ class AlpacaPaperDeployEligibility(BaseModel):
     next_action: str
 
 
+class QualifiedDeployConfiguration(BaseModel):
+    """An exact corpus-covered preset, authored from the program's registry contract."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    symbol: str
+    parameters: dict[str, JsonValue]
+    explanation: str
+
+
 class AlpacaPaperDeployStrategy(BaseModel):
     """Trader-facing option for one accepted, evidence-only, or blocked strategy.
 
@@ -224,6 +235,7 @@ class AlpacaPaperDeployStrategy(BaseModel):
     strategy_key: str
     label: str
     explanation: str
+    qualified_configuration: QualifiedDeployConfiguration | None = None
     validation_case_symbol: str
     # When true, these are the exact non-symbol values accepted by the
     # Golden Validation review. They seed the deploy ticket and are enforced
@@ -386,12 +398,9 @@ class BotStatusView(BaseModel):
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
-    carryover_account_policy_enabled: bool = False
-    carryover_checkpoint_exposure: dict[str, float] = Field(default_factory=dict)
-    carryover_checkpoint_config_matches: bool = False
     running: bool
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
-    desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
+    desired_state: Literal["RUNNING", "STOPPED"]
     active_run_id: str | None
     duty_outcome: BotDutyOutcomeView | None
     binding_created_at_ms: int

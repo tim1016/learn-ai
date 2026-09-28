@@ -20,7 +20,6 @@ from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
-from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
     ActionId,
     copy_for,
@@ -48,7 +47,6 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.run_admission import (
     ProgramBuildAdmissionFact,
-    RunAdmissionDecision,
     proven_build_copy,
 )
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -92,7 +90,7 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     ),
     "STOP_REQUIRES_FLATTEN": (
         "Stopped; flatten required",
-        "The runtime is stopped, but carried exposure was not approved. Use the Clerk flatten action before Resume.",
+        "The runtime is stopped with attributed exposure. Use Flatten to resolve that exposure.",
     ),
     "STOPPED_CUSTODY_UNPROVABLE": (
         "Stopped; custody unprovable",
@@ -104,7 +102,7 @@ _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
         "non-positive price, a high below its low, a print outside the bar's range, or a "
         "negative volume -- so the run was stopped rather than allowed to decide on it. "
         "This is a data-quality refusal, not a market verdict: nothing about the strategy "
-        "changed. Check IB Gateway's connection and market-data farm health, then resume "
+        "changed. Check IB Gateway's connection and market-data farm health, then deploy again "
         "once its bars arrive clean.",
     ),
     **WARMUP_REFUSAL_COPY,
@@ -171,35 +169,12 @@ def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
 def _build_health_card(
     status: BotStatusView,
     *,
-    clerk: ClerkCard,
-    exposure: dict[str, float],
     last_decision_at_ms: int | None,
     last_bar_at_ms: int | None,
     now_ms: int,
-    resume_admission: RunAdmissionDecision | None,
 ) -> BotHealthCard:
     desired_state = status.desired_state
     decision_stale = last_decision_at_ms is not None and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
-    can_resume = resume_admission is not None and resume_admission.allowed
-    has_exposure = any(position_quantity_is_nonzero(quantity) for quantity in exposure.values())
-    if can_resume and has_exposure:
-        resume_label = "Resume custody proof ready"
-        resume_explanation = (
-            "The durable checkpoint, current Clerk attribution, and latest "
-            "clean reconciliation agree. Resume will obtain one fresh broker proof."
-        )
-    elif can_resume:
-        resume_label = "Flat Resume ready"
-        resume_explanation = "The stopped instance is flat and may resume as a newly identified run."
-    elif status.running:
-        resume_label = "Resume not applicable"
-        resume_explanation = "This strategy instance already has a live run."
-    elif resume_admission is not None:
-        resume_label = "Resume blocked"
-        resume_explanation = resume_admission.explanation
-    else:
-        resume_label = "Resume unknown"
-        resume_explanation = "The backend could not obtain one current Resume admission decision."
     return BotHealthCard(
         strategy_instance_id=status.strategy_instance_id,
         phase=status.phase,
@@ -211,10 +186,6 @@ def _build_health_card(
         last_decision_at_ms=last_decision_at_ms,
         decision_stale=decision_stale,
         last_bar_at_ms=last_bar_at_ms,
-        resume_eligible=can_resume,
-        resume_label=resume_label,
-        resume_explanation=resume_explanation,
-        carryover_checkpoint_exposure=status.carryover_checkpoint_exposure,
     )
 
 
@@ -619,9 +590,6 @@ def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[Readiness
     """Project present-tense enforcement checks from the canonical action guards."""
     checks: list[ReadinessCheckView] = []
     authorities = {
-        "resume": "Bot lifecycle registry + Clerk custody proof",
-        "pause": "Bot lifecycle registry",
-        "continue": "Bot lifecycle registry",
         "stop": "Bot lifecycle registry",
         "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
         "reconcile_now": "Alpaca Clerk reconciliation sweep",
@@ -655,12 +623,10 @@ def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[Readiness
 def _mission_verdict(
     status: BotStatusView,
     clerk: ClerkCard,
-    actions: list[PanelAction],
     *,
     channel_health: ChannelHealthEvaluation,
     now_ms: int,
 ) -> MissionVerdictView:
-    resume = next((action for action in actions if action.action_id == "resume"), None)
     if status.phase == "RETIRED":
         return MissionVerdictView(
             state="retired",
@@ -696,14 +662,6 @@ def _mission_verdict(
             evaluated_at_ms=now_ms,
         )
     if status.running:
-        if status.desired_state == "PAUSED":
-            return MissionVerdictView(
-                state="ready",
-                label="Paused",
-                explanation="The current run is live, but bar evaluation is held.",
-                next_action="Use Continue to release this same run without changing its run ID.",
-                evaluated_at_ms=now_ms,
-            )
         return MissionVerdictView(
             state="working",
             label="Working",
@@ -711,36 +669,23 @@ def _mission_verdict(
             next_action="Monitor decisions, fills, and custody evidence.",
             evaluated_at_ms=now_ms,
         )
-    if resume is not None and resume.enabled:
-        return MissionVerdictView(
-            state="ready",
-            label="Ready to resume",
-            explanation="The shared backend admission currently allows a new run.",
-            next_action="Resume the bot when the execution session is intended to run.",
-            evaluated_at_ms=now_ms,
-        )
-    blocker = resume.blockers[0] if resume is not None and resume.blockers else None
     return MissionVerdictView(
         state="off_duty",
         label="Off duty",
-        explanation=(blocker.headline if blocker is not None else "The bot is not evaluating bars."),
-        next_action=(blocker.detail if blocker is not None else "Review readiness before Resume."),
+        explanation="The bot is not evaluating bars. Remaining orders and exposure stay with this deployment.",
+        next_action="Use Deploy again to review a fresh deployment, or Flatten remaining exposure.",
         evaluated_at_ms=now_ms,
     )
 
 
-def _lifecycle_candidate_action_id(health: BotHealthCard) -> ActionId:
+def _lifecycle_candidate_action_id(health: BotHealthCard) -> ActionId | None:
     """The one Trader-visible lifecycle action id implied by ``health`` alone.
 
     Mirrors the pre-#1665 frontend ``primaryLifecycleAction`` state machine,
     narrowed to the closed ``TRADER_LIFECYCLE_ACTION_IDS`` set. Whether that
     action is actually presented for this bot is checked by the caller.
     """
-    if not health.running:
-        return "resume"
-    if health.desired_state == "PAUSED":
-        return "continue"
-    return "stop"
+    return "stop" if health.running else None
 
 
 def select_primary_action_by_lens(
@@ -752,7 +697,7 @@ def select_primary_action_by_lens(
     """Author the one backend-selected banner action for each lens (#1665).
 
     Trader is always the Trader-visible lifecycle action implied by
-    ``health`` (resume/continue/stop), and only when that action is currently
+    ``health`` (Stop for a running deployment), and only when that action is currently
     presented — a missing action fails closed to ``None`` rather than
     guessing. Operator prefers a SQLite recovery capability marked
     ``primary`` (``recovery_primary_action_id``); that is the one precedence
@@ -794,7 +739,6 @@ def build_panel(
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
-    resume_admission: RunAdmissionDecision | None = None,
     sealed_program: SealedBotProgram | None = None,
     program_build: ProgramBuildAdmissionFact,
     dry_run_activity: list[DryRunActivity] | None = None,
@@ -867,12 +811,9 @@ def build_panel(
     clerk = build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(
         status,
-        clerk=clerk,
-        exposure=exposure,
         last_decision_at_ms=health_last_decision_at_ms,
         last_bar_at_ms=health_last_bar_at_ms,
         now_ms=now_ms,
-        resume_admission=resume_admission,
     )
 
     revision = compute_revision(
@@ -896,7 +837,6 @@ def build_panel(
         working_order_count=len(working_orders),
         account_working_order_count=_account_working_order_count(entries),
         account_expected_exposure={},
-        resume_admission=resume_admission,
         symbol_unresolvable=symbol_unresolvable,
     )
 
@@ -927,7 +867,6 @@ def build_panel(
         mode=status.mode,
         sealed_program=sealed_program,
         program_build=program_build,
-        resume_admission=resume_admission,
         updated_at_ms=now_ms,
         revision=revision,
         market_pulse=market_pulse,
@@ -946,7 +885,6 @@ def build_panel(
         mission_verdict=_mission_verdict(
             status,
             clerk,
-            actions,
             channel_health=channel_health,
             now_ms=now_ms,
         ),

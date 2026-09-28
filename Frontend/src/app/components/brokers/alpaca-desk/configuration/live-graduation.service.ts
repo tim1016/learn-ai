@@ -9,6 +9,7 @@ import { commandBodyOf, withCommand, type ResourceTarget } from '../../../../fle
 export type LiveGraduationStatus = components['schemas']['LiveGraduationStatus'];
 export type LiveGraduationPlan = components['schemas']['LiveGraduationPlanView'];
 export type LiveGraduationOutcome = components['schemas']['LiveGraduationApplyOutcome'];
+export type ShadowActivationOutcome = components['schemas']['ShadowActivationOutcome'];
 
 @Injectable({ providedIn: 'root' })
 export class LiveGraduationService {
@@ -24,6 +25,13 @@ export class LiveGraduationService {
         }),
       ),
     );
+  }
+
+  activateShadow(target: ResourceTarget): Promise<ShadowActivationOutcome> {
+    const command = withCommand(target, 'custody_command', target.idempotencyKey);
+    return firstValueFrom(this.http.post<ShadowActivationOutcome>(
+      operationUrl('shadow_activate', command), commandBodyOf(command, {}),
+    ));
   }
 
   prepare(target: ResourceTarget): Promise<LiveGraduationPlan> {

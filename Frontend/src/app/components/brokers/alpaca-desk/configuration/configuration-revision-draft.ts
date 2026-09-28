@@ -1,12 +1,12 @@
 // The editable shape of one broker-configuration revision, and the rules for
 // turning it back into the contract's request body.
 //
-// The draft is **flat** — the six live-envelope values sit beside the slot and
+// The draft is **flat** — the four live-envelope values sit beside the slot and
 // the endpoint mode rather than nested — because Signal Forms binds a field
 // tree, and a nullable nested object would make every envelope input reach
 // through a branch that is `null` for a paper revision.
 //
-// The six envelope values start as `null`, never as a number. ADR 0059
+// The four envelope values start as `null`, never as a number. ADR 0059
 // Decision 4 forbids a default for any of them, and a pre-filled form is a
 // default with a nicer name: it would put a limit nobody chose in front of an
 // operator about to bound real money. An empty field is refused by
@@ -30,20 +30,16 @@ export interface RevisionDraft {
   endpoint_mode: BrokerEndpointMode;
   loss_fraction: number | null;
   loss_usd: number | null;
-  shadow_sessions: number | null;
-  arming_max_sessions: number | null;
   xh_entry_bps: number | null;
   xh_exit_bps: number | null;
   exit_band_multiple: number | null;
   exit_spread_cap_bps: number | null;
 }
 
-/** The six envelope keys, in the order the form renders them. */
+/** The four envelope keys, in the order the form renders them. */
 export const ENVELOPE_KEYS = [
   'loss_fraction',
   'loss_usd',
-  'shadow_sessions',
-  'arming_max_sessions',
   'xh_entry_bps',
   'xh_exit_bps',
 ] as const;
@@ -53,8 +49,6 @@ export type EnvelopeKey = (typeof ENVELOPE_KEYS)[number];
 export const ENVELOPE_LABELS: Readonly<Record<EnvelopeKey, string>> = {
   loss_fraction: 'Daily loss fraction',
   loss_usd: 'Daily loss cap (USD)',
-  shadow_sessions: 'Shadow sessions required',
-  arming_max_sessions: 'Sessions one arming covers',
   xh_entry_bps: 'Extended-hours entry offset (bps)',
   xh_exit_bps: 'Extended-hours exit offset (bps) — also prices automatic after-hours sell-offs and covers',
 };
@@ -66,8 +60,6 @@ export function emptyDraft(credentialSlot: string): RevisionDraft {
     endpoint_mode: 'paper',
     loss_fraction: null,
     loss_usd: null,
-    shadow_sessions: null,
-    arming_max_sessions: null,
     xh_entry_bps: null,
     xh_exit_bps: null,
     exit_band_multiple: null,
@@ -88,8 +80,6 @@ export function draftFromRevision(revision: BrokerProfileRevision): RevisionDraf
     endpoint_mode: revision.endpoint_mode,
     loss_fraction: envelope?.loss_fraction ?? null,
     loss_usd: envelope?.loss_usd ?? null,
-    shadow_sessions: envelope?.shadow_sessions ?? null,
-    arming_max_sessions: envelope?.arming_max_sessions ?? null,
     xh_entry_bps: offsets?.xh_entry_bps ?? null,
     xh_exit_bps: revision.default_exit_terms?.exit_allowance_bps ?? offsets?.xh_exit_bps ?? null,
     exit_band_multiple: revision.default_exit_terms?.band_multiple ?? null,
@@ -146,13 +136,6 @@ function paperOffsetProblems(draft: RevisionDraft): readonly (string | null)[] {
   ];
 }
 
-function wholeAtLeastOne(value: number | null, label: string): string | null {
-  if (value === null || !Number.isFinite(value)) return `${label} needs a number.`;
-  if (!Number.isInteger(value)) return `${label} must be a whole number.`;
-  if (value < 1) return `${label} must be at least 1.`;
-  return null;
-}
-
 /**
  * Whether the slot this draft names can be saved at all.
  *
@@ -195,8 +178,6 @@ export function draftProblems(
   return [
     betweenExclusive(draft.loss_fraction, ENVELOPE_LABELS.loss_fraction, 0, 1),
     wholeCentLossCap(draft.loss_usd),
-    wholeAtLeastOne(draft.shadow_sessions, ENVELOPE_LABELS.shadow_sessions),
-    wholeAtLeastOne(draft.arming_max_sessions, ENVELOPE_LABELS.arming_max_sessions),
     offsetBelow(draft.xh_entry_bps, ENVELOPE_LABELS.xh_entry_bps, 10_000),
     offsetBelow(draft.xh_exit_bps, ENVELOPE_LABELS.xh_exit_bps, 10_000),
   ].filter((problem): problem is string => problem !== null);
@@ -220,16 +201,12 @@ export function toRevisionContent(draft: RevisionDraft): RevisionContent {
   const {
     loss_fraction,
     loss_usd,
-    shadow_sessions,
-    arming_max_sessions,
     xh_entry_bps,
     xh_exit_bps,
   } = draft;
   if (
     loss_fraction === null
     || loss_usd === null
-    || shadow_sessions === null
-    || arming_max_sessions === null
     || xh_entry_bps === null
     || xh_exit_bps === null
   ) {
@@ -245,8 +222,6 @@ export function toRevisionContent(draft: RevisionDraft): RevisionContent {
     live_envelope: {
       loss_fraction,
       loss_usd,
-      shadow_sessions,
-      arming_max_sessions,
       xh_entry_bps,
       xh_exit_bps,
     },

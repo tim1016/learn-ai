@@ -914,11 +914,21 @@ class SourceBarLedger:
             ).fetchone()
         return None if row is None else _retained_row(row)
 
-    def latest_for_symbol(self, symbol: str) -> RetainedSourceBar | None:
-        """Return the newest durable bar for a symbol across sealed providers."""
+    def latest_for_symbol(
+        self, symbol: str, *, provider: str | None = None, at_or_before_ms: int | None = None,
+    ) -> RetainedSourceBar | None:
+        """Newest retained mark, optionally at a proven historical cutoff/provider."""
+        predicates, values = ["b.symbol = ?"], [symbol]
+        if provider is not None:
+            predicates.append("b.provider = ?")
+            values.append(provider)
+        if at_or_before_ms is not None:
+            predicates.append("b.end_ms <= ?")
+            values.append(at_or_before_ms)
+        order = "b.seq DESC" if provider is None and at_or_before_ms is None else "b.end_ms DESC, b.seq DESC"
         with self._lock:
             row = self._conn.execute(
-                f"{_BARS_WITH_JOURNAL} WHERE b.symbol = ? ORDER BY b.seq DESC LIMIT 1", (symbol,)
+                f"{_BARS_WITH_JOURNAL} WHERE {' AND '.join(predicates)} ORDER BY {order} LIMIT 1", values,
             ).fetchone()
         return None if row is None else _retained_row(row)
 

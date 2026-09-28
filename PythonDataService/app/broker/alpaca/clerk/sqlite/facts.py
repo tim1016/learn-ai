@@ -196,9 +196,15 @@ class EnterAcceptedFacts:
     # already-dumped, already-validated leg is the one shape that keeps every
     # facts dataclass here going through the same to/from_facts_json pair.
     leg: dict[str, Any]
+    cash_reference_price: str | None = None
+    fee_provision_cents: int = 0
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        facts = asdict(self)
+        if self.cash_reference_price is None:
+            facts.pop("cash_reference_price")
+            facts.pop("fee_provision_cents")
+        return canonicalize(facts)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> EnterAcceptedFacts:
@@ -540,9 +546,17 @@ class ExternalOrderObservedFacts:
     filled_avg_price: float | None
     observed_at_ms: int
     evidence_refs: list[str]
+    # Earlier observations did not retain this proof. Missing means unknown,
+    # never that an acknowledged external order stopped claiming cash.
+    broker_state: str | None = None
+    filled_quantity: float | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        payload = asdict(self)
+        for key in ("broker_state", "filled_quantity"):
+            if payload[key] is None:
+                payload.pop(key)
+        return canonicalize(payload)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExternalOrderObservedFacts:
@@ -603,6 +617,20 @@ class UncertaintyRaisedFacts:
 
 
 @dataclass(frozen=True)
+class LossHoldClearBasis:
+    original_session_start_ms: int
+    original_policy_revision: int | None
+    original_baseline_usd: float
+    original_loss_limit_usd: float
+    current_session_start_ms: int
+    current_policy_revision: int | None
+    current_loss_limit_usd: float
+    current_day_pnl_usd: float
+    observed_at_ms: int
+    session_reset: bool
+
+
+@dataclass(frozen=True)
 class UncertaintyResolvedFacts:
     """``UNCERTAINTY_RESOLVED`` (#1380): which uncertainty resolved, and why —
     ``uncertainty_id`` is not an outer transition column (unlike
@@ -612,13 +640,20 @@ class UncertaintyResolvedFacts:
     uncertainty_id: str
     resolution_kind: str
     evidence_refs: list[str]
+    loss_hold_clear_basis: LossHoldClearBasis | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        payload = asdict(self)
+        if self.loss_hold_clear_basis is None:
+            payload.pop("loss_hold_clear_basis")
+        return canonicalize(payload)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> UncertaintyResolvedFacts:
-        return cls(**json.loads(facts_json))
+        payload = json.loads(facts_json)
+        if payload.get("loss_hold_clear_basis") is not None:
+            payload["loss_hold_clear_basis"] = LossHoldClearBasis(**payload["loss_hold_clear_basis"])
+        return cls(**payload)
 
 
 @dataclass(frozen=True)

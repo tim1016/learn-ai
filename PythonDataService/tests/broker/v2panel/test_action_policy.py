@@ -22,13 +22,12 @@ def _ctx(*, running: bool, variant: int) -> ActionGuardContext:
     return ActionGuardContext(
         running=running,
         phase=f"phase-{variant}",
-        desired_state=f"state-{variant}",
         hold_active=bool(variant % 2),
         freeze_active=bool(variant % 2),
         reconciliation_verdict=f"verdict-{variant}",
         outstanding_intents=variant,
         has_exposure=bool(variant % 2),
-        resume_admission=None,
+
         flatten_supported=bool(variant % 2),
         account_id=f"acct-{variant}",
         strategy_instance_id=f"sid-{variant}",

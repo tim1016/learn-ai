@@ -442,8 +442,9 @@ EXTENDED_HOURS_ALLOWANCE_UNSET = LegRefusal(
     next_step=(
         "On the broker configuration page, save a revision of this account's profile with "
         "both extended-hours offsets (entry and exit, in bps) — a paper revision has its "
-        "own two fields, a live revision carries them in its envelope — then stage, apply "
-        "and restart; on a live account, re-arm so the sealed envelope carries them."
+        "own two fields, a live revision carries them in its envelope — then stage and "
+        "apply the revision; on a live account, review a fresh Deploy so the new "
+        "envelope carries them."
     ),
 )
 
@@ -460,9 +461,9 @@ EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
         "below zero, which is not a submittable limit."
     ),
     next_step=(
-        "Lower ALPACA_LIVE_XH_ENTRY_BPS / ALPACA_LIVE_XH_EXIT_BPS and re-arm — on "
-        "the live world the allowance in force is the one sealed at arming, so an "
-        "edit alone changes nothing — or keep this instrument out of "
+        "Lower ALPACA_LIVE_XH_ENTRY_BPS / ALPACA_LIVE_XH_EXIT_BPS and review a fresh "
+        "Deploy — on the live world the allowance in force is the one sealed for the "
+        "deployment, so an edit alone changes nothing — or keep this instrument out of "
         "extended-hours trading."
     ),
 )

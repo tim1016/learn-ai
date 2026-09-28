@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
+    CURRENT_ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_ADMISSION_REASON_CODES,
-    ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_SYNC_INTERVAL_S,
     FILL_VISIBILITY_GRACE_MS,
     OBSERVATION_MAX_AGE_MS,
@@ -59,7 +59,10 @@ def test_from_settings_reads_every_live_value_and_names_the_missing_ones() -> No
         live_xh_entry_bps=10.0,
         live_xh_exit_bps=10.0,
     )
-    assert LiveEnvelopeValues.from_settings(settings) == TEST_ENVELOPE_VALUES
+    current = LiveEnvelopeValues.from_settings(settings)
+    assert current.to_mapping() == {key: value for key, value in TEST_ENVELOPE_VALUES.to_mapping().items() if key not in {"shadow_sessions", "arming_max_sessions"}}
+    assert current.sha != TEST_ENVELOPE_VALUES.sha
+    assert LiveEnvelopeValues(**TEST_ENVELOPE_VALUES.to_mapping()).sha == TEST_ENVELOPE_VALUES.sha
     # Exercise absent values, independent of the developer's live .env.
     paper = AlpacaSettings(
         _env_file=None, api_key_id="k", api_secret_key="s", mode="paper",
@@ -198,4 +201,4 @@ def test_the_admission_reason_codes_are_the_four_envelope_refusals() -> None:
 
 def test_the_envelope_reads_exactly_the_settings_live_mode_requires() -> None:
     """A value added to one list only would turn a valid live boot into a service that fails to start."""
-    assert tuple(name for _, name in ENVELOPE_SETTINGS_FIELDS) == tuple(_LIVE_REQUIRED_FIELDS)
+    assert tuple(name for _, name in CURRENT_ENVELOPE_SETTINGS_FIELDS) == tuple(name for name in _LIVE_REQUIRED_FIELDS if name not in {"live_shadow_sessions", "live_arming_max_sessions"})

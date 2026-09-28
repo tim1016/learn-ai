@@ -68,6 +68,8 @@
     currentSelection()?.effective_account_id;
     as effectiveAccountId
   ) {
+    <app-configuration-budget-authority [clerkId]="clerkId()" [accountId]="effectiveAccountId" />
+    <app-configuration-risk-limits [clerkId]="clerkId()" />
     @if (effectiveEndpointMode() === 'live') {
       <app-live-graduation
         [clerkId]="clerkId()"

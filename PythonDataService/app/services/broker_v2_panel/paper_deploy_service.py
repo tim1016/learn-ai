@@ -23,6 +23,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperExecutionMode,
     AlpacaPaperSizingOption,
     BotStatusView,
+    QualifiedDeployConfiguration,
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
@@ -56,7 +57,7 @@ class ResolvedDeployParams:
     overrides, `symbol` excluded (it is carried on the binding separately).
     Storing the full set, not a sparse diff, means a later change to a
     strategy's registered defaults can never silently alter an
-    already-deployed instance's behavior on Resume.
+    already-deployed instance's sealed behavior.
     """
 
     effective: dict[str, Any]
@@ -236,9 +237,8 @@ def _deploy_view_copy(account: BrokerAccountSnapshot, custody_world: CustodyWorl
             ),
             eligible_headline="This Alpaca live account is eligible for a Clerk-governed live deployment.",
             eligible_explanation=(
-                "The operator may choose Clerk-governed live execution — real-money submission for an "
-                "armed instance only; every ENTER of an unarmed instance is refused — or a "
-                "zero-broker-write Dry Run before launch."
+                "Choose real-money execution with a reviewed budget, typed deployment consent and "
+                "effective account risk limits, or explore the configuration in a private Dry Run."
             ),
         )
     return _DeployViewCopy(
@@ -290,17 +290,16 @@ _RECEIPT_COPY: dict[DeployExecutionMode, _ReceiptCopy] = {
             "The deployment binding is durable; the shadow Clerk synthesizes every fill "
             "against this live account's real reads and submits nothing (ADR 0059 D2)."
         ),
-        next_action="Open the bot panel and verify the first synthesized shadow receipt.",
+        next_action="Open the bot panel and verify the first synthesized fill.",
     ),
     "live": _ReceiptCopy(
         duty="Alpaca live",
         explanation=(
-            "The deployment binding is durable and sealed on the real-money account; every ENTER "
-            "is refused until an operator arms this instance (ADR 0059 D11)."
+            "The deployment binding is durable and sealed on the real-money account; "
+            "new entries remain subject to its budget and the effective account risk limits."
         ),
         next_action=(
-            "Arm the instance with scripts.manage_alpaca_arming plan, then apply; then open the bot "
-            "panel and verify the first Clerk receipt."
+            "Open the bot panel to review its budget, launch status and first Clerk receipt."
         ),
     ),
 }
@@ -317,9 +316,8 @@ _OVERRIDE_RECEIPT_NEXT_ACTION = (
 def _override_receipt_copy(copy: _ReceiptCopy) -> _ReceiptCopy:
     """The override's sentences beside the mode's own — an override records a risk; it never hides what the mode does.
 
-    A live launch under an override must still say that every ENTER is refused
-    until the instance is armed (ADR 0059 D11); a shadow one must still say it
-    submits nothing (D2).
+    A live launch under an override must still name its budget and risk bounds;
+    a shadow one must still say it submits nothing.
     """
     return _ReceiptCopy(
         duty=copy.duty,
@@ -333,9 +331,8 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
 
     Dry Run is offered in every world. The one broker-contacting card is the
     world's own — ``paper``, ``shadow``, or ``live`` on the real-live
-    authority (ADR 0059 D2/D11). The paper and shadow worlds also show the
-    ``live`` card as `planned`, because graduation is the step that follows
-    them; on the live world that card *is* the broker card.
+    authority. Account Configuration owns activation and graduation; Deploy
+    offers only the selected world and its private Dry Run.
     """
     dry_run = AlpacaPaperExecutionMode(
         mode="dry_run",
@@ -367,27 +364,12 @@ def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecu
             label="Live",
             availability="available",
             explanation=(
-                "Orders submit real-money trades through the live Clerk for an armed instance only; "
-                "every ENTER of an unarmed instance is refused until an operator arms it (ADR 0059 D11)."
+                "Orders submit real-money trades through the live Clerk after typed deployment consent. "
+                "Every new entry must fit its budget and the effective account risk limits."
             ),
         ),
     }
-    if broker_mode == "live":
-        return (dry_run, broker_cards["live"])
-    planned_live = AlpacaPaperExecutionMode(
-        mode="live",
-        label="Live",
-        availability="planned",
-        explanation=(
-            "Live is unavailable on a paper account. Select a live account to deploy real-money bots."
-            if broker_mode == "paper" else
-            "Real-money submission follows the live cutover and the arming ceremony; a shadow "
-            "rehearsal is optional (ADR 0059, amended 2026-09-09)."
-            if broker_mode == "shadow"
-            else "Live Alpaca execution is planned but is not connected to an admission or execution path."
-        ),
-    )
-    return (dry_run, broker_cards[broker_mode], planned_live)
+    return (dry_run, broker_cards[broker_mode])
 
 
 def _admissible_modes(
@@ -399,6 +381,26 @@ def _admissible_modes(
     if has_runtime:
         return ("dry_run",)
     return ()
+
+
+def _qualified_configuration(strategy_key: str, requested_symbol: str | None) -> QualifiedDeployConfiguration | None:
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    contract = registration.signal_program_contract if registration is not None else None
+    if contract is None or not contract.validated_symbols:
+        return None
+    symbol = requested_symbol if requested_symbol in contract.validated_symbols else contract.validated_symbols[0]
+    parameters = registration.param_schema.model_validate(
+        {**contract.validated_settings, "symbol": symbol}
+    ).model_dump(mode="json", exclude={"symbol"})
+    return QualifiedDeployConfiguration(
+        symbol=symbol,
+        parameters=parameters,
+        explanation=(
+            "This exact symbol and parameter configuration is covered by the registered qualification corpus. "
+            "Using it changes the form only; current evidence, account access, budget, and safety checks still apply. "
+            "Other configurations can be explored in Dry Run."
+        ),
+    )
 
 
 def _strategy_views(
@@ -421,6 +423,7 @@ def _strategy_views(
     return tuple(
         AlpacaPaperDeployStrategy(
             strategy_key=entry.strategy_key,
+            qualified_configuration=_qualified_configuration(entry.strategy_key, requested_symbol),
             label=entry.label,
             explanation=entry.explanation,
             validation_case_symbol=entry.validation_case_symbol,
@@ -870,7 +873,7 @@ def build_alpaca_paper_deploy_view(
         carryover_explanation=(
             "Carryover is globally disabled until a separately reviewed per-program "
             "replay and restart-safety qualification is complete. STOP with exposure "
-            "requires a Clerk-proven flatten before Resume."
+            "requires a Clerk-proven flatten before fresh deployment."
         ),
         allowed_actions=("deploy",) if eligibility.eligible or dry_run_eligibility.eligible else (),
     )
@@ -891,8 +894,7 @@ def build_alpaca_paper_deploy_receipt(
     row, so a shadow deployment on a live account never inherits paper
     prose (ADR 0059 D2). When an evidence override is present, its sentences
     are prepended/appended to the mode's own rather than replacing them, so
-    an override never hides what the mode itself does (e.g. that every ENTER
-    is refused until a live instance is armed). ``receipt_id``'s prefix is an
+    an override never hides what the mode itself does or its money bounds. ``receipt_id``'s prefix is an
     opaque audit token and is deliberately not world-scoped.
     """
     copy = _RECEIPT_COPY[request.execution_mode]

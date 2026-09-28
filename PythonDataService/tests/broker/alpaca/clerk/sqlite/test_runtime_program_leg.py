@@ -29,7 +29,11 @@ from app.services.market_liveness import compose_market_liveness
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import Clock, now_ms_utc, to_ms_utc
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
-from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    _FakeReadPort,
+    _FakeTradePort,
+    remove_budget_schema_for_legacy_fixture,
+)
 from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
 ACCOUNT_ID = "PA-TEST"
@@ -830,7 +834,7 @@ async def test_new_start_without_explicit_exit_terms_is_refused(tmp_path: Path) 
 
 def test_legacy_upgrade_uses_refreshed_live_seal_once(tmp_path: Path, monkeypatch) -> None:
     from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
-    from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
+    from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
     from tests.broker.alpaca.clerk.test_live_arming import _armed
 
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
@@ -894,6 +898,7 @@ def test_v17_terms_upgrade_and_mirror_rebuild_preserve_the_registration_seal(tmp
     path = repo.db_path
     repo.close()
     with sqlite3.connect(path) as conn:
+        remove_budget_schema_for_legacy_fixture(conn)
         conn.execute("DROP TABLE strategy_exit_terms")
         conn.execute("UPDATE control_meta SET schema_version=17")
     migrated = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path)

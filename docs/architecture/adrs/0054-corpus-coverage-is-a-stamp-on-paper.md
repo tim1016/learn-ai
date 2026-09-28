@@ -1,6 +1,7 @@
 # ADR 0054 — Corpus coverage is a stamp on a proven paper account, and a blocker anywhere else
 
 **Status:** Accepted 2026-09-03
+**Amended 2026-09-27 (#2540 / #2544):** The Paper exception in decision 2 is superseded by the amendment below. Uncovered configurations are permitted only in explicit Dry Run.
 **Provenance:** Operator decision in session, 2026-09-03, after a `grill-me` pass. The triggering refusal: *"This instance resolved parameters the golden qualification corpus does not cover."* raised on every paper deploy whose symbol or parameters differed from the registry's single `validated_settings` point.
 **Decision drivers:** Paper trading is this repo's strategy-testing surface, and testing means many symbols, many strategies, and many parameter variations. The refusal above lumped that ordinary testing activity in with nineteen genuine build-identity failures under one reason code, and the only sanctioned way past it was to move a program's one blessed `validated_settings` point — which re-fingerprints the corpus and permanently strands every bot sealed against the old root (`docs/references/` and the 2026-09-01 EMA move, PR #1915, are the evidence). Live trading does not yet exist: every execution path refuses a non-paper account (`LIVE_ACCOUNT_REFUSED`), so "warn in paper, block in live" is currently "warn everywhere that can run", which must therefore be made a *fact about the account* rather than an assumption.
 **Vocabulary:** `corpus_coverage` — whether the golden corpus behind a program's `golden_trace_root` describes the resolved parameter point and symbol a bot runs. `account_mode` on the Clerk custody snapshot — the environment (`paper` / `live`) the Clerk positively learned from the broker at activation; required, never unknown. Both are defined where operators read them: `docs/broker-clerk-fleet-authority.md` § "Operator vocabulary" (absorbed 2026-09-14 when the Broker V2 operator manual was retired).
@@ -57,3 +58,22 @@ The account environment is the single axis. A toggle mirroring `SIGNAL_PROGRAM_W
 - When a live account exists, nothing needs to change for the gate to block: the Clerk will report `live`, and `PROGRAM_CORPUS_UNCOVERED` refuses. A new custody producer cannot forget to state `account_mode`; the snapshot will not construct without it.
 - Two existing tests that pinned the refusal now pin the stamp, and the `admit_lean_parity_settings_for_start_admission` test helper — whose only purpose was to pass the gate this ADR removes — is deleted with its fourteen call sites. Mechanics tests deploying at the LEAN-parity point now run stamped `UNCOVERED`, which none of them asserted against.
 - `ClerkCustodySnapshot` is on the wire, so the OpenAPI contract and the generated frontend types gain `account_mode` and `corpus_coverage`; the frontend renders the backend-authored `explanation`, no new UI.
+
+## Amendment — qualified configurations before Deploy (2026-09-27)
+
+The owner's #2540 decision replaces the Paper exception: Paper, Shadow and Live
+require corpus coverage of the exact symbol and fully resolved parameters. Only
+explicit Dry Run is exempt. The existing run-admission authority enforces this
+at preview and mutation; no ENTER gate or new qualification system is added.
+Build identity remains separate: an uncovered point can still have proven bytes.
+
+Deploy offers a **Use qualified configuration** action authored from the existing
+registry contract. The complete tuple is visible before the action. Clicking it
+passes the offered instrument through the shared joined-catalog/coverage picker
+and then replaces symbol and parameters together. **Try in Dry Run** changes only
+the execution mode. Neither action changes `validated_settings`, trace roots,
+corpus receipts, the old run, or account permission. Golden acceptance, broker
+access and Manual override cannot convert an uncovered tuple into a covered one.
+
+The old Paper-admitted warning is retired. Historical sealed coverage stamps and
+proof receipts retain their meaning and remain readable.

@@ -116,7 +116,7 @@ def _require(condition: bool, message: str) -> None:
 
 @dataclass(frozen=True)
 class ValidatedLiveEnvelope:
-    """The six values, in the domain and the Python types the seal depends on.
+    """Current monetary bounds, with exact decoding of historical six-field seals.
 
     Construct through :meth:`from_mapping`; the dataclass constructor validates
     too, so no path reaches ``LiveEnvelopeValues`` without passing here.
@@ -124,22 +124,28 @@ class ValidatedLiveEnvelope:
 
     loss_fraction: float
     loss_usd: float
-    shadow_sessions: int
-    arming_max_sessions: int
     xh_entry_bps: float
     xh_exit_bps: float
+    # Read-only legacy fields: retained solely to reconstruct historical hashes.
+    shadow_sessions: int | None = None
+    arming_max_sessions: int | None = None
 
     def __post_init__(self) -> None:
         for field in FLOAT_FIELDS:
             object.__setattr__(
                 self, field, _as_float(field, getattr(self, field), refusal=InvalidLiveEnvelope)
             )
+        _require(
+            (self.shadow_sessions is None) == (self.arming_max_sessions is None),
+            "A historical envelope carries both session counts or neither.",
+        )
         for field in INT_FIELDS:
-            object.__setattr__(self, field, _as_int(field, getattr(self, field)))
+            value = getattr(self, field)
+            if value is not None:
+                object.__setattr__(self, field, _as_int(field, value))
+                _require(value >= 1, f"{field} must be at least 1.")
         _require(0 < self.loss_fraction < 1, "loss_fraction must be greater than 0 and less than 1.")
         _require(self.loss_usd > 0, "loss_usd must be greater than 0.")
-        _require(self.shadow_sessions >= 1, "shadow_sessions must be at least 1.")
-        _require(self.arming_max_sessions >= 1, "arming_max_sessions must be at least 1.")
         for field in ALLOWANCE_FIELDS:
             object.__setattr__(
                 self, field, _as_bps(field, getattr(self, field), refusal=InvalidLiveEnvelope)
@@ -149,19 +155,13 @@ class ValidatedLiveEnvelope:
     def from_mapping(cls, mapping: Mapping[str, Any]) -> ValidatedLiveEnvelope:
         """Build from stored or request data, refusing an unknown or missing key."""
         supplied = set(mapping)
-        expected = set(ENVELOPE_FIELDS)
-        missing = sorted(expected - supplied)
-        if missing:
+        if supplied not in (set(FLOAT_FIELDS), set(ENVELOPE_FIELDS)):
             raise InvalidLiveEnvelope(
-                "The live envelope needs every value; missing: " + ", ".join(missing),
-                next_step="Supply all six live envelope values, or save the revision as paper.",
+                "The live envelope requires four monetary values; only historical records "
+                "may also carry both retired session counts.",
+                next_step="Set loss_fraction, loss_usd, xh_entry_bps and xh_exit_bps.",
             )
-        unexpected = sorted(supplied - expected)
-        if unexpected:
-            raise InvalidLiveEnvelope(
-                "The live envelope carries values it does not define: " + ", ".join(unexpected)
-            )
-        return cls(**{field: mapping[field] for field in ENVELOPE_FIELDS})
+        return cls(**mapping)
 
     def validate_for_write(self) -> None:
         """New limits use whole cents; historical seals retain their exact bytes."""
@@ -169,10 +169,13 @@ class ValidatedLiveEnvelope:
 
     def to_values(self) -> LiveEnvelopeValues:
         """The clerk's envelope dataclass, field-for-field — no rename layer."""
-        return LiveEnvelopeValues(**{field: getattr(self, field) for field in ENVELOPE_FIELDS})
+        return LiveEnvelopeValues(**self.to_mapping())
 
     def to_mapping(self) -> dict[str, float | int]:
-        return {field: getattr(self, field) for field in ENVELOPE_FIELDS}
+        return {
+            field: getattr(self, field) for field in ENVELOPE_FIELDS
+            if getattr(self, field) is not None
+        }
 
     @property
     def sha(self) -> str:

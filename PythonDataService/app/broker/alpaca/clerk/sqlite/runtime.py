@@ -18,11 +18,13 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityIdentityError,
+    authority_kind_for_account,
     require_real_account_id,
     require_shadow_account_id,
     require_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
+from app.broker.alpaca.clerk.budgets import entry_requirement
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.exit_terms import (
     ExitTerms,
@@ -65,10 +67,13 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     price_recovery_reduction,
     recovery_reduction_shape,
 )
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
     guard_broker_ports,
 )
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
@@ -152,11 +157,10 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
-from app.schemas.market_liveness import TopOfBookQuote
 from app.services.market_liveness import (
     MarketEntryPolicy,
-    get_market_liveness_store,
     market_liveness_fact,
+    prepared_top_of_book,
 )
 from app.services.session_authority import SessionAuthorityState
 
@@ -268,7 +272,7 @@ class SqliteAlpacaClerkFacade:
             # ADR 0059 D11 (slice 7): a real-money facade is never a permissive
             # default. Both gates are composed by the live selector; a live
             # facade with either missing is a composition bug, refused here.
-            if account_mode == "live" and (live_envelope is None or live_arming is None):
+            if account_mode == "live" and (live_envelope is None or (repo.budget_authority_version() < 2 and live_arming is None)):
                 raise AccountAuthorityIdentityError(
                     "a live sqlite authority requires a risk envelope and an arming gate"
                 )
@@ -295,7 +299,7 @@ class SqliteAlpacaClerkFacade:
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
         # states the quote directly.
-        self._quote_source = quote_source or _live_top_of_book
+        self._quote_source = quote_source or prepared_top_of_book
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
@@ -394,7 +398,7 @@ class SqliteAlpacaClerkFacade:
         immutable custody seal through ``exit_policy_for_instance``.
         """
         policy = self._program_leg_policy
-        if self._live_envelope is not None:
+        if self._live_envelope is not None and self._live_envelope.values is not None:
             values = self._live_envelope.in_force
             return replace(policy, allowance_refusal=None, allowances=ExtendedHoursAllowances(
                 entry_bps=Decimal(str(values.xh_entry_bps)), exit_bps=None,
@@ -675,6 +679,26 @@ class SqliteAlpacaClerkFacade:
             if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
                 raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
             self._exit_terms[binding.strategy_instance_id] = terms
+            if binding.budget_consent is not None:
+                consent = binding.budget_consent
+                world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
+                if consent.world != world or self._live_envelope is None:
+                    raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
+                quote = self._quote_source(binding.symbol, self._repo.clock())
+                if quote is None:
+                    raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
+                required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
+                submission = submit_budgeted_deploy(
+                    self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
+                    world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
+                    exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+                    risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
+                    envelope=self._live_envelope, minimum_position_cost=required,
+                )
+                if not submission.created:
+                    raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
+                self._hold_run(binding, run_owner)
+                return
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
                 if active.lifecycle_run_id == binding.run_id:
@@ -693,6 +717,10 @@ class SqliteAlpacaClerkFacade:
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
             self._hold_run(binding, run_owner)
+
+    async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        async with self._intake:
+            self._repo.record_deploy_launched(strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id)
 
     def _hold_run(self, binding: BrokerBotBinding, run_owner: RunOwner | None) -> None:
         if run_owner is not None:
@@ -1116,16 +1144,12 @@ class SqliteAlpacaClerkFacade:
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
                         arming=self._live_arming,
-                        # The bar's close is a ``Decimal``; the envelope's money
-                        # is float end to end (``BrokerAccountSnapshot.cash``,
-                        # the REAL columns the reservation is stored in, and
-                        # ``cash_bound_admits``' own epsilon). Converting here
-                        # keeps the boundary at one line instead of leaking a
-                        # Decimal into arithmetic that would silently promote.
+                        # Preserve the recorded decision price through the
+                        # canonical Decimal normalization boundary.
                         reference_price=(
                             None
                             if retained_source_bar is None
-                            else float(retained_source_bar.close)
+                            else retained_source_bar.close
                         ),
                     )
                 except AdmissionBlockedError as exc:
@@ -1659,13 +1683,6 @@ def _durable_decision_id(decision_id: str) -> str:
         return decision_id
     encoded = base64.urlsafe_b64encode(decision_id.encode("utf-8")).rstrip(b"=")
     return f"{_ENCODED_DECISION_PREFIX}{encoded.decode('ascii')}"
-
-
-def _live_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
-    """Prepare explicit limit-price demand, then read its current receipt."""
-    store = get_market_liveness_store()
-    store.request_symbol(symbol, now_ms=now_ms)
-    return store.top_of_book(symbol, now_ms=now_ms)
 
 
 def _is_working_order(order: OrderResource) -> bool:

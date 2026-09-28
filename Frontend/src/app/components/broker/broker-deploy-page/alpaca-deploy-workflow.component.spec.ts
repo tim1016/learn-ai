@@ -1,3 +1,5 @@
+import { ApplicationRef } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
@@ -9,6 +11,7 @@ import {
   BrokerV2PanelService,
   type DeployBotBody,
   type DeployBotReceipt,
+  type BudgetDeployReceipt,
   type DeployBotView,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
@@ -126,8 +129,6 @@ const RECEIPT: DeployBotReceipt = {
     mode: 'trade',
     quantity: 1,
     carryover_policy: 'FORBID',
-    carryover_checkpoint_exposure: {},
-    carryover_checkpoint_config_matches: false,
     running: true,
     phase: 'ON_DUTY',
     desired_state: 'RUNNING',
@@ -146,9 +147,22 @@ function mockService(
     accountId: view.account_id,
     getDeployView: vi.fn().mockResolvedValue(view),
     previewStartAdmission: vi.fn().mockResolvedValue(ADMISSION),
-    deployBot: result instanceof HttpErrorResponse
+    previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
+      state: 'ready', detail: 'Account money is ready.', world: body.execution_mode === 'dry_run' ? 'synthetic' : body.execution_mode === 'shadow' ? 'shadow' : body.execution_mode === 'live' ? 'real_live' : 'real_paper',
+      custody_account_id: view.account_id, risk_revision: 1, minimum_budget_usd: '500.00', unreserved_usd: '1000.00',
+      shortcuts: [], review_token: body.budget ? 'budget-reviewed' : null, confirmation_text: null,
+    })),
+    getDeployCommand: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+    deployBudgetBot: result instanceof HttpErrorResponse
       ? vi.fn().mockRejectedValue(result)
-      : vi.fn().mockResolvedValue(result),
+      : vi.fn().mockResolvedValue({
+        status: 'deployed', outcome: 'success', receipt_id: result.receipt_id, recorded_at_ms: result.recorded_at_ms,
+        command_id: 'command-1', strategy_instance_id: result.bot.strategy_instance_id,
+        run_id: result.bot.active_run_id ?? 'run-1', account_id: result.account_id,
+        world: result.execution_mode === 'dry_run' ? 'synthetic' : result.execution_mode === 'shadow' ? 'shadow' : result.execution_mode === 'live' ? 'real_live' : 'real_paper',
+        committed_usd: '1000.00', message: result.message, explanation: result.explanation,
+        next_action: result.next_action, panel_path: result.panel_path,
+      } satisfies BudgetDeployReceipt),
   };
 }
 
@@ -172,6 +186,17 @@ import {
   symbolPicker,
 } from '../../../shared/symbol-picker/testing/fake-picker-world';
 
+async function reviewMoney(): Promise<void> {
+  await TestBed.inject(ApplicationRef).whenStable();
+  const amount = screen.queryByLabelText('Dollar budget (USD)') ?? screen.queryByLabelText('Simulated starting cash (USD)');
+  if (amount === null) return;
+  const review = screen.getByRole<HTMLButtonElement>('button', { name: 'Review budget' });
+  if (review.disabled) return;
+  fireEvent.input(amount, { target: { value: '1000.00' } });
+  fireEvent.click(review);
+  await screen.findByText(/Reviewed budget:/);
+}
+
 describe('AlpacaDeployWorkflowComponent', () => {
   it('accepts lowercase routes and keeps the opening fence after a rebind before the first click', async () => {
     const service = mockService();
@@ -183,9 +208,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fixture.detectChanges();
     fireEvent.input(await screen.findByLabelText('Bot name'), { target: { value: 'case-and-fence' } });
     await fixture.whenStable();
+    await reviewMoney();
     await fixture.componentInstance['submit']();
-    expect(service.deployBot).toHaveBeenCalledTimes(1);
-    const [target] = service.deployBot.mock.calls[0];
+    expect(service.deployBudgetBot).toHaveBeenCalledTimes(1);
+    const [target] = service.deployBudgetBot.mock.calls[0];
     expect(target.bindingGeneration).toBe(DEPLOY_TARGET.bindingGeneration);
     expect(target.routingEpoch).toBe(DEPLOY_TARGET.routingEpoch);
     expect(target.accountId).toBe('PA9');
@@ -206,13 +232,12 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.queryByText('Strategy provenance')).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Every deployment gate' })).toBeNull();
     expect(screen.queryByText('One long stock ENTER and one matching close-leg EXIT.')).toBeNull();
-    expect(screen.queryByText('Live Alpaca execution is planned.')).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
     expect(screen.getByRole('button', {
       name: 'About the trading symbol: One long stock ENTER and one matching close-leg EXIT.',
     })).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: 'About Live: Live Alpaca execution is planned.',
-    })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^About Live:/ })).toBeNull();
   });
 
   it('shows admission gates without a lens toggle, ready ones collapsed', async () => {
@@ -292,10 +317,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
 
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    expect((service.deployBot.mock.calls[0][1] as DeployBotBody).strategy_key)
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).strategy_key)
       .toBe('ema_crossover_signal');
   });
 
@@ -318,10 +344,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(await screen.findByText('differs from default')).toBeTruthy();
 
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    expect((service.deployBot.mock.calls[0][1] as DeployBotBody).parameters).toEqual({ gap: 5 });
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).parameters).toEqual({ gap: 5 });
   });
 
   it('seeds an accepted non-default Golden scope and submits its exact configuration', async () => {
@@ -340,10 +367,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(symbolPicker(view.fixture).symbol()).toBe('TSLA');
     expect((screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement).value).toBe('0.75');
 
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    const body = service.deployBot.mock.calls[0][1] as DeployBotBody;
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
     expect(body.symbol).toBe('TSLA');
     expect(body.parameters).toEqual({ gap: 0.75 });
   });
@@ -377,16 +405,19 @@ describe('AlpacaDeployWorkflowComponent', () => {
     });
 
     const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
+    await reviewMoney();
     expect(deployButton.disabled).toBe(false);
 
     const gapInput = screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement;
     fireEvent.change(gapInput, { target: { value: 'not-a-number' } });
 
     expect(deployButton.disabled).toBe(true);
+    await reviewMoney();
     fireEvent.click(deployButton);
-    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
 
     fireEvent.change(gapInput, { target: { value: '0.4' } });
+    await reviewMoney();
     expect(deployButton.disabled).toBe(false);
   });
 
@@ -418,12 +449,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Operator reason'), {
       target: { value: 'Paper ceremony run; evidence-only risk accepted.' },
     });
+    await reviewMoney();
     expect(deployButton.disabled).toBe(false);
 
+    await reviewMoney();
     fireEvent.click(deployButton);
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    const body = service.deployBot.mock.calls[0][1] as DeployBotBody;
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
     expect(body.strategy_key).toBe('sma_crossover');
     expect(body.evidence_override).toEqual({
       acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
@@ -466,6 +499,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
       target: { value: 'Ceremony run; evidence-only risk accepted.' },
     });
 
+    await reviewMoney();
     expect(deployButton.hasAttribute('disabled')).toBe(false);
     expect(screen.getByText('Ready to deploy this bot.')).toBeTruthy();
   });
@@ -549,6 +583,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Operator reason'), {
       target: { value: 'This override belongs only to the SMA deployment.' },
     });
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
     await screen.findByText('Start blocked');
 
@@ -617,11 +652,13 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: /Dry Run/i }));
 
+    await reviewMoney();
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy dry run bot' }).disabled).toBe(false);
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy dry run bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    expect((service.deployBot.mock.calls[0][1] as DeployBotBody).execution_mode).toBe('dry_run');
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).execution_mode).toBe('dry_run');
   });
 
   it('shows the blocked reason for a single blocked strategy without a strategy selector', async () => {
@@ -724,12 +761,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'spy-test-01' },
     });
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
     await screen.findByText(RECEIPT.receipt_id);
 
-    const body = service.deployBot.mock.calls[0][1] as DeployBotBody;
+    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
     expect(service.previewStartAdmission).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), body);
     expect(body).toEqual({
+      budget: { amount_usd: '1000.00', risk_revision: 1, review_token: 'budget-reviewed', live_confirmation: null },
       exit_terms: DEPLOY_VIEW.default_exit_terms,
       strategy_instance_id: 'spy-test-01',
       strategy_key: 'deployment_validation',
@@ -754,6 +793,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await renderWorkflow(service);
 
     expect(screen.queryByRole('radio', { name: /Paper/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
     const shadowRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Shadow/ });
     expect(shadowRadio.checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Deploy shadow bot' })).toBeTruthy();
@@ -765,10 +805,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'spy-shadow-01' },
     });
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy shadow bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    expect((service.deployBot.mock.calls[0][1] as DeployBotBody).execution_mode)
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).execution_mode)
       .toBe('shadow');
   });
 
@@ -782,35 +823,30 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(live.checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Deploy live bot' })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/paper/i);
-    expect(document.body.textContent).not.toMatch(/shadow/i);
+    expect(document.body.textContent).not.toMatch(/shadow|armed|arming/i);
+    expect(screen.getByRole('button', {
+      name: 'About Live: Orders submit real-money trades through the live Clerk after typed deployment consent. '
+        + 'Every new entry must fit its budget and the effective account risk limits.',
+    })).toBeTruthy();
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'spy-live-01' },
     });
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy live bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    const body = service.deployBot.mock.calls[0][1] as DeployBotBody;
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
     expect(body.execution_mode).toBe('live');
   });
 
-  it('leaves a planned Live card governed by availability alone when the strategy is blocked', async () => {
-    // Whole-branch Important 2: the blocked reason belongs to the card this
-    // world actually offers. On the paper world Live is `planned`, so it
-    // keeps reading Planned with its own copy — not Unavailable with Paper's
-    // blocked explanation.
+  it('shows only this account’s broker mode and its blocked strategy reason', async () => {
     const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
     await renderWorkflow(service);
 
-    const live = screen.getByRole<HTMLInputElement>('radio', { name: /Live/ });
-    const liveCard = live.closest<HTMLElement>('.mode-option');
-    if (liveCard === null) throw new Error('Live mode-option container not found');
-    expect(within(liveCard).getByText('Planned')).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: 'About Live: Live Alpaca execution is planned.',
-    })).toBeTruthy();
-
-    // The card this world does offer still inherits the strategy's reason.
+    expect(screen.queryByRole('radio', { name: /Live/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Shadow/ })).toBeNull();
+    expect(screen.queryByText('Planned')).toBeNull();
     const paper = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
     const paperCard = paper.closest<HTMLElement>('.mode-option');
     if (paperCard === null) throw new Error('Paper mode-option container not found');
@@ -891,12 +927,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Operator reason'), {
       target: { value: 'Shadow ceremony run; evidence-only risk accepted.' },
     });
+    await reviewMoney();
     expect(deployButton.disabled).toBe(false);
 
+    await reviewMoney();
     fireEvent.click(deployButton);
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    const body = service.deployBot.mock.calls[0][1] as DeployBotBody;
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
     expect(body.execution_mode).toBe('shadow');
     expect(body.evidence_override).toEqual({
       acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
@@ -917,13 +955,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
       target: { value: 'spy-dry-01' },
     });
     fireEvent.click(screen.getByRole('radio', { name: /Dry Run Available/i }));
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy dry run bot' }));
 
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    const body = service.deployBot.mock.calls[0][1] as DeployBotBody;
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const body = service.deployBudgetBot.mock.calls[0][1] as DeployBotBody;
     expect(body.execution_mode).toBe('dry_run');
     expect(body.carryover_policy).toBe('FORBID');
-    expect(screen.getByText(/^Dry Run · /)).toBeTruthy();
+    expect(screen.getByText('Dry Run')).toBeTruthy();
   });
 
   it('renders a backend-authored Start refusal without dispatching deployment', async () => {
@@ -940,6 +979,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-stale' }));
 
+    await reviewMoney();
     await component['submit']();
     fixture.detectChanges();
 
@@ -947,7 +987,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText(denied.explanation)).toBeTruthy();
     expect(screen.getByText('Runner safety')).toBeTruthy();
     expect(screen.getByText('Market data')).toBeTruthy();
-    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
   it('removes an obsolete Start decision when the deployment ticket changes', async () => {
@@ -957,6 +997,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const { fixture } = await renderWorkflow(service);
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-stale' }));
+    await reviewMoney();
     await component['submit']();
     fixture.detectChanges();
 
@@ -975,6 +1016,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-race' }));
 
+    await reviewMoney();
     const submission = component['submit']();
     await vi.waitFor(() => expect(service.previewStartAdmission).toHaveBeenCalledOnce());
     pickSymbol(fixture, 'QQQ');
@@ -982,7 +1024,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await submission;
     fixture.detectChanges();
 
-    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
     expect(screen.queryByText('Start allowed')).toBeNull();
   });
 
@@ -997,9 +1039,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
       sizingPreset: 'custom',
       quantity: 7,
     }));
+    await reviewMoney();
     await component['submit']();
 
-    expect((service.deployBot.mock.calls[0][1] as DeployBotBody).sizing)
+    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).sizing)
       .toEqual({ preset: 'custom', quantity: 7 });
   });
 
@@ -1018,10 +1061,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'spy-carryover' },
     });
+    await reviewMoney();
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
-    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
 
-    expect((service.deployBot.mock.calls[0][1] as DeployBotBody).carryover_policy)
+    expect((service.deployBudgetBot.mock.calls[0][1] as DeployBotBody).carryover_policy)
       .toBe('ALLOW');
   });
 
@@ -1060,6 +1104,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(component['ticket']().instanceId).toBe('spy-validation-01');
     expect(component['ticket']().symbol).toBe('BRK.B');
     expect(component['ticketForm']().valid()).toBe(true);
+    await reviewMoney();
     expect(screen.getByRole('button', { name: 'Deploy paper bot' }).hasAttribute('disabled'))
       .toBe(false);
   });
@@ -1090,6 +1135,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-conflict' }));
 
+    await reviewMoney();
     await component['submit']();
     fixture.detectChanges();
 
@@ -1102,18 +1148,20 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
   it('reuses its frozen command target after an uncertain deploy outcome', async () => {
     const service = mockService();
-    service.deployBot = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 0 }));
+    service.deployBudgetBot = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 0 }));
     const { fixture } = await renderWorkflow(service);
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'retry-stable-command' }));
 
+    await reviewMoney();
     await component['submit']();
+    await reviewMoney();
     await component['submit']();
 
     expect(service.previewStartAdmission).toHaveBeenCalledTimes(2);
-    expect(service.deployBot).toHaveBeenCalledTimes(2);
-    const [firstTarget] = service.deployBot.mock.calls[0];
-    const [secondTarget] = service.deployBot.mock.calls[1];
+    expect(service.deployBudgetBot).toHaveBeenCalledTimes(2);
+    const [firstTarget] = service.deployBudgetBot.mock.calls[0];
+    const [secondTarget] = service.deployBudgetBot.mock.calls[1];
     expect(firstTarget).toEqual(secondTarget);
     expect(firstTarget).toMatchObject({
       clerkId: 'clrk_spec',
@@ -1126,17 +1174,20 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
   it('abandons a failed deploy key when the deployment ticket changes', async () => {
     const service = mockService();
-    service.deployBot = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 0 }));
+    service.deployBudgetBot = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 0 }));
     const { fixture } = await renderWorkflow(service);
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'first-deploy-ticket' }));
+    await reviewMoney();
     await component['submit']();
 
+    await component['newDeployment']();
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'second-deploy-ticket' }));
+    await reviewMoney();
     await component['submit']();
 
-    const [firstTarget] = service.deployBot.mock.calls[0];
-    const [secondTarget] = service.deployBot.mock.calls[1];
+    const [firstTarget] = service.deployBudgetBot.mock.calls[0];
+    const [secondTarget] = service.deployBudgetBot.mock.calls[1];
     expect(firstTarget.idempotencyKey).not.toBe(secondTarget.idempotencyKey);
   });
 
@@ -1153,6 +1204,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
     component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'drift-01' }));
 
+    await reviewMoney();
     await component['submit']();
     fixture.detectChanges();
     expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
@@ -1171,11 +1223,12 @@ describe('AlpacaDeployWorkflowComponent', () => {
     // mint a fresh idempotency key against the rebound account — the defect
     // a message-only test cannot catch, since it only proves the *first*,
     // already-denied submission didn't fire.
+    await reviewMoney();
     await component['submit']();
     fixture.detectChanges();
 
     expect(service.previewStartAdmission).toHaveBeenCalledTimes(1);
-    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
     // The conflict survives the second attempt instead of being silently
     // cleared by submit()'s own `this.submitError.set(null)`.
     expect(screen.getAllByText(/The account changed. Nothing was sent/i)).toBeTruthy();
@@ -1212,11 +1265,72 @@ describe('AlpacaDeployWorkflowComponent', () => {
     // button: the dispatch assertion below must be provable independently of
     // whether the button's [disabled] binding happens to read correctly, so
     // it cannot be masked by a DOM-level click no-op on a disabled control.
+    await reviewMoney();
     await component['submit']();
 
     expect(service.previewStartAdmission).not.toHaveBeenCalled();
-    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
     expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
     expect(component['readinessSummary']()?.label).toBe('Blocked');
   });
+  it('reads a pending command after refresh without submitting another deployment', async () => {
+    const service = mockService();
+    const command: BudgetDeployReceipt = {
+      status: 'pending', outcome: 'pending', receipt_id: 'budget-pending', recorded_at_ms: 1700000000000,
+      command_id: 'original-command', strategy_instance_id: 'pending-bot', run_id: 'run-pending', account_id: 'PA9',
+      world: 'real_paper', committed_usd: '1000.00', message: 'Budget committed; launch pending.',
+      explanation: 'The recorded launch has not completed.', next_action: 'Check the recorded result.', panel_path: '/bot/pending-bot',
+    };
+    service.getDeployCommand.mockResolvedValue(command);
+    service.getDeployView.mockRejectedValue(new Error('Readiness unavailable'));
+    await render(AlpacaDeployWorkflowComponent, { providers: [
+      ...fakePickerWorld().providers, provideFleetDirectory(), provideRouter([]),
+      { provide: BrokerV2PanelService, useValue: service },
+      { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap({ deployment: 'pending-bot' }) }, queryParamMap: of(convertToParamMap({ deployment: 'pending-bot' })) } },
+    ], inputs: { target: DEPLOY_TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } } });
+    await screen.findByRole('heading', { name: 'Budget committed; launch pending.' });
+    expect(screen.getByText('Pending')).toBeTruthy();
+    expect(screen.getByText('$1,000.00')).toBeTruthy();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+    service.getDeployCommand.mockResolvedValue({ ...command, status: 'deployed', outcome: 'success', message: 'The bot is running.' });
+    fireEvent.click(screen.getByRole('button', { name: 'Check deployment status' }));
+    await screen.findByRole('heading', { name: 'The bot is running.' });
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('requires a reviewed budget even when the older readiness checks are satisfied', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'needs-consent' } });
+    await fixture.whenStable();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(true);
+    await fixture.componentInstance['submit']();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+    await reviewMoney();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
+  });
+
+  it('applies the explicit qualified tuple atomically and requires a fresh budget review', async () => {
+    const view: DeployBotView = { ...DEPLOY_VIEW, strategies: [{ ...EMA_STRATEGY,
+      golden_validation_scope: false, validation_case_symbol: 'SPY', validation_case_parameters: { gap: 5 },
+      qualified_configuration: { symbol: 'AAPL', parameters: { gap: 0.75 }, explanation: 'This exact tuple has retained qualified evidence.' },
+    }] };
+    const service = mockService(RECEIPT, view);
+    const { fixture } = await renderWorkflow(service);
+    fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'qualified-budget' } });
+    await reviewMoney();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    await vi.waitFor(() => expect(symbolPicker(fixture).symbol()).toBe('AAPL'));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(true);
+    expect(screen.queryByText(/Reviewed budget:/)).toBeNull();
+    await reviewMoney();
+    expect(service.previewBudget.mock.calls.at(-1)?.[1]).toMatchObject({ symbol: 'AAPL', parameters: { gap: 0.75 }, budget: { amount_usd: '1000.00' } });
+    await vi.waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Use qualified configuration' }));
+    expect(screen.getByText(/Reviewed budget:/)).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy paper bot' }).disabled).toBe(false);
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
 });

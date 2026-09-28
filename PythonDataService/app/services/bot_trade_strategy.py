@@ -289,7 +289,7 @@ class _RetainedSourceBarFeed:
 
         A bar held through startup preparation was captured when the stream
         delivered it, not when the run first saw it; the run sees it at
-        handoff, so a pause pressed in between governs it (#2410).
+        handoff, so Stop pressed in between governs it (#2410).
         """
         captured = _evaluation_mode_for(self._source, bar)
         if (bar.symbol, bar.start_ms, bar.end_ms) not in self._held_keys:
@@ -355,7 +355,7 @@ class _RetainedSourceBarFeed:
                     # The session only consumes (and pops) a captured evaluation
                     # mode for bars it actually evaluates, and it never sees a bar
                     # we filter here. Consume the mode ourselves so an upstream
-                    # PauseAwareFeed's captured-mode map cannot grow unbounded over
+                    # DecisionFenceFeed's captured-mode map cannot grow unbounded over
                     # a long-running paper session.
                     self.evaluation_mode_for(bar)
         finally:
@@ -952,7 +952,7 @@ async def run_trade_bot(
                     binding=binding,
                     evaluation=evaluation,
                     outcome="blocked",
-                    reason_code="PAUSED_OBSERVE_ONLY",
+                    reason_code="STOPPED_OBSERVE_ONLY",
                 )
                 continue
             lateness = _screen_late_decision(
@@ -1150,9 +1150,9 @@ def _screen_late_decision(
     Mirrors the liveness gate's split (#1671 AC3). A late ENTER -- new
     exposure -- is refused: DISCARD (nothing was committed, so nothing
     unwinds) and a protected ``blocked`` receipt naming ``DECISION_LATE``, so
-    a later Resume replays the bucket as already decided. Refused rather than
+    a later replay treats the bucket as already decided. Refused rather than
     demoted to ``OBSERVE_ONLY``: the evaluation's mode is fixed in its trace
-    when it is staged, and ``PAUSED_OBSERVE_ONLY`` is the operator's fact, not
+    when it is staged, and ``STOPPED_OBSERVE_ONLY`` is the operator's fact, not
     the clock's. A late EXIT is risk reduction and still reaches the Clerk --
     holding it back would keep a position the strategy has decided to close,
     overnight if the delay straddles the close -- but its lateness is logged
@@ -1219,7 +1219,7 @@ def _decision_bar_evidence(
 
     The ledger identity is authored from each observation's feed provenance.
     A wrapper's stream capability name may differ (for example a test or
-    pause wrapper), so it is not evidence of the decision bar's provider.
+    decision-fence wrapper), so it is not evidence of the decision bar's provider.
     """
     retained = (
         None
@@ -1318,12 +1318,12 @@ async def run_dry_run_bot(
                     binding=binding,
                     evaluation=evaluation,
                     outcome="blocked",
-                    reason_code="PAUSED_OBSERVE_ONLY",
+                    reason_code="STOPPED_OBSERVE_ONLY",
                 )
                 logger.info(
-                    "Dry-run candidate discarded while paused in observe-only mode",
+                    "Dry-run candidate discarded after Stop in observe-only mode",
                     extra={
-                        "action": "dry_run_paused_observe_only",
+                        "action": "dry_run_stopped_observe_only",
                         "strategy_instance_id": binding.strategy_instance_id,
                         "run_id": binding.run_id,
                         "intent": intent.kind.value,

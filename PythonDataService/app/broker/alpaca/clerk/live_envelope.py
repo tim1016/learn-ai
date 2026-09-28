@@ -17,8 +17,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.broker.alpaca.clerk.money import cash_admits, notional
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 
 # ``uncertainty_causes`` owns the loss-hold reason code -- it is the module
@@ -28,6 +30,7 @@ from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
 )
+from app.broker.contract.models import BrokerActivity
 
 if TYPE_CHECKING:
     from app.broker.alpaca.config import AlpacaSettings
@@ -85,7 +88,6 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # maximum plus its documented cushion factor -- by
 # ``tests/broker/alpaca/clerk/test_live_envelope.py``.
 FILL_VISIBILITY_GRACE_MS = 5_000
-_CASH_EPSILON_USD = 1e-9
 
 EnvelopeAgreement = Literal["unsealed", "agreed", "disagreed"]
 
@@ -100,6 +102,9 @@ ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
     ("arming_max_sessions", "live_arming_max_sessions"),
     ("xh_entry_bps", "live_xh_entry_bps"),
     ("xh_exit_bps", "live_xh_exit_bps"),
+)
+CURRENT_ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = tuple(
+    pair for pair in ENVELOPE_SETTINGS_FIELDS if pair[0] not in {"shadow_sessions", "arming_max_sessions"}
 )
 
 # The domain of each envelope value, as one table.
@@ -139,22 +144,24 @@ class LiveEnvelopeIncomplete(ValueError):
 class LiveEnvelopeValues:
     loss_fraction: float
     loss_usd: float
-    shadow_sessions: int
-    arming_max_sessions: int
     xh_entry_bps: float
     xh_exit_bps: float
+    # Historical records retain their original six-field seal. Current
+    # Configuration has no session-count or expiring-grant authority.
+    shadow_sessions: int | None = None
+    arming_max_sessions: int | None = None
 
     @classmethod
     def from_settings(cls, settings: AlpacaSettings) -> LiveEnvelopeValues:
-        missing = [name for _, name in ENVELOPE_SETTINGS_FIELDS if getattr(settings, name) is None]
+        missing = [name for _, name in CURRENT_ENVELOPE_SETTINGS_FIELDS if getattr(settings, name) is None]
         if missing:
             raise LiveEnvelopeIncomplete(
                 "the live envelope needs every ALPACA_LIVE_* value; missing: " + ", ".join(missing)
             )
-        return cls(**{field: getattr(settings, name) for field, name in ENVELOPE_SETTINGS_FIELDS})
+        return cls(**{field: getattr(settings, name) for field, name in CURRENT_ENVELOPE_SETTINGS_FIELDS})
 
     def to_mapping(self) -> dict[str, float | int]:
-        return asdict(self)
+        return {name: value for name, value in asdict(self).items() if value is not None}
 
     @property
     def sha(self) -> str:
@@ -169,6 +176,8 @@ def envelope_domain_violation(values: LiveEnvelopeValues) -> str | None:
     arming path has to say *which record* carries the bad value.
     """
     for name, admits, domain in _ENVELOPE_DOMAINS:
+        if name in {"shadow_sessions", "arming_max_sessions"} and getattr(values, name) is None:
+            continue
         if not admits(getattr(values, name)):
             return f"{name} is not {domain}"
     return None
@@ -197,13 +206,25 @@ class AccountObservation:
     broker_cash_usd: float
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
-    cash_available_usd: float
-    equity_usd: float
+    cash_available_usd: float | Decimal
     last_equity_usd: float | None
-    # Diagnostic only; the equity loss verdict never depends on the positions
-    # endpoint, so the sync leaves this unknown rather than coupling safety to
-    # a second broker surface.
     position_count: int | None
+    equity_usd: float | None = None
+    unrealized_pl_usd: float = 0.0  # simulation diagnostic; never the loss authority
+    risk_cash_flows: tuple[BrokerActivity, ...] = ()
+    risk_cash_flow_evidence_complete: bool = False
+    risk_cash_flow_window_start_ms: int | None = None
+    risk_equity_window_start_ms: int | None = None
+    risk_revision: int | None = None
+    # Effective fill watermark before requesting broker unrealized P&L. A
+    # subsequent execution can close a lot already included in that mark.
+    risk_fill_sequence: int = 0
+    # Simulated cash is projected atomically from custody, including settled
+    # modelled fees. These explicit cutoffs prevent subtracting them twice.
+    simulation_cash_seen_before_ms: int | None = None
+    modelled_fees_seen_before_ms: int | None = None
+    simulation_session_start_ms: int | None = None
+    simulation_marks_valid_until_ms: int | None = None
 
     @property
     def fills_seen_before_ms(self) -> int:
@@ -217,7 +238,7 @@ class AccountObservation:
         refuses an ENTER that would have fit, where under-reserving admits one
         against cash already spent.
         """
-        return self.observed_at_ms - FILL_VISIBILITY_GRACE_MS
+        return self.simulation_cash_seen_before_ms if self.simulation_cash_seen_before_ms is not None else self.observed_at_ms - FILL_VISIBILITY_GRACE_MS
 
 
 @dataclass(frozen=True)
@@ -226,10 +247,12 @@ class EnvelopeReservation:
 
     quantity: float
     reference_price: float
+    exact_reference_price: str | None = None
+    fee_provision_cents: int = 0
 
     @property
     def notional_usd(self) -> float:
-        return self.quantity * self.reference_price
+        return float(notional(self.quantity, self.exact_reference_price or self.reference_price))
 
 
 def loss_limit_usd(values: LiveEnvelopeValues, *, last_equity_usd: float) -> float:
@@ -243,7 +266,7 @@ def loss_breached(*, day_pnl_usd: float, loss_limit_usd: float) -> bool:
 def cash_bound_admits(
     *, cash_available_usd: float, reserved_usd: float, notional_usd: float
 ) -> bool:
-    return notional_usd + reserved_usd <= cash_available_usd + _CASH_EPSILON_USD
+    return cash_admits(cash=cash_available_usd, claims=reserved_usd, required=notional_usd)
 
 
 class LiveEnvelopeGate:
@@ -258,7 +281,7 @@ class LiveEnvelopeGate:
     def __init__(
         self,
         *,
-        values: LiveEnvelopeValues,
+        values: LiveEnvelopeValues | None,
         sealed: LiveEnvelopeValues | None = None,
         custody_is_simulated: bool,
         observation_max_age_ms: int = OBSERVATION_MAX_AGE_MS,
@@ -271,7 +294,7 @@ class LiveEnvelopeGate:
 
     @property
     def agreement(self) -> EnvelopeAgreement:
-        return envelope_agreement(self.values, self.sealed)
+        return "unsealed" if self.values is None else envelope_agreement(self.values, self.sealed)
 
     @property
     def in_force(self) -> LiveEnvelopeValues:
@@ -296,7 +319,10 @@ class LiveEnvelopeGate:
         *about* the configured half: ``agreement`` (does the environment still
         match what was armed?) and the arming snapshot's own disagreement check.
         """
-        return self.values if self.sealed is None else self.sealed
+        values = self.values if self.sealed is None else self.sealed
+        if values is None:
+            raise LiveEnvelopeIncomplete("No historical live envelope is configured")
+        return values
 
     @property
     def in_force_is_sealed(self) -> bool:
@@ -318,6 +344,10 @@ class LiveEnvelopeGate:
         bounding one against a figure that only *looks* fresh.
         """
         self._observation = None
+
+    @property
+    def observation_max_age_ms(self) -> int:
+        return self._max_age_ms
 
     def latest_observation(self) -> AccountObservation | None:
         return self._observation

@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
@@ -58,7 +59,7 @@ class DayPnl:
 
     @property
     def known(self) -> bool:
-        return self.cash_flows_known
+        return self.cash_flows_known and all(math.isfinite(v) for v in (self.current_equity_usd, self.prior_close_equity_usd, self.net_cash_flow_usd, self.total_usd))
 
 
 def day_pnl_at(
@@ -67,10 +68,13 @@ def day_pnl_at(
     cash_flows: Sequence[BrokerActivity],
     now_ms: int,
     cash_flow_evidence_complete: bool = True,
+    retained_start_ms: int | None = None,
 ) -> DayPnl:
     if observation.last_equity_usd is None:
         raise ValueError("day P&L needs the broker's prior-close equity")
-    day_start_ms = day_pnl_window_start_ms(now_ms)
+    if observation.equity_usd is None:
+        raise ValueError("day P&L needs current account equity")
+    day_start_ms = retained_start_ms if retained_start_ms is not None else (observation.simulation_session_start_ms if observation.simulation_session_start_ms is not None else day_pnl_window_start_ms(now_ms))
     usable_amounts = [
         activity.net_amount
         for activity in cash_flows
@@ -115,3 +119,24 @@ __all__ = [
     "day_pnl_at",
     "day_pnl_window_start_ms",
 ]
+
+
+def risk_fill_sequence(repo: ClerkSqliteRepository) -> int:
+    """Executions invalidate observations before another commitment."""
+    with repo._write_lock:
+        return int(repo._conn.execute("SELECT COALESCE(MAX(recorded_transition_sequence), 0) FROM fills").fetchone()[0])
+
+
+def risk_evidence_ready(repo: ClerkSqliteRepository, *, now_ms: int) -> bool:
+    """Canonical fees/coverage gate spending without subtracting fees from equity twice."""
+    return repo.fee_attribution(now_ms=now_ms).known
+
+
+def observed_day_pnl(*, observation: AccountObservation, now_ms: int, retained_start_ms: int | None = None, retained_equity_usd: float | None = None) -> DayPnl:
+    """Read the immutable observation's transfer evidence, never a broker endpoint."""
+    start = retained_start_ms if retained_start_ms is not None else (observation.simulation_session_start_ms if observation.simulation_session_start_ms is not None else day_pnl_window_start_ms(now_ms))
+    current_start = observation.simulation_session_start_ms if observation.simulation_session_start_ms is not None else day_pnl_window_start_ms(now_ms)
+    complete = observation.risk_equity_window_start_ms == current_start and observation.risk_cash_flow_evidence_complete and observation.risk_cash_flow_window_start_ms is not None and observation.risk_cash_flow_window_start_ms <= start
+    flows = tuple(flow for flow in observation.risk_cash_flows if flow.occurred_at_ms is None or flow.occurred_at_ms > start)
+    observed = observation if retained_equity_usd is None else replace(observation, last_equity_usd=retained_equity_usd)
+    return day_pnl_at(observation=observed, cash_flows=flows, now_ms=now_ms, cash_flow_evidence_complete=complete, retained_start_ms=start)

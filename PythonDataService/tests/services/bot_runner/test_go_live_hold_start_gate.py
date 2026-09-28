@@ -67,11 +67,8 @@ async def test_a_held_lane_refuses_every_start_and_resume_before_admission(
 
     with pytest.raises(RunAdmissionRefusedError, match="awaits go-live") as start:
         await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    with pytest.raises(RunAdmissionRefusedError, match="awaits go-live") as resume:
-        await registry.resume_existing_with_admission("alpaca", _SID)
 
     assert start.value.reason_code == LANE_GO_LIVE_PENDING
-    assert resume.value.reason_code == LANE_GO_LIVE_PENDING
     assert "go-live" in (start.value.detail or "")
 
 

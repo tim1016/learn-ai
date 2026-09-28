@@ -75,6 +75,40 @@ export class BrokerConfigurationService {
     );
   }
 
+  readBudgetAuthority(target: ResourceTarget): Promise<components['schemas']['BudgetAuthorityState']> {
+    return firstValueFrom(this.http.get<components['schemas']['BudgetAuthorityState']>(
+      operationUrl('configuration_budget_authority_read', target),
+    ));
+  }
+
+  applyBudgetAuthority(target: ResourceTarget, payload: components['schemas']['BudgetAuthorityApplyRequest']): Promise<components['schemas']['BudgetAuthorityState']> {
+    return firstValueFrom(this.http.post<components['schemas']['BudgetAuthorityState']>(
+      operationUrl('configuration_budget_authority_apply', target), this.commandBody(target, payload),
+    ));
+  }
+
+  readRiskLimits(clerkId: string): Promise<components['schemas']['AccountRiskStateResponse']> {
+    return firstValueFrom(this.http.get<components['schemas']['AccountRiskStateResponse']>(
+      operationUrl('configuration_risk_limits_read', { broker: 'alpaca', clerkId }),
+    ));
+  }
+
+  applyRiskLimits(
+    target: ResourceTarget, payload: components['schemas']['AccountRiskApplyRequest'],
+  ): Promise<components['schemas']['AccountRiskStateResponse']> {
+    return firstValueFrom(this.http.post<components['schemas']['AccountRiskStateResponse']>(
+      operationUrl('configuration_risk_limits_apply', target), this.commandBody(target, payload),
+    ));
+  }
+
+  clearRiskHold(
+    target: ResourceTarget, payload: components['schemas']['AccountRiskClearRequest'],
+  ): Promise<components['schemas']['AccountRiskStateResponse']> {
+    return firstValueFrom(this.http.post<components['schemas']['AccountRiskStateResponse']>(
+      operationUrl('configuration_risk_hold_clear', target), this.commandBody(target, payload),
+    ));
+  }
+
   /** Backend-authored activation guidance; reads durable configuration only. */
   readDeskState(clerkId: string): Promise<AlpacaDeskState> {
     return firstValueFrom(
@@ -125,7 +159,7 @@ export class BrokerConfigurationService {
     );
   }
 
-  /** Metadata only. A rename never invalidates an arming (ADR 0060 Decision 4). */
+  /** Metadata only. A rename changes no deployment consent or economic terms. */
   updateProfile(
     target: ResourceTarget,
     profileId: string,

@@ -81,16 +81,6 @@ class _FakeFillSource:
         return "", self.fills_by_sid.get(sid, ())
 
 
-class _FakePrimaryActionSource:
-    def __init__(self, actions_by_sid: dict[str, PanelAction | None]) -> None:
-        self.actions_by_sid = actions_by_sid
-
-    async def resolve_resume_action(
-        self, broker: str, account_id: str, sid: str
-    ) -> PanelAction | None:
-        return self.actions_by_sid.get(sid)
-
-
 def _status_label_for(*, phase: str, running: bool) -> str:
     """Mirrors ``catalog_projection_service.status_label_for`` so these
     fakes carry an accurate ``status_label`` — the field ``GalleryHub``
@@ -306,7 +296,7 @@ async def test_build_snapshot_uses_the_five_second_buffer_when_configured() -> N
 
 
 @pytest.mark.asyncio
-async def test_build_snapshot_includes_stopped_bot_with_resume_action_and_its_bars() -> None:
+async def test_build_snapshot_includes_stopped_bot_with_deploy_again_navigation_and_its_bars() -> None:
     """A stopped (non-retired) bot stays on the wall — projected with
     ``running=False`` and a Resume primary action — and its symbol's bars
     are fetched even though nothing running holds that symbol."""
@@ -329,8 +319,8 @@ async def test_build_snapshot_includes_stopped_bot_with_resume_action_and_its_ba
     assert sorted(aggregator.subscribed) == ["QQQ", "SPY"]
     stopped = next(b for b in snap.bots if b.sid == "Aug11-03")
     assert stopped.running is False
-    assert stopped.primary_action.action_id == "resume"
-    assert stopped.primary_action.label == "Resume"
+    assert stopped.primary_action.action_id == "deploy_again"
+    assert stopped.primary_action.label == "Deploy again"
 
 
 @pytest.mark.asyncio
@@ -416,7 +406,7 @@ async def test_build_update_stopped_bot_survives_not_removed() -> None:
     assert {b.sid for b in upd.bots_delta} == {"Aug11-02", "Aug11-03"}
     stopped = next(b for b in upd.bots_delta if b.sid == "Aug11-03")
     assert stopped.running is False
-    assert stopped.primary_action.action_id == "resume"
+    assert stopped.primary_action.action_id == "deploy_again"
 
 
 @pytest.mark.asyncio
@@ -748,45 +738,13 @@ async def test_build_update_does_not_drop_a_same_millisecond_fill(
 
 def _hub_with_rows(
     rows: list[_Cat2],
-    *,
-    primary_action_source: _FakePrimaryActionSource | None = None,
 ) -> GalleryHub:
     return GalleryHub(
         broker="alpaca",
         account_id="PA3",
         catalog_source=_FakeCatalogSource(rows),
         aggregator=_FakeAggregator(),
-        primary_action_source=primary_action_source,
     )
-
-
-@pytest.mark.asyncio
-async def test_primary_action_honors_disabled_panel_resume_action_for_stopped_bot() -> None:
-    """A stopped bot uses the full panel's request-specific Resume action;
-    the catalog deliberately has no Resume admission decision."""
-    row = _Cat2("Aug11-02", "SPY", False, None, None, None)
-    action_source = _FakePrimaryActionSource(
-        {"Aug11-02": _row_action("resume", enabled=False, explanation="Admission unavailable.")}
-    )
-    snap = await _hub_with_rows([row], primary_action_source=action_source).build_snapshot()
-
-    action = snap.bots[0].primary_action
-    assert action.action_id == "resume"
-    assert action.enabled is False
-    assert action.disabled_reason == "Admission unavailable."
-
-
-@pytest.mark.asyncio
-async def test_primary_action_honors_enabled_panel_resume_action() -> None:
-    row = _Cat2("Aug11-02", "SPY", False, None, None, None)
-    action_source = _FakePrimaryActionSource({"Aug11-02": _row_action("resume", enabled=True)})
-
-    snap = await _hub_with_rows([row], primary_action_source=action_source).build_snapshot()
-
-    action = snap.bots[0].primary_action
-    assert action.action_id == "resume"
-    assert action.enabled is True
-    assert action.disabled_reason is None
 
 
 @pytest.mark.asyncio
@@ -804,30 +762,25 @@ async def test_primary_action_uses_row_action_enabled_true_for_running_bot() -> 
 
 
 @pytest.mark.asyncio
-async def test_primary_action_fails_closed_when_catalog_action_is_not_resume() -> None:
-    """A catalog action for another command is not Resume eligibility."""
-    row = _Cat2(
-        "Aug11-02", "SPY", False, None, None, None,
-        row_action=_row_action("stop", enabled=False, explanation="The bot is already stopped."),
-    )
-    snap = await _hub_with_rows([row]).build_snapshot()
+@pytest.mark.parametrize("row_action", [None, _row_action("reconcile_now", enabled=False)])
+async def test_running_tile_keeps_stop_entry_point_when_roster_only_has_recovery(row_action: PanelAction | None) -> None:
+    row = _Cat2("Aug11-02", "SPY", True, None, None, None, row_action=row_action)
+    snapshot = await _hub_with_rows([row]).build_snapshot()
 
-    action = snap.bots[0].primary_action
-    assert action.action_id == "resume"
-    assert action.enabled is False
-    assert action.disabled_reason is not None
+    assert snapshot.bots[0].primary_action.action_id == "stop"
+    assert snapshot.bots[0].primary_action.enabled is True
 
 
 @pytest.mark.asyncio
-async def test_primary_action_fails_closed_when_resume_projection_is_unavailable() -> None:
-    """Missing panel admission evidence must never become enabled Resume."""
+async def test_deploy_again_is_navigation_without_a_resume_projection() -> None:
+    """Opening Deploy never requires or grants permission to trade."""
     row = _Cat2("Aug11-02", "SPY", False, None, None, None)  # row_action=None
     snap = await _hub_with_rows([row]).build_snapshot()
 
     action = snap.bots[0].primary_action
-    assert action.action_id == "resume"
-    assert action.enabled is False
-    assert action.disabled_reason is not None
+    assert action.action_id == "deploy_again"
+    assert action.enabled is True
+    assert action.disabled_reason is None
 
 
 @pytest.mark.asyncio

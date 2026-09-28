@@ -370,3 +370,16 @@ async def test_facade_reports_unavailable_when_the_reader_refuses(
     assert result.account_id == "PA-FEE-RECON"
     assert "SQLite session fill window limit exceeded." in result.why
     assert port.calls == []
+
+
+def test_duplicate_fee_delivery_is_not_charged_twice() -> None:
+    fee = _fee("same-fee", -44.83)
+    result = _reconcile(activities=(_older(), fee, fee))
+    assert result.observed_total_usd == 44.83
+    assert result.observed_activity_count == 1
+
+
+def test_conflicting_duplicate_fee_amount_is_unobserved() -> None:
+    result = _reconcile(activities=(_older(), _fee("same", -44.83), _fee("same", -45.83)))
+    assert result.observed_total_usd is None
+    assert result.verdict == "unobserved"

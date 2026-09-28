@@ -572,6 +572,18 @@ def market_liveness_fact(symbol: str, now_ms: int) -> MarketLivenessFact:
     return _store.fact(symbol, now_ms=now_ms)
 
 
+def prepared_top_of_book(symbol: str, now_ms: int) -> TopOfBookQuote | None:
+    """Ask IBKR for ``symbol``, then read its live quote if one is fresh.
+
+    The one read for every caller that prices from the live book. Demand is
+    what makes the status source subscribe a symbol no running bot or custody
+    already watches, so the first read of such a symbol answers ``None``
+    until the next snapshot carries its quote.
+    """
+    _store.request_symbol(symbol, now_ms=now_ms)
+    return _store.top_of_book(symbol, now_ms=now_ms)
+
+
 def reset_market_liveness_store_for_testing() -> None:
     """Reset process state between isolated tests."""
     global _store

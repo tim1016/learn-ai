@@ -154,7 +154,6 @@ class _CachedFifo:
     records: tuple[FillRecord, ...] = ()
     lots: dict[str, deque[_Lot]] = field(default_factory=dict)
     closed_lots: list[ClosedLot] = field(default_factory=list)
-    realized: list[float] = field(default_factory=lambda: [0.0])
     fee_total: float | None = 0.0
     fee_missing: bool = False
 
@@ -166,12 +165,11 @@ class _CachedFifo:
             self.records = ()
             self.lots = {}
             self.closed_lots = []
-            self.realized = [0.0]
             self.fee_total = 0.0
             self.fee_missing = False
 
         for record in records[len(self.records) :]:
-            apply_fill_to_lots(self.lots, record, self.closed_lots, self.realized)
+            apply_fill_to_lots(self.lots, record, self.closed_lots)
             if record.fee is None:
                 self.fee_missing = True
                 self.fee_total = None
@@ -1056,73 +1054,11 @@ class SqliteEconomicProjectionReader:
         cursor_key: tuple[int, str] | None,
         limit: int | None,
     ) -> list[sqlite3.Row]:
-        """Read current fill leaves with their root economic timestamps.
-
-        The recursive CTE follows a correction chain backward from every
-        effective row.  The root's source timestamp determines FIFO order and
-        session membership; the outer row's ``recorded_at_ms`` remains the
-        audit/keyset timestamp.
-        """
-        where = ["1 = 1"]
-        params: list[object] = []
-        if strategy_instance_ids is not None:
-            if not strategy_instance_ids:
-                return []
-            where.append(
-                f"effective.strategy_instance_id IN ({_placeholders(strategy_instance_ids)})"
-            )
-            params.extend(strategy_instance_ids)
-        if from_ms is not None:
-            where.append("effective.economic_filled_at_ms >= ?")
-            params.append(from_ms)
-        if to_ms is not None:
-            where.append("effective.economic_filled_at_ms < ?")
-            params.append(to_ms)
-        if cursor_key is not None:
-            where.append(
-                "(effective.recorded_at_ms < ? OR "
-                "(effective.recorded_at_ms = ? AND effective.execution_sort_key < ?))"
-            )
-            params.extend((cursor_key[0], cursor_key[0], cursor_key[1]))
-        limit_sql = "" if limit is None else " LIMIT ?"
-        if limit is not None:
-            params.append(limit + 1)
-        sql = f"""
-            {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
-                SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
-                       f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
-                       f.recorded_at_ms, f.recorded_transition_sequence,
-                       e.subject_id, e.strategy_instance_id,
-                       CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                       COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
-                       COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
-                                f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
-                       COALESCE(roots.root_transition_sequence,
-                                f.recorded_transition_sequence) AS economic_ledger_sequence,
-                       COALESCE(f.execution_id, f.fill_id) AS execution_sort_key
-                FROM fills f
-                JOIN orders o ON o.order_ref = f.order_ref
-                JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
-                LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
-                LEFT JOIN custody_transitions manual_acceptance
-                    ON manual_acceptance.sequence = (
-                        SELECT MIN(acceptance.sequence)
-                        FROM custody_transitions acceptance
-                        WHERE acceptance.order_ref = o.order_ref
-                          AND acceptance.effect_operation_id = e.effect_operation_id
-                          AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
-                    )
-                JOIN roots ON roots.effective_fill_id = f.fill_id
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM fills successor
-                    WHERE successor.superseded_execution_ref = f.execution_id
-                )
-            )
-            SELECT effective.* FROM effective
-            WHERE {' AND '.join(where)}
-            ORDER BY effective.recorded_at_ms DESC, effective.execution_sort_key DESC{limit_sql}
-        """
-        return self._conn.execute(sql, params).fetchall()
+        """Delegate the canonical query on this reader's existing transaction."""
+        return effective_fill_rows(
+            self._conn, strategy_instance_ids=strategy_instance_ids,
+            from_ms=from_ms, to_ms=to_ms, cursor_key=cursor_key, limit=limit,
+        )
 
     def _account_execution_rows(
         self,
@@ -1297,6 +1233,108 @@ class SqliteEconomicProjectionReader:
         return "incomplete" if row is not None else "complete"
 
 
+def effective_fill_rows(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_ids: Sequence[str] | None,
+    from_ms: int | None,
+    to_ms: int | None,
+    cursor_key: tuple[int, str] | None,
+    limit: int | None,
+) -> list[sqlite3.Row]:
+    """Read current fill leaves with their root economic timestamps.
+
+    The recursive CTE follows a correction chain backward from every
+    effective row.  The root's source timestamp determines FIFO order and
+    session membership; the outer row's ``recorded_at_ms`` remains the
+    audit/keyset timestamp.
+    """
+    where = ["1 = 1"]
+    params: list[object] = []
+    if strategy_instance_ids is not None:
+        if not strategy_instance_ids:
+            return []
+        where.append(
+            f"effective.strategy_instance_id IN ({_placeholders(strategy_instance_ids)})"
+        )
+        params.extend(strategy_instance_ids)
+    if from_ms is not None:
+        where.append("effective.economic_filled_at_ms >= ?")
+        params.append(from_ms)
+    if to_ms is not None:
+        where.append("effective.economic_filled_at_ms < ?")
+        params.append(to_ms)
+    if cursor_key is not None:
+        where.append(
+            "(effective.recorded_at_ms < ? OR "
+            "(effective.recorded_at_ms = ? AND effective.execution_sort_key < ?))"
+        )
+        params.extend((cursor_key[0], cursor_key[0], cursor_key[1]))
+    limit_sql = "" if limit is None else " LIMIT ?"
+    if limit is not None:
+        params.append(limit + 1)
+    sql = f"""
+        {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
+            SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
+                   f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
+                   f.recorded_at_ms, f.recorded_transition_sequence,
+                   e.subject_id, e.strategy_instance_id, o.broker_order_id,
+                   COALESCE(roots.root_recorded_at_ms, f.recorded_at_ms) AS root_recorded_at_ms,
+                   CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
+                   COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                   COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
+                            f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
+                   COALESCE(roots.root_transition_sequence,
+                            f.recorded_transition_sequence) AS economic_ledger_sequence,
+                   COALESCE(f.execution_id, f.fill_id) AS execution_sort_key
+            FROM fills f
+            JOIN orders o ON o.order_ref = f.order_ref
+            JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
+            LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            LEFT JOIN custody_transitions manual_acceptance
+                ON manual_acceptance.sequence = (
+                    SELECT MIN(acceptance.sequence)
+                    FROM custody_transitions acceptance
+                    WHERE acceptance.order_ref = o.order_ref
+                      AND acceptance.effect_operation_id = e.effect_operation_id
+                      AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                )
+            JOIN roots ON roots.effective_fill_id = f.fill_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM fills successor
+                WHERE successor.superseded_execution_ref = f.execution_id
+            )
+        )
+        SELECT effective.* FROM effective
+        WHERE {' AND '.join(where)}
+        ORDER BY effective.recorded_at_ms DESC, effective.execution_sort_key DESC{limit_sql}
+    """
+    return conn.execute(sql, params).fetchall()
+
+
+def effective_fill_records(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    strategy_instance_ids: Sequence[str] | None = None,
+) -> tuple[FillRecord, ...]:
+    """Canonical effective lineage on a caller-owned custody transaction.
+
+    The caller holds the repository coordinator (and checks admission coverage).
+    This does not open another SQLite snapshot between checking cash and
+    committing a claim. Stable custody-subject identities keep same-symbol
+    deployments distinct; lot matching still belongs to canonical FIFO.
+    """
+    rows = effective_fill_rows(
+        conn, strategy_instance_ids=strategy_instance_ids, from_ms=None,
+        to_ms=None, cursor_key=None, limit=None,
+    )
+    return tuple(sorted(
+        (_to_fill_record(row, account_id=account_id, custody_subject_identity=True) for row in rows),
+        key=lambda record: (record.filled_at_ms, record.ledger_sequence),
+    ))
+
+
 def _to_fill_record(
     row: sqlite3.Row,
     *,
@@ -1330,6 +1368,8 @@ def _to_fill_record(
         filled_at_ms=int(row["economic_filled_at_ms"]),
         fee=(float(row["fee"]) if row["fee"] is not None else None),
         ledger_sequence=_required_ledger_sequence(row, field="economic_ledger_sequence"),
+        native_order_id=row["broker_order_id"],
+        recorded_at_ms=int(row["root_recorded_at_ms"]),
     )
 
 

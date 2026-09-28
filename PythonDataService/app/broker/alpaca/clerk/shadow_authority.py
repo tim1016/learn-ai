@@ -25,7 +25,6 @@ from app.broker.alpaca.clerk.active_runtime import (
     compose_repository_runtime,
     unavailable_runtime,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
     LiveEnvelopeGate,
@@ -42,7 +41,6 @@ from app.broker.alpaca.clerk.shadow_broker import (
     compose_shadow_ports,
     verify_shadow_namespace_empty,
 )
-from app.broker.alpaca.clerk.shadow_sessions import ShadowSessionLedger, ShadowSessionRecorder
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -145,8 +143,7 @@ async def select_shadow_clerk_runtime(
             "SHADOW_ACTIVATION_REQUIRED",
             account_id=shadow.account_id,
             recovery=(
-                "Explicitly activate the shadow authority for this live account "
-                "(scripts.manage_alpaca_shadow activate) before starting shadow custody."
+                "Open this account’s Configuration and choose Activate Shadow."
             ),
         )
 
@@ -157,10 +154,6 @@ async def select_shadow_clerk_runtime(
         ):
             raise ShadowActivationInvalid("shadow activation does not match repository identity")
 
-    sessions = ShadowSessionRecorder(
-        ledger=ShadowSessionLedger(artifacts_root=artifacts_root, account_id=shadow.account_id),
-        window=read.capabilities().extended_hours_window,
-    )
     try:
         composed = await compose_repository_runtime(
             ports=ports,
@@ -174,20 +167,16 @@ async def select_shadow_clerk_runtime(
             execution_lease_retry_interval_s=execution_lease_retry_interval_s,
             stream_health_gate=stream_health_gate,
             roster_symbols=roster_symbols,
-            sweep_listener=sessions.record,
             # Simulated custody: the live account's cash never moves, so the
             # envelope subtracts what this Clerk's own fills would have spent
-            # (plan R2). Unsealed until an arming record exists (slice 6).
+            # (plan R2). Shadow uses current account policy and per-run budgets.
             live_envelope=LiveEnvelopeGate(
                 values=live_envelope_values, custody_is_simulated=True
             ),
-            # The envelope observes the live account's cash and positions
-            # (plan: unrealized is the live account's).
+            # Only base cash is read from Live. The common simulation
+            # projection owns Shadow marks, fees and retained risk capital.
             envelope_read=read,
-            # ADR 0059 D3/R10: the sealed envelope comes from this account's
-            # arming ledger, which is rooted on the LIVE account id -- not the
-            # ``shadow:`` custody namespace the rest of this composition uses.
-            arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id),
+
         )
     except Exception as exc:
         logger.warning(
@@ -207,11 +196,17 @@ async def select_shadow_clerk_runtime(
             authority_generation=activation.authority_generation,
             db_identity_token=activation.db_identity_token,
         )
+    # Capture initial reference capital before any simulated fill exists.
+    # Missing marks on retained custody leave the authority installed but
+    # unready; they never manufacture a baseline after an evidence gap.
+    if composed.envelope_sync is not None:
+        await composed.envelope_sync.tick()
     return ActiveClerkRuntime(
         authority_kind="shadow",
         clerk=composed.facade,
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
+        fee_sync=composed.fee_sync,
         envelope_sync=composed.envelope_sync,
         evidence_sink=NullTradeUpdateEvidenceSink(),
         _sqlite_repository=composed.repository,
@@ -229,7 +224,7 @@ async def activate_shadow_clerk_authority(
     """Explicitly initialize and durably activate the shadow authority for one live account.
 
     No startup path calls this; the operator does, once, through
-    ``scripts.manage_alpaca_shadow activate``. The custody database it creates
+    Configuration (or the recovery CLI). The custody database it creates
     is the shadow world's own -- the live account's authority is untouched.
     """
     record = await activate_isolated_authority(

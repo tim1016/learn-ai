@@ -15,11 +15,11 @@ from app.broker.alpaca.clerk.live_arming import (
     LiveArmingRecord,
 )
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerAccountModeDisagreement
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import ENVELOPE_T0 as T0
 
@@ -139,7 +139,7 @@ async def test_an_instance_leaving_armed_is_warned_about_once_with_its_code(
     with caplog.at_level("WARNING"):
         await sync.tick()
         assert _halts(caplog) == []
-        ledger.revoke_latest(SID, disarmed_at_ms=T0)
+        ledger.append_disarm_fixture(SID, disarmed_at_ms=T0)
         await sync.tick()
         await sync.tick()
 
@@ -186,13 +186,13 @@ async def test_a_second_loss_of_arming_is_warned_about_again(
 
     with caplog.at_level("WARNING"):
         await sync.tick()
-        ledger.revoke_latest(SID, disarmed_at_ms=T0)
+        ledger.append_disarm_fixture(SID, disarmed_at_ms=T0)
         await sync.tick()
         assert len(_halts(caplog)) == 1
         ledger.append(_record(armed_at_ms=T0 - 30_000))
         await sync.tick()
         assert len(_halts(caplog)) == 1
-        ledger.revoke_latest(SID, disarmed_at_ms=T0)
+        ledger.append_disarm_fixture(SID, disarmed_at_ms=T0)
         await sync.tick()
 
     halts = _halts(caplog)

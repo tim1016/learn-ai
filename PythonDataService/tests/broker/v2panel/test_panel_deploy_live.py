@@ -53,10 +53,13 @@ def test_the_live_world_offers_live_and_dry_run_only(monkeypatch: pytest.MonkeyP
     assert view.eligibility.eligible is True
 
 
-def test_the_live_view_names_real_money_and_the_arming_step(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_live_view_names_real_money_and_deploy_consent(monkeypatch: pytest.MonkeyPatch) -> None:
     view = _live_view(monkeypatch)
     live = next(mode for mode in view.execution_modes if mode.mode == "live")
-    assert "real-money" in live.explanation and "arm" in live.explanation
+    assert "real-money" in live.explanation and "consent" in live.explanation
+    assert "arm" not in live.explanation
+    assert "consent" in view.eligibility.explanation
+    assert "arm" not in view.eligibility.explanation
     row = next(check for check in view.readiness_checks if check.gate_id == "broker.account_posture")
     assert row.label == "Live account posture"
     assert "paper" not in row.headline.lower()
@@ -108,22 +111,26 @@ def _receipt(
     )
 
 
-def test_live_receipt_says_every_enter_refuses_until_armed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_receipt_uses_budget_and_risk_without_a_second_action(monkeypatch: pytest.MonkeyPatch) -> None:
     receipt = _receipt(_live_view(monkeypatch), "live")
 
     assert receipt.message == f"{SID} is on duty in Alpaca live."
-    assert "every ENTER is refused until an operator arms this instance" in receipt.explanation
-    assert "manage_alpaca_arming" in receipt.next_action
+    assert "budget" in receipt.explanation and "risk" in receipt.explanation
+    assert "arm" not in receipt.explanation
+    assert receipt.next_action.startswith("Open the bot panel")
+    assert "scripts." not in receipt.next_action
     prose = (receipt.message, receipt.explanation, receipt.next_action)
     assert not any(word in sentence.lower() for sentence in prose for word in ("paper", "shadow"))
 
 
-def test_an_evidence_override_never_hides_the_live_arming_instruction(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_evidence_override_preserves_live_budget_and_risk_terms(monkeypatch: pytest.MonkeyPatch) -> None:
     receipt = _receipt(_live_view(monkeypatch), "live", evidence_override=_override())
 
     assert "human override of evidence-only" in receipt.explanation
-    assert "every ENTER is refused until an operator arms this instance" in receipt.explanation
-    assert "manage_alpaca_arming" in receipt.next_action
+    assert "budget" in receipt.explanation and "risk" in receipt.explanation
+    assert "arm" not in receipt.explanation
+    assert receipt.next_action.startswith("Open the bot panel")
+    assert "scripts." not in receipt.next_action
     assert "stop the bot if behavior differs" in receipt.next_action
 
 

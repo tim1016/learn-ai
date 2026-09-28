@@ -44,6 +44,28 @@ function inputs(overrides: Partial<BotPanelView> = {}, operator = false, runStat
 }
 
 describe('BotBannerComponent', () => {
+  it('opens ordinary Deploy for a stopped bot without reusing identity or sending a command', async () => {
+    const requested: unknown[] = [];
+    const panel = fakeBotPanelView();
+    await render(BotBannerComponent, {
+      inputs: inputs({
+        health: { ...panel.health, running: false, desired_state: 'STOPPED' },
+        actions: [],
+        primary_action_by_lens: { trader: null, operator: null },
+      }),
+      providers: [provideRouter([])],
+      on: { actionRequested: (event) => requested.push(event) },
+    });
+
+    const link = screen.getByRole('link', { name: 'Deploy again' });
+    expect(link.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/deploy');
+    // Its own class, not the unrelated manual-order control's.
+    expect(link.classList.contains('bot-banner__deploy-again')).toBe(true);
+    expect(link.classList.contains('bot-banner__manual-order')).toBe(false);
+    expect(screen.queryByRole('button', { name: /^(Pause|Continue|Resume)$/ })).toBeNull();
+    expect(requested).toEqual([]);
+  });
+
   it('shows which bot this is, the way back, and its freshness once, above the switch', async () => {
     await render(BotBannerComponent, {
       inputs: inputs(),
@@ -176,15 +198,15 @@ describe('BotBannerComponent', () => {
   it('puts the strategy title and its actions on one row, not two', async () => {
     const { container } = await render(BotBannerComponent, {
       inputs: inputs({
-        actions: [fakePanelAction('resume')],
-        primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+        actions: [fakePanelAction('stop')],
+        primary_action_by_lens: { trader: 'stop', operator: 'stop' },
       }),
       providers: [provideRouter([])],
     });
 
     const row = container.querySelector('.bot-banner__status-row');
     const heading = screen.getByRole('heading', { name: /Deployment Validation/ });
-    const button = screen.getByRole('button', { name: 'Resume' });
+    const button = screen.getByRole('button', { name: 'Stop' });
     expect(row?.contains(heading)).toBe(true);
     expect(row?.contains(button)).toBe(true);
   });
@@ -192,14 +214,14 @@ describe('BotBannerComponent', () => {
   it('shows the trader mission verdict and direct trader actions, with no quote or promoted flatten', async () => {
     await render(BotBannerComponent, {
       inputs: inputs({
-        actions: [fakePanelAction('resume')],
-        primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+        actions: [fakePanelAction('stop')],
+        primary_action_by_lens: { trader: 'stop', operator: 'stop' },
       }),
       providers: [provideRouter([])],
     });
 
     expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More trader actions' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'More operator actions' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'More trader actions' }));
@@ -210,7 +232,7 @@ describe('BotBannerComponent', () => {
     await render(BotBannerComponent, {
       inputs: inputs({
         actions: [
-          fakePanelAction('resume'),
+          fakePanelAction('stop'),
           fakePanelAction('resolve_execution_coverage', { label: 'Resolve execution coverage' }),
         ],
         primary_action_by_lens: { trader: null, operator: 'resolve_execution_coverage' },
@@ -219,7 +241,7 @@ describe('BotBannerComponent', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Resolve execution coverage' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
 
   it('combines the operator quote with direct lifecycle and recovery actions', async () => {
@@ -250,31 +272,29 @@ describe('BotBannerComponent', () => {
   const executeFlatten: PanelAction = fakePanelAction('execute_safe_flatten', {
     label: 'Execute safe flatten',
   });
-  const resume: PanelAction = fakePanelAction('resume');
-
   function stoppedPanel(overrides: Partial<BotPanelView> = {}): Partial<BotPanelView> {
     return {
       health: { ...fakeBotPanelView().health, running: false, phase: 'OFF_DUTY', desired_state: 'STOPPED' },
-      actions: [resume, prepareFlatten],
-      primary_action_by_lens: { trader: null, operator: 'resume' },
+      actions: [prepareFlatten],
+      primary_action_by_lens: { trader: null, operator: null },
       ...overrides,
     };
   }
 
-  it('promotes flatten beside Resume for a stopped bot still holding exposure, operator only', async () => {
+  it('promotes flatten beside Deploy again for a stopped bot still holding exposure, operator only', async () => {
     await render(BotBannerComponent, {
       inputs: inputs(stoppedPanel({ exposure: { SPY: 3 } }), true),
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Deploy again' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Prepare safe flatten' })).toBeTruthy();
   });
 
   it('prefers the execute step once the backend presents it', async () => {
     await render(BotBannerComponent, {
       inputs: inputs(
-        stoppedPanel({ exposure: { SPY: 3 }, actions: [resume, prepareFlatten, executeFlatten] }),
+        stoppedPanel({ exposure: { SPY: 3 }, actions: [prepareFlatten, executeFlatten] }),
         true,
       ),
       providers: [provideRouter([])],
@@ -292,7 +312,6 @@ describe('BotBannerComponent', () => {
         stoppedPanel({
           exposure: { SPY: 3 },
           actions: [
-            resume,
             prepareFlatten,
             { ...executeFlatten, enabled: false },
           ],
@@ -313,7 +332,7 @@ describe('BotBannerComponent', () => {
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Deploy again' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Prepare safe flatten' })).toBeNull();
   });
 

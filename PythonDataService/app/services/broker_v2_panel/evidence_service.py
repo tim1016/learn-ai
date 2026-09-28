@@ -151,6 +151,30 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Entry terminal state confirmed",
         "The Account Clerk confirmed the entry order reached a terminal state.",
     ),
+    "BUDGET_AUTHORITY_CUTOVER": (
+        "Account switched to budgets",
+        "Earlier runners were stopped. Fresh deployment consent now owns new spending; prior custody obligations remain.",
+    ),
+    "SIMULATION_SESSION_BASELINE": (
+        "Simulation risk baseline retained",
+        "The simulation recorded the reference equity for its own session loss calculation.",
+    ),
+    "DEPLOY_COMMITTED": (
+        "Deployment budget committed",
+        "The reviewed dollar budget and one deployment intent were recorded together. Launch is pending.",
+    ),
+    "DEPLOY_LAUNCHED": (
+        "Deployment launch recorded",
+        "The authorized deployment's runner was installed. Its current state is shown separately.",
+    ),
+    "ACCOUNT_RISK_LIMITS_APPLIED": (
+        "Account risk limits applied",
+        "The reviewed loss limits now govern new entries. Existing exit terms and standing holds remain.",
+    ),
+    "FEE_EVIDENCE_OBSERVED": (
+        "Account fee evidence recorded",
+        "New broker activity evidence was retained for deployment fee attribution.",
+    ),
     "RECONCILIATION_ATTEMPTED": (
         "Reconciliation completed",
         "The Account Clerk compared durable custody with a broker observation.",

@@ -1,5 +1,9 @@
 # ADR 0059 — Real-money Alpaca Live is reachable only through a shadow gate, a per-instance arming ceremony, and a cash-bound risk envelope
 
+**Amended 2026-09-27 (PRD #2540):** The budget-authority amendment below
+supersedes the separate arming, grant expiry and Shadow-receipt prerequisites.
+Their descriptions remain historical; current Live consent is part of Deploy.
+
 **Status:** Accepted 2026-09-07
 **Provenance:** Proposed, read and amended the same day; the owner's answers are recorded under "Resolved before Accepted", which under [ADR 0039](0039-adr-status-is-decision-standing.md) is the read-through that promotes; code lands from this point in the slice order under Consequences. Scope memo `live-account-attachment-scope-2026-09-07.md` (which this ADR resolves; pruned to git history 2026-09-12), and the 2026-09-07 grilling session in which the repo owner chose real-money submission over read-only observation, a mandatory shadow gate, a cash-only envelope, no-new-entries-on-loss, and then — on reading the draft — extended hours and every symbol in scope, no per-order cap, and every envelope value sourced from the environment file. External facts verified on 2026-09-07 against Alpaca's credential-management, Intraday Margin Rule, regulatory-fee, order and extended-hours documentation and the SEC's FY2026 §31 rate advisory.
 **Decision drivers:** The owner wants sealed programs to trade a real-money Alpaca account. The repo forbids this at thirteen deliberate sites (census in the memo §2) and in doctrine — ADR 0042 ("Future real-money Live remains unreachable"), PRD #1723 FR-035, ADR 0021 §6 guardrail 2. None of that is drift; it is the correct posture for a research tool with no live risk envelope. Reaching live therefore needs a decision that says *what replaces the refusal*, not a toggle that removes it. Five facts learned during the session shaped the shape: FINRA retired the Pattern Day Trader rule on 2026-06-04 in favour of an Intraday Margin Rule that measures continuous exposure rather than counting trades; Alpaca API keys carry per-scope access controls and MFA gates only dashboard sign-in; every sealed program in the registry is long-only; every program order was a market DAY order, which Alpaca queues for the next trading day when submitted after the regular close without extended-hours eligibility; and the decision clock is regular-hours-only today (`feed_continuity_policy` refuses `use_rth=False` as `all_session_not_supported`).
@@ -108,6 +112,10 @@ Port an `AlpacaEquityRegulatoryFeeModel` as canonical math under the Math Proven
 
 Fees the broker actually charged arrive as `FEE` activities and are the truth the Clerk journals. The model is used for two things only: backtest cost parity on the vendor being traded, and envelope headroom. Predicted-vs-observed is reconciled per session; drift beyond the fixture tolerance is a reconciliation finding, never silently absorbed. The IBKR model stays for QC parity and is never applied to an Alpaca fill.
 
+**Fee attribution amendment (2026-09-27, #2542 / PRD #2540).** Each deployment retains its own fee ownership after Stop. The canonical dated fee model supplies unrounded fee weights; observed aggregate fees and pending provisions use one exact integer-cent largest-remainder allocation, with stable custody-subject tie-breaking. Component-specific charges use that component's weights. Proven manual/external subjects participate; incomplete populations, unpinned rates, positive zero-weight charges, unlinked refunds and unproven overlap with reported fill fees remain account-unattributed. Observed settlement replaces provisions. Proven linked refunds reverse original shares, including cumulative partial refunds, without charging a subject twice.
+
+Provider activity evidence is retained as immutable custody transitions and allocation is derived with the current effective corrected fill population. A background producer refreshes this evidence independent of UI reads; explicit provider page exhaustion can prove a young account's history complete, while a truncated read cannot. The account and bot UI show estimates, modelled settlement, observed charges and unresolved obligations. Shadow and Dry Run only use modelled fees. Their cash projection records when those fees are already reflected, preventing a second reservation. Fee unknownness refuses new spending and does not remove reducing recovery. See [the attribution reference and exact-cent proof](../../references/alpaca-fee-attribution.md).
+
 ### 7. Margin fields are ingested to prove the bound, not to use it
 
 The adapter ingests `multiplier`, `regt_buying_power`, `daytrading_buying_power`, `maintenance_margin`, `initial_margin`, `sma` and `last_equity` onto `BrokerAccountSnapshot` (nullable; absence is unknown). The account card renders them so an operator can see that exposure sits under cash. The envelope reads `equity` and `last_equity` for account day P&L; it reads none of the margin or buying-power fields. *(Amended 2026-09-24 by owner decision #2423.)*
@@ -184,3 +192,125 @@ supersedes account-level EXIT pricing with immutable registration terms,
 introduces profile v4 defaults and the acknowledged manual band override,
 and exposes the existing arming ceremony through the Live UI. Entry allowance
 semantics and the IBKR-data/Alpaca-orders boundary remain unchanged.
+
+### Simulation cash and risk amendment — 2026-09-27 (#2540 / #2546)
+
+This amendment supersedes Decision 4's mixed Shadow P&L reading. One
+`SimulatedAccountProjection` composes canonical effective fills, FIFO valuation,
+fee attribution and the calendar for both simulated worlds. It introduces no
+second position, fee or balance ledger.
+
+Shadow shares one `shadow:<live account>` pool: current observed real cash,
+minus its own cumulative BUY costs, plus its own SELL proceeds, minus settled
+modelled fees. Real cash changes affect reference capital available for new
+commitments; they never become simulated P&L. Real positions, unrealized P&L,
+`last_equity` and FEE activities cannot enter this projection. Open simulated
+lots use fresh retained IBKR marks. A missing, conflicting or stale mark makes
+new exposure unavailable, while custody effects and reductions still proceed.
+
+The initial positive risk capital is captured before the first simulated fill.
+Immutable `SIMULATION_SESSION_BASELINE` custody transitions retain this capital
+and each session's equity; they rebuild with the existing mirror. Later
+baselines use that initial capital plus cumulative own realized and marked open
+P&L minus canonical accrued modelled fees, with effective fills and fee inputs
+cut off inclusively at the prior scheduled NYSE close and marks from that same
+calendar boundary. Current marked equity includes accrued modelled fees even
+before settlement; cash subtracts settled fees only, while pending provisions
+remain cash claims. A restart may reconstruct a
+missed boundary only from complete retained close evidence; it cannot invent a
+baseline or substitute current real equity. Changes to reference cash or risk
+limits cannot rewrite a retained baseline or clear a standing loss hold.
+After session rollover, the existing obligation-resolution proof reads only
+the selected simulated custody world; foreign real positions or orders cannot
+block clearance of a resolved simulated hold.
+
+Dry Run uses its explicitly reviewed starting cash: transient consent before
+Deploy commits, then the private account's durable committed cents. It retains
+its explicit exemption from the account daily-loss policy, rather than borrowing
+Live's policy or inventing an additional setting. This exemption does not waive
+cash affordability, modelled fees, coherent execution/price evidence or custody
+holds. Separate Dry Runs cannot pool cash with each other or their parent lane.
+
+The observation carries an exact simulated fill and settled-fee cutoff so the
+budget projection counts effects once. New executions invalidate the observation
+before another commitment. Its session and mark-expiry facts are rechecked at
+commit; a fresh observation cannot extend a stale price or a prior-day baseline.
+
+### Shadow activation through Configuration — 2026-09-27 (#2546)
+
+A configured Live lane without Shadow custody offers **Activate Shadow and
+restart** on its existing Configuration authority rail. The command verifies
+the effective pinned account, fresh broker Live identity, positive initial
+reference capital, and the existing empty Clerk-order namespace proof. It
+shares the graduation mutation fence, rejects a changed binding or existing
+Live activation, and never accepts caller-authored account evidence or paths.
+The durable isolated activation and initial risk baseline precede the supervised
+restart. Nothing is deployed and no real order permission is created.
+
+A new empty Shadow database adopts budget authorization as part of that
+explicit action, preserving the activation receipt and configured owner as its
+proof. Existing run/order history requires the visible guarded budget upgrade;
+activation cannot convert historical grants into commitments. Configuration
+status and activation remain routable while execution is unavailable, with the
+account pin checked inside the lane. The activation CLI remains recovery-only.
+
+
+## 2026-09-27 amendment: one budgeted Deploy authority (#2545 / #2547)
+
+The existing Clerk owns one whole-cent dollar commitment per fresh deployment,
+recorded atomically with its command and run intent. Canonical effective fills,
+FIFO and fee attribution project its balance and all account cash claims. No
+independent armed flag, balance store or promotion check at ENTER is introduced.
+Paper and Live share these checks; Live also requires typed confirmation of the
+exact reviewed account, world, configuration, dollars, ExitTerms and risk revision.
+Price and cash are checked again without changing the consented amount. Regular
+session market execution can exceed the estimate: this is entry admission, not a
+guaranteed maximum debit or loss, and actual broker evidence is always retained.
+
+Configuration exposes **Stop bots and use budgets**. Under the existing lane
+mutation and custody fences, it stops old runners, reconciles existing custody,
+then records **Budget authority cutover** exactly once. The durable authorization
+version is the sole before/after boundary. Old grants grant nothing after that
+point, including after restart or mirror reconstruction; schema compatibility
+refuses an older writer. Working orders, exposure and fee claims survive the
+switch. No budget or consent is inferred from a historical grant. A new private
+Dry Run or empty Shadow authority may establish budget authority as part of its
+explicit creation; an authority with older runs follows the visible migration.
+
+Live authority selection, authenticated control, account mode agreement and the
+existing graduation fence remain prerequisites. Graduation creates neither a
+budget nor a trade. It stops Shadow execution before selecting Live, while each
+world's money, risk holds and retained evidence stay in its own custody pool.
+A missing budget or unreadable money fact refuses new exposure and preserves
+normal reducing recovery. There is no fallback to the historical arming ledger.
+Historical grants and six-field profile hashes remain readable and unchanged.
+
+### Graduation binds current risk policy — 2026-09-27 (#2543 / #2546 / #2547)
+
+Graduation reviews the effective account policy recorded by Apply risk limits,
+not the profile's former defaults. A version-four cutover plan content-addresses
+the source Shadow policy, selection generation, effective profile and current
+extended-hours allowances. Applying the review holds the same selection and
+custody writer fences as risk edits through durable activation; a changed
+policy or selection requires a fresh review. Version-three historical plan
+hashes and the recovery CLI decoder remain compatible. Fresh broker proofs
+may have new observation times and references; their independently fresh
+account identity, mode, positions and orders must still match the review.
+
+The target database remains empty through the existing cutover's verified
+backup and activation boundary. The activation proof carries the accepted
+policy. Before composing any Live Clerk execution capability, startup records
+that policy as Live revision one through the ordinary account-policy transition.
+An interruption after activation resumes this same initialization; failure to
+record it prevents runtime installation. Repeated startup cannot overwrite a
+later explicit Apply. The activation proof remains the durable provenance.
+
+This creates no budget, no bot and no trade consent. Shadow's policy is the
+reviewed source for the new Live limits, but its holds, session baseline, P&L,
+fees, budgets and order history stay in Shadow. Real cash and fresh real risk
+evidence must be observed before Live Deploy; existing budget-authority
+upgrade rules and per-deployment consent still apply.
+
+Validated by `tests/services/test_graduation_risk_boundary.py` through real
+cutover, interrupted startup and admission, plus cutover compatibility and
+composed Shadow operator tests.

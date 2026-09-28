@@ -119,8 +119,6 @@ def status_explanation_for(status: BotStatusView, rollup: CatalogEconomicRollup)
     if status.phase == "RETIRED":
         return "Retired; no further runs can start."
     if status.running:
-        if status.desired_state == "PAUSED":
-            return "Paused; the current run remains live while bar evaluation is held."
         if status.mode == "trade":
             return "Running under Account Clerk custody."
         if status.mode == "dry_run":
@@ -163,8 +161,7 @@ def compose_catalog_view(
 ) -> BotCatalogView:
     """Compose one roster row from a bot's status and its rollup (§5).
 
-    The roster preserves the backend-owned desired state, including ``PAUSED``
-    for a live run whose evaluation is temporarily held.
+    The roster preserves the backend-owned Running or Stopped intent.
     """
     return BotCatalogView(
         strategy_instance_id=status.strategy_instance_id,

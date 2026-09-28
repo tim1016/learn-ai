@@ -180,8 +180,6 @@ def _qualification_settings(account_mode: str) -> AlpacaSettings:
             {
                 "live_loss_fraction": 0.01,
                 "live_loss_usd": 100.0,
-                "live_shadow_sessions": 1,
-                "live_arming_max_sessions": 1,
                 "live_xh_entry_bps": 0.0,
                 "live_xh_exit_bps": 0.0,
             }

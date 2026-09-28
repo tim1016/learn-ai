@@ -34,6 +34,7 @@ from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
@@ -79,10 +80,6 @@ class SealedProgramConflictError(ValueError):
     """One immutable instance was assigned different v2 program semantics."""
 
 
-class LegacyMigrationLineageConflictError(ValueError):
-    """One clone instance id was assigned a different migration origin."""
-
-
 def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
     """Build the v1 stock plan from the existing deploy controls."""
     return ActionPlan(
@@ -126,6 +123,7 @@ class BrokerBotBinding(BaseModel):
     # Transient authoring metadata is persisted only inside the append-only v2
     # seal. Excluding it here preserves the historical v1 configuration hash.
     strategy_param_origins: dict[str, ParameterOrigin] | None = Field(default=None, exclude=True)
+    budget_consent: DeployBudgetConsent | None = Field(default=None, exclude=True)
     sealed_program: SealedBotProgram | None = Field(default=None, exclude=True)
     program_build: ProgramBuildAdmissionFact | None = Field(default=None, exclude=True)
     # A Start obtains this exact account from its custody snapshot before it
@@ -254,14 +252,10 @@ class ProgramBuildRunEvidence(BaseModel):
 
 
 class LegacyMigrationLineageRecord(BaseModel):
-    """Create-once evidence that one instance id is a PRD Sec 11.5 clone.
+    """Read-only historical evidence from the removed legacy clone workflow.
 
-    Written once, under the *clone*'s own instance directory, and never
-    under the original's — migration never touches the original's bytes.
-    A clone is otherwise an ordinary strategy instance: its own first
-    Start/Resume writes its own ``strategy_instance.json`` exactly like any
-    fresh deployment, so this sidecar is the only artifact that names the
-    lineage rather than colliding with that future write.
+    The original and clone identity bytes remain untouched. Fresh deployment
+    never appends a seal or constructs a successor from this lineage record.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -323,7 +317,7 @@ class BotBindingRepository:
         self,
         binding: BrokerBotBinding,
         *,
-        launch_reason: Literal["deploy", "resume"],
+        launch_reason: Literal["deploy"],
     ) -> None:
         """Durably append one run, then make it the instance's current run."""
         instance_dir = self._instance_dir_for(binding.strategy_instance_id)
@@ -560,49 +554,6 @@ class BotBindingRepository:
         ):
             raise ValueError("program-build evidence belongs to another run identity")
         return evidence
-
-    def ensure_legacy_migration_clone_lineage(
-        self,
-        *,
-        original_strategy_instance_id: str,
-        clone_instance_id: str,
-        reason: str,
-        now_ms: int,
-    ) -> LegacyMigrationLineageRecord:
-        """Idempotently record that a clone id succeeds an unprovable legacy instance.
-
-        PRD Sec 11.5: pure lineage evidence only. It never writes the
-        clone's own ``strategy_instance.json`` and never touches the
-        original's directory at all, so the original's v1 bytes are
-        untouched and the clone's own eventual first Start/Resume remains
-        an ordinary, unconflicted create-once deployment. Calling this
-        twice for the same original always computes and writes the
-        identical record (the same deterministic clone id maps to the same
-        origin), so a repeated Resume attempt cannot mint a second clone.
-        """
-        clone_dir = self._instance_dir_for(clone_instance_id)
-        clone_dir.mkdir(parents=True, exist_ok=True)
-        self._live_state_root.mkdir(parents=True, exist_ok=True)
-        candidate = LegacyMigrationLineageRecord(
-            strategy_instance_id=clone_instance_id,
-            migrated_from_strategy_instance_id=original_strategy_instance_id,
-            reason=reason,
-            created_at_ms=now_ms,
-        )
-        path = clone_dir / LEGACY_MIGRATION_LINEAGE_FILENAME
-        try:
-            self._create_atomic_once(path, candidate)
-            return candidate
-        except FileExistsError:
-            existing = LegacyMigrationLineageRecord.model_validate_json(path.read_text(encoding="utf-8"))
-        if (
-            existing.strategy_instance_id != candidate.strategy_instance_id
-            or existing.migrated_from_strategy_instance_id != candidate.migrated_from_strategy_instance_id
-        ):
-            raise LegacyMigrationLineageConflictError(
-                f"Clone instance '{clone_instance_id}' already has different migration lineage."
-            )
-        return existing
 
     def read_legacy_migration_lineage(
         self,

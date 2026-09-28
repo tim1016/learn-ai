@@ -207,7 +207,9 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
     deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     first_run_id = deployed.active_run_id
     await registry.stop("alpaca", _SID)
-    resumed = await registry.resume_existing("alpaca", _SID)
+    # Seed a retained pre-cutover second run as evidence, without starting it.
+    historical = registry.binding_for_control("alpaca", _SID).model_copy(update={"run_id": "historical-second-run"})
+    registry._bindings.record_launch(historical, launch_reason="deploy")
 
     async with _client(app) as client:
         current = await client.get(
@@ -233,23 +235,22 @@ async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
         )
 
     assert current.status_code == 200
-    assert current.json()["run_id"] == resumed.active_run_id
+    assert current.json()["run_id"] == historical.run_id
     assert current.json()["is_current"] is True
-    assert current.json()["process"]["state"] == "RUNNING"
+    assert current.json()["process"]["state"] == "UNKNOWN"
     assert current.json()["terminal_outcome"] is None
     assert history.status_code == 200
     assert [run["run_id"] for run in history.json()["runs"]] == [first_run_id]
     assert history.json()["runs"][0]["terminal_outcome"]["kind"] == "STOPPED"
     assert history.json()["next_cursor"] is None
     assert scoped_current.status_code == 200
-    assert scoped_current.json()["run_id"] == resumed.active_run_id
+    assert scoped_current.json()["run_id"] == historical.run_id
     assert scoped_history.status_code == 200
     assert [run["run_id"] for run in scoped_history.json()["runs"]] == [first_run_id]
     assert wrong_account_current.status_code == 404
     assert wrong_account_history.status_code == 404
     assert "account-1" in wrong_account_current.json()["detail"]["message"]
     assert "account-1" in wrong_account_history.json()["detail"]["message"]
-    await registry.stop("alpaca", _SID)
 
 
 @pytest.mark.asyncio

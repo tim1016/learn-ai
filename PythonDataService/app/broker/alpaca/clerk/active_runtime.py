@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
@@ -35,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
+from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
@@ -49,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseHeld,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.sqlite.stream_health_sync import StreamHealthHoldSync
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.synthetic_activation import (
@@ -110,6 +113,7 @@ def _ordered_taps(
     envelope_sync: BackgroundSweep | None,
     hold_sync: BackgroundSweep | None,
     sweep: BackgroundSweep | None,
+    fee_sync: BackgroundSweep | None = None,
 ) -> tuple[BackgroundSweep, ...]:
     """The background taps an authority owns, in start order, absent ones dropped.
 
@@ -120,7 +124,7 @@ def _ordered_taps(
     startup cleanup in :func:`compose_repository_runtime` -- read it from
     here rather than each keeping their own branch order true.
     """
-    return tuple(tap for tap in (envelope_sync, hold_sync, sweep) if tap is not None)
+    return tuple(tap for tap in (fee_sync, envelope_sync, hold_sync, sweep) if tap is not None)
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,7 @@ class ActiveClerkRuntime:
     sweep: BackgroundSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
     envelope_sync: LiveEnvelopeSync | None = None
+    fee_sync: FeeEvidenceSync | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
@@ -162,7 +167,7 @@ class ActiveClerkRuntime:
 
     def _taps(self) -> tuple[BackgroundSweep, ...]:
         return _ordered_taps(
-            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep
+            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep, fee_sync=self.fee_sync
         )
 
     def start_background_taps(self) -> None:
@@ -179,7 +184,7 @@ class ActiveClerkRuntime:
         makes "did anything start the taps?" one question main.py answers in
         one place.
         """
-        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None):
+        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None, fee_sync=self.fee_sync):
             tap.start()
 
     async def close(self) -> None:
@@ -190,6 +195,7 @@ class ActiveClerkRuntime:
         # nothing, exactly as ``_sqlite_repository`` below.
         for tap in self._taps():
             await tap.stop()
+        self.fee_sync = None
         self.envelope_sync = None
         self.hold_sync = None
         self.sweep = None
@@ -251,6 +257,7 @@ class _ComposedAuthority:
     sweep: ReconciliationSweep
     hold_sync: StreamHealthHoldSync
     envelope_sync: LiveEnvelopeSync | None
+    fee_sync: FeeEvidenceSync | None
 
 
 async def compose_repository_runtime(
@@ -272,6 +279,8 @@ async def compose_repository_runtime(
     arming_ledger: LiveArmingLedger | None = None,
     arming_gate: ArmingGate | None = None,
     instance_seals: InstanceSeals | None = None,
+    simulation_initial_cash: Decimal | None = None,
+    initialize_reviewed_policy: Callable[[ClerkSqliteRepository], None] | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -281,8 +290,8 @@ async def compose_repository_runtime(
 
     ``envelope_read`` is the port the envelope observes when it is not the
     Clerk's own read port -- the shadow authority passes the live account's
-    read so cash and positions are the real account's while custody stays
-    synthesized.
+    read as the reference cash source. Simulated positions, fees and risk
+    come exclusively from its own custody and retained market-data evidence.
 
     ``arming_ledger`` is the account's sealed-arming evidence (ADR 0059 D3). The
     envelope sync re-reads it every tick so an arming performed by the
@@ -298,6 +307,7 @@ async def compose_repository_runtime(
     sweep: ReconciliationSweep | None = None
     hold_sync: StreamHealthHoldSync | None = None
     envelope_sync: LiveEnvelopeSync | None = None
+    fee_sync: FeeEvidenceSync | None = None
     try:
         repository = await _open_repository_after_lease_expiry(
             repository_opener,
@@ -307,6 +317,13 @@ async def compose_repository_runtime(
             retry_interval_s=execution_lease_retry_interval_s,
         )
         verify_activation(repository.control_meta_snapshot())
+        if initialize_reviewed_policy is not None:
+            initialize_reviewed_policy(repository)
+        if repository.budget_authority_version() >= 2:
+            # Historical arming remains readable for exit-term migration;
+            # it supplies no executable permission after the cutover.
+            arming_gate = None
+            instance_seals = None
         intake = ReentrantAsyncLock()
         guarded_read, guarded_trade = guard_broker_ports(
             read=ports.read,
@@ -384,9 +401,8 @@ async def compose_repository_runtime(
         # the hold sync has one -- the reconcile loop's backoff reaches 300 s
         # on failure, and a losing day must not wait that long to be judged.
         # Unstarted here too: `start_background_taps()` is the one start seam.
-        # The envelope judges the account the money is in. Under shadow that
-        # is the live account (cash and positions), not the synthesized
-        # book, whose positions never mark to market.
+        # Shadow takes only reference cash from the real account. The shared
+        # simulated projection values its own custody with retained marks.
         envelope_sync = (
             None
             if live_envelope is None
@@ -398,11 +414,16 @@ async def compose_repository_runtime(
                     else guard_broker_read_port(envelope_read, intake=intake)
                 ),
                 envelope=live_envelope,
-                arming_ledger=arming_ledger,
+                custody_read=guarded_read,
+                arming_ledger=arming_ledger if repository.budget_authority_version() < 2 else None,
                 arming_gate=arming_gate,
                 instance_seals=instance_seals,
+                simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
+                    if repository.account_id.startswith(("sim:", "shadow:")) else None),
             )
         )
+        if not repository.account_id.startswith(("sim:", "shadow:")):
+            fee_sync = FeeEvidenceSync(repo=repository, read=guarded_read)
         if envelope_sync is not None:
             await asyncio.to_thread(envelope_sync.refresh_arming)
         await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
@@ -416,13 +437,14 @@ async def compose_repository_runtime(
             sweep=sweep,
             hold_sync=hold_sync,
             envelope_sync=envelope_sync,
+            fee_sync=fee_sync,
         )
     except Exception:
         # Whatever was built before the failure, stopped in the same declared
         # order the runtime's own ``close()`` uses -- a tap left running here
         # would outlive the repository closed on the next line.
         for tap in _ordered_taps(
-            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep
+            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep, fee_sync=fee_sync
         ):
             await tap.stop()
         if repository is not None:

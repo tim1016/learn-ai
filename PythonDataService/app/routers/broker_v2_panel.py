@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.config import settings
 from app.schemas.broker_bots import (
@@ -64,9 +65,11 @@ from app.schemas.canary_admission import (
     CanaryActivationRequest,
     CanaryAdmissionEvent,
 )
+from app.schemas.deployment_budget import BudgetDeployCommandReceipt, DeploymentBudgetPreview, DeploymentBudgetView
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import (
+    budget_deploy,
     cohort_archive,
     cohort_flatten,
     panel_deploy,
@@ -377,8 +380,43 @@ async def preview_bot_start_admission_scoped(
 
 
 @router.post(
+    "/{broker}/accounts/{account_id}/bots/budget-preview",
+    response_model=DeploymentBudgetPreview,
+    summary="Review server-calculated dollars for the exact deployment",
+)
+async def preview_deployment_budget_scoped(broker: str, account_id: str, request: AlpacaPaperDeployRequest) -> DeploymentBudgetPreview:
+    try:
+        return await panel_deploy.preview_alpaca_deployment_budget(broker, account_id, request)
+    except panel_errors.PanelDataError as error:
+        _raise_alpaca_deploy_error(error)
+
+
+@router.get("/{broker}/accounts/{account_id}/bots/{sid}/budget", response_model=DeploymentBudgetView)
+async def read_deployment_budget_scoped(broker: str, account_id: str, sid: str) -> DeploymentBudgetView:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
+    try:
+        return await budget_deploy.budget_view(account_id, sid)
+    except BudgetUnavailable as error:
+        _raise_alpaca_deploy_error(budget_deploy.budget_error(error))
+
+
+@router.get("/{broker}/accounts/{account_id}/bots/{sid}/deploy-command", response_model=BudgetDeployCommandReceipt)
+async def read_deployment_command_scoped(broker: str, account_id: str, sid: str) -> BudgetDeployCommandReceipt:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Budget deployment is available on Alpaca accounts.")
+    try:
+        receipt = await budget_deploy.command_receipt(account_id, sid)
+        if receipt is None:
+            raise HTTPException(status_code=404, detail="No budget-backed Deploy command exists for this deployment.")
+        return receipt
+    except BudgetUnavailable as error:
+        _raise_alpaca_deploy_error(budget_deploy.budget_error(error))
+
+
+@router.post(
     "/{broker}/accounts/{account_id}/bots",
-    response_model=AlpacaPaperDeployReceipt,
+    response_model=AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt,
     status_code=201,
     summary="Deploy one Clerk-governed Alpaca paper bot (§5)",
 )
@@ -386,7 +424,7 @@ async def deploy_bot_scoped(
     broker: str,
     account_id: str,
     request: AlpacaPaperDeployRequest,
-) -> AlpacaPaperDeployReceipt:
+) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
     try:
         return await panel_deploy.deploy_alpaca_paper_bot(broker, account_id, request)
     except panel_errors.PanelDataError as error:

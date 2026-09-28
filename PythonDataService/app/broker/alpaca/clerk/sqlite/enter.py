@@ -73,10 +73,12 @@ import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.arming_admission import require_arming_admission
+from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_COMMITMENT_MISSING
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.envelope_admission import require_envelope_admission
@@ -103,7 +105,12 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     resolve_order_submission,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import require_admission
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    Capability,
+    CapabilityDecision,
+    require_admission,
+)
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
@@ -168,7 +175,7 @@ def accept_enter(
     decision_receipt: AtomicDecisionReceipt | None = None,
     arming: ArmingGate | None = None,
     envelope: LiveEnvelopeGate | None = None,
-    reference_price: float | None = None,
+    reference_price: float | Decimal | None = None,
 ) -> EnterSubmission:
     """Reserve + accept, entirely local (no broker call). R1's fence.
 
@@ -217,7 +224,18 @@ def accept_enter(
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         require_admission(repo, strategy_instance_id=strategy_instance_id)
-        if arming is not None:
+        budget = repo.deployment_budget(strategy_instance_id)
+        if repo.budget_authority_version() >= 2 and budget is None:
+            raise AdmissionBlockedError(CapabilityDecision(
+                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
+                why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
+            ))
+        if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:
+            raise AdmissionBlockedError(CapabilityDecision(
+                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
+                why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
+            ))
+        if arming is not None and repo.budget_authority_version() < 2:
             require_arming_admission(arming, strategy_instance_id=strategy_instance_id, now_ms=repo.clock())
         reservation = (
             None
@@ -228,6 +246,7 @@ def accept_enter(
                 leg=leg,
                 reference_price=reference_price,
                 now_ms=repo.clock(),
+                strategy_instance_id=strategy_instance_id,
             )
         )
         effect_operation_id = f"effect:{idempotency_key}"
@@ -243,6 +262,8 @@ def accept_enter(
             effect_kind="ENTER",
             decision_id=decision_id,
             leg=leg.model_dump(mode="json"),
+            cash_reference_price=None if reservation is None else reservation.exact_reference_price,
+            fee_provision_cents=0 if reservation is None else reservation.fee_provision_cents,
         )
         return TransitionInput(
             strategy_instance_id=strategy_instance_id,
@@ -257,7 +278,9 @@ def accept_enter(
             clerk_observed_at_ms=repo.clock(),
             summary_code="ENTER_ACCEPTED",
             facts_json=facts.to_facts_json(),
-            envelope_reservation=reservation,
+            envelope_reservation=(
+                reservation if reservation is None or reservation.exact_reference_price is None else None
+            ),
         )
 
     outcome = repo.commit_first_transition(
@@ -303,7 +326,7 @@ async def submit_enter(
     trade: BrokerTradePort,
     decision_receipt: AtomicDecisionReceipt | None = None,
     envelope: LiveEnvelopeGate | None = None,
-    reference_price: float | None = None,
+    reference_price: float | Decimal | None = None,
 ) -> EnterSubmission:
     """Accept, then (only for a fresh reservation) call the broker.
 

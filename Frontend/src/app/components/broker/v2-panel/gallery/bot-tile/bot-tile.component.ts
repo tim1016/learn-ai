@@ -147,7 +147,7 @@ export class BotTileComponent {
       : primaryAction.label;
   });
   protected readonly actionIsStop = computed(() =>
-    this.bot().primary_action.action_id !== 'resume',
+    this.bot().primary_action.action_id === 'stop',
   );
   protected readonly confirmText = computed(() => {
     const view = this.bot();
@@ -204,7 +204,7 @@ export class BotTileComponent {
       // Move keyboard focus into the confirm when it opens, mirroring
       // `TypedHaltConfirmComponent` — a wall of tiles with no focus
       // management would strand keyboard/screen-reader operators on the
-      // toolbar behind the confirm for a live Stop/Resume control.
+      // toolbar behind the confirm for a live Stop control.
       if (this.confirmOpen()) {
         queueMicrotask(() => this.confirmCancelButton()?.nativeElement.focus());
       }
@@ -244,6 +244,10 @@ export class BotTileComponent {
 
   protected onActionClick(): void {
     if (!this.bot().primary_action.enabled) return;
+    if (this.bot().primary_action.action_id === 'deploy_again') {
+      this.action.emit({ sid: this.bot().sid, actionId: 'deploy_again' });
+      return;
+    }
     this.confirmOpen.set(true);
   }
 

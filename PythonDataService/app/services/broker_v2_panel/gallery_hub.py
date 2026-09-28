@@ -49,7 +49,7 @@ from app.schemas.broker_v2_gallery import (
     GalleryResolution,
     GallerySymbolBars,
 )
-from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker, PanelAction
+from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker
 from app.services.broker_v2_panel.catalog_projection_service import day_pnl
 from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
@@ -81,7 +81,7 @@ def _is_retired(row: BotCatalogView) -> bool:
     ``catalog_projection_service.status_label_for`` — rather than
     re-deriving the phase comparison here, so this predicate can never drift
     from the canonical mapping. Retired bots are archived, off-wall by design
-    (spec §11): a Resume affordance on a retired tile would be a lie.
+    (spec §11): retired identities must not reappear as active tiles.
     """
     return getattr(row, "status_label", "") == "Retired"
 
@@ -257,20 +257,6 @@ class GalleryFillSource(Protocol):
     ) -> tuple[str, Sequence[FillRecord]]: ...
 
 
-class GalleryPrimaryActionSource(Protocol):
-    """Production implementation resolves the stopped bot's authoritative
-    ``resume`` action from the full broker-v2 panel projection.
-
-    The catalog deliberately omits Resume because its admission decision is
-    request-specific. The gallery therefore cannot infer Resume enablement
-    from ``running=False`` or from a missing catalog ``row_action``.
-    """
-
-    async def resolve_resume_action(
-        self, broker: str, account_id: str, sid: str
-    ) -> PanelAction | None: ...
-
-
 class GalleryHub:
     """Composes one versioned snapshot of the non-retired bot gallery for one account."""
 
@@ -283,7 +269,6 @@ class GalleryHub:
         aggregator: GalleryBarAggregator,
         resolution: GalleryResolution = "1m",
         fill_source: GalleryFillSource | None = None,
-        primary_action_source: GalleryPrimaryActionSource | None = None,
         io_cache_ttl_ms: int = 0,
     ) -> None:
         self._broker = broker
@@ -292,7 +277,6 @@ class GalleryHub:
         self._aggregator = aggregator
         self._resolution = resolution
         self._fill_source = fill_source
-        self._primary_action_source = primary_action_source
         self._epoch = f"{broker}:{account_id}:{_PROCESS_NONCE}"
         self._version = 0
         # A response receives its version only after every awaited input has
@@ -331,8 +315,6 @@ class GalleryHub:
         self._catalog_cache_at_ms = -1
         self._markers_cache: dict[str, list[ChartFillMarker]] | None = None
         self._markers_cache_at_ms = -1
-        self._primary_actions_cache: dict[str, PanelAction] | None = None
-        self._primary_actions_cache_at_ms = -1
 
     async def _ensure_chart_subscription(self, symbol: str) -> None:
         if self._resolution == "5s":
@@ -352,52 +334,27 @@ class GalleryHub:
     def _primary_action(
         self,
         row: BotCatalogView,
-        *,
-        resume_actions: dict[str, PanelAction],
     ) -> GalleryPrimaryAction:
-        """Derive the wall's single quick action: Stop while running, Resume
-        while not. Enablement/disabled_reason reuse the roster's own
-        authoritative catalog ``row_action`` for Stop and the full panel's
-        request-specific ``resume`` action for Resume. The catalog
-        intentionally omits Resume admission; a missing panel action therefore
-        fails closed instead of inventing an enabled command.
-        """
-        running = getattr(row, "running", False)
-        action_id = "stop" if running else "resume"
-        label = "Stop" if running else "Resume"
-        row_action = getattr(row, "row_action", None)
-        authoritative = (
-            row_action
-            if running and row_action is not None and row_action.action_id == action_id
-            else resume_actions.get(row.strategy_instance_id)
-        )
-        if authoritative is not None and authoritative.action_id == action_id:
-            disabled_reason = None
-            if not authoritative.enabled:
-                disabled_reason = (
-                    authoritative.blockers[0].detail if authoritative.blockers else authoritative.explanation
-                )
+        """Stop is a command; Deploy again only navigates to fresh consent."""
+        if not row.running:
             return GalleryPrimaryAction(
-                action_id=action_id,
-                label=label,
-                enabled=authoritative.enabled,
-                disabled_reason=disabled_reason,
+                action_id="deploy_again", label="Deploy again", enabled=True,
             )
-        if not running:
-            return GalleryPrimaryAction(
-                action_id=action_id,
-                label=label,
-                enabled=False,
-                disabled_reason=(
-                    "Resume eligibility is unavailable. Open the bot panel "
-                    "and refresh its safety evidence."
-                ),
-            )
+        # The compact roster may carry a recovery action or no row action.
+        # Neither is a Stop verdict. Preserve the running tile's Stop entry
+        # point; the UI reads the current panel action before dispatching it.
+        action = row.row_action
+        if action is None or action.action_id != "stop":
+            return GalleryPrimaryAction(action_id="stop", label="Stop", enabled=True)
         return GalleryPrimaryAction(
-            action_id=action_id,
-            label=label,
-            enabled=True,
-            disabled_reason=None,
+            action_id="stop",
+            label=action.label,
+            enabled=action.enabled,
+            disabled_reason=(
+                None if action.enabled
+                else action.blockers[0].detail if action.blockers
+                else action.explanation
+            ),
         )
 
     def _project_bot(
@@ -405,7 +362,6 @@ class GalleryHub:
         row: BotCatalogView,
         *,
         session_change_pcts: dict[str, float],
-        resume_actions: dict[str, PanelAction],
         feeds: dict[str, GalleryFeedView],
         model: type[GalleryBotView] = GalleryBotView,
     ) -> GalleryBotView:
@@ -441,7 +397,7 @@ class GalleryHub:
             session_change_pct=session_change_pcts.get(row.symbol),
             fills_today=getattr(row, "fills_today", None),
             last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),
-            primary_action=self._primary_action(row, resume_actions=resume_actions),
+            primary_action=self._primary_action(row),
             feed=feeds[row.symbol],
         )
 
@@ -607,51 +563,6 @@ class GalleryHub:
         self._markers_cache_at_ms = now_ms
         return markers
 
-    async def _fetch_resume_actions(
-        self, shown: list[BotCatalogView], *, now_ms: int
-    ) -> dict[str, PanelAction]:
-        """Resolve authoritative Resume actions for every stopped bot.
-
-        Resume admission is deliberately absent from the catalog and is
-        authored only by the full panel's action policy. Fan-out and short-TTL
-        caching mirror marker collection; one bot's unavailable panel leaves
-        that bot fail-closed without hiding the rest of the gallery.
-        """
-        if self._primary_action_source is None:
-            return {}
-        if (
-            self._primary_actions_cache is not None
-            and now_ms - self._primary_actions_cache_at_ms < self._io_cache_ttl_ms
-        ):
-            return self._primary_actions_cache
-        stopped_sids = [
-            row.strategy_instance_id
-            for row in shown
-            if not getattr(row, "running", False)
-        ]
-        results = await asyncio.gather(
-            *(
-                self._primary_action_source.resolve_resume_action(
-                    self._broker, self._account_id, sid
-                )
-                for sid in stopped_sids
-            ),
-            return_exceptions=True,
-        )
-        actions: dict[str, PanelAction] = {}
-        for sid, result in zip(stopped_sids, results, strict=True):
-            if isinstance(result, BaseException):
-                logger.warning(
-                    "[GALLERY] Resume action unavailable for bot; disabling quick action",
-                    extra={"broker": self._broker, "account_id": self._account_id, "sid": sid},
-                    exc_info=result,
-                )
-                continue
-            if result is not None and result.action_id == "resume":
-                actions[sid] = result
-        self._primary_actions_cache = actions
-        self._primary_actions_cache_at_ms = now_ms
-        return actions
 
     async def build_snapshot(self) -> GalleryLiveSnapshot:
         """Build one versioned snapshot: every non-retired bot (running +
@@ -665,10 +576,7 @@ class GalleryHub:
         async with self._publish_lock:
             shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=None)
             as_of_ms = now_ms_utc()
-            markers, resume_actions = await asyncio.gather(
-                self._fetch_markers(shown, now_ms=as_of_ms),
-                self._fetch_resume_actions(shown, now_ms=as_of_ms),
-            )
+            markers = await self._fetch_markers(shown, now_ms=as_of_ms)
             open_ms, _close_ms = live_window(as_of_ms)
             symbols = sorted({row.symbol for row in shown})
             session_change_pcts = self._fetch_session_change_pcts(symbols, open_ms=open_ms)
@@ -684,7 +592,6 @@ class GalleryHub:
                     self._project_bot(
                         row,
                         session_change_pcts=session_change_pcts,
-                        resume_actions=resume_actions,
                         feeds=feeds,
                     )
                     for row in shown
@@ -705,7 +612,7 @@ class GalleryHub:
         Every shown (non-retired) bot is re-projected into ``bots_delta`` (no
         dirty-tracking yet) — this includes a bot that stopped since the last
         call, which re-projects with ``running=False`` (``_primary_action``
-        then derives Resume) rather than dropping it from the wall.
+        then presents Deploy again navigation) rather than dropping it from the wall.
         ``known_sids`` is the *caller's own* last-observed shown roster —
         each SSE stream tracks this itself (see the router's
         ``_gallery_event_source``) rather than the hub holding one shared
@@ -737,10 +644,7 @@ class GalleryHub:
             current_sids = {row.strategy_instance_id for row in shown}
             removed_sids = sorted(known_sids - current_sids)
             as_of_ms = now_ms_utc()
-            markers, resume_actions = await asyncio.gather(
-                self._fetch_markers(shown, now_ms=as_of_ms),
-                self._fetch_resume_actions(shown, now_ms=as_of_ms),
-            )
+            markers = await self._fetch_markers(shown, now_ms=as_of_ms)
             markers_delta = _markers_delta(markers, since_marker_keys)
             open_ms, _close_ms = live_window(as_of_ms)
             symbols = sorted({row.symbol for row in shown})
@@ -757,7 +661,6 @@ class GalleryHub:
                     self._project_bot(
                         row,
                         session_change_pcts=session_change_pcts,
-                        resume_actions=resume_actions,
                         feeds=feeds,
                         model=GalleryBotDelta,
                     )

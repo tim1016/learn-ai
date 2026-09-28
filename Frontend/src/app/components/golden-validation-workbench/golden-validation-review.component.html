@@ -33,6 +33,12 @@
     } @else if (historicalRunIsRejected()) {
       <p class="golden-review__notice" role="status">A rejection does not authorize a Signal Program version.</p>
     }
+    @if (golden().evidence_applicability?.requires_manual_override && draft().decision === 'accept') {
+      <label>
+        <input type="checkbox" [checked]="draft().acknowledgeProvenanceRisk ?? false" (change)="setProvenanceRisk($event)" />
+        <span>Manual override: I accept the recorded affected or unknown conventions. This human promotion is not profitability certification.</span>
+      </label>
+    }
     <button type="submit" [disabled]="busy()">Save review</button>
   </form>
   @if (golden().reviews.length > 0) {

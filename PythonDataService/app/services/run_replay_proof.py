@@ -338,7 +338,8 @@ _OUTCOMES_BY_STAGED_KIND: dict[str, frozenset[str]] = {
 
 EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
     {
-        # bot_trade_strategy.py: the pause gate's blocked-receipt reason.
+        # Terminal stop fence; retain the legacy pause reason for historical replay.
+        "STOPPED_OBSERVE_ONLY",
         "PAUSED_OBSERVE_ONLY",
         # bot_trade_strategy._screen_late_decision: an ENTER decided after its
         # delivery allowance (#2303/#2345). Wall-clock lateness is live-only;
@@ -433,8 +434,9 @@ class _RunReplayFeed:
     bars the live run did.
     Exposes no ``evaluation_mode_for``, so every bar replays in DECIDE mode
     (``bot_trade_strategy._evaluation_mode_for`` fallback); live OBSERVE_ONLY
-    buckets are receipted ``blocked``/``PAUSED_OBSERVE_ONLY`` and classify as
-    expected live effects.
+    buckets are receipted ``blocked``/``STOPPED_OBSERVE_ONLY`` and classify as
+    expected live effects. Historical ``PAUSED_OBSERVE_ONLY`` receipts keep
+    the same classification without authorizing any lifecycle action.
     """
 
     def __init__(

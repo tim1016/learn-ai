@@ -102,6 +102,9 @@ def test_current_validation_fact_rehashes_an_accepted_proof_at_start() -> None:
     assert fact.evidence_status == "accepted"
     assert fact.event_id == "event-accepted"
     assert "strategy-validation:snapshot:" + _SHA in fact.evidence_refs
+    assert "unknown, not known affected" in fact.explanation
+    assert "Existing acceptance is preserved" in fact.explanation
+    assert fact.evidence_snapshot_sha256 == _SHA
 
 
 def test_current_validation_fact_blocks_when_a_rehashed_artifact_changes(
@@ -451,3 +454,30 @@ async def test_resume_loads_its_pinned_golden_record_without_catalog_pagination(
 
     assert fact.state == "VERIFIED"
     assert fact.event_id == "golden-validation:1:review:101"
+
+
+@pytest.mark.asyncio
+async def test_new_deploy_reassesses_affected_evidence_despite_unchanged_program_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    monkeypatch.setattr(validation_admission, "current_strategy_validation_fact", lambda *_args: _legacy_fact())
+    original = _golden_dossier()
+    affected = replace(original, validation_case={**original.validation_case, "evidence_provenance": {
+        "schema_version": 1, "data_contract": "lake_complete_sessions/v1",
+        "statistics_basis": "marked_equity_curve/v1", "daily_return_convention": "platform_skip_first_session/v1",
+    }})
+
+    async def load(*_args):
+        return GoldenDeploymentCandidates((affected,), True)
+
+    refused = await validation_admission.current_deployment_strategy_validation_fact(_fresh_binding(), _NOW, golden_loader=load)
+    assert refused.state == "UNVERIFIED"
+    assert "#2448" in refused.explanation
+    assert affected.validation_case["strategy"] == original.validation_case["strategy"]
+
+    affected = replace(affected, reviews=(replace(affected.latest_review,
+        classification="manual_override", evidence_json='{"acknowledge_provenance_risk":true}'),))
+    reviewed = await validation_admission.current_deployment_strategy_validation_fact(_fresh_binding(), _NOW, golden_loader=load)
+    assert reviewed.state == "VERIFIED"
+    assert "manual override" in reviewed.explanation
+    assert "#2448" in reviewed.explanation

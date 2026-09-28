@@ -34,15 +34,15 @@ const PLAN: LiveGraduationPlan = {
   backup_reference: 'accounts/alpaca/live/verified-backups/backup-1',
   daily_loss_fraction: 0.1,
   daily_loss_usd: 200,
-  arming_max_sessions: 1,
   extended_hours_entry_bps: 0,
   extended_hours_exit_bps: 0,
-  consequence: 'Graduation changes custody but deploys and arms nothing.',
+  consequence: 'Graduation changes custody but deploys nothing.',
 };
 
-async function renderGraduation() {
+async function renderGraduation(status: LiveGraduationStatus = STATUS) {
   const service = {
-    readStatus: vi.fn().mockResolvedValue(STATUS),
+    readStatus: vi.fn().mockResolvedValue(status),
+    activateShadow: vi.fn().mockResolvedValue({ state: 'restart_scheduled' }),
     prepare: vi.fn().mockResolvedValue(PLAN),
     apply: vi.fn().mockResolvedValue({ state: 'restart_scheduled' }),
   };
@@ -63,7 +63,29 @@ async function renderGraduation() {
 }
 
 describe('LiveGraduationComponent', () => {
-  it('keeps graduation distinct from deploy and arming, then requires an explicit acknowledgement', async () => {
+  it('offers explicit Shadow activation while the lane has no custody authority', async () => {
+    const { fixture, service } = await renderGraduation({ ...STATUS, authority: 'unavailable', state: 'activation_available', headline: 'Activate Shadow for this account' });
+    expect(screen.queryByRole('button', { name: 'Review Live graduation' })).toBeNull();
+    expect(service.activateShadow).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Activate Shadow and restart' }));
+    await fixture.whenStable();
+    expect(service.activateShadow).toHaveBeenCalledOnce();
+    expect(service.activateShadow.mock.calls[0][0]).toMatchObject({ clerkId: 'clrk_live', accountId: ACCOUNT });
+    expect(await screen.findByText(/Restarting the clerk safely/)).toBeTruthy();
+    expect(service.apply).not.toHaveBeenCalled();
+  });
+
+  it('keeps refused activation visible and never retries it automatically', async () => {
+    const { fixture, service } = await renderGraduation({ ...STATUS, authority: 'unavailable', state: 'activation_available' });
+    service.activateShadow.mockRejectedValue(new Error('connection failed'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Activate Shadow and restart' }));
+    await fixture.whenStable();
+    expect((await screen.findByRole('alert')).textContent).toContain('Refresh its status before retrying');
+    expect(service.activateShadow).toHaveBeenCalledOnce();
+    expect((screen.getByRole('button', { name: 'Activate Shadow and restart' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('keeps graduation distinct from deployment consent, then requires an explicit acknowledgement', async () => {
     const { fixture, service } = await renderGraduation();
 
     expect(screen.getByText(/does not deploy a strategy/)).toBeTruthy();

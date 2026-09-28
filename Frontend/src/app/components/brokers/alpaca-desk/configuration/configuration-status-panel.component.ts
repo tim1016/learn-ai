@@ -37,17 +37,10 @@ function modeLabel(mode: BrokerEndpointMode | null): string {
 }
 
 /**
- * Staged and effective, side by side, and the Apply button between them.
- *
- * The three states ADR 0060 Decision 4 separates are separated here too:
- * **staged** governs nothing, **effective** is what the running worker
- * resolved at its last boot, and **sealed** — the envelope a live arming
- * record binds — is not on this surface at all, because nothing here can
- * change it.
- *
- * Pressing Apply records a one-shot request and changes no runtime. The panel
- * says so rather than implying the change is live, and it never implies the
- * browser can arm a live limit: that is a host CLI ceremony.
+ * Staged and effective profile revisions, with the explicit Apply action.
+ * The worker resolves a staged revision after the requested restart. Effective
+ * account risk limits have their own immediate Apply action; profile selection
+ * never supplies a deployment budget or starts a bot.
  */
 @Component({
   selector: 'app-configuration-status-panel',

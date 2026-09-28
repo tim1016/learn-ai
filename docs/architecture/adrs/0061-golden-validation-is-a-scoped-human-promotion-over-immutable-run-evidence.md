@@ -135,3 +135,47 @@ ADR 0020's original “validate once per strategy, never per symbol” language 
 - ADR 0054 — corpus coverage remains independent of Golden Validation.
 - ADR 0058 — Python-owned backtest runs and parity verdict semantics, including preserved v2 history and later v3 evidence.
 - `CONTEXT.md` § "Golden Validation (resolved 2026-09-11)" — domain terminology.
+
+## Amendment — convention provenance and affected evidence (2026-09-27, #2544)
+
+Program identity and unchanged metric catalog IDs do not prove data or metric
+conventions. B1 (#2445/#2446), B3 (#2447), and B4 (#2448) exposed that distinction.
+Completed engine responses now author their data contract, headline statistics
+basis, first-session return convention, and available data-manifest hash. History
+persists this nullable metadata; Golden designation freezes it in a version-2
+case. Imports without producer metadata remain null. Migration 10 never backfills
+historical claims from today's code, acceptance date, or registry.
+
+One pure applicability assessment classifies the recorded conventions as current,
+positively affected, or unknown. Exact legacy convention identifiers establish
+known affectedness. Absent/unrecognized provenance is unknown, never a claim that
+an issue affected that run or that it was unaffected. A known affected assessment
+participates in the current evidence revision, so an earlier acceptance no longer
+admits a new Deploy even when the program identity is unchanged. A current record
+retains its review revision. Previously accepted unknown records remain usable,
+with their uncertainty visible; this preserves existing scope rather than silently
+inventing certainty or invalidating all history.
+
+A new acceptance of affected or unknown conventions requires a separate, unchecked
+**Manual override** acknowledgement and an explanatory review note. That explicit
+choice and the assessment are frozen in the append-only review. Computed parity
+state and original artifacts stay unchanged. Manual override is human promotion,
+not profitability certification, and cannot bypass corpus, account, budget or
+other operational checks. The existing v1 artifact/hash admission remains
+applicable to strategies that have not entered the Golden workflow.
+
+The UI links the frozen baseline to its saved Strategy Lab configuration. Rerun
+creates a distinct history run; the operator inspects it and its existing parity
+comparison, designates a new Golden case, then explicitly reviews it. Neither
+rerunning nor designating accepts a case automatically. Original cases/reviews
+remain available for comparison and cannot be rewritten.
+
+### Historical inventory boundary
+
+On 2026-09-27 the local checkout had no configured `POSTGRES_URL`, so no production
+history inventory was available to this implementation session. No production
+records were read, manufactured, or changed, and no count of affected records is
+claimed. The additive migration, immutable history, and review workflow were
+validated against a separately created disposable PostgreSQL 16 instance. Known
+legacy convention cases in regression tests are synthetic fixtures, not a report
+of production affectedness.

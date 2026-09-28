@@ -1,5 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 
+import { FeeAttributionComponent } from '../../broker/fee-attribution/fee-attribution.component';
+
 import type { PortfolioHistoryRange } from '../../../api/alpaca.types';
 import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
 import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
@@ -34,6 +36,7 @@ const SCOPE_CONFIG = {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaPositionsTableComponent,
+    FeeAttributionComponent,
     AccountDeskTransactionHistoryComponent,
     AlpacaPortfolioHistoryChartComponent,
     AlpacaPortfolioReconciliationProofComponent,

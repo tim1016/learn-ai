@@ -31,12 +31,14 @@ import logging
 import secrets
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
 from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
 from app.broker.alpaca.clerk.sqlite import reads, writes
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, read_account_risk_policy
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     AtomicDecisionReceipt,
     append_atomic_decision_receipt_row,
@@ -236,6 +238,10 @@ class ClerkSqliteRepository(
         self._authority_generation_at_open = authority_generation
         self._poisoned = False
         self._reconciliation_in_progress = False
+        # Latest successful fee-evidence read by this process. Process-local
+        # liveness like the envelope's published account observation, never
+        # a custody fact: only record_fee_evidence writes it, under the lock.
+        self._fee_evidence_checked_at_ms: int | None = None
         # Pinned contracts doc §2: "one application-owned write coordinator
         # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
@@ -247,6 +253,25 @@ class ClerkSqliteRepository(
         # sequence, and append_transition (called from inside that sequence)
         # takes it again from the same thread — must not deadlock.
         self._write_lock = threading.RLock()
+
+    def account_risk_policy(self) -> AccountRiskPolicy | None:
+        """The effective, replayable policy; call inside admission's writer fence."""
+        with self._write_lock:
+            return read_account_risk_policy(self._conn)
+
+    @contextmanager
+    def write_fence(self) -> Iterator[sqlite3.Connection]:
+        """The one public custody write fence for callers outside this package.
+
+        Yields the repository's connection under the same reentrant write
+        coordinator every custody transition takes, so a fenced read/write
+        block serializes with commit/append/recovery the same way internal
+        callers already do. Cross-package code must use this seam rather
+        than the private lock/connection, keeping the composite free to
+        change its internals.
+        """
+        with self._write_lock:
+            yield self._conn
 
     @property
     def account_id(self) -> str:
@@ -1039,6 +1064,27 @@ class ClerkSqliteRepository(
     # to hash, what transition to build, what admission means) lives in its
     # own domain module built on top of this and append_transition().
     # ------------------------------------------------------------------
+
+    def record_deploy_launched(self, *, strategy_instance_id: str, lifecycle_run_id: str) -> None:
+        """Idempotently record process launch while the consent's run is active."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+
+        with self._write_lock:
+            budget = self.deployment_budget(strategy_instance_id)
+            if budget is None:
+                raise BudgetUnavailable("No deployment consent exists for this run.")
+            run = self.active_run(strategy_instance_id)
+            if run is None or run.lifecycle_run_id != lifecycle_run_id or budget["released_at_ms"] is not None:
+                raise BudgetUnavailable("A stopped deployment cannot launch again.")
+            if budget["launched_at_ms"] is not None:
+                return
+            self.append_transition(TransitionInput(
+                strategy_instance_id=strategy_instance_id, run_id=run.run_id,
+                command_id=budget["command_id"], transition_kind="DEPLOY_LAUNCHED",
+                custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded", clerk_observed_at_ms=self.clock(),
+                summary_code="DEPLOY_LAUNCHED", facts_json="{}",
+            ))
 
     def commit_first_transition(
         self,

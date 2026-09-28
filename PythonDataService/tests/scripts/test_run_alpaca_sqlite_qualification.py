@@ -78,7 +78,7 @@ def _valid_ui_receipt() -> dict[str, object]:
             "lifecycle_request_action_ids": [],
             "revision_sequence": list(BOUNDED_UI_CAMPAIGN.revision_sequence),
             "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-            "presented_action_id": "resume",
+            "presented_action_id": "deploy_again",
             "correlation_record_count": 25,
         },
         "correlation_records": correlation_records,
@@ -263,7 +263,7 @@ def test_preverified_ui_receipt_rejects_unmeasured_or_mismatched_campaign(
         "lifecycle_request_action_ids": ["resume_bot"],
         "revision_sequence": list(BOUNDED_UI_CAMPAIGN.revision_sequence),
         "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-        "presented_action_id": "resume",
+        "presented_action_id": "deploy_again",
         "correlation_record_count": 25,
     }
     receipt = tmp_path / "ui-evidence.json"

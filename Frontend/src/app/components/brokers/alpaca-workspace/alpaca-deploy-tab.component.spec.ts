@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrokerAccountSnapshot } from '../../../api/alpaca.types';
 import { AlpacaDeployTabComponent } from './alpaca-deploy-tab.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
-import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type DeployBotBody } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { DEPLOY_VIEW } from '../../broker/broker-deploy-page/alpaca-deploy-workflow.fixtures';
 import { provideFleetDirectory, testLane } from '../../../fleet/fleet-directory-testing';
@@ -153,11 +153,19 @@ describe('AlpacaDeployTabComponent', () => {
         { provide: BrokersService, useValue: { getAccount: vi.fn().mockResolvedValue(fakeAccount()), getClerkStatus: vi.fn().mockResolvedValue({ account_id: 'PA9' }) } },
         { provide: BrokerV2PanelService, useValue: {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW), getCatalog: vi.fn().mockResolvedValue([]), previewStartAdmission: preview,
+          previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
+            state: 'ready', detail: 'Money is ready.', world: 'real_paper', custody_account_id: 'PA9', risk_revision: 1,
+            shortcuts: [], review_token: body.budget ? 'reviewed-money' : null,
+          })),
         } },
       ],
     });
     await screen.findByRole('heading', { name: 'Bot binding' });
     fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'reviewed-retry' } });
+    await fixture.whenStable();
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
+    await screen.findByText(/Reviewed budget:/);
     directory.rebind({ observed_at_ms: 2, clerks: [{ ...lane, effective_binding_generation: 4, routing_epoch: 8 }] });
     fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
     await vi.waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
@@ -172,6 +180,10 @@ describe('AlpacaDeployTabComponent', () => {
     fixture.detectChanges();
     await fixture.whenStable();
     fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'reviewed-retry' } });
+    await fixture.whenStable();
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
+    await screen.findByText(/Reviewed budget:/);
     const deploy = screen.getByRole('button', { name: 'Deploy paper bot' });
     await vi.waitFor(() => expect((deploy as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(deploy);

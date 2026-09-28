@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
-from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.alpaca.profile.credentials import AlpacaCredentialEnvironment
 from app.broker.alpaca.profile.errors import (
@@ -114,11 +113,7 @@ def test_a_live_revision_without_an_envelope_is_incomplete_not_a_crash(
 def test_stored_values_and_environment_values_seal_to_the_same_sha(
     only_default_slot_injected: AlpacaCredentialEnvironment,
 ) -> None:
-    from_environment = LiveEnvelopeValues.from_settings(
-        AlpacaSettings(
-            api_key_id="k", api_secret_key="s", mode="live", **_LIVE_SETTINGS_KWARGS
-        )
-    )
+    from_environment = LiveEnvelopeValues(**COMPLETE_ENVELOPE)
 
     context = resolve_runtime_context(
         endpoint_mode="live",
@@ -147,11 +142,7 @@ def test_an_integer_stored_for_a_float_field_round_trips_as_a_float(
 
     assert context.live_envelope is not None
     assert type(context.live_envelope.loss_usd) is float
-    assert context.live_envelope.sha == LiveEnvelopeValues.from_settings(
-        AlpacaSettings(
-            api_key_id="k", api_secret_key="s", mode="live", **_LIVE_SETTINGS_KWARGS
-        )
-    ).sha
+    assert context.live_envelope.sha == LiveEnvelopeValues(**COMPLETE_ENVELOPE).sha
 
 
 @pytest.mark.parametrize(
@@ -494,3 +485,13 @@ def test_the_resolved_context_is_immutable(
 
     with pytest.raises(AttributeError):
         context.account_pin = "PA123"  # type: ignore[misc]
+
+
+def test_current_four_field_profile_ignores_stale_session_environment(only_default_slot_injected: AlpacaCredentialEnvironment, monkeypatch: pytest.MonkeyPatch) -> None:
+    monetary = {key: value for key, value in COMPLETE_ENVELOPE.items() if key not in {"shadow_sessions", "arming_max_sessions"}}
+    monkeypatch.setenv("ALPACA_LIVE_SHADOW_SESSIONS", "99")
+    monkeypatch.setenv("ALPACA_LIVE_ARMING_MAX_SESSIONS", "99")
+    context = resolve_runtime_context(endpoint_mode="live", credential_slot="default", live_envelope=monetary, environment=only_default_slot_injected)
+    assert context.live_envelope.to_mapping() == monetary
+    assert context.settings.live_shadow_sessions is None
+    assert context.settings.live_arming_max_sessions is None

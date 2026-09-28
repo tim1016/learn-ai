@@ -878,74 +878,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Arming Status */
-        get: operations["arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/apply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Arming Apply */
-        post: operations["arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/disarm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Arming Disarm */
-        post: operations["arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Arming Plan */
-        post: operations["arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/alpaca/accounts/{account_id}/live-graduation": {
         parameters: {
             query?: never;
@@ -991,6 +923,23 @@ export interface paths {
         put?: never;
         /** Prepare Live Graduation */
         post: operations["prepare_live_graduation_api_brokers_alpaca_accounts__account_id__live_graduation_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation/shadow-activation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate Shadow Authority */
+        post: operations["activate_shadow_authority_api_brokers_alpaca_accounts__account_id__live_graduation_shadow_activation_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1149,6 +1098,40 @@ export interface paths {
         /** Put Nickname */
         put: operations["put_nickname_api_brokers_alpaca_configuration_account_nicknames__account_id__put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/budget-authority": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Budget Authority State */
+        get: operations["read_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/budget-authority/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply Budget Authority State */
+        post: operations["apply_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_apply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1364,6 +1347,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/configuration/risk-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Risk Limits */
+        get: operations["read_risk_limits_api_brokers_alpaca_configuration_risk_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/risk-limits/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply Risk Limits */
+        post: operations["apply_risk_limits_api_brokers_alpaca_configuration_risk_limits_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/configuration/risk-limits/clear-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear Risk Hold */
+        post: operations["clear_risk_hold_api_brokers_alpaca_configuration_risk_limits_clear_hold_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/alpaca/configuration/selection": {
         parameters: {
             query?: never;
@@ -1473,6 +1507,23 @@ export interface paths {
         put?: never;
         /** Preview the exact Start admission used by execution */
         post: operations["preview_bot_start_admission_scoped_api_brokers__broker__accounts__account_id__bots_admission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/budget-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review server-calculated dollars for the exact deployment */
+        post: operations["preview_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots_budget_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1608,6 +1659,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Deployment Budget Scoped */
+        get: operations["read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
         parameters: {
             query?: never;
@@ -1634,6 +1702,23 @@ export interface paths {
         };
         /** LIVE chart pane: today's IBKR bars + fill markers (§8) */
         get: operations["get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Deployment Command Scoped */
+        get: operations["read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2208,6 +2293,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/budget-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Budget Preview
+         * @description Fleet-routed POST /accounts/{account_id}/bots/budget-preview (deploy).
+         */
+        post: operations["fleet_bot_budget_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_budget_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/catalog": {
         parameters: {
             query?: never;
@@ -2336,86 +2441,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Live Arming Status
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/arming (custody_read).
-         */
-        get: operations["fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/apply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Live Arming Apply
-         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/apply (custody_command).
-         */
-        post: operations["fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/disarm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Live Arming Disarm
-         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/disarm (custody_command).
-         */
-        post: operations["fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Live Arming Plan
-         * @description Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/plan (custody_command).
-         */
-        post: operations["fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/authority-facts": {
         parameters: {
             query?: never;
@@ -2428,6 +2453,26 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/authority-facts (bot_panel_read).
          */
         get: operations["fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Budget Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/budget (bot_panel_read).
+         */
+        get: operations["fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2488,6 +2533,26 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/decision-evidence (custody_read).
          */
         get: operations["fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Deploy Command Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-command (bot_panel_read).
+         */
+        get: operations["fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3076,6 +3141,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation/shadow-activation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Shadow Activate
+         * @description Fleet-routed POST /accounts/{account_id}/live-graduation/shadow-activation (custody_command).
+         */
+        post: operations["fleet_shadow_activate_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_shadow_activation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
         parameters: {
             query?: never;
@@ -3360,6 +3445,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/budget-authority": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Budget Authority Read
+         * @description Fleet-routed GET /configuration/budget-authority (configuration_manage).
+         */
+        get: operations["fleet_configuration_budget_authority_read_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/budget-authority/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Budget Authority Apply
+         * @description Fleet-routed POST /configuration/budget-authority/apply (configuration_manage).
+         */
+        post: operations["fleet_configuration_budget_authority_apply_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/credential-slots": {
         parameters: {
             query?: never;
@@ -3596,6 +3721,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Configuration Risk Limits Read
+         * @description Fleet-routed GET /configuration/risk-limits (configuration_manage).
+         */
+        get: operations["fleet_configuration_risk_limits_read_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Risk Limits Apply
+         * @description Fleet-routed POST /configuration/risk-limits/apply (configuration_manage).
+         */
+        post: operations["fleet_configuration_risk_limits_apply_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits/clear-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Configuration Risk Hold Clear
+         * @description Fleet-routed POST /configuration/risk-limits/clear-hold (configuration_manage).
+         */
+        post: operations["fleet_configuration_risk_hold_clear_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_clear_hold_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/selection": {
         parameters: {
             query?: never;
@@ -3634,6 +3819,26 @@ export interface paths {
          * @description Fleet-routed POST /configuration/selection/apply (configuration_manage).
          */
         post: operations["fleet_configuration_selection_apply_api_brokers__broker__clerks__clerk_id__configuration_selection_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/fees/attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Fee Attribution Read
+         * @description Fleet-routed GET /fees/attribution (account_read).
+         */
+        get: operations["fleet_fee_attribution_read_api_brokers__broker__clerks__clerk_id__fees_attribution_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3857,6 +4062,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/fees/attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deployment Fee Attribution
+         * @description Canonical lifetime fee evidence, including stopped deployment ownership.
+         */
+        get: operations["get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/fees/session-reconciliation": {
         parameters: {
             query?: never;
@@ -4014,7 +4239,7 @@ export interface paths {
          * @description The server-derived live verdict (ADR 0059 D8).
          *
          *     Never contacts the broker: settings, the clerk selection outcome, and a
-         *     read of the durable shadow evidence are the only inputs.
+         *     read of current account risk and budget authority are the only inputs.
          */
         get: operations["get_live_verdict_api_brokers__broker__live_verdict_get"];
         put?: never;
@@ -7837,6 +8062,52 @@ export interface components {
             /** Within Tolerance */
             within_tolerance: boolean;
         };
+        /** AccountRiskApplyRequest */
+        AccountRiskApplyRequest: {
+            /** Expected Risk Revision */
+            expected_risk_revision: number;
+            /** Expected Selection Generation */
+            expected_selection_generation: number;
+            /** Loss Fraction */
+            loss_fraction: number;
+            /** Loss Usd */
+            loss_usd: number;
+        };
+        /** AccountRiskClearRequest */
+        AccountRiskClearRequest: {
+            /** Expected Risk Revision */
+            expected_risk_revision: number;
+            /** Expected Selection Generation */
+            expected_selection_generation: number;
+        };
+        /** AccountRiskStateResponse */
+        AccountRiskStateResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Applied At Ms */
+            applied_at_ms: number | null;
+            /** Detail */
+            detail: string;
+            /**
+             * Entry State
+             * @enum {string}
+             */
+            entry_state: "ready" | "held" | "unknown";
+            /** Hold Loss Limit Usd */
+            hold_loss_limit_usd?: number | null;
+            /** Hold Policy Revision */
+            hold_policy_revision?: number | null;
+            /** Hold Session Start Ms */
+            hold_session_start_ms?: number | null;
+            /** Loss Fraction */
+            loss_fraction: number | null;
+            /** Loss Usd */
+            loss_usd: number | null;
+            /** Risk Revision */
+            risk_revision: number;
+            /** Selection Generation */
+            selection_generation: number;
+        };
         /** AccountVerificationResponse */
         AccountVerificationResponse: {
             /** Observed Accounts */
@@ -8032,8 +8303,8 @@ export interface components {
         };
         /** AlpacaLiveVerdict */
         AlpacaLiveVerdict: {
-            /** Armed Instance Count */
-            armed_instance_count: number;
+            /** Budget Authority Version */
+            budget_authority_version: number;
             /**
              * Clerk Authority
              * @enum {string}
@@ -8046,23 +8317,18 @@ export interface components {
              * @enum {string}
              */
             configured_mode: "paper" | "live" | "unconfigured";
+            /**
+             * Deployment Readiness
+             * @enum {string}
+             */
+            deployment_readiness: "not_applicable" | "upgrade_required" | "risk_not_observed" | "loss_hold" | "ready";
             /** Detail */
             detail: string;
-            /**
-             * Envelope Agreement
-             * @enum {string}
-             */
-            envelope_agreement: "not_applicable" | "unsealed" | "agreed" | "disagreed";
-            /**
-             * Envelope State
-             * @enum {string}
-             */
-            envelope_state: "not_applicable" | "configured_unsealed" | "sealed";
             /**
              * Final Verdict
              * @enum {string}
              */
-            final_verdict: "paper" | "live-unarmed" | "live-armed" | "unknown";
+            final_verdict: "paper" | "live" | "shadow" | "unknown";
             /** Headline */
             headline: string;
             /**
@@ -8082,11 +8348,6 @@ export interface components {
              * Format: int64
              */
             observed_at_ms: number;
-            /**
-             * Shadow State
-             * @enum {string}
-             */
-            shadow_state: "not_applicable" | "none" | "in_progress" | "complete";
         };
         /**
          * AlpacaPaperDeployEligibility
@@ -8194,6 +8455,7 @@ export interface components {
          * @description Closed account-scoped command for the production Alpaca deploy page.
          */
         AlpacaPaperDeployRequest: {
+            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
             /**
              * Carryover Policy
              * @default FORBID
@@ -8269,6 +8531,7 @@ export interface components {
              */
             paper_access_state: "not_required" | "blocked" | "available" | "enabled";
             params_schema?: components["schemas"]["StrategyParamsSchema"];
+            qualified_configuration?: components["schemas"]["QualifiedDeployConfiguration"] | null;
             /** Selectable */
             selectable: boolean;
             /** Strategy Key */
@@ -8496,54 +8759,6 @@ export interface components {
              * @description Details of worst violations
              */
             worst_slices?: Record<string, never>[];
-        };
-        /** ArmingApplyRequest */
-        ArmingApplyRequest: {
-            /** Confirmation Token */
-            confirmation_token: string;
-            /** Plan Id */
-            plan_id: string;
-        };
-        /** ArmingPlanView */
-        ArmingPlanView: {
-            /** Account Id */
-            account_id: string;
-            /** Changes */
-            changes: string[];
-            /** Confirmation Token */
-            confirmation_token: string;
-            /** Created At Ms */
-            created_at_ms: number;
-            envelope: components["schemas"]["LiveEnvelopePayload"];
-            exit_terms: components["schemas"]["ExitTerms"];
-            /** Expires At Ms */
-            expires_at_ms: number;
-            /** Plan Id */
-            plan_id: string;
-            /** Shadow Receipt Sha256 */
-            shadow_receipt_sha256: string | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /** ArmingStatusView */
-        ArmingStatusView: {
-            /** Account Id */
-            account_id: string;
-            /** Armed Instance Count */
-            armed_instance_count: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Reason Code */
-            reason_code: string | null;
-            /** Sessions Remaining */
-            sessions_remaining: number;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "unarmed" | "armed" | "disarmed" | "lapsed";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * ArtifactDetail
@@ -9432,7 +9647,7 @@ export interface components {
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            desired_state: "RUNNING" | "STOPPED";
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -9516,21 +9731,16 @@ export interface components {
          * BotHealthCard
          * @description Bot-health card beside the rail (§7.2).
          *
-         *     ``PAUSED`` means the current process/run remains live while bar delivery
-         *     is held. Continue retains that run identity; Resume is not applicable.
+         *     Terminal Stop retains custody evidence; new trading requires fresh Deploy.
          */
         BotHealthCard: {
-            /** Carryover Checkpoint Exposure */
-            carryover_checkpoint_exposure: {
-                [key: string]: number;
-            };
             /** Decision Stale */
             decision_stale: boolean;
             /**
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            desired_state: "RUNNING" | "STOPPED";
             /** Desired State Label */
             desired_state_label: string;
             duty_outcome: components["schemas"]["DutyOutcomeView"] | null;
@@ -9545,12 +9755,6 @@ export interface components {
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Phase Label */
             phase_label: string;
-            /** Resume Eligible */
-            resume_eligible: boolean;
-            /** Resume Explanation */
-            resume_explanation: string;
-            /** Resume Label */
-            resume_label: string;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -9622,7 +9826,6 @@ export interface components {
             recent_decisions: components["schemas"]["RecentDecisionView"][];
             /** Recent Fills */
             recent_fills: components["schemas"]["RecentFillView"][];
-            resume_admission: components["schemas"]["RunAdmissionDecision"] | null;
             /** Revision */
             revision: number;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
@@ -9787,20 +9990,6 @@ export interface components {
             /** Broker */
             broker: string;
             /**
-             * Carryover Account Policy Enabled
-             * @default false
-             */
-            carryover_account_policy_enabled?: boolean;
-            /**
-             * Carryover Checkpoint Config Matches
-             * @default false
-             */
-            carryover_checkpoint_config_matches?: boolean;
-            /** Carryover Checkpoint Exposure */
-            carryover_checkpoint_exposure?: {
-                [key: string]: number;
-            };
-            /**
              * Carryover Policy
              * @default FORBID
              * @enum {string}
@@ -9810,7 +9999,7 @@ export interface components {
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            desired_state: "RUNNING" | "STOPPED";
             duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
             evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /** Last Transition At Ms */
@@ -10212,6 +10401,75 @@ export interface components {
             unrealized_pl: number;
             /** Unrealized Plpc */
             unrealized_plpc: number | null;
+        };
+        /** BudgetAuthorityApplyRequest */
+        BudgetAuthorityApplyRequest: {
+            /** Review Token */
+            review_token: string;
+        };
+        /** BudgetAuthorityState */
+        BudgetAuthorityState: {
+            /** Account Id */
+            account_id: string;
+            /** Active Run Count */
+            active_run_count: number;
+            /** Authorization Version */
+            authorization_version: number;
+            /** Detail */
+            detail: string;
+            /** Review Token */
+            review_token: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "legacy" | "budget";
+        };
+        /**
+         * BudgetDeployCommandReceipt
+         * @description Recoverable durable result; process absence never fabricates launch.
+         */
+        BudgetDeployCommandReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Command Id */
+            command_id: string;
+            /** Committed Usd */
+            committed_usd: string;
+            /** Explanation */
+            explanation: string;
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "pending" | "success" | "failure";
+            /** Panel Path */
+            panel_path: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Recorded At Ms
+             * Format: int64
+             */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "deployed" | "failed";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
         };
         /**
          * BuildFromCsvRequest
@@ -13522,6 +13780,162 @@ export interface components {
              */
             valid?: boolean;
         };
+        /** DeploymentBudgetInput */
+        DeploymentBudgetInput: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Live Confirmation */
+            live_confirmation?: string | null;
+            /** Review Token */
+            review_token?: string | null;
+            /** Risk Revision */
+            risk_revision: number;
+        };
+        /** DeploymentBudgetPreview */
+        DeploymentBudgetPreview: {
+            /** Confirmation Text */
+            confirmation_text?: string | null;
+            /** Custody Account Id */
+            custody_account_id: string;
+            /** Detail */
+            detail: string;
+            /** Estimated Price Usd */
+            estimated_price_usd?: string | null;
+            /** Minimum Budget Usd */
+            minimum_budget_usd?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+            /** Review Token */
+            review_token?: string | null;
+            /**
+             * Risk Limits Summary
+             * @default Account risk evidence is unavailable.
+             */
+            risk_limits_summary?: string;
+            /**
+             * Risk Revision
+             * @default 0
+             */
+            risk_revision?: number;
+            /**
+             * Shortcuts
+             * @default []
+             */
+            shortcuts?: components["schemas"]["DeploymentBudgetShortcut"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable" | "awaiting_price";
+            /** Unreserved Usd */
+            unreserved_usd?: string | null;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
+        };
+        /** DeploymentBudgetShortcut */
+        DeploymentBudgetShortcut: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "quarter" | "half" | "all" | "position_headroom";
+            /** Label */
+            label: string;
+        };
+        /**
+         * DeploymentBudgetView
+         * @description All dollars are authored by Python, including display rounding.
+         */
+        DeploymentBudgetView: {
+            /** Committed Usd */
+            committed_usd?: string | null;
+            /** Detail */
+            detail: string;
+            /**
+             * Entry Eligible
+             * @default false
+             */
+            entry_eligible?: boolean;
+            /** Fees Usd */
+            fees_usd?: string | null;
+            /** Free Usd */
+            free_usd?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+            /** Outstanding Cash Usd */
+            outstanding_cash_usd?: string | null;
+            /** Pending Orders Usd */
+            pending_orders_usd?: string | null;
+            /** Position Cost Usd */
+            position_cost_usd?: string | null;
+            /** Realized Gross Usd */
+            realized_gross_usd?: string | null;
+            /** Released Usd */
+            released_usd?: string | null;
+            /** Shortfall Usd */
+            shortfall_usd?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable" | "legacy";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
+        };
+        /** DeploymentFeeAttribution */
+        DeploymentFeeAttribution: {
+            /** Account Id */
+            account_id: string | null;
+            /** Account Unattributed Usd */
+            account_unattributed_usd: string | null;
+            /** Authority Revision */
+            authority_revision: number | null;
+            /** Available */
+            available: boolean;
+            /** Known */
+            known: boolean;
+            /** Messages */
+            messages: string[];
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /** Rows */
+            rows: components["schemas"]["DeploymentFeeRow"][];
+        };
+        /**
+         * DeploymentFeeRow
+         * @description Server-owned fee totals; decimal USD is preserved on the wire.
+         */
+        DeploymentFeeRow: {
+            /** Estimated Usd */
+            estimated_usd: string;
+            /** Label */
+            label: string;
+            /** Modelled Settled Usd */
+            modelled_settled_usd: string;
+            /** Observed Usd */
+            observed_usd: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+            /** Subject Id */
+            subject_id: string;
+            /** Total Usd */
+            total_usd: string;
+        };
         /** DesignateGoldenRunRequest */
         DesignateGoldenRunRequest: {
             /** Command Id */
@@ -14022,6 +14436,7 @@ export interface components {
             /** Error */
             error?: string | null;
             evaluation_window?: components["schemas"]["EngineEvaluationWindowResponse"] | null;
+            evidence_provenance?: components["schemas"]["RunEvidenceProvenance"] | null;
             /** Fill Mode */
             fill_mode: string;
             /** Final Equity */
@@ -14347,6 +14762,23 @@ export interface components {
              */
             detail: string;
         };
+        /** EvidenceApplicability */
+        EvidenceApplicability: {
+            /**
+             * Affected Issues
+             * @default []
+             */
+            affected_issues?: string[];
+            /** Explanation */
+            explanation: string;
+            /** Requires Manual Override */
+            requires_manual_override: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "current" | "affected" | "unknown";
+        };
         /**
          * EvidenceEntry
          * @description One redacted, size-capped journal entry exposed to the operator lens.
@@ -14522,23 +14954,6 @@ export interface components {
              * @enum {string}
              */
             rule?: "fixed_bar_count_countdown" | "level_true";
-        };
-        /**
-         * ExitTerms
-         * @description Immutable stored terms; an upgraded registration may retain an unset allowance.
-         */
-        ExitTerms: {
-            /** Band Multiple */
-            band_multiple: number;
-            /** Exit Allowance Bps */
-            exit_allowance_bps: number | null;
-            /**
-             * Provenance
-             * @enum {string}
-             */
-            provenance: "deployed" | "backfilled";
-            /** Spread Cap Bps */
-            spread_cap_bps: number;
         };
         /**
          * ExitTermsInput
@@ -15369,8 +15784,11 @@ export interface components {
          * @description The single most relevant action for a gallery tile (§ gallery spec).
          */
         GalleryPrimaryAction: {
-            /** Action Id */
-            action_id: string;
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "stop" | "deploy_again";
             /** Disabled Reason */
             disabled_reason?: string | null;
             /** Enabled */
@@ -15484,6 +15902,7 @@ export interface components {
             designated_at_ms: number;
             /** Designated By */
             designated_by: string;
+            evidence_applicability: components["schemas"]["EvidenceApplicability"];
             /** Evidence Revision */
             evidence_revision: string;
             /** Evidence State */
@@ -18114,31 +18533,16 @@ export interface components {
         };
         /**
          * LiveEnvelopePayload
-         * @description The six values, named exactly as ``LiveEnvelopeValues`` names them.
+         * @description The four current account bounds; retired session counts are rejected.
          *
-         *     The mapping to the dataclass is an identity, so no rename layer can drift
-         *     (contract §2.4). The bounds restate ``AlpacaSettings``' domain for an early,
-         *     field-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on
-         *     every path into storage, which is where the rule actually lives.
-         *
-         *     ``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax
-         *     mode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises
-         *     before it: ``{"shadow_sessions": true}`` would arrive as ``1`` and the
-         *     by-name ``int`` check downstream would never see the boolean it exists to
-         *     refuse — a real-money session count silently minted from ``true``. Strict
-         *     ``int`` refuses ``True``, ``1.0`` and ``"3"``; strict ``float`` still
-         *     accepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'
-         *     ``float`` annotation does with ``5000``.
+         *     Historical revisions retain their full hash-bearing representation in storage.
+         *     The configuration API projects only the fields a trader can currently edit.
          */
         LiveEnvelopePayload: {
-            /** Arming Max Sessions */
-            arming_max_sessions: number;
             /** Loss Fraction */
             loss_fraction: number;
             /** Loss Usd */
             loss_usd: number;
-            /** Shadow Sessions */
-            shadow_sessions: number;
             /** Xh Entry Bps */
             xh_entry_bps: number;
             /** Xh Exit Bps */
@@ -18182,8 +18586,6 @@ export interface components {
         LiveGraduationPlanView: {
             /** Account Id */
             account_id: string;
-            /** Arming Max Sessions */
-            arming_max_sessions: number;
             /** Backup Reference */
             backup_reference: string;
             /** Broker Observed At Ms */
@@ -18242,7 +18644,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "review_available" | "graduated" | "blocked";
+            state: "activation_available" | "review_available" | "graduated" | "blocked";
         };
         /**
          * LiveGreeksRequest
@@ -19541,12 +19943,6 @@ export interface components {
             reduction_explanation: string;
             /** Reduction Label */
             reduction_label: string;
-            /** Resume Comparisons */
-            resume_comparisons: components["schemas"]["ResumeComparison"][];
-            /** Resume Label */
-            resume_label: string;
-            /** Resume Result */
-            resume_result: string;
             /** Scope Cards */
             scope_cards: components["schemas"]["AuthoredValue"][];
         };
@@ -20094,7 +20490,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -20127,7 +20523,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -20156,7 +20552,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -20179,7 +20575,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -20222,7 +20618,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
+            supported_action_ids: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline")[];
         };
         /**
          * PanelQuiesceActionRequest
@@ -20261,12 +20657,12 @@ export interface components {
          *     or the send-time re-price of an exit sent after its session. A
          *     regular-hours run's EXIT on the day's last bar goes out after the close
          *     as such a limit, so Start of a regular-hours run refuses
-         *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
-         *     Resume. A held position must pass the carry-over and checkpoint gates;
-         *     unsupported carry-over requires Flatten before Resume (#2504).
+         *     ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
+         *     never carried into a new deployment; resolving it requires Flatten before
+         *     a fresh Deploy (#2504).
          *
          *     Paper only, and only the two: a live revision carries its pair inside
-         *     ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
+         *     ``live_envelope``, sealed at Deploy. ``extra="forbid"`` refuses a live-only
          *     value (``loss_usd``, a session count) offered here rather than dropping it,
          *     and ``strict=True`` refuses ``true`` or ``"5"`` for the reason
          *     ``LiveEnvelopePayload`` states. The bounds restate the envelope's; the
@@ -20646,7 +21042,7 @@ export interface components {
          *
          *     ``trader`` is restricted to the closed
          *     ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-         *     (``resume`` / ``continue`` / ``stop``); an Operator-only recovery
+         *     (``stop``); an Operator-only recovery
          *     capability can never reach it. ``operator`` also considers those same
          *     lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
          *     action takes precedence when one is available — the audience-aware
@@ -20658,9 +21054,9 @@ export interface components {
          */
         PrimaryActionByLens: {
             /** Operator */
-            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            operator: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
             /** Trader */
-            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            trader: ("deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
         };
         /** ProfileCloneRequest */
         ProfileCloneRequest: {
@@ -21026,6 +21422,20 @@ export interface components {
             worst_case_cost: number;
         };
         /**
+         * QualifiedDeployConfiguration
+         * @description An exact corpus-covered preset, authored from the program's registry contract.
+         */
+        QualifiedDeployConfiguration: {
+            /** Explanation */
+            explanation: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * QuantLibGreeksResponse
          * @description Single option pricing result.
          */
@@ -21205,7 +21615,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "deploy" | "stop" | "flatten_stop" | "retire" | "archive" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -21992,25 +22402,6 @@ export interface components {
             value: string | number | boolean;
         };
         /**
-         * ResumeComparison
-         * @description An already-evaluated Resume checkpoint comparison.
-         */
-        ResumeComparison: {
-            /** Checkpoint */
-            checkpoint: string;
-            /** Label */
-            label: string;
-            /** Observed */
-            observed: string;
-            /** Result Label */
-            result_label: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
-        };
-        /**
          * RetireReplaceAction
          * @description Move: retire this bot and start a fresh deploy flow with lineage kept.
          */
@@ -22102,6 +22493,11 @@ export interface components {
         };
         /** ReviewGoldenRunRequest */
         ReviewGoldenRunRequest: {
+            /**
+             * Acknowledge Provenance Risk
+             * @default false
+             */
+            acknowledge_provenance_risk?: boolean;
             /** Authorized Program Version */
             authorized_program_version?: string | null;
             /** Command Id */
@@ -22396,6 +22792,23 @@ export interface components {
              * @description List of tickers to test
              */
             tickers: string[];
+        };
+        /** RunEvidenceProvenance */
+        RunEvidenceProvenance: {
+            /** Daily Return Convention */
+            daily_return_convention: string;
+            /** Data Availability Hash */
+            data_availability_hash?: string | null;
+            /** Data Contract */
+            data_contract: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Statistics Basis */
+            statistics_basis: string;
         };
         /**
          * RunFeatureResearchRequest
@@ -23662,6 +24075,25 @@ export interface components {
              * @enum {string}
              */
             kind: "SetHoldings";
+        };
+        /**
+         * ShadowActivationOutcome
+         * @description Durable isolated activation, returned before the supervised restart.
+         */
+        ShadowActivationOutcome: {
+            /** Account Id */
+            account_id: string;
+            /** Activated At Ms */
+            activated_at_ms: number;
+            /** Activation Sha256 */
+            activation_sha256: string;
+            /** Message */
+            message: string;
+            /**
+             * State
+             * @constant
+             */
+            state: "restart_scheduled";
         };
         /**
          * SharpeCiResponse
@@ -26148,7 +26580,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -29170,146 +29602,6 @@ export interface operations {
             };
         };
     };
-    arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ArmingApplyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArmingPlanView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get: {
         parameters: {
             query?: never;
@@ -29400,6 +29692,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiveGraduationPlanView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_shadow_authority_api_brokers_alpaca_accounts__account_id__live_graduation_shadow_activation_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowActivationOutcome"];
                 };
             };
             /** @description Validation Error */
@@ -29724,6 +30049,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NicknameResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAuthorityState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAuthorityApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAuthorityState"];
                 };
             };
             /** @description Validation Error */
@@ -30250,6 +30641,107 @@ export interface operations {
             };
         };
     };
+    read_risk_limits_api_brokers_alpaca_configuration_risk_limits_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRiskStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_risk_limits_api_brokers_alpaca_configuration_risk_limits_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRiskApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRiskStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_risk_hold_api_brokers_alpaca_configuration_risk_limits_clear_hold_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRiskClearRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRiskStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     read_selection_api_brokers_alpaca_configuration_selection_get: {
         parameters: {
             query?: never;
@@ -30439,7 +30931,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AlpacaPaperDeployReceipt"];
+                    "application/json": components["schemas"]["AlpacaPaperDeployReceipt"] | components["schemas"]["BudgetDeployCommandReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -30478,6 +30970,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunAdmissionDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots_budget_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlpacaPaperDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBudgetPreview"];
                 };
             };
             /** @description Validation Error */
@@ -30858,6 +31388,41 @@ export interface operations {
             };
         };
     };
+    read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBudgetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get: {
         parameters: {
             query: {
@@ -30919,6 +31484,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChartLiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -32080,6 +32680,45 @@ export interface operations {
             };
         };
     };
+    fleet_bot_budget_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_budget_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get: {
         parameters: {
             query?: never;
@@ -32378,7 +33017,7 @@ export interface operations {
             };
         };
     };
-    fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get: {
+    fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get: {
         parameters: {
             query?: never;
             header?: {
@@ -32414,127 +33053,7 @@ export interface operations {
             };
         };
     };
-    fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get: {
+    fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get: {
         parameters: {
             query?: never;
             header?: {
@@ -32643,6 +33162,42 @@ export interface operations {
         };
     };
     fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get: {
         parameters: {
             query?: never;
             header?: {
@@ -33758,6 +34313,45 @@ export interface operations {
             };
         };
     };
+    fleet_shadow_activate_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_shadow_activation_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_manual_order_ticket_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__manual_order_tickets__ticket_id__get: {
         parameters: {
             query?: never;
@@ -34288,6 +34882,78 @@ export interface operations {
                 broker: string;
                 clerk_id: string;
                 account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_budget_authority_read_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_budget_authority_apply_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
             };
             cookie?: never;
         };
@@ -34866,6 +35532,116 @@ export interface operations {
             };
         };
     };
+    fleet_configuration_risk_limits_read_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_risk_limits_apply_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_configuration_risk_hold_clear_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_clear_hold_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_configuration_selection_read_api_brokers__broker__clerks__clerk_id__configuration_selection_get: {
         parameters: {
             query?: never;
@@ -34955,6 +35731,40 @@ export interface operations {
                 "application/json": Record<string, never> | null;
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_fee_attribution_read_api_brokers__broker__clerks__clerk_id__fees_attribution_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -35344,6 +36154,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerClockEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get: {
+        parameters: {
+            query?: {
+                strategy_instance_id?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentFeeAttribution"];
                 };
             };
             /** @description Validation Error */

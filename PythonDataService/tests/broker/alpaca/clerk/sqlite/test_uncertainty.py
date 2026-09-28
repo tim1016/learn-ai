@@ -449,6 +449,20 @@ def test_classify_admission_refusal_marks_sweep_resolvable_codes_transient() -> 
     assert classify_admission_refusal("RECONCILIATION_IN_PROGRESS") is RefusalClass.TRANSIENT
 
 
+def test_missing_budget_commitment_is_its_own_transient_refusal_code() -> None:
+    """Post-cutover ENTER without a budget names the budget fact, not the envelope.
+
+    Consumers keying on reason codes must not misclassify a missing budget
+    commitment as missing envelope evidence; the refusal stays transient so
+    the refused ENTER retries on the next decision clock.
+    """
+    from app.broker.alpaca.clerk.sqlite.budget_authority import (
+        BUDGET_COMMITMENT_MISSING,
+    )
+
+    assert classify_admission_refusal(BUDGET_COMMITMENT_MISSING) is RefusalClass.TRANSIENT
+
+
 def test_classify_admission_refusal_fails_closed_for_unknown_or_subject_codes() -> None:
     assert classify_admission_refusal(None) is RefusalClass.TERMINAL
     assert classify_admission_refusal("SOME_FUTURE_CODE") is RefusalClass.TERMINAL

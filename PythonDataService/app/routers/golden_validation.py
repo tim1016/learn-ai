@@ -114,6 +114,7 @@ async def review_golden_run(golden_run_id: int, body: ReviewGoldenRunRequest) ->
             reason=body.reason,
             quantconnect_backtest_id=body.quantconnect_backtest_id,
             authorized_program_version=body.authorized_program_version,
+            acknowledge_provenance_risk=body.acknowledge_provenance_risk,
             actor=local_strategy_validation_actor(),
         )
     except service.GoldenValidationError as exc:

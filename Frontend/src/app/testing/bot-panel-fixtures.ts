@@ -47,7 +47,7 @@ export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPane
       verified_at_ms: OBSERVED_AT_MS,
       explanation: 'No Signal Program build proof supplied.',
     },
-    resume_admission: null,
+
     updated_at_ms: OBSERVED_AT_MS,
     revision: 1,
     market_pulse: {
@@ -101,10 +101,6 @@ export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPane
       last_decision_at_ms: null,
       decision_stale: false,
       last_bar_at_ms: null,
-      resume_eligible: false,
-      resume_label: 'Resume not applicable',
-      resume_explanation: 'This strategy instance already has a live run.',
-      carryover_checkpoint_exposure: {},
     },
     clerk: {
       account_id: 'PA9',
@@ -150,7 +146,7 @@ export function fakePanelAction(
 ): PanelAction {
   return {
     action_id: actionId,
-    label: actionId === 'resume' ? 'Resume' : 'Stop',
+    label: actionId === 'stop' ? 'Stop' : actionId,
     explanation: `${actionId} this bot.`,
     enabled: true,
     blockers: [],

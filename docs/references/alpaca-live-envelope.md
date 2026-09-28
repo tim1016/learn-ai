@@ -456,3 +456,53 @@ The independently hand-computed golden fixture `PNL-001` applies the cited
 Alpaca field semantics to no-flow, deposit, withdrawal, and mixed-flow cases.
 It pins the canonical result with `atol=1e-9, rtol=0`, so the accepted dollar
 error stays far below one cent and never grows with account magnitude.
+
+## Immediate risk edits and retained loss holds (#2543, 2026-09-27)
+
+The effective loss policy is the last explicit account risk Apply in Clerk
+custody; original profile and arming payloads remain historical. Apply, entry
+admission, and explicit hold clearance use the same current equity-based risk
+fact and account writer fence. Saving a draft has no effect. A held account
+retains its original limit, policy, baseline, and session; loosening current
+limits never clears that cause. Clearance requires fresh evidence satisfying
+both the retained hold and current policy. Later-session clearance additionally
+proves prior obligations resolved through the existing account-quiet authority.
+There is no automatic rollover clearance or second real-account P&L formula.
+
+The accepted prior-close correction in #2443 governs the real account's loss
+calculation. Observed fees already reduce broker equity and must not be deducted
+again. Budget free cash and pending obligations independently consume the sole
+fee attribution authority; missing cash/fee coverage cannot create available
+budget. Simulated equity includes its own canonical fees and marked holdings.
+Risk revision, apply/clear races, unknown evidence, rollover, restart and mirror
+rebuild are covered by `tests/broker/alpaca/clerk/sqlite/test_account_risk_policy.py`.
+
+## Shared simulated cash and risk reference (#2546)
+
+`sqlite/simulated_account.py` composes existing canonical effective fills,
+`fifo_pnl.py`, `custody_fee_attribution` and the NYSE calendar. The independent
+arithmetic oracle in `tests/broker/alpaca/clerk/sqlite/test_simulated_account.py`
+uses a Shadow initial baseline of $1,000, BUY 2 at $100, SELL 1 at $120, and a
+$130 mark. With current reference cash of $1,200, available cash is exactly
+`1200 - 200 + 120 = 1120`; open P&L is $30. Current risk equity is
+`1000 + 20 + 30 - .03 = 1049.97`, including accrued modelled fees before
+settlement. Pending provisions remain separate cash claims; they are not
+deducted twice from cash or risk equity. A later real deposit cannot change
+the retained $1,000 risk baseline. Once the date settles the canonical modelled
+fees ($0.01 SEC + $0.01 TAF + $0.01 CAT), a $1,500 reference gives exact cash
+`1500 - 200 + 120 - .03 = 1419.97`. The next baseline is
+`1000 + 20 + 30 - .03 = 1049.97`, using the exact previous scheduled close mark.
+Both effective fills and fee inputs are cut off inclusively at that close;
+after-hours fills belong to the next loss window. Regression cases cover an
+after-close BUY with no prior-close position and an after-close SELL whose
+realized gain must not leak into the previous close baseline.
+
+Cash assertions use exact Decimal equality. Existing canonical FIFO outputs
+use absolute tolerance `1e-9`, relative tolerance zero; this is composition of
+the repository's mathematical authorities, not a new external numerical port.
+The tests also pin independent private starting cash, shared Shadow commitment
+competition, rejection of real P&L contamination, missing/wrong-provider/stale
+marks, session-boundary expiry, retained-baseline mirror rebuild, and restart
+between private budget commitment and first projection. Real broker read grace
+remains unchanged; simulated cash's coherent cutoff supersedes that grace only
+for its own effective fills and modelled settlement.

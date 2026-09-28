@@ -1,5 +1,11 @@
 # Alpaca live authority — graduation, the admission chain, and the first real order
 
+
+**Current authorization (2026-09-27, PRD #2540 / #2547):** after explicit Budget
+authority cutover, Live deployment requires its own reviewed budget and consent.
+Standalone arming is retired. This note's older arming descriptions document the
+pre-cutover historical reader; they are not a current operator workflow.
+
 **Status:** canonical for ADR 0059 slice 7 (2026-09-09). Lineage: live.
 
 ## What it is

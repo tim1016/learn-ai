@@ -102,3 +102,34 @@ async def test_endpoint_reports_idempotency_conflicts_without_mutating_the_first
         )
         assert conflict.status_code == 409
         assert conflict.json()["detail"]["code"] == "GOLDEN_VALIDATION_COMMAND_CONFLICT"
+
+
+async def test_unknown_provenance_acceptance_requires_a_visible_acknowledgement() -> None:
+    _requires_ephemeral_db()
+    symbol = f"G{uuid.uuid4().hex[:6].upper()}"
+    run_id = (await with_connection(
+        backtest_repo.insert_run,
+        record_from_payload(engine_payload(symbol=symbol, evidence_provenance_json=None)),
+    )).run_id
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        designated = await client.post("/api/research/golden-validations", json={
+            "source_run_id": run_id, "command_id": f"designate-{symbol}",
+            "rationale": "Retain the historical record for deliberate review.",
+        })
+        assert designated.status_code == 201
+        candidate = designated.json()
+        assert candidate["evidence_applicability"]["status"] == "unknown"
+        assert candidate["evidence_applicability"]["affected_issues"] == []
+        body = {
+            "command_id": f"review-{symbol}", "expected_evidence_revision": candidate["evidence_revision"],
+            "decision": "accept", "reason": "I accept the recorded unknown provenance.",
+        }
+        refused = await client.post(f"/api/research/golden-validations/{candidate['id']}/reviews", json=body)
+        assert refused.status_code == 409
+        assert "Manual override" in refused.json()["detail"]["message"]
+        accepted = await client.post(f"/api/research/golden-validations/{candidate['id']}/reviews", json={
+            **body, "acknowledge_provenance_risk": True,
+        })
+        assert accepted.status_code == 200
+        assert accepted.json()["latest_review"]["classification"] == "manual_override"
+        assert accepted.json()["validation_case"] == candidate["validation_case"]

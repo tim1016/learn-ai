@@ -36,9 +36,9 @@ could not settle — but it bounds §6 and §7, and the bound is stated there.
 | [PRD](prds/2026-09-12-multi-broker-clerk-control-plane.md) | Requirements |
 | [Delivery review](design/2026-09-13-clerk-fleet-delivery-review.md) | Delivery shape |
 | `CONTEXT.md` § "Broker clerk fleet (resolved 2026-09-12)" | Vocabulary — adopted here unchanged |
-| [ADR 0059](architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md) / [ADR 0060](architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) | Arming/envelope and Stage→Apply→restart, retained per clerk |
+| [ADR 0059](architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md) / [ADR 0060](architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) | Deployment consent, effective account risk and profile changes, retained per clerk |
 
-The Alpaca clerk's internals — custody, arming, recovery — are described **at their interface
+The Alpaca clerk's internals — custody, budgets, recovery — are described **at their interface
 only**. They carry their own accepted authority in ADRs 0035 / 0037 / 0047 / 0059 / 0060.
 
 ---
@@ -380,31 +380,51 @@ Absorbed on 2026-09-14 from the retired operator manual, because two Accepted AD
 operator-facing document as the place these terms are defined. Without this section their
 definitions would exist nowhere an operator is told to look.
 
-### `corpus_coverage` — a stamp on paper, a blocker anywhere else
-*(home for [ADR 0054](architecture/adrs/0054-corpus-coverage-is-a-stamp-on-paper.md))*
+### Deploy, Stop and remaining money
 
-Whether the golden corpus behind a program's `golden_trace_root` actually covers the symbol **and**
-the exact parameter values a bot resolved. The registry qualifies one `validated_settings` point per
-program over its `validated_symbols`; any other symbol, or any parameter value differing from that
-point, is `UNCOVERED`.
+The account-scoped Deploy page is the single entry point for a fresh run. It
+reviews the qualified configuration, server-priced dollar budget, immutable
+exit terms and current account risk policy. Live also requires typed consent.
+Paper offers Paper and Dry Run; a Live lane offers Shadow and Dry Run before
+graduation, then Live and Dry Run afterward. Configuration owns Shadow
+activation, graduation, Apply risk limits, guarded hold clearance and the
+explicit Budget authority upgrade for existing accounts.
 
-It is a fact about the *evidence a run can later claim*, not about the bytes it runs — artifact and
-wiring digests still match their receipt — so since ADR 0054 it no longer refuses the build proof.
+Stop ends new strategy decisions. It releases proven free cash while pending
+orders, unseen fills, fees and positions remain attributed to the stopped run.
+Use the existing Reconcile and guarded Flatten actions to resolve those
+obligations. Deploy again opens a fresh Deploy form and grants no permission
+itself. Pause, Continue, Resume and standalone arming are retired. Historical
+evidence remains readable; it cannot create a new run or a dollar commitment.
 
-Whether an uncovered point may start depends on `account_mode`:
+One Clerk projection supplies the displayed budget and cash claims and checks
+new entries. Apply risk limits changes the effective account policy without
+redeploying bots; it cannot rewrite their exit terms or silently clear a hold.
+Shadow and each private Dry Run retain their own cash, fees and risk evidence.
+See [ADR 0059](architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md)
+and [ADR 0060](architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md).
 
-- **Proven paper** (and Dry Run, whose synthetic authority is paper by construction): the run
-  starts, and every surface says so. The Start/Resume `explanation` carries *"Corpus coverage is
-  UNCOVERED: the paper environment admits this exploratory run, which is not citable as
-  qualification evidence"*; the build fact reads `corpus_coverage: UNCOVERED` with a `next_step`
-  naming the two routes to a covered run (deploy at the registered validated settings, or run
-  golden qualification for these parameters); and the run's frozen evidence keeps the stamp, so the
-  panel never replays an exploratory run as citable proof.
-- **Live**: the run refuses with `PROGRAM_CORPUS_UNCOVERED`.
+### `corpus_coverage` — qualification for the exact configuration
+*(home for [ADR 0054](architecture/adrs/0054-corpus-coverage-is-a-stamp-on-paper.md),
+as amended by #2544)*
 
-A custody answer cannot omit its environment, so there is no third case. **There is no toggle** —
-the environment is the only switch, and a paper run that must be corpus-covered simply deploys at
-the validated point and reads `COVERED`.
+The golden corpus behind a program's `golden_trace_root` covers a particular
+symbol and exact parameter values. The registry qualifies its
+`validated_settings` over its `validated_symbols`; an unsupported tuple is
+`UNCOVERED` even when the artifact and wiring digests match.
+
+Paper, Shadow and Live require a covered tuple before a deployment can commit
+money. Deploy shows that tuple and offers **Use qualified configuration** or
+**Try in Dry Run**. It never silently changes the configuration or self-certifies
+a new corpus point. Dry Run retains its explicit exploratory exemption; its
+frozen evidence keeps the coverage result and cannot claim qualification.
+
+Corpus coverage, applicable human promotion, program access and operational
+readiness remain separate facts. A Manual override belongs to the existing
+human-promotion authority and does not bypass corpus, cash or account risk.
+Known affected evidence requires review; unknown provenance is shown honestly.
+Historical acceptances remain immutable. No strategy-evidence gate is added
+at ENTER.
 
 ### `account_mode`
 *(home for [ADR 0054](architecture/adrs/0054-corpus-coverage-is-a-stamp-on-paper.md))*

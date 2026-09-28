@@ -17,8 +17,8 @@ from pydantic import ValidationError
 from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings
 from app.broker.alpaca.clerk.active_authority import primary_custody_world
 from app.broker.alpaca.clerk.live_arming import LIVE_ARMING_LEDGER_INVALID, LIVE_ARMING_REQUIRED, LiveArmingInvalid
-from app.broker.alpaca.clerk.live_arming_ceremony import account_arming
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeIncomplete, LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_arming_history import account_arming
+from app.broker.alpaca.clerk.live_envelope import ENVELOPE_SETTINGS_FIELDS, LiveEnvelopeIncomplete, LiveEnvelopeValues
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.ibkr.config import live_artifacts_root
@@ -46,6 +46,11 @@ def live_arming_admission_fact(
     The keyword seams exist for tests and for callers that already hold the
     values; production resolves each from its one owner.
     """
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+
+    runtime = get_clerk_runtime(custody.account_id)
+    if runtime is not None and runtime.sqlite_repository is not None and runtime.sqlite_repository.budget_authority_version() >= 2:
+        return None  # Consent/money are checked by the durable Deploy command.
     world = primary_custody_world() if custody_world is None else custody_world
     # ``world != "real_live"`` is the world question; the mode question is the
     # closed table's answer for that world, not a second ``"live"`` literal
@@ -65,7 +70,14 @@ def live_arming_admission_fact(
             live_account_id=custody.account_id,
             artifacts_root=resolved.clerk_dir if artifacts_root is None else artifacts_root,
             live_state_root=live_artifacts_root() if live_state_root is None else live_state_root,
-            configured_envelope=LiveEnvelopeValues.from_settings(resolved),
+            configured_envelope=(
+                runtime.clerk.live_envelope.values
+                if runtime is not None and runtime.clerk is not None and runtime.clerk.live_envelope is not None
+                else LiveEnvelopeValues(**{
+                    field: getattr(resolved, setting) for field, setting in ENVELOPE_SETTINGS_FIELDS
+                    if getattr(resolved, setting) is not None
+                })
+            ),
             now_ms=observed_at_ms,
             strategy_instance_ids=(binding.strategy_instance_id,),
             custody_world=world,
@@ -88,7 +100,7 @@ def live_arming_admission_fact(
                 "The arming ledger or the ALPACA_LIVE_* environment for this account does not "
                 "verify; the detail is in the service log."
             ),
-            next_step="Restore the arming ledger and the ALPACA_LIVE_* environment, then retry.",
+            next_step="Review Budget authority upgrade in Configuration; historical permission cannot be renewed.",
             observed_at_ms=observed_at_ms,
         )
     status = arming.statuses[binding.strategy_instance_id]

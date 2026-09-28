@@ -120,7 +120,9 @@ async def test_the_whole_cutover_and_its_rollback(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    legacy_sha = LiveEnvelopeValues.from_settings(AlpacaSettings(_env_file=None)).sha
+    configured = AlpacaSettings(_env_file=None)
+    current_sha = LiveEnvelopeValues.from_settings(configured).sha
+    legacy_sha = LiveEnvelopeValues(**{field: getattr(configured, f"live_{field}") for field in ("loss_fraction", "loss_usd", "shadow_sessions", "arming_max_sessions", "xh_entry_bps", "xh_exit_bps")}).sha
 
     # 1. Before the import: no profiles, so the environment is still the only
     #    description of this worker and it boots from it unchanged.
@@ -130,7 +132,7 @@ async def test_the_whole_cutover_and_its_rollback(
     assert isinstance(before, BoundWorker)
     assert before.candidate is None
     assert before.context.live_envelope is not None
-    assert before.context.live_envelope.sha == legacy_sha
+    assert before.context.live_envelope.sha == current_sha
 
     # 2. Import. Reads the environment, writes one profile revision, stages it.
     values = LegacyEnvironmentValues(_env_file=None)

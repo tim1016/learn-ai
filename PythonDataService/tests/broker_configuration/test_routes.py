@@ -25,7 +25,9 @@ from app.routers.broker_configuration import (
     get_broker_configuration_service as service_dependency,
 )
 from tests.broker_configuration.conftest import (
-    LIVE_ENVELOPE_PAYLOAD,
+    LIVE_ENVELOPE_PAYLOAD as HISTORICAL_ENVELOPE_PAYLOAD,
+)
+from tests.broker_configuration.conftest import (
     OPERATOR_IDENTITY,
     TEST_CREDENTIAL_SLOTS,
     FakeAccountVerifier,
@@ -33,6 +35,9 @@ from tests.broker_configuration.conftest import (
     restart_target,
     slot_directory_for_tests,
 )
+
+LIVE_ENVELOPE_PAYLOAD = {key: value for key, value in HISTORICAL_ENVELOPE_PAYLOAD.items() if key not in {"shadow_sessions", "arming_max_sessions"}}
+
 
 PAPER_BODY = {"credential_slot": "alpaca_paper_primary", "endpoint_mode": "paper"}
 
@@ -683,3 +688,12 @@ async def test_every_route_requires_the_control_secret(
     response = await client.request(method, f"{PREFIX}{path}", json=body)
 
     assert response.status_code == 403, f"{method} {path} answered {response.status_code}"
+
+
+@pytest.mark.parametrize("field", ["shadow_sessions", "arming_max_sessions"])
+async def test_retired_session_counts_cannot_be_saved_through_http(client: AsyncClient, field: str) -> None:
+    response = await client.post(f"{PREFIX}/profiles", json={
+        "display_name": "Retired field", "credential_slot": "alpaca_live_primary", "endpoint_mode": "live",
+        "live_envelope": {**LIVE_ENVELOPE_PAYLOAD, field: 1},
+    })
+    assert response.status_code == 422

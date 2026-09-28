@@ -10,6 +10,31 @@
 - **Supersedes:** ADR 0026 §4 and its 2026-07-21 amendment, for Alpaca bots.
 - **Vocabulary:** `CONTEXT.md` § "Bot control plane (resolved 2026-08-17)".
 
+## 2026-09-27 amendment: Deploy is the only start path
+
+Owner decision in [PRD #2540](https://github.com/tim1016/learn-ai/issues/2540),
+implemented by [#2541](https://github.com/tim1016/learn-ai/issues/2541), supersedes
+all active Alpaca Pause, Continue and Resume behavior in ADRs 0004, 0010, 0011,
+0026, 0033–0038 and the
+legacy lifecycle vocabulary. The lifecycle is **Deploy → Running → Stop**.
+Terminal failure also ends that deployment's right to make new decisions.
+
+“Deploy again” opens the ordinary account-scoped Deploy form. It grants nothing,
+reuses no instance or run identity, adopts no position, and passes the same
+current checks and consent as any fresh deployment. The removed commands are
+absent from the API's closed action set and runner methods, not hidden buttons.
+
+Stop retains its in-flight decision fence and durable Clerk stop before task
+cancellation. Existing orders, positions, sealed exit terms and guarded Flatten
+remain attached to the old deployment. Same-run feed reconnection and Clerk
+recovery can finish existing obligations; neither creates a replacement run.
+Retained `PAUSED` desired-state files decode as history, project as stopped, and
+boot recovery durably records stopped intent without starting a process.
+Historical launch reasons, original receipts, and sealed `pause_policy` values
+remain readable and hash-stable; they authorize no new trading.
+
+Vocabulary: `CONTEXT.md` § “Identity ladder”.
+
 ## What the census actually found
 
 The census reported "five bypass writers" of `lifecycle_state.json` and

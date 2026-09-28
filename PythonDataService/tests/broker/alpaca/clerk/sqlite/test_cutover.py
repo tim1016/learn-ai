@@ -1125,7 +1125,7 @@ def test_apply_rejects_changed_evidence_without_quarantining_or_activating(
         account_mode="paper",
         observed_at_ms=PLAN_MS,
         proof_reference="changed-proof",
-        positions={"SPY": 0.0},
+        positions={"IWM": 0.0},
         open_order_ids=(),
     )
 

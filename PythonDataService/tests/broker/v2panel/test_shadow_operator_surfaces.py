@@ -205,7 +205,7 @@ async def shadow_registry(
         await registry.stop_all()
 
 
-async def test_shadow_runner_can_deploy_stop_and_resume(
+async def test_shadow_runner_can_deploy_stop_and_deploy_fresh(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     shadow_registry: BotTaskRegistry,
 ) -> None:
@@ -231,10 +231,10 @@ async def test_shadow_runner_can_deploy_stop_and_resume(
     stopped = await shadow_registry.stop("alpaca", SID)
     assert stopped.phase == "OFF_DUTY"
     assert runtime.sqlite_repository.active_run(SID) is None
-    resumed = await shadow_registry.resume_existing("alpaca", SID)
+    resumed = await shadow_registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
     assert resumed.running is True
     assert resumed.active_run_id != deployed.active_run_id
-    assert runtime.sqlite_repository.active_run(SID).lifecycle_run_id == resumed.active_run_id
+    assert runtime.sqlite_repository.active_run(SID + "-fresh").lifecycle_run_id == resumed.active_run_id
 
 
 async def test_shadow_boot_recovers_a_clerk_run_without_a_binding(
@@ -258,7 +258,7 @@ async def test_shadow_boot_recovers_a_clerk_run_without_a_binding(
     assert runtime.sqlite_repository.active_run(SID) is None
 
 
-async def test_shadow_failed_activation_recovers_and_resumes_the_existing_binding(
+async def test_shadow_failed_activation_recovers_without_reusing_the_existing_binding(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
     shadow_registry: BotTaskRegistry,
     monkeypatch: pytest.MonkeyPatch,
@@ -297,11 +297,11 @@ async def test_shadow_failed_activation_recovers_and_resumes_the_existing_bindin
     assert recovered.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
     assert shadow_registry.process_fact("alpaca", SID).state == "EXITED"
 
-    resumed = await shadow_registry.resume_existing("alpaca", SID)
+    resumed = await shadow_registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
     assert resumed.running is True
     assert resumed.active_run_id != failed_binding.run_id
-    history = shadow_registry.run_history("alpaca", SID, cursor=None, limit=10)
-    failed_run = next(run for run in history.runs if run.run_id == failed_binding.run_id)
+    failed_run = shadow_registry.current_run("alpaca", SID)
+    assert failed_run.run_id == failed_binding.run_id
     assert failed_run.terminal_outcome.reason_code == "INTERRUPTED_BY_RESTART"
 
 
@@ -439,7 +439,7 @@ async def test_the_deploy_view_is_reachable_over_http_and_offers_shadow(
     view = response.json()
     assert view["account_mode"] == "live"
     offered = {mode["mode"]: mode["availability"] for mode in view["execution_modes"]}
-    assert offered == {"dry_run": "available", "shadow": "available", "live": "planned"}
+    assert offered == {"dry_run": "available", "shadow": "available"}
 
 
 async def test_clerk_status_is_reachable_and_reads_the_shadow_custody_identity(
@@ -559,7 +559,7 @@ async def test_a_manual_order_post_is_refused_with_a_typed_reason(
             json=body,
         )
 
-    assert at_route_account.status_code == 404
+    assert at_route_account.status_code == 404, at_route_account.text
     assert at_route_account.json()["detail"]["reason"] == "sqlite_account_not_selected"
     assert at_custody_account.status_code == 200
     capability = at_custody_account.json()["capability"]
@@ -700,22 +700,39 @@ async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shado
     shadow_app_and_broker: tuple[FastAPI, ActiveClerkRuntime, _LiveBroker],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(j) A live loss on the composed shadow authority reaches the verdict endpoint."""
+    """Only this Shadow authority's simulated losses reach its account hold."""
     for name, value in {
         "ALPACA_API_KEY_ID": "k", "ALPACA_API_SECRET_KEY": "s", "ALPACA_MODE": "live",
         "ALPACA_LIVE_LOSS_FRACTION": "0.02", "ALPACA_LIVE_LOSS_USD": "500",
-        "ALPACA_LIVE_SHADOW_SESSIONS": "5", "ALPACA_LIVE_ARMING_MAX_SESSIONS": "20",
         "ALPACA_LIVE_XH_ENTRY_BPS": "10", "ALPACA_LIVE_XH_EXIT_BPS": "10",
     }.items():
         monkeypatch.setenv(name, value)
     reset_alpaca_settings_for_testing()
     try:
         app, runtime, broker = shadow_app_and_broker
-        broker.unrealized = -5_000.0
-        assert runtime.envelope_sync is not None
-        # The composed repository uses the live clock. Keep the broker's local
-        # ingestion stamp in that same ET loss window, as the real adapter does.
-        broker.now_ms = runtime.sqlite_repository.clock()
+        from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+        from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+        from app.broker.contract.models import BrokerOrderLeg
+        from tests.broker.alpaca.clerk.sqlite.conftest import (
+            DAY_PNL_RUN_ID,
+            DAY_PNL_SID,
+            _append_day_pnl_slice,
+        )
+
+        repo = runtime.sqlite_repository
+        assert repo is not None and runtime.envelope_sync is not None
+        repo.register_strategy_instance(strategy_instance_id=DAY_PNL_SID, symbol="SPY", config_hash="loss-test")
+        submit_start_run(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID, lifecycle_run_id=DAY_PNL_RUN_ID)
+        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID,
+            lifecycle_run_id=DAY_PNL_RUN_ID, decision_id="shadow-loss",
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=10))
+        _append_day_pnl_slice(repo, accepted, execution_id="shadow-buy", side="BUY", quantity=10,
+            price=1000, occurred_at_ms=repo.clock())
+        _append_day_pnl_slice(repo, accepted, execution_id="shadow-sell", side="SELL", quantity=10,
+            price=400, occurred_at_ms=repo.clock())
+        append_risk_policy(repo, policy=AccountRiskPolicy(1, 0.05, 5000, "live-profile", 1, "owner", repo.clock()), expected_revision=0)
+        # Foreign real-account profit cannot cancel a simulated realized loss.
+        broker.unrealized = 9999.0
         assert await runtime.envelope_sync.tick() == "hold_raised"
 
         async with httpx.AsyncClient(
@@ -726,7 +743,6 @@ async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shado
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["loss_hold"] == "held"
-        assert body["envelope_agreement"] == "unsealed"
-        assert body["final_verdict"] == "live-unarmed"
+        assert body["final_verdict"] == "shadow"
     finally:
         reset_alpaca_settings_for_testing()

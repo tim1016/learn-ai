@@ -5,7 +5,7 @@
     "PythonDataService/app/broker/fleet_composition.py (production_provider_adapters)",
     "PythonDataService/app/broker/alpaca/clerk/fleet_adapter.py (ALPACA_OPERATIONS)"
   ],
-  "adapter_version": "alpaca-fleet.8",
+  "adapter_version": "alpaca-fleet.9",
   "operations": {
     "account_read": {
       "method": "GET",
@@ -30,6 +30,16 @@
     "bot_authority_facts": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/{sid}/authority-facts",
+      "requires_account": true
+    },
+    "bot_budget_preview": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/budget-preview",
+      "requires_account": true
+    },
+    "bot_budget_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/budget",
       "requires_account": true
     },
     "bot_chart_history": {
@@ -70,6 +80,11 @@
     "bot_decision_evidence": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/{sid}/decision-evidence",
+      "requires_account": true
+    },
+    "bot_deploy_command_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/deploy-command",
       "requires_account": true
     },
     "bot_evidence": {
@@ -130,6 +145,16 @@
     "configuration_account_pin": {
       "method": "POST",
       "path_template": "/configuration/profiles/{profile_id}/revisions/{revision}/account-pin",
+      "requires_account": false
+    },
+    "configuration_budget_authority_apply": {
+      "method": "POST",
+      "path_template": "/configuration/budget-authority/apply",
+      "requires_account": false
+    },
+    "configuration_budget_authority_read": {
+      "method": "GET",
+      "path_template": "/configuration/budget-authority",
       "requires_account": false
     },
     "configuration_credential_slots": {
@@ -205,6 +230,21 @@
     "configuration_revisions_list": {
       "method": "GET",
       "path_template": "/configuration/profiles/{profile_id}/revisions",
+      "requires_account": false
+    },
+    "configuration_risk_hold_clear": {
+      "method": "POST",
+      "path_template": "/configuration/risk-limits/clear-hold",
+      "requires_account": false
+    },
+    "configuration_risk_limits_apply": {
+      "method": "POST",
+      "path_template": "/configuration/risk-limits/apply",
+      "requires_account": false
+    },
+    "configuration_risk_limits_read": {
+      "method": "GET",
+      "path_template": "/configuration/risk-limits",
       "requires_account": false
     },
     "configuration_selection_apply": {
@@ -322,6 +362,11 @@
       "path_template": "/accounts/{account_id}/custody/transactions",
       "requires_account": true
     },
+    "fee_attribution_read": {
+      "method": "GET",
+      "path_template": "/fees/attribution",
+      "requires_account": false
+    },
     "gallery_snapshot": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/gallery/snapshot",
@@ -352,26 +397,6 @@
       "path_template": "/lane/stop-all-bots",
       "requires_account": false
     },
-    "live_arming_apply": {
-      "method": "POST",
-      "path_template": "/accounts/{account_id}/bots/{sid}/arming/apply",
-      "requires_account": true
-    },
-    "live_arming_disarm": {
-      "method": "POST",
-      "path_template": "/accounts/{account_id}/bots/{sid}/arming/disarm",
-      "requires_account": false
-    },
-    "live_arming_plan": {
-      "method": "POST",
-      "path_template": "/accounts/{account_id}/bots/{sid}/arming/plan",
-      "requires_account": true
-    },
-    "live_arming_status": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/{sid}/arming",
-      "requires_account": true
-    },
     "live_graduation_apply": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/live-graduation/apply",
@@ -385,7 +410,7 @@
     "live_graduation_status": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/live-graduation",
-      "requires_account": true
+      "requires_account": false
     },
     "live_verdict": {
       "method": "GET",
@@ -460,6 +485,11 @@
     "positions_read": {
       "method": "GET",
       "path_template": "/positions",
+      "requires_account": false
+    },
+    "shadow_activate": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/live-graduation/shadow-activation",
       "requires_account": false
     }
   }

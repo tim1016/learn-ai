@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -119,12 +118,12 @@ class _FakeBrokerPort:
 class _FakeRegistry:
     def __init__(
         self,
-        receipts_root: Path | None = None,
+        artifacts_root: Path | None = None,
         *,
         running: bool = True,
         sids: Sequence[str] = (SID,),
     ) -> None:
-        self._receipts_root = receipts_root or Path("receipts")
+        self.artifacts_root = artifacts_root or Path("receipts")
         self._running = running
         self._sids = tuple(sids)
         # Attributed per bot, not counted as a scalar: a fleet-wide total is
@@ -148,9 +147,6 @@ class _FakeRegistry:
         ) as (snapshot, _policy, _terms):
             self.custody_projections.append((sid, snapshot.reconciliation_state))
         raise BotRunnerError("resume admission policy is not modelled in this harness")
-
-    def panel_action_receipt_path(self, sid: str) -> Path:
-        return self._receipts_root / f"{sid}-panel-action-receipts.json"
 
     def status(self, broker: str, sid: str) -> BotStatusView:
         assert broker == "alpaca"
@@ -457,25 +453,8 @@ _PROJECTIONS_PER_BOT_PER_ROUND = 2
 def _assert_every_bot_ran_the_custody_projection(
     registry: _FakeRegistry, fleet_size: int, rounds: int
 ) -> None:
-    """Non-vacuity for the per-bot panel surface, attributed per bot.
-
-    A scalar total is the wrong instrument here: the gallery alone fans out
-    to every bot on every round, so ``fleet_size * rounds`` is already met
-    without a single panel GET doing any custody work. A panel read that
-    regressed to returning 200 without running ``preview_resume_admission``
-    — the exact custody-projection regression these gates exist to catch —
-    would clear a total-only bound on the gallery's output alone.
-
-    Counting per sid closes that: every bot must be projected at least
-    ``_PROJECTIONS_PER_BOT_PER_ROUND * rounds`` times, so losing either
-    contributing surface halves that bot's count and fails.
-    """
-    counts = Counter(sid for sid, _state in registry.custody_projections)
-    expected = _PROJECTIONS_PER_BOT_PER_ROUND * rounds
-    short = {
-        sid: counts[sid] for sid in _fleet_sids(fleet_size) if counts[sid] < expected
-    }
-    assert not short, f"bots projected fewer than {expected} times: {short}"
+    """No read may revive the removed Resume admission workflow."""
+    assert registry.custody_projections == []
 
 
 async def _assert_every_read_surface_projected_the_whole_fleet(
@@ -999,6 +978,44 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
     assert second.status_code == 200
     assert second.json()["applied"] is False
     assert second.json()["receipt_id"] == first.json()["receipt_id"]
+
+
+async def test_action_refuses_malformed_sid_before_touching_receipt_path(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed bot id is a clean 404 and never reaches the receipt path.
+
+    The durable panel-action receipt ledger keys a filesystem path by the
+    request's ``sid`` (CodeQL py/path-injection, PR #2550). The instance-id
+    guard in ``run_action`` is the boundary copy of the artifact-path
+    validators: it refuses the id before the roster or the receipt store is
+    touched. Before the guard a malformed id surfaced as a harness 500.
+    """
+    from app.services.broker_v2_panel import panel_data_source
+
+    app, _repo = api
+    seen_paths: list[Path] = []
+    real_store = panel_data_source.durable_idempotency_store_for
+
+    def spy(artifacts_root: Path, sid: str) -> object:
+        seen_paths.append(artifacts_root / sid)
+        return real_store(artifacts_root, sid)
+
+    monkeypatch.setattr(panel_data_source, "durable_idempotency_store_for", spy)
+    request = {
+        "action_id": "stop",
+        "revision": 1,
+        "concurrency_token": "token",
+        "idempotency_key": "malformed-sid",
+    }
+    async with _client(app) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/evil%20id/actions", json=request
+        )
+
+    assert response.status_code == 404
+    assert seen_paths == []
 
 
 async def test_live_chart_accepts_five_second_resolution(

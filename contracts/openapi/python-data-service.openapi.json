@@ -365,6 +365,173 @@
         "title": "AccountPnlReconciliationResponse",
         "type": "object"
       },
+      "AccountRiskApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_risk_revision": {
+            "minimum": 0.0,
+            "title": "Expected Risk Revision",
+            "type": "integer"
+          },
+          "expected_selection_generation": {
+            "minimum": 0.0,
+            "title": "Expected Selection Generation",
+            "type": "integer"
+          },
+          "loss_fraction": {
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Loss Fraction",
+            "type": "number"
+          },
+          "loss_usd": {
+            "exclusiveMinimum": 0.0,
+            "title": "Loss Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "expected_risk_revision",
+          "expected_selection_generation",
+          "loss_fraction",
+          "loss_usd"
+        ],
+        "title": "AccountRiskApplyRequest",
+        "type": "object"
+      },
+      "AccountRiskClearRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_risk_revision": {
+            "minimum": 0.0,
+            "title": "Expected Risk Revision",
+            "type": "integer"
+          },
+          "expected_selection_generation": {
+            "minimum": 0.0,
+            "title": "Expected Selection Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_risk_revision",
+          "expected_selection_generation"
+        ],
+        "title": "AccountRiskClearRequest",
+        "type": "object"
+      },
+      "AccountRiskStateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "applied_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At Ms"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "entry_state": {
+            "enum": [
+              "ready",
+              "held",
+              "unknown"
+            ],
+            "title": "Entry State",
+            "type": "string"
+          },
+          "hold_loss_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Loss Limit Usd"
+          },
+          "hold_policy_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Policy Revision"
+          },
+          "hold_session_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Session Start Ms"
+          },
+          "loss_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Fraction"
+          },
+          "loss_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Usd"
+          },
+          "risk_revision": {
+            "title": "Risk Revision",
+            "type": "integer"
+          },
+          "selection_generation": {
+            "title": "Selection Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "risk_revision",
+          "selection_generation",
+          "loss_fraction",
+          "loss_usd",
+          "applied_at_ms",
+          "entry_state",
+          "detail"
+        ],
+        "title": "AccountRiskStateResponse",
+        "type": "object"
+      },
       "AccountVerificationResponse": {
         "additionalProperties": false,
         "properties": {
@@ -789,9 +956,9 @@
       "AlpacaLiveVerdict": {
         "additionalProperties": false,
         "properties": {
-          "armed_instance_count": {
+          "budget_authority_version": {
             "minimum": 0.0,
-            "title": "Armed Instance Count",
+            "title": "Budget Authority Version",
             "type": "integer"
           },
           "clerk_authority": {
@@ -825,35 +992,27 @@
             "title": "Configured Mode",
             "type": "string"
           },
+          "deployment_readiness": {
+            "enum": [
+              "not_applicable",
+              "upgrade_required",
+              "risk_not_observed",
+              "loss_hold",
+              "ready"
+            ],
+            "title": "Deployment Readiness",
+            "type": "string"
+          },
           "detail": {
             "minLength": 1,
             "title": "Detail",
             "type": "string"
           },
-          "envelope_agreement": {
-            "enum": [
-              "not_applicable",
-              "unsealed",
-              "agreed",
-              "disagreed"
-            ],
-            "title": "Envelope Agreement",
-            "type": "string"
-          },
-          "envelope_state": {
-            "enum": [
-              "not_applicable",
-              "configured_unsealed",
-              "sealed"
-            ],
-            "title": "Envelope State",
-            "type": "string"
-          },
           "final_verdict": {
             "enum": [
               "paper",
-              "live-unarmed",
-              "live-armed",
+              "live",
+              "shadow",
               "unknown"
             ],
             "title": "Final Verdict",
@@ -899,16 +1058,6 @@
             "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"
-          },
-          "shadow_state": {
-            "enum": [
-              "not_applicable",
-              "none",
-              "in_progress",
-              "complete"
-            ],
-            "title": "Shadow State",
-            "type": "string"
           }
         },
         "required": [
@@ -917,11 +1066,9 @@
           "mode_agreement",
           "clerk_authority",
           "clerk_refusal_reason_code",
-          "armed_instance_count",
-          "envelope_state",
-          "envelope_agreement",
+          "budget_authority_version",
+          "deployment_readiness",
           "loss_hold",
-          "shadow_state",
           "final_verdict",
           "headline",
           "detail",
@@ -1173,6 +1320,16 @@
         "additionalProperties": false,
         "description": "Closed account-scoped command for the production Alpaca deploy page.",
         "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentBudgetInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "carryover_policy": {
             "default": "FORBID",
             "enum": [
@@ -1313,6 +1470,16 @@
           },
           "params_schema": {
             "$ref": "#/components/schemas/StrategyParamsSchema"
+          },
+          "qualified_configuration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualifiedDeployConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "selectable": {
             "title": "Selectable",
@@ -1746,166 +1913,6 @@
           "severity"
         ],
         "title": "ArbitrageDetail",
-        "type": "object"
-      },
-      "ArmingApplyRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "confirmation_token": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Confirmation Token",
-            "type": "string"
-          },
-          "plan_id": {
-            "pattern": "^[0-9a-f]{64}$",
-            "title": "Plan Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "plan_id",
-          "confirmation_token"
-        ],
-        "title": "ArmingApplyRequest",
-        "type": "object"
-      },
-      "ArmingPlanView": {
-        "additionalProperties": false,
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "changes": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Changes",
-            "type": "array"
-          },
-          "confirmation_token": {
-            "title": "Confirmation Token",
-            "type": "string"
-          },
-          "created_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Created At Ms",
-            "type": "integer"
-          },
-          "envelope": {
-            "$ref": "#/components/schemas/LiveEnvelopePayload"
-          },
-          "exit_terms": {
-            "$ref": "#/components/schemas/ExitTerms"
-          },
-          "expires_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Expires At Ms",
-            "type": "integer"
-          },
-          "plan_id": {
-            "title": "Plan Id",
-            "type": "string"
-          },
-          "shadow_receipt_sha256": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Shadow Receipt Sha256"
-          },
-          "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "plan_id",
-          "confirmation_token",
-          "account_id",
-          "strategy_instance_id",
-          "created_at_ms",
-          "expires_at_ms",
-          "envelope",
-          "exit_terms",
-          "changes",
-          "shadow_receipt_sha256"
-        ],
-        "title": "ArmingPlanView",
-        "type": "object"
-      },
-      "ArmingStatusView": {
-        "additionalProperties": false,
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "armed_instance_count": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Armed Instance Count"
-          },
-          "observed_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Observed At Ms",
-            "type": "integer"
-          },
-          "reason_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason Code"
-          },
-          "sessions_remaining": {
-            "title": "Sessions Remaining",
-            "type": "integer"
-          },
-          "state": {
-            "enum": [
-              "unarmed",
-              "armed",
-              "disarmed",
-              "lapsed"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "account_id",
-          "strategy_instance_id",
-          "state",
-          "reason_code",
-          "sessions_remaining",
-          "armed_instance_count",
-          "observed_at_ms"
-        ],
-        "title": "ArmingStatusView",
         "type": "object"
       },
       "ArtifactDetail": {
@@ -4058,7 +4065,6 @@
           "desired_state": {
             "enum": [
               "RUNNING",
-              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -4301,15 +4307,8 @@
         "type": "object"
       },
       "BotHealthCard": {
-        "description": "Bot-health card beside the rail (\u00a77.2).\n\n``PAUSED`` means the current process/run remains live while bar delivery\nis held. Continue retains that run identity; Resume is not applicable.",
+        "description": "Bot-health card beside the rail (\u00a77.2).\n\nTerminal Stop retains custody evidence; new trading requires fresh Deploy.",
         "properties": {
-          "carryover_checkpoint_exposure": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "title": "Carryover Checkpoint Exposure",
-            "type": "object"
-          },
           "decision_stale": {
             "title": "Decision Stale",
             "type": "boolean"
@@ -4317,7 +4316,6 @@
           "desired_state": {
             "enum": [
               "RUNNING",
-              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -4372,18 +4370,6 @@
             "title": "Phase Label",
             "type": "string"
           },
-          "resume_eligible": {
-            "title": "Resume Eligible",
-            "type": "boolean"
-          },
-          "resume_explanation": {
-            "title": "Resume Explanation",
-            "type": "string"
-          },
-          "resume_label": {
-            "title": "Resume Label",
-            "type": "string"
-          },
           "running": {
             "title": "Running",
             "type": "boolean"
@@ -4403,11 +4389,7 @@
           "duty_outcome",
           "last_decision_at_ms",
           "decision_stale",
-          "last_bar_at_ms",
-          "resume_eligible",
-          "resume_label",
-          "resume_explanation",
-          "carryover_checkpoint_exposure"
+          "last_bar_at_ms"
         ],
         "title": "BotHealthCard",
         "type": "object"
@@ -4579,16 +4561,6 @@
             "title": "Recent Fills",
             "type": "array"
           },
-          "resume_admission": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RunAdmissionDecision"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "revision": {
             "title": "Revision",
             "type": "integer"
@@ -4661,7 +4633,6 @@
           "mode",
           "sealed_program",
           "program_build",
-          "resume_admission",
           "updated_at_ms",
           "revision",
           "market_pulse",
@@ -5098,23 +5069,6 @@
             "title": "Broker",
             "type": "string"
           },
-          "carryover_account_policy_enabled": {
-            "default": false,
-            "title": "Carryover Account Policy Enabled",
-            "type": "boolean"
-          },
-          "carryover_checkpoint_config_matches": {
-            "default": false,
-            "title": "Carryover Checkpoint Config Matches",
-            "type": "boolean"
-          },
-          "carryover_checkpoint_exposure": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "title": "Carryover Checkpoint Exposure",
-            "type": "object"
-          },
           "carryover_policy": {
             "default": "FORBID",
             "enum": [
@@ -5127,7 +5081,6 @@
           "desired_state": {
             "enum": [
               "RUNNING",
-              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -6348,6 +6301,164 @@
           "observed_at_ms"
         ],
         "title": "BrokerPosition",
+        "type": "object"
+      },
+      "BudgetAuthorityApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "review_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Review Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_token"
+        ],
+        "title": "BudgetAuthorityApplyRequest",
+        "type": "object"
+      },
+      "BudgetAuthorityState": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "active_run_count": {
+            "title": "Active Run Count",
+            "type": "integer"
+          },
+          "authorization_version": {
+            "title": "Authorization Version",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "review_token": {
+            "title": "Review Token",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "legacy",
+              "budget"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "account_id",
+          "authorization_version",
+          "active_run_count",
+          "review_token",
+          "detail"
+        ],
+        "title": "BudgetAuthorityState",
+        "type": "object"
+      },
+      "BudgetDeployCommandReceipt": {
+        "additionalProperties": false,
+        "description": "Recoverable durable result; process absence never fabricates launch.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "committed_usd": {
+            "title": "Committed Usd",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "pending",
+              "success",
+              "failure"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "panel_path": {
+            "title": "Panel Path",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "deployed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "outcome",
+          "receipt_id",
+          "recorded_at_ms",
+          "command_id",
+          "strategy_instance_id",
+          "run_id",
+          "account_id",
+          "world",
+          "committed_usd",
+          "message",
+          "explanation",
+          "next_action",
+          "panel_path"
+        ],
+        "title": "BudgetDeployCommandReceipt",
         "type": "object"
       },
       "BuildFromCsvRequest": {
@@ -13584,6 +13695,504 @@
         "title": "DeflatedSharpeResponse",
         "type": "object"
       },
+      "DeploymentBudgetInput": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_usd": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "live_confirmation": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Confirmation"
+          },
+          "review_token": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Token"
+          },
+          "risk_revision": {
+            "minimum": 0.0,
+            "title": "Risk Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amount_usd",
+          "risk_revision"
+        ],
+        "title": "DeploymentBudgetInput",
+        "type": "object"
+      },
+      "DeploymentBudgetPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Text"
+          },
+          "custody_account_id": {
+            "title": "Custody Account Id",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "estimated_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Price Usd"
+          },
+          "minimum_budget_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Budget Usd"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "review_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Token"
+          },
+          "risk_limits_summary": {
+            "default": "Account risk evidence is unavailable.",
+            "title": "Risk Limits Summary",
+            "type": "string"
+          },
+          "risk_revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Risk Revision",
+            "type": "integer"
+          },
+          "shortcuts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentBudgetShortcut"
+            },
+            "title": "Shortcuts",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable",
+              "awaiting_price"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "unreserved_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreserved Usd"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "world",
+          "custody_account_id"
+        ],
+        "title": "DeploymentBudgetPreview",
+        "type": "object"
+      },
+      "DeploymentBudgetShortcut": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "quarter",
+              "half",
+              "all",
+              "position_headroom"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "amount_usd",
+          "explanation"
+        ],
+        "title": "DeploymentBudgetShortcut",
+        "type": "object"
+      },
+      "DeploymentBudgetView": {
+        "additionalProperties": false,
+        "description": "All dollars are authored by Python, including display rounding.",
+        "properties": {
+          "committed_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed Usd"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "entry_eligible": {
+            "default": false,
+            "title": "Entry Eligible",
+            "type": "boolean"
+          },
+          "fees_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees Usd"
+          },
+          "free_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Usd"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "outstanding_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outstanding Cash Usd"
+          },
+          "pending_orders_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Orders Usd"
+          },
+          "position_cost_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Cost Usd"
+          },
+          "realized_gross_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Gross Usd"
+          },
+          "released_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Released Usd"
+          },
+          "shortfall_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortfall Usd"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable",
+              "legacy"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "strategy_instance_id",
+          "world"
+        ],
+        "title": "DeploymentBudgetView",
+        "type": "object"
+      },
+      "DeploymentFeeAttribution": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_unattributed_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Unattributed Usd"
+          },
+          "authority_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Revision"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "known": {
+            "title": "Known",
+            "type": "boolean"
+          },
+          "messages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentFeeRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "observed_at_ms",
+          "authority_revision",
+          "available",
+          "known",
+          "rows",
+          "account_unattributed_usd",
+          "messages"
+        ],
+        "title": "DeploymentFeeAttribution",
+        "type": "object"
+      },
+      "DeploymentFeeRow": {
+        "description": "Server-owned fee totals; decimal USD is preserved on the wire.",
+        "properties": {
+          "estimated_usd": {
+            "title": "Estimated Usd",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "modelled_settled_usd": {
+            "title": "Modelled Settled Usd",
+            "type": "string"
+          },
+          "observed_usd": {
+            "title": "Observed Usd",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "total_usd": {
+            "title": "Total Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_id",
+          "strategy_instance_id",
+          "label",
+          "estimated_usd",
+          "modelled_settled_usd",
+          "observed_usd",
+          "total_usd"
+        ],
+        "title": "DeploymentFeeRow",
+        "type": "object"
+      },
       "DesignateGoldenRunRequest": {
         "properties": {
           "command_id": {
@@ -14628,6 +15237,16 @@
               }
             ]
           },
+          "evidence_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunEvidenceProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "fill_mode": {
             "title": "Fill Mode",
             "type": "string"
@@ -15531,6 +16150,43 @@
         "title": "ErrorDetailResponse",
         "type": "object"
       },
+      "EvidenceApplicability": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_issues": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Issues",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "requires_manual_override": {
+            "title": "Requires Manual Override",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "current",
+              "affected",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "explanation",
+          "requires_manual_override"
+        ],
+        "title": "EvidenceApplicability",
+        "type": "object"
+      },
       "EvidenceEntry": {
         "description": "One redacted, size-capped journal entry exposed to the operator lens.",
         "properties": {
@@ -16053,53 +16709,6 @@
           "countdown_state_persistable"
         ],
         "title": "ExitEligibilityContract",
-        "type": "object"
-      },
-      "ExitTerms": {
-        "additionalProperties": false,
-        "description": "Immutable stored terms; an upgraded registration may retain an unset allowance.",
-        "properties": {
-          "band_multiple": {
-            "maximum": 10.0,
-            "minimum": 1.0,
-            "title": "Band Multiple",
-            "type": "number"
-          },
-          "exit_allowance_bps": {
-            "anyOf": [
-              {
-                "exclusiveMaximum": 10000.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exit Allowance Bps"
-          },
-          "provenance": {
-            "enum": [
-              "deployed",
-              "backfilled"
-            ],
-            "title": "Provenance",
-            "type": "string"
-          },
-          "spread_cap_bps": {
-            "maximum": 1000.0,
-            "minimum": 1.0,
-            "title": "Spread Cap Bps",
-            "type": "number"
-          }
-        },
-        "required": [
-          "band_multiple",
-          "spread_cap_bps",
-          "exit_allowance_bps",
-          "provenance"
-        ],
-        "title": "ExitTerms",
         "type": "object"
       },
       "ExitTermsInput": {
@@ -18030,6 +18639,10 @@
         "description": "The single most relevant action for a gallery tile (\u00a7 gallery spec).",
         "properties": {
           "action_id": {
+            "enum": [
+              "stop",
+              "deploy_again"
+            ],
             "title": "Action Id",
             "type": "string"
           },
@@ -18368,6 +18981,9 @@
             "title": "Designated By",
             "type": "string"
           },
+          "evidence_applicability": {
+            "$ref": "#/components/schemas/EvidenceApplicability"
+          },
           "evidence_revision": {
             "title": "Evidence Revision",
             "type": "string"
@@ -18461,6 +19077,7 @@
           "validation_case",
           "evidence_state",
           "evidence_revision",
+          "evidence_applicability",
           "parity_evidence",
           "latest_review",
           "review_is_current",
@@ -23635,13 +24252,8 @@
       },
       "LiveEnvelopePayload": {
         "additionalProperties": false,
-        "description": "The six values, named exactly as ``LiveEnvelopeValues`` names them.\n\nThe mapping to the dataclass is an identity, so no rename layer can drift\n(contract \u00a72.4). The bounds restate ``AlpacaSettings``' domain for an early,\nfield-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on\nevery path into storage, which is where the rule actually lives.\n\n``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax\nmode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises\nbefore it: ``{\"shadow_sessions\": true}`` would arrive as ``1`` and the\nby-name ``int`` check downstream would never see the boolean it exists to\nrefuse \u2014 a real-money session count silently minted from ``true``. Strict\n``int`` refuses ``True``, ``1.0`` and ``\"3\"``; strict ``float`` still\naccepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'\n``float`` annotation does with ``5000``.",
+        "description": "The four current account bounds; retired session counts are rejected.\n\nHistorical revisions retain their full hash-bearing representation in storage.\nThe configuration API projects only the fields a trader can currently edit.",
         "properties": {
-          "arming_max_sessions": {
-            "minimum": 1.0,
-            "title": "Arming Max Sessions",
-            "type": "integer"
-          },
           "loss_fraction": {
             "exclusiveMaximum": 1.0,
             "exclusiveMinimum": 0.0,
@@ -23652,11 +24264,6 @@
             "exclusiveMinimum": 0.0,
             "title": "Loss Usd",
             "type": "number"
-          },
-          "shadow_sessions": {
-            "minimum": 1.0,
-            "title": "Shadow Sessions",
-            "type": "integer"
           },
           "xh_entry_bps": {
             "exclusiveMaximum": 10000.0,
@@ -23674,8 +24281,6 @@
         "required": [
           "loss_fraction",
           "loss_usd",
-          "shadow_sessions",
-          "arming_max_sessions",
           "xh_entry_bps",
           "xh_exit_bps"
         ],
@@ -23754,11 +24359,6 @@
           "account_id": {
             "title": "Account Id",
             "type": "string"
-          },
-          "arming_max_sessions": {
-            "minimum": 1.0,
-            "title": "Arming Max Sessions",
-            "type": "integer"
           },
           "backup_reference": {
             "title": "Backup Reference",
@@ -23850,7 +24450,6 @@
           "backup_reference",
           "daily_loss_fraction",
           "daily_loss_usd",
-          "arming_max_sessions",
           "extended_hours_entry_bps",
           "extended_hours_exit_bps",
           "consequence"
@@ -23904,6 +24503,7 @@
           },
           "state": {
             "enum": [
+              "activation_available",
               "review_available",
               "graduated",
               "blocked"
@@ -27097,25 +27697,6 @@
             "title": "Reduction Label",
             "type": "string"
           },
-          "resume_comparisons": {
-            "items": {
-              "$ref": "#/components/schemas/ResumeComparison"
-            },
-            "maxItems": 4,
-            "minItems": 4,
-            "title": "Resume Comparisons",
-            "type": "array"
-          },
-          "resume_label": {
-            "minLength": 1,
-            "title": "Resume Label",
-            "type": "string"
-          },
-          "resume_result": {
-            "minLength": 1,
-            "title": "Resume Result",
-            "type": "string"
-          },
           "scope_cards": {
             "items": {
               "$ref": "#/components/schemas/AuthoredValue"
@@ -27136,9 +27717,6 @@
           "custody_spine",
           "exposure_label",
           "exposure_slices",
-          "resume_label",
-          "resume_result",
-          "resume_comparisons",
           "freeze_label",
           "freeze_explanation",
           "next_step",
@@ -28316,9 +28894,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28401,9 +28976,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28492,9 +29064,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28558,9 +29127,6 @@
           "action_id": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -28656,9 +29222,6 @@
             "items": {
               "enum": [
                 "deploy",
-                "resume",
-                "pause",
-                "continue",
                 "stop",
                 "flatten_stop",
                 "retire",
@@ -28749,7 +29312,7 @@
       },
       "PaperXhAllowancesPayload": {
         "additionalProperties": false,
-        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far from the price an extended-hours or after-close limit is placed:\nan entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the\nprice for a buy and below it for a sell (a short entry sells the entry\nallowance below; a cover buys the exit allowance above). The price is the\ndecision bar's close for a leg placed as the program decides, and the live\nbid (sell) or ask (buy) for an exit priced later \u2014 the automatic re-drive,\nor the send-time re-price of an exit sent after its session. A\nregular-hours run's EXIT on the day's last bar goes out after the close\nas such a limit, so Start of a regular-hours run refuses\n``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a\nResume. A held position must pass the carry-over and checkpoint gates;\nunsupported carry-over requires Flatten before Resume (#2504).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at arming. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
+        "description": "A paper revision's own extended-hours allowances, in basis points.\n\nHow far from the price an extended-hours or after-close limit is placed:\nan entry by ``xh_entry_bps`` and an exit by ``xh_exit_bps``, above the\nprice for a buy and below it for a sell (a short entry sells the entry\nallowance below; a cover buys the exit allowance above). The price is the\ndecision bar's close for a leg placed as the program decides, and the live\nbid (sell) or ask (buy) for an exit priced later \u2014 the automatic re-drive,\nor the send-time re-price of an exit sent after its session. A\nregular-hours run's EXIT on the day's last bar goes out after the close\nas such a limit, so Start of a regular-hours run refuses\n``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is\nnever carried into a new deployment; resolving it requires Flatten before\na fresh Deploy (#2504).\n\nPaper only, and only the two: a live revision carries its pair inside\n``live_envelope``, sealed at Deploy. ``extra=\"forbid\"`` refuses a live-only\nvalue (``loss_usd``, a session count) offered here rather than dropping it,\nand ``strict=True`` refuses ``true`` or ``\"5\"`` for the reason\n``LiveEnvelopePayload`` states. The bounds restate the envelope's; the\ndomain itself lives in ``ValidatedPaperAllowances``.",
         "properties": {
           "xh_entry_bps": {
             "exclusiveMaximum": 10000.0,
@@ -29511,16 +30074,13 @@
         "type": "object"
       },
       "PrimaryActionByLens": {
-        "description": "The one backend-selected banner action for each lens (issue #1665).\n\n``trader`` is restricted to the closed\n``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set\n(``resume`` / ``continue`` / ``stop``); an Operator-only recovery\ncapability can never reach it. ``operator`` also considers those same\nlifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery\naction takes precedence when one is available \u2014 the audience-aware\nprecedence rule authored once by\n``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).\nEither reference is ``None``, never a guess, when nothing currently\nqualifies; the frontend renders no banner action in that case rather than\nderiving one from ``health``.",
+        "description": "The one backend-selected banner action for each lens (issue #1665).\n\n``trader`` is restricted to the closed\n``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set\n(``stop``); an Operator-only recovery\ncapability can never reach it. ``operator`` also considers those same\nlifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery\naction takes precedence when one is available \u2014 the audience-aware\nprecedence rule authored once by\n``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).\nEither reference is ``None``, never a guess, when nothing currently\nqualifies; the frontend renders no banner action in that case rather than\nderiving one from ``health``.",
         "properties": {
           "operator": {
             "anyOf": [
               {
                 "enum": [
                   "deploy",
-                  "resume",
-                  "pause",
-                  "continue",
                   "stop",
                   "flatten_stop",
                   "retire",
@@ -29549,9 +30109,6 @@
               {
                 "enum": [
                   "deploy",
-                  "resume",
-                  "pause",
-                  "continue",
                   "stop",
                   "flatten_stop",
                   "retire",
@@ -30635,6 +31192,34 @@
         "title": "ProposedLimitEvaluationResponse",
         "type": "object"
       },
+      "QualifiedDeployConfiguration": {
+        "additionalProperties": false,
+        "description": "An exact corpus-covered preset, authored from the program's registry contract.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "parameters",
+          "explanation"
+        ],
+        "title": "QualifiedDeployConfiguration",
+        "type": "object"
+      },
       "QuantLibGreeksResponse": {
         "description": "Single option pricing result.",
         "properties": {
@@ -31030,9 +31615,6 @@
           "operation": {
             "enum": [
               "deploy",
-              "resume",
-              "pause",
-              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -33200,52 +33782,6 @@
         "title": "ResolvedSignalParameter",
         "type": "object"
       },
-      "ResumeComparison": {
-        "additionalProperties": false,
-        "description": "An already-evaluated Resume checkpoint comparison.",
-        "properties": {
-          "checkpoint": {
-            "minLength": 1,
-            "title": "Checkpoint",
-            "type": "string"
-          },
-          "label": {
-            "minLength": 1,
-            "title": "Label",
-            "type": "string"
-          },
-          "observed": {
-            "minLength": 1,
-            "title": "Observed",
-            "type": "string"
-          },
-          "result_label": {
-            "minLength": 1,
-            "title": "Result Label",
-            "type": "string"
-          },
-          "tone": {
-            "enum": [
-              "neutral",
-              "verified",
-              "active",
-              "caution",
-              "blocked"
-            ],
-            "title": "Tone",
-            "type": "string"
-          }
-        },
-        "required": [
-          "label",
-          "checkpoint",
-          "observed",
-          "result_label",
-          "tone"
-        ],
-        "title": "ResumeComparison",
-        "type": "object"
-      },
       "RetireReplaceAction": {
         "additionalProperties": false,
         "description": "Move: retire this bot and start a fresh deploy flow with lineage kept.",
@@ -33425,6 +33961,11 @@
       },
       "ReviewGoldenRunRequest": {
         "properties": {
+          "acknowledge_provenance_risk": {
+            "default": false,
+            "title": "Acknowledge Provenance Risk",
+            "type": "boolean"
+          },
           "authorized_program_version": {
             "anyOf": [
               {
@@ -34089,6 +34630,46 @@
           "end_date"
         ],
         "title": "RunBatchOptionsRequest",
+        "type": "object"
+      },
+      "RunEvidenceProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "daily_return_convention": {
+            "title": "Daily Return Convention",
+            "type": "string"
+          },
+          "data_availability_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Availability Hash"
+          },
+          "data_contract": {
+            "title": "Data Contract",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "statistics_basis": {
+            "title": "Statistics Basis",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data_contract",
+          "statistics_basis",
+          "daily_return_convention"
+        ],
+        "title": "RunEvidenceProvenance",
         "type": "object"
       },
       "RunFeatureResearchRequest": {
@@ -37137,6 +37718,44 @@
           "fraction"
         ],
         "title": "SetHoldings",
+        "type": "object"
+      },
+      "ShadowActivationOutcome": {
+        "additionalProperties": false,
+        "description": "Durable isolated activation, returned before the supervised restart.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "activated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Activated At Ms",
+            "type": "integer"
+          },
+          "activation_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Activation Sha256",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "state": {
+            "const": "restart_scheduled",
+            "title": "State"
+          }
+        },
+        "required": [
+          "account_id",
+          "state",
+          "activation_sha256",
+          "activated_at_ms",
+          "message"
+        ],
+        "title": "ShadowActivationOutcome",
         "type": "object"
       },
       "SharpeCiResponse": {
@@ -42544,9 +43163,13 @@
           "ACCOUNT_HOLD_RAISED",
           "ACCOUNT_HOLD_REFRESHED",
           "ACCOUNT_HOLD_RESOLVED",
+          "ACCOUNT_RISK_LIMITS_APPLIED",
           "ATTRIBUTED_RESIDUE_DISCHARGED",
+          "BUDGET_AUTHORITY_CUTOVER",
           "COMMAND_REJECTED",
           "CUSTODY_SUBJECT_REGISTERED",
+          "DEPLOY_COMMITTED",
+          "DEPLOY_LAUNCHED",
           "ENTER_ACCEPTED",
           "ENTER_SUBMISSION_REFUSED",
           "ENTER_UNFILLED",
@@ -42567,6 +43190,7 @@
           "EXIT_TERMS_UPGRADE_COMPLETED",
           "EXTERNAL_ORDER_ACKNOWLEDGED",
           "EXTERNAL_ORDER_OBSERVED",
+          "FEE_EVIDENCE_OBSERVED",
           "MANUAL_ORDER_ACCEPTED",
           "MANUAL_ORDER_CANCELED",
           "MANUAL_ORDER_CANCEL_ACCEPTED",
@@ -42588,6 +43212,7 @@
           "RECONCILIATION_ATTEMPTED",
           "RUN_STARTED",
           "RUN_STOPPED",
+          "SIMULATION_SESSION_BASELINE",
           "STRATEGY_INSTANCE_REGISTERED",
           "STRATEGY_INSTANCE_RETIRED",
           "UNCERTAINTY_RAISED",
@@ -49373,304 +49998,6 @@
         ]
       }
     },
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming": {
-      "get": {
-        "operationId": "arming_status_api_brokers_alpaca_accounts__account_id__bots__sid__arming_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "maxLength": 120,
-              "minLength": 1,
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArmingStatusView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Arming Status",
-        "tags": [
-          "alpaca-live-arming"
-        ]
-      }
-    },
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/apply": {
-      "post": {
-        "operationId": "arming_apply_api_brokers_alpaca_accounts__account_id__bots__sid__arming_apply_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "maxLength": 120,
-              "minLength": 1,
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ArmingApplyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArmingStatusView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Arming Apply",
-        "tags": [
-          "alpaca-live-arming"
-        ]
-      }
-    },
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/disarm": {
-      "post": {
-        "operationId": "arming_disarm_api_brokers_alpaca_accounts__account_id__bots__sid__arming_disarm_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "maxLength": 120,
-              "minLength": 1,
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArmingStatusView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Arming Disarm",
-        "tags": [
-          "alpaca-live-arming"
-        ]
-      }
-    },
-    "/api/brokers/alpaca/accounts/{account_id}/bots/{sid}/arming/plan": {
-      "post": {
-        "operationId": "arming_plan_api_brokers_alpaca_accounts__account_id__bots__sid__arming_plan_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "maxLength": 120,
-              "minLength": 1,
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArmingPlanView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Arming Plan",
-        "tags": [
-          "alpaca-live-arming"
-        ]
-      }
-    },
     "/api/brokers/alpaca/accounts/{account_id}/live-graduation": {
       "get": {
         "operationId": "read_live_graduation_status_api_brokers_alpaca_accounts__account_id__live_graduation_get",
@@ -49856,6 +50183,66 @@
           }
         },
         "summary": "Prepare Live Graduation",
+        "tags": [
+          "alpaca-live-graduation"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation/shadow-activation": {
+      "post": {
+        "operationId": "activate_shadow_authority_api_brokers_alpaca_accounts__account_id__live_graduation_shadow_activation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShadowActivationOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Shadow Authority",
         "tags": [
           "alpaca-live-graduation"
         ]
@@ -50485,6 +50872,114 @@
           }
         },
         "summary": "Put Nickname",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/budget-authority": {
+      "get": {
+        "operationId": "read_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAuthorityState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Budget Authority State",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/budget-authority/apply": {
+      "post": {
+        "operationId": "apply_budget_authority_state_api_brokers_alpaca_configuration_budget_authority_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAuthorityApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAuthorityState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Budget Authority State",
         "tags": [
           "broker-configuration"
         ]
@@ -51441,6 +51936,173 @@
         ]
       }
     },
+    "/api/brokers/alpaca/configuration/risk-limits": {
+      "get": {
+        "operationId": "read_risk_limits_api_brokers_alpaca_configuration_risk_limits_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRiskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Risk Limits",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/risk-limits/apply": {
+      "post": {
+        "operationId": "apply_risk_limits_api_brokers_alpaca_configuration_risk_limits_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRiskApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRiskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Risk Limits",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/configuration/risk-limits/clear-hold": {
+      "post": {
+        "operationId": "clear_risk_hold_api_brokers_alpaca_configuration_risk_limits_clear_hold_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRiskClearRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRiskStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Risk Hold",
+        "tags": [
+          "broker-configuration"
+        ]
+      }
+    },
     "/api/brokers/alpaca/configuration/selection": {
       "get": {
         "description": "Staged and effective, always both, so neither can be rendered as the other.",
@@ -51771,7 +52433,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                    }
+                  ],
+                  "title": "Response Deploy Bot Scoped Api Brokers  Broker  Accounts  Account Id  Bots Post"
                 }
               }
             },
@@ -51866,6 +52536,83 @@
           }
         },
         "summary": "Preview the exact Start admission used by execution",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/budget-preview": {
+      "post": {
+        "operationId": "preview_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots_budget_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlpacaPaperDeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBudgetPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review server-calculated dollars for the exact deployment",
         "tags": [
           "broker-v2-panel"
         ]
@@ -52649,6 +53396,82 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/budget": {
+      "get": {
+        "operationId": "read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBudgetView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Deployment Budget Scoped",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
       "get": {
         "operationId": "get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get",
@@ -52826,6 +53649,82 @@
           }
         },
         "summary": "LIVE chart pane: today's IBKR bars + fill markers (\u00a78)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-command": {
+      "get": {
+        "operationId": "read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Deployment Command Scoped",
         "tags": [
           "broker-v2-panel"
         ]
@@ -55426,6 +56325,98 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/budget-preview": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/budget-preview (deploy).",
+        "operationId": "fleet_bot_budget_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_budget_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Budget Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/catalog": {
       "get": {
         "description": "Fleet-routed GET /accounts/{account_id}/bots/catalog (bot_panel_read).",
@@ -56108,393 +57099,6 @@
         ]
       }
     },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming": {
-      "get": {
-        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/arming (custody_read).",
-        "operationId": "fleet_live_arming_status_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Live Arming Status",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/apply": {
-      "post": {
-        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/apply (custody_command).",
-        "operationId": "fleet_live_arming_apply_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_apply_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Live Arming Apply",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/disarm": {
-      "post": {
-        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/disarm (custody_command).",
-        "operationId": "fleet_live_arming_disarm_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_disarm_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Live Arming Disarm",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/arming/plan": {
-      "post": {
-        "description": "Fleet-routed POST /accounts/{account_id}/bots/{sid}/arming/plan (custody_command).",
-        "operationId": "fleet_live_arming_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__arming_plan_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sid",
-            "required": true,
-            "schema": {
-              "title": "Sid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Live Arming Plan",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/authority-facts": {
       "get": {
         "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/authority-facts (bot_panel_read).",
@@ -56574,6 +57178,90 @@
           }
         },
         "summary": "Fleet Bot Authority Facts",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/budget": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/budget (bot_panel_read).",
+        "operationId": "fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Budget Read",
         "tags": [
           "broker-clerks"
         ]
@@ -56826,6 +57514,90 @@
           }
         },
         "summary": "Fleet Bot Decision Evidence",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-command": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-command (bot_panel_read).",
+        "operationId": "fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Deploy Command Read",
         "tags": [
           "broker-clerks"
         ]
@@ -59363,6 +60135,98 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation/shadow-activation": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/live-graduation/shadow-activation (custody_command).",
+        "operationId": "fleet_shadow_activate_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_shadow_activation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Shadow Activate",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
       "get": {
         "description": "Fleet-routed GET /accounts/{account_id}/manual-order-tickets/{ticket_id} (manual_orders).",
@@ -60640,6 +61504,155 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/budget-authority": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/budget-authority (configuration_manage).",
+        "operationId": "fleet_configuration_budget_authority_read_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Budget Authority Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/budget-authority/apply": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/budget-authority/apply (configuration_manage).",
+        "operationId": "fleet_configuration_budget_authority_apply_api_brokers__broker__clerks__clerk_id__configuration_budget_authority_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Budget Authority Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/credential-slots": {
       "get": {
         "description": "Fleet-routed GET /configuration/credential-slots (configuration_manage).",
@@ -61840,6 +62853,238 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits": {
+      "get": {
+        "description": "Fleet-routed GET /configuration/risk-limits (configuration_manage).",
+        "operationId": "fleet_configuration_risk_limits_read_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Risk Limits Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits/apply": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/risk-limits/apply (configuration_manage).",
+        "operationId": "fleet_configuration_risk_limits_apply_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Risk Limits Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/risk-limits/clear-hold": {
+      "post": {
+        "description": "Fleet-routed POST /configuration/risk-limits/clear-hold (configuration_manage).",
+        "operationId": "fleet_configuration_risk_hold_clear_api_brokers__broker__clerks__clerk_id__configuration_risk_limits_clear_hold_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Configuration Risk Hold Clear",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/selection": {
       "get": {
         "description": "Fleet-routed GET /configuration/selection (configuration_manage).",
@@ -62065,6 +63310,72 @@
           }
         },
         "summary": "Fleet Configuration Selection Apply",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/fees/attribution": {
+      "get": {
+        "description": "Fleet-routed GET /fees/attribution (account_read).",
+        "operationId": "fleet_fee_attribution_read_api_brokers__broker__clerks__clerk_id__fees_attribution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Fee Attribution Read",
         "tags": [
           "broker-clerks"
         ]
@@ -62822,6 +64133,83 @@
         ]
       }
     },
+    "/api/brokers/{broker}/fees/attribution": {
+      "get": {
+        "description": "Canonical lifetime fee evidence, including stopped deployment ownership.",
+        "operationId": "get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentFeeAttribution"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deployment Fee Attribution",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
     "/api/brokers/{broker}/fees/session-reconciliation": {
       "get": {
         "description": "Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6).",
@@ -63209,7 +64597,7 @@
     },
     "/api/brokers/{broker}/live-verdict": {
       "get": {
-        "description": "The server-derived live verdict (ADR 0059 D8).\n\nNever contacts the broker: settings, the clerk selection outcome, and a\nread of the durable shadow evidence are the only inputs.",
+        "description": "The server-derived live verdict (ADR 0059 D8).\n\nNever contacts the broker: settings, the clerk selection outcome, and a\nread of current account risk and budget authority are the only inputs.",
         "operationId": "get_live_verdict_api_brokers__broker__live_verdict_get",
         "parameters": [
           {

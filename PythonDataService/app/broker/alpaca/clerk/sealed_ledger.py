@@ -1,8 +1,7 @@
 """The one write-and-read discipline every sealed isolated-authority ledger uses.
 
-The activation fences (``synthetic_activation.py``) and the shadow receipts
-(``shadow_receipt.py``) are different records with different error types, but
-they are the same file on disk: an append-only JSONL ledger whose rows are
+The synthetic and Shadow activation fences are distinct records with distinct
+error types. Both use append-only JSONL ledgers whose rows are
 sha256-sealed over their canonical JSON. Sealing, the symlink refusal and the
 durable-append recipe live here once, so a correction to any of them -- adding
 ``O_NOFOLLOW``, changing when the parent directory is fsynced -- lands in one
@@ -51,10 +50,6 @@ def verify_sealed_record[RecordT](
     string must leave as the caller's own error, not as a bare ``TypeError``
     from a comparison inside a validator.
 
-    ``shadow_receipt.py`` and ``synthetic_activation.py`` still carry their own
-    copies of this recipe. They are slice-4 code whose rows are already in
-    operators' ledgers, so they migrate on next touch rather than as a drive-by
-    edit here.
     """
     try:
         record = cls(**payload)

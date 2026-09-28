@@ -1,5 +1,10 @@
 # ADR 0011 — Broker safety verdict: per-gate, fail-closed, reactive, order-blocking on unsafe, start-blocking on unknown, halt-on-transition on degradation, guarded Resume
 
+> **2026-09-27 lifecycle supersession:** Active Alpaca bots now use Deploy, Stop
+> and a fresh Deploy again. Pause, Continue and Resume described below are
+> historical; same-run feed/order recovery and guarded Flatten remain. See
+> [ADR 0038's lifecycle amendment](0038-alpaca-sole-bot-control-plane.md#2026-09-27-amendment-deploy-is-the-only-start-path).
+
 **Status:** Accepted 2026-08-18
 **Extended by [ADR 0059](0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md) (2026-09-07, Accepted):** the verdict principles — server-derived, fail-closed, reactive, order-blocking on unsafe, halt-on-transition, guarded Resume, never client-composed — govern the new Alpaca live verdict. The IBKR derivation in §2 and the 2026-06-21 amendment are unchanged.
 **Provenance:** Promoted from `Proposed` to `Accepted` on 2026-08-18 under [ADR 0039](0039-adr-status-is-decision-standing.md) Decision 1 — a read-through confirming the decision still stands. No code conformance was checked, and none is implied. Original Status line: Proposed 2026-06-14. **Amended 2026-06-21 (PRD #619-A) — Decision §2 derivation: `paper-only` no longer requires `readonly_flag == true`. Identity (`configured_mode=paper ∧ paper_port ∧ DU account`) and submission capability are independent facts. See "Amendment 2026-06-21" block after Decision §9.** Vocabulary recorded in `CONTEXT.md` § "Broker safety verdict" and § "QC provenance card split". Grilling session: `grill-with-docs` 2026-06-14 against the vibe-coded-app remediation PRD (pruned 2026-07-04; git history). Load-bearing code claims (four-layer paper enforcement in `broker/ibkr/orders.py::place_paper_order`; hardcoded "Paper trading mode" string in `bot-control` hero per VCR-0010; `qc_cloud_backtest_id` labelled "QC-approved" per VCR-0014) verified before the session.

@@ -117,5 +117,7 @@ def _same_observation(
         and existing.limit_price == expected.limit_price
         and existing.stop_price == expected.stop_price
         and existing.filled_avg_price == expected.filled_avg_price
+        and existing.broker_state == expected.broker_state
+        and existing.filled_quantity == expected.filled_quantity
         and existing.evidence_refs == expected.evidence_refs
     )

@@ -204,7 +204,7 @@ def test_a_v2_database_upgrades_and_every_stored_revision_keeps_its_sha(
 
     service = _service(clerk_dir, clock)
     try:
-        assert _stored_schema_version(clerk_dir) == schema.SCHEMA_VERSION == 4
+        assert _stored_schema_version(clerk_dir) == schema.SCHEMA_VERSION == 5
         profiles = {profile.display_name: profile for profile in service.list_profiles()}
         assert set(profiles) == set(_V2_CONTENT_SHAS)
         for name, written_sha in _V2_CONTENT_SHAS.items():

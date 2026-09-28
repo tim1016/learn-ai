@@ -41,8 +41,6 @@ async def test_a_drained_lane_refuses_every_new_start_before_admission(
     registry = _registry(tmp_path, gate=lambda: True)
     with pytest.raises(RunAdmissionRefusedError, match="drained"):
         await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    with pytest.raises(RunAdmissionRefusedError, match="drained"):
-        await registry.resume_existing_with_admission("alpaca", _SID)
 
 
 async def test_the_gate_stays_silent_until_the_lane_learns_its_drain(
@@ -77,6 +75,3 @@ async def test_the_fleet_refusal_code_reaches_the_start_error(
     with pytest.raises(RunAdmissionRefusedError) as refused:
         await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert refused.value.reason_code == reason
-    with pytest.raises(RunAdmissionRefusedError) as resumed:
-        await registry.resume_existing_with_admission("alpaca", _SID)
-    assert resumed.value.reason_code == reason

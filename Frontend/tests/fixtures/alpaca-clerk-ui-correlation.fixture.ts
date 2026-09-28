@@ -20,7 +20,7 @@ interface UiCorrelationCampaignV4 {
   readonly revision_sequence: readonly number[];
   readonly bootstrap_revision: number;
   readonly historical_snapshot_state: string;
-  readonly presented_action_id: 'resume';
+  readonly presented_action_id: 'deploy_again';
   readonly evidence_click_target: string;
   readonly evidence_button_name: string;
   readonly hide_evidence_button_name: string;
@@ -69,7 +69,7 @@ export const PROFILE: PanelProfile = {
   flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: [PRESENTED_ACTION_ID],
+  supported_action_ids: [],
 };
 
 export function panelAtRevision(revision: number): BotPanelView {
@@ -88,7 +88,7 @@ export function panelAtRevision(revision: number): BotPanelView {
       verified_at_ms: BASE_TIMESTAMP_MS,
       explanation: 'No Signal Program build proof supplied.',
     },
-    resume_admission: null,
+
     updated_at_ms: BASE_TIMESTAMP_MS + revision,
     revision,
     market_pulse: {
@@ -127,7 +127,7 @@ export function panelAtRevision(revision: number): BotPanelView {
       state: 'off_duty',
       label: 'Off duty',
       explanation: `Revision ${revision} is stopped after restart.`,
-      next_action: 'Resume only after reviewing custody evidence.',
+      next_action: 'Stop only after reviewing custody evidence.',
       evaluated_at_ms: BASE_TIMESTAMP_MS + revision,
     },
     execution_policy: 'Observation only.',
@@ -142,10 +142,6 @@ export function panelAtRevision(revision: number): BotPanelView {
       last_decision_at_ms: null,
       decision_stale: false,
       last_bar_at_ms: null,
-      resume_eligible: true,
-      resume_label: 'Resume',
-      resume_explanation: 'Custody is flat and the stopped bot is eligible to resume.',
-      carryover_checkpoint_exposure: {},
     },
     clerk: {
       account_id: ACCOUNT_ID,
@@ -181,17 +177,8 @@ export function panelAtRevision(revision: number): BotPanelView {
     journal_tail_ref:
       `/api/brokers/alpaca/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}/journal`,
     journal_tail_seq: null,
-    actions: [{
-      action_id: PRESENTED_ACTION_ID,
-      label: 'Resume',
-      explanation: 'Resume evaluating bars after the durable SQLite command.',
-      enabled: true,
-      blockers: [],
-      confirmation: null,
-      revision,
-      concurrency_token: `resume-token-${revision}`,
-    }],
-    primary_action_by_lens: { trader: PRESENTED_ACTION_ID, operator: PRESENTED_ACTION_ID },
+    actions: [],
+    primary_action_by_lens: { trader: null, operator: null },
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,

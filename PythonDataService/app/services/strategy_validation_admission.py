@@ -1,4 +1,4 @@
-"""Fresh validation-proof receipts for the Start and Resume admission boundary."""
+"""Fresh validation-proof receipts for the Deploy admission boundary."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import asyncpg
 from pydantic import ValidationError
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.research.backtest_runs.evidence_provenance import assess_evidence_provenance
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
 from app.schemas.run_admission import StrategyValidationAdmissionFact
@@ -70,7 +71,7 @@ def current_strategy_validation_fact(
 ) -> StrategyValidationAdmissionFact:
     """Re-read and re-hash the proof that this run proposes to rely on.
 
-    This adapter deliberately executes at Start/Resume, not only when the
+    This adapter deliberately executes at Deploy, not only when the
     deploy panel was rendered.  A stale panel is therefore unable to turn a
     later-edited settings file, audit copy, validator, or validation event into
     a new duty run.
@@ -161,11 +162,11 @@ async def current_deployment_strategy_validation_fact(
     golden_loader: GoldenDossierLoader | None = None,
     golden_by_id_loader: GoldenDossierByIdLoader | None = None,
 ) -> StrategyValidationAdmissionFact:
-    """Resolve the exact Golden gate for Start/Resume, with v1 compatibility.
+    """Resolve the exact Golden gate for Deploy, with v1 compatibility.
 
     The first Golden case designated for a strategy moves that strategy onto
     configuration-scoped admission.  Until then, its existing v1 validation
-    event remains authoritative.  A Resume whose immutable program seal names
+    event remains authoritative.  An immutable program seal naming
     a Golden review is pinned to that exact record and can never fall back to
     a strategy-wide event.
     """
@@ -349,8 +350,8 @@ def _golden_verified(
             f"golden-validation:classification:{receipt.classification}",
         ),
         explanation=(
-            f"Golden Validation {golden_id} ({receipt.classification}) matches the exact "
-            "program version, symbol, and resolved parameters for this admission."
+            f"Golden Validation {golden_id}, human review: {receipt.classification.replace('_', ' ')}. "
+            + receipt.explanation
         ),
     )
 
@@ -468,7 +469,10 @@ def _verified(
         evidence_snapshot_sha256=event.evidence_snapshot_sha256,
         verified_at_ms=observed_at_ms,
         evidence_refs=evidence_refs,
-        explanation="The active validation proof and all referenced artifacts were re-hashed for this admission.",
+        explanation=(
+            "The active validation proof and all referenced artifacts were re-hashed for this admission. "
+            + assess_evidence_provenance(None).explanation
+        ),
     )
 
 

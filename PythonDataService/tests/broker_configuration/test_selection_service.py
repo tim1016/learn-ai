@@ -420,39 +420,6 @@ def test_a_crash_with_a_staged_selection_still_reads_the_last_effective_revision
     assert selection.apply_requested is False
 
 
-def test_arming_cli_cannot_resolve_or_append_during_worker_handover(
-    service: BrokerConfigurationService,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """An arming append cannot arrive after Apply's invalidation ledger scan."""
-    import json
-    from contextvars import Context
-
-    from app.broker.alpaca.config import AlpacaSettings
-    from app.broker_configuration import cli_binding
-    from scripts import manage_alpaca_arming
-
-    monkeypatch.setattr(cli_binding, "_installed_profiles_service", lambda: service)
-    resolved_calls: list[None] = []
-
-    def resolve(_settings: AlpacaSettings | None) -> cli_binding.EffectiveBroker:
-        resolved_calls.append(None)
-        return cli_binding.EffectiveBroker(
-            settings=AlpacaSettings(api_key_id="test-key", api_secret_key="test-secret"),
-            selection=None,
-        )
-
-    monkeypatch.setattr(manage_alpaca_arming, "_resolved_broker", resolve)
-    monkeypatch.setattr(manage_alpaca_arming, "_plan", lambda *args, **kwargs: 0)
-    with service.selection_handover():
-        # A separate request/process must not inherit this request's ownership.
-        result = Context().run(
-            manage_alpaca_arming.main, ["plan", "--strategy-instance-id", "test-instance"]
-        )
-    assert result == 2
-    assert resolved_calls == []
-    assert json.loads(capsys.readouterr().out)["error"] == "selection_generation_conflict"
 
 
 def test_the_binding_generation_advances_only_on_a_changed_effective_tuple() -> None:

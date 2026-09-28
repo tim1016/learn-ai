@@ -789,9 +789,6 @@ async def _runtime_fact_with_unresolved_intent(
         boot_recovery_report=None,
         unresolved_intents_probe=one_unresolved,
         recovery_evaluation=((lambda: recovery_evaluation) if wired else None),
-        projected_start_count=0,
-        restart_threshold=100,
-        restart_window_ms=60_000,
     )
 
 
@@ -868,9 +865,6 @@ async def test_probe_failure_reports_recovery_uncertain_even_mid_evaluation() ->
         boot_recovery_report=None,
         unresolved_intents_probe=raising_probe,
         recovery_evaluation=lambda: _evaluation(),
-        projected_start_count=0,
-        restart_threshold=100,
-        restart_window_ms=60_000,
     )
 
     assert fact.state == "RECOVERY_UNCERTAIN"
@@ -896,9 +890,6 @@ async def _boot_gate_fact(report: BootRecoveryReport | None) -> StartRuntimeAdmi
         boot_recovery_required=True,
         boot_recovery_report=report,
         unresolved_intents_probe=None,
-        projected_start_count=0,
-        restart_threshold=100,
-        restart_window_ms=60_000,
     )
 
 

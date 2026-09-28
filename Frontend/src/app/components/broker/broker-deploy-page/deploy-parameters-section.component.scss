@@ -27,3 +27,17 @@ h2 { margin: 0; font-size: var(--fs-lg); }
 
 input.invalid { border-color: var(--bear); }
 .parameter-error { color: var(--bear); font-size: var(--fs-xs); }
+
+.qualified-configuration {
+  display: grid;
+  gap: .75rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+
+  h3, p, dl { margin: 0; }
+  dl { display: flex; flex-wrap: wrap; gap: 1rem; }
+  dt { color: var(--text-secondary); }
+  dd { margin: 0; }
+}

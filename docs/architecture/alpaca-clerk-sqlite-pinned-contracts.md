@@ -1194,7 +1194,15 @@ CREATE INDEX IF NOT EXISTS ix_uncertainties_reason_code ON uncertainties(reason_
 CREATE TABLE IF NOT EXISTS exit_recovery_checks (strategy_instance_id TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id), uncertainty_id TEXT NOT NULL, lease_owner TEXT NOT NULL, last_checked_at_ms INTEGER, completed_at_ms INTEGER NOT NULL, interval_ms INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS strategy_exit_terms (strategy_instance_id TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id), terms_json TEXT NOT NULL);
-INSERT OR IGNORE INTO strategy_exit_terms (strategy_instance_id, terms_json) SELECT strategy_instance_id, CASE transition_kind WHEN 'EXIT_TERMS_SEALED' THEN facts_json ELSE json_extract(facts_json, '$.exit_terms') END FROM custody_transitions WHERE transition_kind = 'EXIT_TERMS_SEALED' OR (transition_kind = 'STRATEGY_INSTANCE_REGISTERED' AND json_extract(facts_json, '$.exit_terms') IS NOT NULL) ORDER BY sequence;
+INSERT OR IGNORE INTO strategy_exit_terms (strategy_instance_id, terms_json) SELECT strategy_instance_id, CASE transition_kind WHEN 'EXIT_TERMS_SEALED' THEN facts_json ELSE json_extract(facts_json, '$.exit_terms') END FROM custody_transitions WHERE transition_kind = 'EXIT_TERMS_SEALED' OR (transition_kind = 'STRATEGY_INSTANCE_REGISTERED' AND json_extract(facts_json, '$.exit_terms') IS NOT NULL) ORDER BY sequence;CREATE TABLE IF NOT EXISTS account_risk_policy (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, policy_json TEXT NOT NULL);
+
+ALTER TABLE envelope_reservations ADD COLUMN exact_reference_price TEXT;
+ALTER TABLE envelope_reservations ADD COLUMN fee_provision_cents INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE deployment_budgets (strategy_instance_id TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id), command_id TEXT NOT NULL UNIQUE REFERENCES commands(command_id), run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id), world TEXT NOT NULL CHECK(world IN ('real_paper','real_live','shadow','synthetic')), committed_cents INTEGER NOT NULL CHECK(typeof(committed_cents) = 'integer' AND committed_cents > 0), configuration_hash TEXT NOT NULL, exit_terms_hash TEXT NOT NULL, risk_revision INTEGER NOT NULL, actor TEXT NOT NULL, request_fingerprint TEXT NOT NULL, committed_at_ms INTEGER NOT NULL, launched_at_ms INTEGER, released_at_ms INTEGER);
+CREATE TRIGGER trg_deployment_budget_identity_immutable BEFORE UPDATE OF strategy_instance_id, command_id, run_id, world, committed_cents, configuration_hash, exit_terms_hash, risk_revision, actor, request_fingerprint, committed_at_ms ON deployment_budgets BEGIN SELECT RAISE(ABORT, 'deployment budget consent is immutable'); END;
+CREATE TRIGGER trg_deployment_budget_delete_forbidden BEFORE DELETE ON deployment_budgets BEGIN SELECT RAISE(ABORT, 'deployment budget commitments are append-only'); END;
+ALTER TABLE control_meta ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1 CHECK(authorization_version IN (1,2));
+CREATE TRIGGER trg_budget_authority_monotonic BEFORE UPDATE OF authorization_version ON control_meta WHEN OLD.authorization_version <> 1 OR NEW.authorization_version <> 2 BEGIN SELECT RAISE(ABORT, 'budget authorization cannot be reversed'); END;
 ```
 
 The `holds` view appears **twice** on purpose: v12 creates it, and the v13

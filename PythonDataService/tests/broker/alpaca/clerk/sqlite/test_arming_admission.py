@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     AccountObservation,
     LiveEnvelopeGate,
 )
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -79,6 +80,9 @@ def _envelope(observed: bool = True) -> LiveEnvelopeGate:
                 equity_usd=100_000.0,
                 last_equity_usd=100_000.0,
                 position_count=0,
+                risk_cash_flow_evidence_complete=True,
+                risk_cash_flow_window_start_ms=day_pnl_window_start_ms(T0),
+                risk_equity_window_start_ms=day_pnl_window_start_ms(T0),
             )
         )
     return gate

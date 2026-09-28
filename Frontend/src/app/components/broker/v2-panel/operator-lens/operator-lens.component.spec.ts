@@ -33,10 +33,6 @@ function makeHealth(): BotHealthCard {
     last_decision_at_ms: 1_700_000_000_000,
     decision_stale: false,
     last_bar_at_ms: 1_700_000_001_000,
-    resume_eligible: false,
-    resume_label: 'Resume not applicable',
-    resume_explanation: 'This strategy instance already has a live run.',
-    carryover_checkpoint_exposure: {},
   };
 }
 
@@ -114,7 +110,7 @@ function makePanel(): BotPanelView {
       verified_at_ms: 1_700_000_001_000,
       explanation: 'No Signal Program build proof supplied.',
     },
-    resume_admission: null,
+
     updated_at_ms: 1_700_000_001_000,
     revision: 1,
     market_pulse: {
@@ -398,7 +394,7 @@ describe('OperatorLensComponent', () => {
     expect(container.querySelector('app-bot-run-history')).toBeNull();
   });
 
-  it('renders backend-authored Resume and account-freeze copy unchanged', async () => {
+  it('renders backend-authored account-freeze copy unchanged', async () => {
     const fakeSvc = makeFakePanelService();
     const panel: BotPanelView = {
       ...makePanel(),
@@ -407,9 +403,7 @@ describe('OperatorLensComponent', () => {
         running: false,
         phase: 'OFF_DUTY',
         desired_state: 'STOPPED',
-        resume_eligible: false,
-        resume_label: 'opaque resume label 01J9',
-        resume_explanation: 'Exact carryover comparison failed at the Clerk.',
+
       },
       clerk: {
         ...makeClerk(),
@@ -434,10 +428,6 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('opaque resume label 01J9')).toBeTruthy();
-    expect(
-      screen.getByText('Exact carryover comparison failed at the Clerk.'),
-    ).toBeTruthy();
     expect(screen.getByText('opaque freeze label 01J8')).toBeTruthy();
     expect(
       screen.getByText('Fresh broker truth could not be established.'),
@@ -541,14 +531,14 @@ describe('OperatorLensComponent', () => {
     // "Ready" state, explanation) stays visible for inspection.
     const fakeSvc = makeFakePanelService();
     const resumeAction: PanelAction = {
-      action_id: 'resume', label: 'Resume', explanation: 'Resume bot.', enabled: true,
-      blockers: [], confirmation: null, revision: 1, concurrency_token: 'resume-token',
+      action_id: 'stop', label: 'Stop', explanation: 'Stop bot.', enabled: true,
+      blockers: [], confirmation: null, revision: 1, concurrency_token: 'stop-token',
     };
     const panel: BotPanelView = {
       ...makePanel(),
       health: { ...makeHealth(), running: false, phase: 'OFF_DUTY', desired_state: 'STOPPED' },
       actions: [resumeAction],
-      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+      primary_action_by_lens: { trader: 'stop', operator: 'stop' },
       readiness_checks: [makeReadinessCheck(resumeAction)],
     };
 
@@ -560,9 +550,9 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expandReadiness('Resume');
-    expect(screen.getByText('Resume bot.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    expandReadiness('Stop');
+    expect(screen.getByText('Stop bot.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
 
   it('renders the transaction rail with the station from the panel', async () => {

@@ -1,3 +1,6 @@
+import type { ResourceTarget } from '../../../../fleet/resource-target';
+import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
+import { FeeAttributionComponent } from '../../fee-attribution/fee-attribution.component';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -37,6 +40,8 @@ import { RecentDecisionsListComponent } from './recent-decisions-list/recent-dec
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     DualPaneChartComponent,
+    FeeAttributionComponent,
+    DeploymentBudgetComponent,
     TradesTodayListComponent,
     TraderMetricsComponent,
     RecentDecisionsListComponent,
@@ -48,6 +53,7 @@ export class TraderLensComponent {
   // ── Inputs ────────────────────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
+  readonly target = input<ResourceTarget | null>(null);
   readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly profile = input.required<PanelProfile>();
   readonly liveChart = input<ChartLiveResponse | null>(null);

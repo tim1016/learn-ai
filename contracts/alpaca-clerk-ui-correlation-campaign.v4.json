@@ -18,7 +18,7 @@
   "revision_sequence": [41, 41, 42, 42, 43],
   "bootstrap_revision": 40,
   "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-  "presented_action_id": "resume",
+  "presented_action_id": "deploy_again",
   "evidence_click_target": "BROKER_ACK_RAW_EVIDENCE",
   "evidence_button_name": "View raw evidence for Broker ack",
   "hide_evidence_button_name": "Hide raw evidence for Broker ack",

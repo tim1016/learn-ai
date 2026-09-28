@@ -1,0 +1,52 @@
+[
+  {
+    "cents": 5,
+    "weights": {
+      "bot:c": "1",
+      "bot:a": "1",
+      "bot:b": "1"
+    },
+    "expected_cents": {
+      "bot:c": 1,
+      "bot:a": 2,
+      "bot:b": 2
+    }
+  },
+  {
+    "cents": 11,
+    "weights": {
+      "bot:a": "0.125",
+      "bot:b": "0.375",
+      "manual:owner": "0.5"
+    },
+    "expected_cents": {
+      "bot:a": 1,
+      "bot:b": 4,
+      "manual:owner": 6
+    }
+  },
+  {
+    "cents": 1,
+    "weights": {
+      "a": "0.00000000000000000000001",
+      "b": "0.00000000000000000000002"
+    },
+    "expected_cents": {
+      "a": 0,
+      "b": 1
+    }
+  },
+  {
+    "cents": 123,
+    "weights": {
+      "a": "1.23789",
+      "b": "8.98273",
+      "c": "0"
+    },
+    "expected_cents": {
+      "a": 15,
+      "b": 108,
+      "c": 0
+    }
+  }
+]

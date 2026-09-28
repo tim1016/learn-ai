@@ -1,5 +1,10 @@
 # ADR 0004 — The operator console is an instance-addressed control room; the process registry owns the live binding; desired-state is the single intent knob
 
+> **2026-09-27 lifecycle supersession:** Active Alpaca bots now use Deploy, Stop
+> and a fresh Deploy again. Pause, Continue and Resume described below are
+> historical; same-run feed/order recovery and guarded Flatten remain. See
+> [ADR 0038's lifecycle amendment](0038-alpaca-sole-bot-control-plane.md#2026-09-27-amendment-deploy-is-the-only-start-path).
+
 **Status:** Accepted 2026-05-30
 **Provenance:** **Amended 2026-06-21 (PRD #619-B) — adds daemon `boot_id` + lease + DRAINING semantics, the child watchdog's ordered shutdown contract, and orphan classification on daemon boot. See "Amendment 2026-06-21" block after the Consequences section.**
 **Decision drivers:** PRD-A through PRD-D shipped a per-`run_id` "Paper Run" status page, but the backend identity model is strategy-instance-centric (clientId, order namespace, durable desired-state, and the managed-process registry are all keyed by `strategy_instance_id`). A grilling session found the UI behaves like a *run artifact viewer with controls attached* when it needs to be an *instance control room with the current run/artifacts attached as evidence*. The run-centric framing is the root of half the operator-grade findings.

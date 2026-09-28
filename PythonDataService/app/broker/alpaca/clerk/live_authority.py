@@ -45,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecordInvalid,
     ActivationStore,
 )
+from app.broker.alpaca.clerk.sqlite.graduation_risk import initialize_reviewed_live_risk
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -158,6 +159,7 @@ async def select_live_clerk_runtime(
             account_mode="live",
             artifacts_root=artifacts_root,
             verify_activation=_verify_live_activation,
+            initialize_reviewed_policy=lambda repo: initialize_reviewed_live_risk(repo, activation=activation, artifacts_root=artifacts_root),
             repository_opener=repository_opener,
             startup_recovery_timeout_s=startup_recovery_timeout_s,
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
@@ -196,6 +198,7 @@ async def select_live_clerk_runtime(
         clerk=composed.facade,
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
+        fee_sync=composed.fee_sync,
         envelope_sync=composed.envelope_sync,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=composed.repository,

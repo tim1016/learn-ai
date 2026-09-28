@@ -33,7 +33,6 @@ from app.broker.alpaca.clerk.live_arming import (
     LIVE_MODE_DISAGREEMENT,
     LiveArmingRecord,
 )
-from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_authority import (
     LIVE_CONTROL_UNAUTHENTICATED,
     select_live_clerk_runtime,
@@ -48,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import OrderSide
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
 from tests.broker.alpaca.clerk.live_arming_fixtures import record_sealed_binding
 from tests.broker.alpaca.clerk.live_authority_fixtures import (
@@ -184,6 +184,38 @@ async def test_an_activated_live_account_boots_the_real_live_authority_with_both
     assert isinstance(runtime.evidence_sink, SqliteTradeUpdateEvidenceSink)
     set_active_clerk_runtime(runtime)
     assert primary_custody_world() == "real_live"
+
+
+async def test_budget_cutover_boot_does_not_read_arming_or_install_its_gate(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+    from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+
+    repo = ClerkSqliteRepository.initialize(account_id=LIVE_ACCT, artifacts_root=tmp_path, clock=lambda: NOW_MS)
+    commit_budget_authority_cutover(repo, actor="owner", reviewed_token="reviewed", stop_receipt="empty")
+    append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOW_MS), expected_revision=0)
+    record_fee_evidence(repo, [], checked_at_ms=NOW_MS, history_complete=True)
+    meta = repo.control_meta_snapshot()
+    repo.close()
+    ledger = LiveArmingLedger(tmp_path, live_account_id=LIVE_ACCT)
+    ledger.path.parent.mkdir(parents=True, exist_ok=True)
+    ledger.path.write_text("unreadable retired permission\n")
+    broker = _RecordingLiveBroker(now_ms=NOW_MS)
+    activation = live_activation(authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token, artifacts_root=tmp_path)
+    runtime = await select_active_clerk_runtime(read=broker, trade=broker, artifacts_root=tmp_path,
+        activation_store=_ActivationStore(activation), repository_opener=pinned_repository(NOW_MS),
+        live_envelope_values=TEST_ENVELOPE_VALUES, instance_seals=lambda _: pytest.fail("retired grants must not be read"))
+    try:
+        assert runtime.authority_kind == "sqlite", runtime.startup_failure
+        assert runtime.clerk.live_arming is None
+        # Fee freshness belongs to this process's producer, as at a real boot.
+        assert runtime.fee_sync is not None and not await runtime.fee_sync.tick()
+        assert await runtime.envelope_sync.tick() == "observed"
+        assert runtime.envelope_sync.risk_snapshot().observation is not None
+        assert not broker.submissions
+    finally:
+        await runtime.close()
 
 
 async def test_an_open_control_plane_installs_no_live_authority(
@@ -472,6 +504,9 @@ async def test_an_armed_live_instances_enter_passes_all_three_gates_and_reaches_
     """Consequence 7: the slice after which a real order is possible — and this is that order."""
     runtime, broker = live_runtime
     bar, seal_hash = registered_live_bot
+    from tests.broker.alpaca.clerk.sqlite.conftest import complete_fee_evidence
+
+    complete_fee_evidence(runtime.sqlite_repository)
     _arm(tmp_path, seal_hash)
     assert runtime.envelope_sync is not None and runtime.sqlite_repository is not None
     await runtime.envelope_sync.tick()

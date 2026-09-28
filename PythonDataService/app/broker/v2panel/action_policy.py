@@ -30,7 +30,6 @@ from app.schemas.operator_blocker import (
     OperatorBlocker,
     OperatorConfirmationCopy,
 )
-from app.schemas.run_admission import RunAdmissionDecision
 
 
 @dataclass(frozen=True)
@@ -39,13 +38,11 @@ class ActionGuardContext:
 
     running: bool
     phase: str
-    desired_state: str
     hold_active: bool
     freeze_active: bool
     reconciliation_verdict: str | None
     outstanding_intents: int
     has_exposure: bool
-    resume_admission: RunAdmissionDecision | None
     flatten_supported: bool
     account_id: str
     strategy_instance_id: str
@@ -113,79 +110,9 @@ def _disabled(*blockers: OperatorBlocker) -> tuple[bool, list[OperatorBlocker]]:
     return False, list(blockers)
 
 
-def _stable_admission_evidence_refs(evidence_refs: tuple[str, ...]) -> tuple[str, ...]:
-    """Drop observation-only suffixes from the optimistic-concurrency input.
-
-    The complete evidence reference remains on the admission receipt for audit.
-    A fresh observation instant is not, by itself, a changed safety decision, so
-    its timestamp must not make an already presented Resume action stale.
-
-    Four refs carry only an observation instant that advances every evaluation:
-
-    - ``market-data-feed:<feed_id>:<observed_at_ms>`` — a health probe; keep the
-      feed identity, drop the probe time.
-    - ``alpaca-reconciliation:<observed_at_ms>`` — a Clerk reconciliation pass;
-      keep the constant marker, drop the pass time. Each panel GET and the
-      action POST run their own fresh reconciliation with a fresh clock, so
-      leaving this instant in the token made an unchanged off-duty Resume 409
-      on essentially every click (val-nvda-0804-05, 2026-08-04).
-    - ``market-liveness-clock:<source>:<observed_at_ms>`` and
-      ``market-liveness-symbol:<source>:<observed_at_ms>`` — liveness probes
-      stamped by ``run_admission.py`` with a fresh instant per evaluation;
-      keep the source identity, drop the probe time. Left in, they reproduced
-      the same always-stale Resume fleet-wide (0/20 executions, 2026-08-24).
-
-    A genuine custody change is still captured by
-    ``alpaca-clerk-journal:<account>:<journal_sequence>`` (the Clerk appends a
-    line only on change) and by the decision's ``allowed`` / ``reason_code``
-    fields — a liveness *state* change flips those — so normalising these
-    instants out cannot hide a real change.
-    """
-    stable: list[str] = []
-    for ref in evidence_refs:
-        if ref.startswith(
-            ("market-data-feed:", "market-liveness-clock:", "market-liveness-symbol:")
-        ):
-            stable.append(":".join(ref.split(":")[:2]))
-        elif ref.startswith("alpaca-reconciliation:"):
-            stable.append("alpaca-reconciliation")
-        else:
-            stable.append(ref)
-    return tuple(stable)
-
-
 def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
     # deploy is a list-page action; the per-bot panel always presents it disabled.
     return _disabled()
-
-
-def _guard_resume(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    """Render the runner's typed Resume decision without recreating it."""
-    decision = ctx.resume_admission
-    if decision is None:
-        return _disabled(
-            _blocker(
-                "RESUME_ADMISSION_UNAVAILABLE",
-                scope="bot",
-                headline="Resume safety is unknown.",
-                detail="Refresh after the bot registry and Clerk can produce one admission decision.",
-                evidence={"strategy_instance_id": ctx.strategy_instance_id},
-            )
-        )
-    if decision.allowed:
-        return True, []
-    return _disabled(
-        _blocker(
-            decision.reason_code,
-            scope="bot",
-            headline="Resume is blocked.",
-            detail=decision.explanation,
-            evidence={
-                "strategy_instance_id": decision.strategy_instance_id,
-                "evaluated_at_ms": decision.evaluated_at_ms,
-            },
-        )
-    )
 
 
 def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -196,35 +123,7 @@ def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
             "BOT_NOT_RUNNING",
             scope="bot",
             headline="The bot is already off duty.",
-                detail="Use Resume when you are ready to create a new run.",
-        )
-    )
-
-
-def _guard_pause(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    if ctx.running and ctx.desired_state == "RUNNING":
-        return True, []
-    return _disabled(
-        _blocker(
-            "PAUSE_REQUIRES_LIVE_RUNNING_RUN",
-            scope="bot",
-            headline="Pause requires a live evaluating run.",
-            detail="Resume a stopped bot, or use Continue if this run is already paused.",
-            evidence={"strategy_instance_id": ctx.strategy_instance_id},
-        )
-    )
-
-
-def _guard_continue(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    if ctx.running and ctx.desired_state == "PAUSED":
-        return True, []
-    return _disabled(
-        _blocker(
-            "CONTINUE_REQUIRES_LIVE_PAUSED_RUN",
-            scope="bot",
-            headline="Continue requires a live paused run.",
-            detail="Continue keeps the current run ID; Resume is only for a terminal prior run.",
-            evidence={"strategy_instance_id": ctx.strategy_instance_id},
+            detail="Open Deploy again to review a fresh deployment.",
         )
     )
 
@@ -549,36 +448,6 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         list_page_only=True,
         guard=_guard_deploy,
         revision_inputs=lambda ctx: (),
-    ),
-    "resume": ActionPolicy(
-        action_id="resume",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_resume,
-        revision_inputs=lambda ctx: (
-            ctx.resume_admission.allowed if ctx.resume_admission is not None else None,
-            ctx.resume_admission.reason_code if ctx.resume_admission is not None else None,
-            ctx.resume_admission.configuration_hash if ctx.resume_admission is not None else None,
-            (
-                _stable_admission_evidence_refs(ctx.resume_admission.evidence_refs)
-                if ctx.resume_admission is not None
-                else ()
-            ),
-        ),
-    ),
-    "pause": ActionPolicy(
-        action_id="pause",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_pause,
-        revision_inputs=lambda ctx: (ctx.running, ctx.desired_state),
-    ),
-    "continue": ActionPolicy(
-        action_id="continue",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_continue,
-        revision_inputs=lambda ctx: (ctx.running, ctx.desired_state),
     ),
     "stop": ActionPolicy(
         action_id="stop",

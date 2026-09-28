@@ -26,13 +26,13 @@
   border-color: #f06b68;
 }
 
+.lane-mode-chip--shadow {
+  color: #d9caff;
+  border-color: #a78bfa;
+}
+
 .lane-mode-chip--undetermined {
   color: #fff;
   border-color: #ffb020;
   background: rgba(122, 61, 0, 0.85);
-}
-
-.lane-mode-chip__detail {
-  font-weight: var(--fw-regular);
-  opacity: 0.86;
 }

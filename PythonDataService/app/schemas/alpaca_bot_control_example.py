@@ -100,18 +100,6 @@ class ExposureSlice(BaseModel):
     explanation: str = Field(min_length=1)
 
 
-class ResumeComparison(BaseModel):
-    """An already-evaluated Resume checkpoint comparison."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    label: str = Field(min_length=1)
-    checkpoint: str = Field(min_length=1)
-    observed: str = Field(min_length=1)
-    result_label: str = Field(min_length=1)
-    tone: Tone
-
-
 class EvidenceItem(BaseModel):
     """Bounded evidence with a code label and opaque identifier kept verbatim."""
 
@@ -138,9 +126,6 @@ class OperatorDiagnosticView(BaseModel):
     custody_spine: list[CustodySpineStep] = Field(min_length=5, max_length=5)
     exposure_label: str = Field(min_length=1)
     exposure_slices: list[ExposureSlice] = Field(min_length=1)
-    resume_label: str = Field(min_length=1)
-    resume_result: str = Field(min_length=1)
-    resume_comparisons: list[ResumeComparison] = Field(min_length=4, max_length=4)
     freeze_label: str = Field(min_length=1)
     freeze_explanation: str = Field(min_length=1)
     next_step: str = Field(min_length=1)

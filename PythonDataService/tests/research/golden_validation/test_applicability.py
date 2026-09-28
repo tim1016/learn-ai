@@ -219,3 +219,49 @@ def test_a_v3_match_with_empty_receipt_bodies_cannot_claim_engine_agreement() ->
 
     assert evidence.state == "corrupt"
     assert "parity_verdict_not_certificate_grade" in evidence.payload["qualification_warnings"]
+
+
+def test_positively_affected_accepted_case_requires_a_new_explicit_review() -> None:
+    from dataclasses import replace
+
+    from app.research.backtest_runs.evidence_provenance import assess_evidence_provenance
+
+    dossier = _dossier()
+    case = {**dossier.validation_case, "evidence_provenance": {
+        "schema_version": 1,
+        "data_contract": "lake_complete_sessions/v1",
+        "statistics_basis": "paired_realized_trade_ledger/v1",
+        "daily_return_convention": "platform_skip_first_session/v1",
+    }}
+    affected = replace(dossier, validation_case=case)
+    assert assess_evidence_provenance(case["evidence_provenance"]).affected_issues == ("#2447", "#2448")
+    receipt = service.assess_deployment_scope(affected, _proposed(dossier))
+    assert not receipt.applicable
+    assert "#2447" in receipt.explanation
+    assert dossier.latest_review.reason == affected.latest_review.reason
+    assert dossier.latest_review.expected_evidence_revision == affected.latest_review.expected_evidence_revision
+
+    override = replace(affected.latest_review, classification="manual_override", evidence_json='{"acknowledge_provenance_risk":true}')
+    approved = replace(affected, reviews=(override,))
+    assert service.assess_deployment_scope(approved, _proposed(dossier)).applicable
+
+
+def test_unknown_conventions_are_not_known_affected_and_preserve_existing_acceptance() -> None:
+    dossier = _dossier()
+    assert dossier.evidence_applicability.status == "unknown"
+    assert dossier.evidence_applicability.affected_issues == ()
+    assert service.assess_deployment_scope(dossier, _proposed(dossier)).applicable
+
+
+def test_current_recorded_conventions_preserve_the_review_revision() -> None:
+    from dataclasses import replace
+    dossier = _dossier()
+    case = {**dossier.validation_case, "evidence_provenance": {
+        "schema_version": 1, "data_contract": "fixture_identity/v1",
+        "statistics_basis": "marked_equity_curve/v1",
+        "daily_return_convention": "initial_capital_first_session/v1",
+    }}
+    current = replace(dossier, validation_case=case)
+    assert current.evidence_applicability.status == "current"
+    assert current.review_is_current is True
+    assert current.evidence.revision == dossier.evidence.revision

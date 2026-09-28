@@ -93,6 +93,11 @@ describe('BrokerConfigurationService', () => {
     url: string;
     invoke: () => unknown;
   }[] = [
+    { name: 'readBudgetAuthority', method: 'GET', url: `${BASE}/configuration/budget-authority`, invoke: () => service.readBudgetAuthority(TARGET) },
+    { name: 'applyBudgetAuthority', method: 'POST', url: `${BASE}/configuration/budget-authority/apply`, invoke: () => service.applyBudgetAuthority(TARGET, { review_token: 'review-1' }) },
+    { name: 'readRiskLimits', method: 'GET', url: `${BASE}/configuration/risk-limits`, invoke: () => service.readRiskLimits(CLERK) },
+    { name: 'applyRiskLimits', method: 'POST', url: `${BASE}/configuration/risk-limits/apply`, invoke: () => service.applyRiskLimits(TARGET, { expected_risk_revision: 1, expected_selection_generation: 1, loss_fraction: 0.02, loss_usd: 100 }) },
+    { name: 'clearRiskHold', method: 'POST', url: `${BASE}/configuration/risk-limits/clear-hold`, invoke: () => service.clearRiskHold(TARGET, { expected_risk_revision: 1, expected_selection_generation: 1 }) },
     {
       name: 'readDeskState',
       method: 'GET',
@@ -238,8 +243,8 @@ describe('BrokerConfigurationService', () => {
     request.flush({});
   });
 
-  it('covers all 17 HTTP call sites this service makes — a new one must be added here too', () => {
-    expect(routes).toHaveLength(17);
+  it('covers every HTTP call site this service makes', () => {
+    expect(routes.map(route => route.name).sort()).toEqual([...USED_OPERATION_IDS.keys()].sort());
   });
 
   it('stages an exact revision under the generation it read', async () => {
@@ -276,8 +281,6 @@ describe('BrokerConfigurationService', () => {
       live_envelope: {
         loss_fraction: 0.05,
         loss_usd: 5000,
-        shadow_sessions: 3,
-        arming_max_sessions: 20,
         xh_entry_bps: 11,
         xh_exit_bps: 17.5,
       },
@@ -288,8 +291,10 @@ describe('BrokerConfigurationService', () => {
     expect(request.request.body).toMatchObject({
       expected_revision: 3,
       endpoint_mode: 'live',
-      live_envelope: { shadow_sessions: 3 },
+      live_envelope: { loss_fraction: 0.05, loss_usd: 5000, xh_entry_bps: 11, xh_exit_bps: 17.5 },
     });
+    expect(request.request.body.live_envelope).not.toHaveProperty('shadow_sessions');
+    expect(request.request.body.live_envelope).not.toHaveProperty('arming_max_sessions');
     request.flush({});
   });
 

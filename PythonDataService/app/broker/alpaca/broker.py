@@ -30,6 +30,7 @@ from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerActivityEvidence,
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
@@ -386,6 +387,29 @@ class AlpacaBroker:
                 break
             page_token = next_page_token
         return activities
+
+    async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence:
+        """Read raw dated evidence with the provider's explicit page completion.
+
+        Alpaca Trading API documents page_size 1..100. A bounded unfinished
+        walk is useful evidence, but never proof that an empty young account
+        or an old fee date has no further rows; its ``next_page_token``
+        resumes the newest-first walk from exactly where it stopped.
+        """
+        return await self._activity_evidence(page_size=100, page_token=page_token)
+
+    async def _activity_evidence(self, *, page_size: int, page_token: str | None) -> BrokerActivityEvidence:
+        activities: list[BrokerActivity] = []
+        for _ in range(_ACTIVITY_MAX_PAGES):
+            payloads = await self._client.list_activities(limit=page_size, page_token=page_token)
+            activities.extend(adapter.from_alpaca_activity(payload) for payload in payloads)
+            if len(payloads) < page_size:
+                return BrokerActivityEvidence(activities=activities, history_complete=True)
+            next_token = payloads[-1].get("id")
+            if not isinstance(next_token, str) or not next_token or next_token == page_token:
+                return BrokerActivityEvidence(activities=activities, history_complete=False)
+            page_token = next_token
+        return BrokerActivityEvidence(activities=activities, history_complete=False, next_page_token=page_token)
 
     async def list_assets(
         self,

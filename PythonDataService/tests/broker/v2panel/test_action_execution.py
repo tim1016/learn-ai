@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -22,11 +23,6 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
-from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
-from app.services.bot_runner_errors import (
-    ActivationFailedCleanupProvenError,
-    RunAdmissionRefusedError,
-)
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
@@ -36,10 +32,10 @@ from app.services.broker_v2_panel.action_execution_service import (
     IdempotencyStore,
     StaleRevisionError,
     UnknownActionError,
+    durable_idempotency_store_for,
     execute_action,
 )
 from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
-from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
 
 _SID = "bot-alpha"
 
@@ -322,17 +318,17 @@ async def test_activation_failed_cleanup_proven_burns_the_key_as_a_known_failure
     store = IdempotencyStore()
     with pytest.raises(ActivationFailedError) as exc:
         await execute_action(
-            _request(action_id="resume", key="cleanup-proven-1"),
+            _request(action_id="reconcile_now", key="cleanup-proven-1"),
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"resume": _perform},
+            performers={"reconcile_now": _perform},
             operator_identity="op",
             store=store,
         )
 
     assert "the Clerk stop committed" in str(exc.value)
-    assert store._records[(_SID, "resume", "cleanup-proven-1")].state == "failed"
+    assert store._records[(_SID, "reconcile_now", "cleanup-proven-1")].state == "failed"
 
 
 async def test_activation_failed_replay_returns_the_same_failure_without_reexecuting() -> None:
@@ -347,14 +343,14 @@ async def test_activation_failed_replay_returns_the_same_failure_without_reexecu
         )
 
     store = IdempotencyStore()
-    request = _request(action_id="resume", key="cleanup-proven-2")
+    request = _request(action_id="reconcile_now", key="cleanup-proven-2")
     with pytest.raises(ActivationFailedError):
         await execute_action(
             request,
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"resume": _perform},
+            performers={"reconcile_now": _perform},
             operator_identity="op",
             store=store,
         )
@@ -365,7 +361,7 @@ async def test_activation_failed_replay_returns_the_same_failure_without_reexecu
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"resume": _perform},
+            performers={"reconcile_now": _perform},
             operator_identity="op",
             store=store,
         )
@@ -395,9 +391,7 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.get_panel", _panel)
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: SimpleNamespace(
-            panel_action_receipt_path=lambda _sid: tmp_path / "receipts.json"
-        ),
+        lambda: SimpleNamespace(artifacts_root=tmp_path),
     )
 
     with pytest.raises(ActionNotAvailableError) as exc:
@@ -412,26 +406,6 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     assert exc.value.detail == "Start the bot before Stop."
 
 
-async def test_sqlite_panel_resume_defers_to_lifecycle_executor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#1410: Resume is lifecycle work, not a SQLite recovery capability."""
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
-        lambda _broker: object(),
-    )
-
-    result = await execute_sqlite_panel_action(
-        "alpaca",
-        "account-1",
-        _SID,
-        request=_request(action_id="resume"),
-        panel=SimpleNamespace(revision=42),
-        action=SimpleNamespace(concurrency_token="token"),
-        availability_error=None,
-    )
-
-    assert result is None
 
 
 async def test_idempotent_repost_survives_revision_advance() -> None:
@@ -550,6 +524,93 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     assert result.recorded_at_ms == legacy_observed_at_ms
 
 
+@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue"])
+async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
+    tmp_path: Path, retired_action_id: str,
+) -> None:
+    """#2550 review: a bot's ledger written before Resume/Pause/Continue were
+    retired must still load. Those receipts remain readable history, and the
+    bot's next command -- Stop included -- runs instead of failing the load."""
+    path = tmp_path / "panel_action_receipts.json"
+    compound = "\u001f".join((_SID, retired_action_id, "before-retirement"))
+    history = {
+        compound: {
+            "state": "succeeded",
+            "result": {
+                "action_id": retired_action_id,
+                "outcome": "success",
+                "receipt_id": "before-retirement",
+                "recorded_at_ms": 1_700_000_000_000,
+                "applied": True,
+                "revision": 7,
+                "concurrency_token": "token",
+                "message": f"{retired_action_id} applied",
+            },
+            "error_detail": None,
+        }
+    }
+    path.write_text(json.dumps(history), encoding="utf-8")
+
+    result = await execute_action(
+        _request(key="after-retirement"),
+        sid=_SID,
+        current_revision=42,
+        current_concurrency_token="token",
+        performers={"stop": lambda _operator, _reason: _noop()},
+        operator_identity="op",
+        store=DurableIdempotencyStore(path),
+    )
+
+    assert result.applied is True
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted[compound] == history[compound]
+    assert len(persisted) == 2
+
+
+async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path) -> None:
+    """A load failure must not mark the ledger loaded: the next command would
+    start from an empty ledger and overwrite the bot's receipt history."""
+    path = tmp_path / "panel_action_receipts.json"
+    compound = "\u001f".join((_SID, "stop", "truncated"))
+    path.write_text(json.dumps({compound: {"state": "succeeded", "result": {"action_id": "stop"}}}), encoding="utf-8")
+    original = path.read_text(encoding="utf-8")
+    store = DurableIdempotencyStore(path)
+
+    for _ in range(2):
+        with pytest.raises(ValidationError):
+            await store.reserve_or_get(_SID, "stop", "next-command")
+
+    assert path.read_text(encoding="utf-8") == original
+
+
+async def test_durable_store_keeps_receipts_beside_the_instance_artifacts(tmp_path: Path) -> None:
+    """The ledger stays at ``live_state/<sid>/panel_action_receipts.json``, the
+    location every existing bot's receipts were written to, so an upgrade still
+    replays them instead of re-firing a completed command."""
+    store = durable_idempotency_store_for(tmp_path, _SID)
+
+    assert await store.reserve_or_get(_SID, "stop", "first") is None
+
+    assert (tmp_path / "live_state" / _SID / "panel_action_receipts.json").is_file()
+
+
+@pytest.mark.parametrize("hostile_sid", ["../escape", "evil id", "a/b", ""])
+def test_durable_store_refuses_an_id_that_is_not_one_confined_segment(
+    tmp_path: Path, hostile_sid: str,
+) -> None:
+    """The store builds its own path from the request's id through the confined
+    per-instance directory, so no caller -- production registry or test double
+    -- can hand it a file outside the artifacts root (CodeQL py/path-injection,
+    #2554)."""
+    artifacts_root = tmp_path / "artifacts"
+
+    with pytest.raises(ValueError):
+        durable_idempotency_store_for(artifacts_root, hostile_sid)
+
+    assert not artifacts_root.exists()
+    assert not (tmp_path / "escape").exists()
+
+
 async def test_unwired_action_is_typed_not_available() -> None:
     with pytest.raises(ActionNotAvailableError) as exc:
         await execute_action(
@@ -564,127 +625,12 @@ async def test_unwired_action_is_typed_not_available() -> None:
     assert exc.value.http_status == 409
 
 
-async def test_resume_performer_creates_new_run_from_durable_binding(monkeypatch) -> None:
-    resumed: list[tuple[str, str]] = []
-
-    class _Registry:
-        async def resume_existing_with_admission(self, broker: str, sid: str):
-            resumed.append((broker, sid))
-            return SimpleNamespace(bot=SimpleNamespace(active_run_id="run-2"))
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-    message = await _action_performers(
-        "alpaca",
-        _SID,
-        idempotency_key="resume-1",
-    )["resume"]("desk-operator", None)
-
-    assert resumed == [("alpaca", _SID)]
-    assert message == (
-        "Bot resumed as new run run-2 from its immutable configuration. "
-        "The Clerk remains the only owner of broker order effects."
-    )
 
 
-async def test_resume_performer_returns_known_refusal_when_fresh_admission_changes(monkeypatch) -> None:
-    class _Registry:
-        async def resume_existing_with_admission(self, _broker: str, _sid: str):
-            raise RunAdmissionRefusedError(
-                "Resume admission was refused.",
-                detail="The Clerk evidence changed before activation.",
-            )
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-
-    with pytest.raises(ActionNotAvailableError) as exc:
-        await _action_performers("alpaca", _SID, idempotency_key="resume-2")["resume"](
-            "desk-operator", None
-        )
-
-    assert exc.value.http_status == 409
-    assert exc.value.reason_code is None
-    assert exc.value.detail == "The Clerk evidence changed before activation."
 
 
-async def test_resume_performer_carries_the_admission_reason_code(monkeypatch) -> None:
-    """PRD #1716 FR-4: an admission denial's reason_code survives the
-    bot-runner-to-action mapping so the router/frontend can render it."""
-    decision = RunAdmissionDecision(
-        operation="RESUME",
-        allowed=False,
-        reason_code="TERMINAL_EVIDENCE_UNREADABLE",
-        explanation="The terminal receipt could not be read.",
-        next_step="This requires engineering investigation; Refresh to check for updated evidence.",
-        strategy_instance_id=_SID,
-        proposed_run_id="run-2",
-        configuration_hash="a" * 64,
-        account_id="paper-account",
-        evaluated_at_ms=1_000,
-        fact_ages_ms=RunAdmissionFactAges(
-            program_build=0,
-            runtime=0,
-            process=0,
-            market_data=0,
-            market_liveness=0,
-            clerk=0,
-        ),
-        evidence_refs=(),
-    )
-
-    class _Registry:
-        async def resume_existing_with_admission(self, _broker: str, _sid: str):
-            raise RunAdmissionRefusedError(
-                "Resume admission was refused.",
-                detail=decision.explanation,
-                admission_decision=decision,
-            )
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-
-    with pytest.raises(ActionNotAvailableError) as exc:
-        await _action_performers("alpaca", _SID, idempotency_key="resume-3")["resume"](
-            "desk-operator", None
-        )
-
-    assert exc.value.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
-    assert exc.value.detail == decision.explanation
 
 
-async def test_resume_performer_maps_cleanup_proven_activation_failure(monkeypatch) -> None:
-    """PRD #1716 FR-6: a cleanup-proven activation failure becomes the
-    action layer's ActivationFailedError, not the generic
-    ActionNotAvailableError used for pre-execution admission denials."""
-
-    class _Registry:
-        async def resume_existing_with_admission(self, _broker: str, _sid: str):
-            raise ActivationFailedCleanupProvenError(
-                "Activation failed after Clerk registration for run 'run-2'; "
-                "the Clerk stop committed.",
-                attempted_run_id="run-2",
-                detail="TypeError: boom",
-            )
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-
-    with pytest.raises(ActivationFailedError) as exc:
-        await _action_performers("alpaca", _SID, idempotency_key="resume-4")["resume"](
-            "desk-operator", None
-        )
-
-    assert "run-2" in str(exc.value)
-    assert exc.value.detail == "TypeError: boom"
 
 
 async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> None:
@@ -887,33 +833,6 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     assert (liveness.state, liveness.reason_code) == ("TRADABLE", "MARKET_TRADABLE")
 
 
-async def test_pause_and_continue_performers_preserve_run_identity(monkeypatch) -> None:
-    calls: list[tuple[str, str, str]] = []
-
-    class _Registry:
-        async def pause(self, broker: str, sid: str, **_kwargs):
-            calls.append(("pause", broker, sid))
-            return SimpleNamespace(active_run_id="run-live")
-
-        async def continue_paused(self, broker: str, sid: str, **_kwargs):
-            calls.append(("continue", broker, sid))
-            return SimpleNamespace(active_run_id="run-live")
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
-        lambda: _Registry(),
-    )
-    performers = _action_performers("alpaca", _SID, idempotency_key="same-run-1")
-
-    paused = await performers["pause"]("desk-operator", None)
-    continued = await performers["continue"]("desk-operator", None)
-
-    assert calls == [
-        ("pause", "alpaca", _SID),
-        ("continue", "alpaca", _SID),
-    ]
-    assert paused == "Run run-live is paused; its process remains live."
-    assert continued == "Run run-live continued without changing run identity."
 
 
 async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -> None:
@@ -1125,7 +1044,7 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
 
 
 def test_reason_left_optional_for_non_comment_actions() -> None:
-    request = _request(action_id="resume", reason=None)
+    request = _request(action_id="reconcile_now", reason=None)
 
     assert request.reason is None
 
@@ -1202,4 +1121,3 @@ def test_program_build_for_display_falls_back_to_live_check_when_no_evidence_rec
     fact = panel_data_source._program_build_for_display(binding, verified_at_ms=9_999)
 
     assert fact is sentinel
-

@@ -160,3 +160,17 @@ def test_verdict_inputs_are_identical_in_paired_and_normal_mode() -> None:
     assert paired.run_verdict.model_dump(exclude={"generated_at_ms"}) == (
         normal.run_verdict.model_dump(exclude={"generated_at_ms"})
     )
+
+
+def test_the_actual_producer_records_conventions_and_preserves_unknown_data_identity() -> None:
+    response = _aggregate(_request())
+    assert response.evidence_provenance.statistics_basis == "marked_equity_curve/v1"
+    assert response.evidence_provenance.daily_return_convention == "initial_capital_first_session/v1"
+    assert response.evidence_provenance.data_contract == "unrecorded"
+
+    with_manifest = _aggregate_backtest_response(
+        result=_result(), request=_request(), strategy=_strategy(), lake_manifest="a" * 64,
+        on_phase=lambda _phase: None, on_log=lambda _line: None,
+    )
+    assert with_manifest.evidence_provenance.data_contract == "lake_complete_sessions/v1"
+    assert with_manifest.evidence_provenance.data_availability_hash == "a" * 64

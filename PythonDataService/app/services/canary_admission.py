@@ -21,13 +21,11 @@ exists — this module invents no new proof of its own:
 * ``evaluate_canary_rollback`` classifies whether an existing Stop custody
   outcome (``app.services.bot_carryover.prove_stop_outcome``, itself backed
   by the Clerk's ``prove_instance_custody``) is a *safe* boundary to roll a
-  canary back at. Resuming after a rollback is not a separate mechanism: it
-  re-enters ``BotResumeAdmission`` and is re-gated by the same allowlist,
-  seal, build, validation, replay, and custody checks as any other Resume —
-  there is no cached or partial admission to replay, and no process is
-  hot-swapped (Resume only admits once the prior process is proven
-  ``EXITED``; see ``evaluate_run_admission``'s ``RESUME_PROCESS_NOT_TERMINAL``
-  gate).
+  canary back at. Trading after a rollback is not a separate mechanism: it
+  is a fresh Deploy, re-gated by the same allowlist, seal, build,
+  validation, replay, and custody checks as any other deployment — there is
+  no cached or partial admission to replay, and no process is hot-swapped
+  into a running one.
 
 SAFETY (issue #1729): ``CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS`` ships EMPTY.
 Operational activation is a two-step, content-addressed human decision stored

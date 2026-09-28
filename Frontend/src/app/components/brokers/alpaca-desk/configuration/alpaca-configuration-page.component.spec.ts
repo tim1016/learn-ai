@@ -141,6 +141,8 @@ class FakeConfigurationService {
   readonly applied: number[] = [];
   stageRefusal: HttpErrorResponse | null = null;
 
+  readBudgetAuthority = vi.fn(async () => ({ state: 'budget', account_id: this.current.effective_account_id,
+    authorization_version: 2, active_run_count: 0, review_token: 'test-authority', detail: 'Budgets are enabled.' }));
   listCredentialSlots = vi.fn(async (_clerkId: string) => SLOTS);
   listNicknames = vi.fn(async (_clerkId: string) => this.nicknames);
   listProfiles = vi.fn(async (
@@ -311,7 +313,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(screen.getByText('Record Apply')).toBeTruthy();
     expect(screen.getByText('Restart the worker')).toBeTruthy();
     expect(screen.getByText('Verify before deploying')).toBeTruthy();
-    expect(screen.getByText(/never retargets, arms, or launches an existing bot/)).toBeTruthy();
+    expect(screen.getByText(/never retargets or launches an existing bot/)).toBeTruthy();
     expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
   });
 
@@ -752,7 +754,7 @@ describe('AlpacaConfigurationPageComponent', () => {
     expect(document.querySelectorAll('input[type="password"]')).toHaveLength(0);
   });
 
-  it('reads the effective revision so the status panel can say Live, and still never arms', async () => {
+  it('reads the effective revision so the status panel can say Live, without deployment permission', async () => {
     const service = new FakeConfigurationService();
     service.profiles.push(profile({ profile_id: 'profile-1' }));
     service.revisions.push(
@@ -764,8 +766,6 @@ describe('AlpacaConfigurationPageComponent', () => {
         live_envelope: {
           loss_fraction: 0.05,
           loss_usd: 5000,
-          shadow_sessions: 3,
-          arming_max_sessions: 20,
           xh_entry_bps: 11,
           xh_exit_bps: 17.5,
         },
@@ -781,7 +781,7 @@ describe('AlpacaConfigurationPageComponent', () => {
 
     expect(await screen.findByText('Live', { selector: '.status__mode--live' })).toBeTruthy();
     expect(service.readRevision).toHaveBeenCalledWith('clrk_spec', 'profile-1', 2);
-    expect(screen.getByText(/Apply never arms live trading/)).toBeTruthy();
+    expect(screen.getByText(/Applying a profile does not deploy a bot/)).toBeTruthy();
   });
 
   it('keeps the endpoint on screen across an Apply, which changes neither side', async () => {

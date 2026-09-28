@@ -30,7 +30,7 @@ from app.broker.fleet.provider import (
     ServedContext,
 )
 
-_ADAPTER_VERSION = "alpaca-fleet.8"
+_ADAPTER_VERSION = "alpaca-fleet.9"
 
 
 def _op(
@@ -111,6 +111,13 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "/activities",
             capability=Capability.ACCOUNT_READ,
             agent_path="/api/brokers/alpaca/activities",
+        ),
+        _op(
+            "fee_attribution_read",
+            "GET",
+            "/fees/attribution",
+            capability=Capability.ACCOUNT_READ,
+            agent_path="/api/brokers/alpaca/fees/attribution",
         ),
         _op(
             "portfolio_history_read",
@@ -360,6 +367,20 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             readiness=_CONFIGURATION,
         ),
         _op(
+            "configuration_risk_limits_read", "GET", "/configuration/risk-limits",
+            capability=Capability.CONFIGURATION_MANAGE, readiness=_CONFIGURATION,
+        ),
+        _op(
+            "configuration_risk_limits_apply", "POST", "/configuration/risk-limits/apply",
+            capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION,
+        ),
+        _op(
+            "configuration_risk_hold_clear", "POST", "/configuration/risk-limits/clear-hold",
+            capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION,
+        ),
+        _op("configuration_budget_authority_read", "GET", "/configuration/budget-authority", capability=Capability.CONFIGURATION_MANAGE, readiness=_CONFIGURATION),
+        _op("configuration_budget_authority_apply", "POST", "/configuration/budget-authority/apply", capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION),
+        _op(
             "configuration_events",
             "GET",
             "/configuration/events",
@@ -389,6 +410,9 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.DEPLOY,
             account=True,
         ),
+        _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, account=True),
+        _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
+        _op("bot_deploy_command_read", "GET", "/accounts/{account_id}/bots/{sid}/deploy-command", capability=Capability.BOT_PANEL_READ, account=True),
         _op(
             "bot_cohort_archive_read",
             "GET",
@@ -455,9 +479,11 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         # The panel's quiesce actions (vocabulary.QUIESCE_ACTION_IDS: stop,
         # flatten-and-stop and the SQLite recovery stop/cancel/flatten/
         # reconcile), split from bot_panel_action because that one operation
-        # also resumes and continues bots: a route layer that cannot read the
-        # body cannot tell them apart, so the quiesce half gets its own
-        # operation and a draining lane routes it (#2351). Its request schema
+        # also carries actions a draining lane must refuse -- a deployment
+        # would start decisions again, and resolve_execution_coverage can lift
+        # a hold: a route layer that cannot read the body cannot tell them
+        # apart, so the quiesce half gets its own operation and a draining
+        # lane routes it (#2351). Its request schema
         # admits only those ids. The custody recovery-execute operations stay
         # refused while draining: they accept every recovery id, including
         # resolve_execution_coverage, which can lift a hold.
@@ -569,15 +595,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             account=True,
             stream=OperationStream.SSE,
         ),
-        _op("live_arming_status", "GET", "/accounts/{account_id}/bots/{sid}/arming",
-            capability=Capability.CUSTODY_READ, account=True),
-        _op("live_arming_plan", "POST", "/accounts/{account_id}/bots/{sid}/arming/plan",
-            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT, account=True),
-        _op("live_arming_apply", "POST", "/accounts/{account_id}/bots/{sid}/arming/apply",
-            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT, account=True),
-        _op("live_arming_disarm", "POST", "/accounts/{account_id}/bots/{sid}/arming/disarm",
-            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT, account=False,
-            drain_admission=_QUIESCE, readiness=_CONFIGURATION),
         # Graduation changes the boot-selected custody world but never deploys
         # or arms a strategy. It is account-scoped and lane-local: the clerk
         # owns its broker evidence, backup, activation receipt and restart.
@@ -586,8 +603,12 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/accounts/{account_id}/live-graduation",
             capability=Capability.CUSTODY_READ,
-            account=True,
+            readiness=_CONFIGURATION,
+            account=False,
         ),
+        _op("shadow_activate", "POST", "/accounts/{account_id}/live-graduation/shadow-activation",
+            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT,
+            readiness=_CONFIGURATION, account=False),
         _op(
             "live_graduation_plan",
             "POST",

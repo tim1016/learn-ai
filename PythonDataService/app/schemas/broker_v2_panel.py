@@ -27,6 +27,7 @@ from app.broker.v2panel.vocabulary import (
     Phase,
     QuiesceActionId,
     ReconciliationVerdict,
+    RecordedActionId,
     StationId,
     StationState,
 )
@@ -38,7 +39,7 @@ from app.schemas.account_authority import (
 )
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
-from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -201,8 +202,7 @@ class DutyOutcomeView(BaseModel):
 class BotHealthCard(BaseModel):
     """Bot-health card beside the rail (§7.2).
 
-    ``PAUSED`` means the current process/run remains live while bar delivery
-    is held. Continue retains that run identity; Resume is not applicable.
+    Terminal Stop retains custody evidence; new trading requires fresh Deploy.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -220,10 +220,6 @@ class BotHealthCard(BaseModel):
     decision_stale: bool
     # Last bar seen (§7.2): the most recent bar this bot evaluated.
     last_bar_at_ms: int | None
-    resume_eligible: bool
-    resume_label: str
-    resume_explanation: str
-    carryover_checkpoint_exposure: dict[str, float]
 
 
 class ChannelHealthView(BaseModel):
@@ -404,7 +400,7 @@ class PrimaryActionByLens(BaseModel):
 
     ``trader`` is restricted to the closed
     ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
-    (``resume`` / ``continue`` / ``stop``); an Operator-only recovery
+    (``stop``); an Operator-only recovery
     capability can never reach it. ``operator`` also considers those same
     lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
     action takes precedence when one is available — the audience-aware
@@ -623,11 +619,6 @@ class BotPanelView(BaseModel):
     # registered Signal Program, ``UNPROVEN`` when the seal or receipt evidence
     # does not (yet) close, ``PROVEN`` otherwise.
     program_build: ProgramBuildAdmissionFact
-    # PRD Sec 11.3 "current admission-policy version and verdict": the most
-    # recent Start/Resume admission decision this panel observed. ``None``
-    # while the bot is running — Resume admission is not evaluated for a live
-    # run, which is an explicit absence, not a missing read.
-    resume_admission: RunAdmissionDecision | None
     updated_at_ms: int
     revision: int
     market_pulse: MarketPulseView
@@ -725,17 +716,17 @@ class PanelQuiesceActionRequest(PanelActionRequest):
     action_id: QuiesceActionId  # type: ignore[assignment]
 
 
-class PanelActionResult(BaseModel):
-    """The outcome of an executed action (§11).
+class PanelActionReceipt(BaseModel):
+    """One succeeded action as a bot's durable receipt ledger holds it.
 
-    On success the caller re-polls the panel; ``applied`` distinguishes a fresh
-    application from an idempotent replay (``applied=False`` — the key was seen
-    before, the action is a no-op).
+    Read-widened: a receipt written before #2540 retired Resume, Pause and
+    Continue still decodes as history. Every new result is the narrowed
+    :class:`PanelActionResult`, so a retired id is never dispatched or returned.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    action_id: ActionId
+    action_id: RecordedActionId
     outcome: Literal["success"] = "success"
     receipt_id: str
     recorded_at_ms: int
@@ -743,6 +734,17 @@ class PanelActionResult(BaseModel):
     revision: int
     concurrency_token: str
     message: str
+
+
+class PanelActionResult(PanelActionReceipt):
+    """The outcome of an executed action (§11).
+
+    On success the caller re-polls the panel; ``applied`` distinguishes a fresh
+    application from an idempotent replay (``applied=False`` — the key was seen
+    before, the action is a no-op).
+    """
+
+    action_id: ActionId  # type: ignore[assignment]
 
 
 class PanelActionErrorResponse(BaseModel):
@@ -772,7 +774,7 @@ class PanelActionErrorResponse(BaseModel):
 #: The flatten-class action ids a cohort leg may execute. Under the active
 #: SQLite authority the presented flatten surface is the recovery ladder's
 #: ``execute_safe_flatten`` (the SQLite panel adapter retains only
-#: resume/retire from generic lifecycle actions, so ``flatten_stop`` never
+#: retire/archive from generic lifecycle actions, so ``flatten_stop`` never
 #: reaches those panels); ``flatten_stop`` stays in the closed pair for the
 #: surfaces that do present it. A closed subset on purpose: the cohort
 #: wrapper composes existing per-bot mutations; it never introduces one.
@@ -1188,4 +1190,3 @@ class LaneAttentionRead(BaseModel):
 
     account_id: str | None
     items: list[LaneAttentionItem]
-

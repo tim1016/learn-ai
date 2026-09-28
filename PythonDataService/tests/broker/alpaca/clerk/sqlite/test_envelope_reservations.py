@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLDS_COMPATIBILITY_VIEW_DDL,
 )
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
@@ -64,6 +65,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _clock_at,
     _register_active,
     _TestClock,
+    complete_fee_evidence,
 )
 
 # The trailing-fill timeline: terminal ack, then the cash observation, then the
@@ -106,6 +108,9 @@ def _gate(*, cash: float = 100_000.0) -> LiveEnvelopeGate:
             equity_usd=cash,
             last_equity_usd=cash,
             position_count=0,
+            risk_cash_flow_evidence_complete=True,
+            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(T0),
+            risk_equity_window_start_ms=day_pnl_window_start_ms(T0),
         )
     )
     return gate
@@ -159,7 +164,11 @@ def _rewind_to_v12(db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(
+            "DROP TABLE deployment_budgets;\n"
+            "DROP TABLE account_risk_policy;\n"
             "DROP TABLE envelope_reservations;\n"
+            "DROP TRIGGER trg_budget_authority_monotonic;\n"
+            "ALTER TABLE control_meta DROP COLUMN authorization_version;\n"
             "DROP VIEW holds;\n"
             f"{_V12_HOLDS_VIEW_DDL}"
             "UPDATE control_meta SET schema_version = 12 WHERE id = 1;\n"
@@ -172,8 +181,8 @@ def _rewind_to_v12(db_path: Path) -> None:
 def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
     envelope_repo: ClerkSqliteRepository,
 ) -> None:
-    assert schema.SCHEMA_VERSION == 18
-    assert envelope_repo.control_meta_snapshot().schema_version == 18
+    assert schema.SCHEMA_VERSION >= 20
+    assert envelope_repo.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
     assert (
         envelope_repo._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='envelope_reservations'"
@@ -218,7 +227,7 @@ def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clo
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
     try:
-        assert reopened.control_meta_snapshot().schema_version == 18
+        assert reopened.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
         assert (
             reopened._conn.execute(
                 "SELECT name FROM sqlite_master "
@@ -291,6 +300,7 @@ def test_the_reservation_never_enters_the_hash_chain(
             account_id=ACCOUNT_ID, artifacts_root=tmp_path / name, clock=envelope_clock
         )
         try:
+            complete_fee_evidence(clerk)
             _register_active(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
             accept_enter(
                 clerk,

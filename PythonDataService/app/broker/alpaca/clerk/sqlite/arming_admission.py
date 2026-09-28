@@ -60,12 +60,12 @@ def require_arming_admission(gate: ArmingGate, *, strategy_instance_id: str, now
         raise _refuse(
             LIVE_ARMING_REQUIRED,
             f"{strategy_instance_id} has never been armed on {snapshot.live_account_id}; "
-            "run scripts.manage_alpaca_arming plan, then apply.",
+            "review Budget authority upgrade in Configuration, then deploy a fresh run.",
         )
     raise _refuse(
         status.reason_code or LIVE_ARMING_REQUIRED,
         f"{strategy_instance_id} is {status.state} on {snapshot.live_account_id} "
-        f"({status.reason_code}); re-arm before its next ENTER.",
+        f"({status.reason_code}); review Budget authority upgrade in Configuration, then deploy a fresh run.",
     )
 
 

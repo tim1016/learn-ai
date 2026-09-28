@@ -19,6 +19,7 @@ from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
@@ -115,6 +116,7 @@ class StartRequest:
     # narrower field here was already silently out of sync with its own
     # producer, not a deliberate invariant.
     strategy_param_origins: dict[str, ParameterOrigin] | None = None
+    budget_consent: DeployBudgetConsent | None = None
 
 
 @dataclass(frozen=True)
@@ -148,11 +150,11 @@ class StartAdmissionUnavailable(Exception):
 class RunAdmissionInvariantError(RuntimeError):
     """An admitted run lost evidence its own admission decision required.
 
-    ``evaluate_run_admission`` only allows Start/Resume once
+    ``evaluate_run_admission`` only allows Deploy once
     ``market_data.state == "AVAILABLE"``, and ``market_data_admission_fact``
     only reports that state when a feed was resolved — so an allowed
     decision with no feed means that invariant broke upstream. Shared by
-    Start and Resume so both admission paths fail the same explicit way
+    Deploy so both admission paths fail the same explicit way
     instead of a bare ``assert`` that ``python -O`` would strip.
     """
 
@@ -185,6 +187,7 @@ def make_start_request(
     exit_terms: ExitTerms | None,
     strategy_params: dict[str, Any] | None = None,
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
+    budget_consent: DeployBudgetConsent | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -201,6 +204,7 @@ def make_start_request(
         strategy_params=strategy_params,
         exit_terms=exit_terms,
         strategy_param_origins=strategy_param_origins,
+        budget_consent=budget_consent,
     )
 
 
@@ -251,12 +255,9 @@ async def resolve_start_runtime_fact(
     boot_recovery_required: bool,
     boot_recovery_report: BootRecoveryReport | None,
     unresolved_intents_probe: UnresolvedIntentsProbe | None,
-    projected_start_count: int,
-    restart_threshold: int,
-    restart_window_ms: int,
     recovery_evaluation: RecoveryEvaluationProbe | None = None,
 ) -> StartRuntimeAdmissionFact:
-    """Project recovery and restart intensity without mutating runner state.
+    """Project boot recovery and recovery intents without mutating runner state.
 
     ``boot_recovery_report`` is the boot sweep's report: absent while the
     sweep has not run; degraded when it names bots no lifecycle authority
@@ -323,20 +324,10 @@ async def resolve_start_runtime_fact(
                 ),
                 next_step="Resolve recovery intents before Start.",
             )
-    if projected_start_count >= restart_threshold:
-        return StartRuntimeAdmissionFact(
-            state="RESTART_INTENSITY_EXCEEDED",
-            observed_at_ms=observed_at_ms,
-            explanation=(
-                f"The next activation would be number {projected_start_count} inside "
-                f"the {restart_window_ms} ms restart window."
-            ),
-            next_step="Wait for the restart window to clear before Start.",
-        )
     return StartRuntimeAdmissionFact(
         state="READY",
         observed_at_ms=observed_at_ms,
-        explanation="Boot recovery and restart intensity admit Start.",
+        explanation="Boot recovery admits Start.",
     )
 
 
@@ -347,8 +338,8 @@ def extended_hours_admission_fact(
 
     Every new run needs exit terms, including regular-session runs whose last
     bar exits after the close. Extended entries additionally need the account's
-    declared window and entry allowance. Holding Resume separately requires
-    Flatten and cannot change the prior bot's immutable terms.
+    declared window and entry allowance. A stopped bot retains its immutable
+    terms and resolves remaining exposure through Flatten.
     """
     if exit_terms is None or exit_terms.exit_allowance_bps is None:
         state: ExtendedHoursAdmissionState = "EXIT_ALLOWANCE_UNSET"
@@ -424,6 +415,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         strategy_params=request.strategy_params,
         exit_terms=request.exit_terms,
         strategy_param_origins=request.strategy_param_origins,
+        budget_consent=request.budget_consent,
         sealed_account_id=(
             synthetic_account_id_for_strategy(request.strategy_instance_id)
             if request.mode == "dry_run"
@@ -453,9 +445,9 @@ def seal_binding_to_custody_snapshot(
 def log_run_launch(
     binding: BrokerBotBinding,
     *,
-    reason: Literal["deploy", "resume"],
+    reason: Literal["deploy"],
 ) -> None:
-    """Emit the common structured launch event for Start and Resume."""
+    """Emit the common structured launch event for Deploy."""
     logger.info(
         "Bot run launched",
         extra={

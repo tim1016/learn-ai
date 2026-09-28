@@ -19,11 +19,12 @@ describe('AlpacaBotControlExampleComponent', () => {
 
     const selector = screen.getByLabelText('Review scenario');
     fireEvent.change(selector, { target: { value: 'stopped_carryover_mismatch' } });
-    expect(screen.getByText('Resume blocked')).toBeTruthy();
+    expect(screen.getByText('Stopped exposure needs review')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    expect(screen.getByText('Resume custody proof')).toBeTruthy();
-    expect(screen.getByText('Fail: no new run may be created.')).toBeTruthy();
+    expect(screen.getByText('Attributed account exposure')).toBeTruthy();
+    expect(screen.queryByText('Resume custody proof')).toBeNull();
+    expect(screen.getByText('This stopped instance cannot restart or transfer its historical exposure to a fresh deployment.')).toBeTruthy();
     expect(screen.getByText('Carryover Mismatch')).toBeTruthy();
   });
 

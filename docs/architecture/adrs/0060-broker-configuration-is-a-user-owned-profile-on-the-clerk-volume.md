@@ -173,3 +173,79 @@ supersedes account-level EXIT pricing with immutable registration terms,
 introduces profile v4 defaults and the acknowledged manual band override,
 and exposes the existing arming ceremony through the Live UI. Entry allowance
 semantics and the IBKR-data/Alpaca-orders boundary remain unchanged.
+
+### 2026-09-27 amendment — immediate account risk limits (#2543)
+
+For account loss limits only, **Apply risk limits** replaces Decision 4's
+restart/re-arm rule. A reviewed policy revision is committed through the existing
+Clerk custody transition and mirror, with its effective profile reference and
+server-resolved actor. That replayable projection is the single effective risk
+policy; saved profile content remains immutable historical configuration.
+Profile identity, credentials, endpoint changes and their selection handover keep
+the existing controls. Old profile hashes and arming payloads are never rewritten.
+
+Apply, observation publication, ENTER and guarded hold clearance use the same
+custody write coordinator and effective policy revision. Tightening immediately
+withdraws entry permission and raises the existing hold when fresh evidence
+breaches the new threshold. Unknown evidence remains blocked. Draft edits do
+nothing. Paper and Live use this same policy and observation implementation.
+
+A standing hold retains the original policy revision, session start, equity
+baseline and derived dollar threshold. Clear requires fresh evidence safe under
+both the current session policy and the original hold's retained dollar limit.
+Within the original session, the loss must recover below both limits. After that
+session ends, the same explicit Clear action may begin a fresh session only after
+complete fresh evidence proves original positions and orders resolved. It reuses
+the account-quiet double read of broker orders/positions and current custody;
+unknown evidence or remaining obligations refuse. Current-session P&L must be safe
+under both the original baseline-derived dollar threshold and current policy.
+The original cause/session/baseline/revision stays unchanged in history; the
+resolution records both thresholds, the new session and fresh observation basis.
+This prevents a permanent dead end after a fully realized loss while keeping
+rollover, looser Apply, restart and legacy re-arm from clearing automatically.
+The explicit Clear loss hold action remains available in Configuration.
+
+Immutable per-instance ExitTerms remain the sole exit pricing authority; risk
+changes do not replace working orders or mutate those seals. This amendment
+supersedes the loss-limit and exit-pricing claims in Decision 4 wherever they
+conflict with #2543 and ADR 0045's immutable ExitTerms.
+
+Risk consumes the canonical dated fee projection (#2542), including estimated
+provisions until observed charges replace them. Missing or stale fee evidence,
+incomplete execution coverage and unknown marks make P&L unknown, never zero.
+Applying a valid policy still commits it, but its receipt remains unready when
+such evidence is missing. ENTRY and budget commitment rejudge custody P&L under
+the same writer fence using the fresh broker observation; a cadence snapshot
+cannot authorize spending after new fee or execution evidence changes the risk.
+The observation carries the execution watermark taken before the broker read.
+New execution/correction evidence invalidates its unrealized mark until another
+coherent read, preventing closed P&L from being counted twice. These checks
+never prevent custody from recording executions or reducing risk.
+
+
+### 2026-09-27 amendment — current four-field profiles and historical fidelity (#2547)
+
+Current configuration accepts only `loss_fraction`, `loss_usd`, `xh_entry_bps`
+and `xh_exit_bps`. Session-count and expiring-arming controls are retired; the
+request schema rejects both old count keys. New Live runs acquire their own
+reviewed budget and consent through Deploy after Budget authority cutover.
+
+Profiles schema 5 adds a nullable four-field envelope document. A database CHECK
+prohibits that document beside any of the legacy six scalar values or Paper
+allowances. The existing revision immutability trigger also guards the new
+column. There is one representation per revision, never a second mutable home
+for its limits. The migration adds the column without rewriting existing rows,
+revisions, selections, foreign keys or content hashes.
+
+The historical six-field decoder retains exact numeric types, both retired
+counts and the original hash calculation. Its read-only arming ledger still
+verifies original records. Configuration projects only the four editable values;
+saving them creates a new revision and cannot rewrite an old revision's identity.
+Current runtime resolution explicitly clears stale session-count environment
+values. The legacy import reader remains capable of decoding the old six-field
+configuration for recovery and historical verification.
+
+`test_schema_migration.py` proves a v4 upgrade preserves hashes and pinned
+selections, a new four-field revision survives reopen, the database refuses two
+simultaneous representations, and the current document is immutable. Historical
+seal tests continue to verify original record digests; no golden hash is updated.

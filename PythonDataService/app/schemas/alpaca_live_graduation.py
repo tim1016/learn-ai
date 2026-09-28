@@ -17,7 +17,7 @@ class LiveGraduationStatus(BaseModel):
     account_id: str
     configured_mode: Literal["live"]
     authority: Literal["shadow", "live", "unavailable"]
-    state: Literal["review_available", "graduated", "blocked"]
+    state: Literal["activation_available", "review_available", "graduated", "blocked"]
     headline: str
     detail: str
     next_action: str | None
@@ -41,7 +41,6 @@ class LiveGraduationPlanView(BaseModel):
     backup_reference: str
     daily_loss_fraction: float = Field(gt=0, lt=1)
     daily_loss_usd: float = Field(gt=0)
-    arming_max_sessions: int = Field(ge=1)
     extended_hours_entry_bps: float = Field(ge=0, lt=10_000)
     extended_hours_exit_bps: float = Field(ge=0, lt=10_000)
     consequence: str
@@ -68,3 +67,15 @@ class LiveGraduationApplyOutcome(BaseModel):
     activated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     message: str
 
+
+
+class ShadowActivationOutcome(BaseModel):
+    """Durable isolated activation, returned before the supervised restart."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str
+    state: Literal["restart_scheduled"]
+    activation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    activated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    message: str

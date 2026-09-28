@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -16,12 +17,14 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     ExecutionSliceFilledFacts,
 )
+from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import (
+    BrokerActivity,
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
@@ -39,6 +42,23 @@ class _TestClock:
 
     def advance(self, delta_ms: int) -> None:
         self.value += delta_ms
+
+
+
+def complete_fee_evidence(repo: ClerkSqliteRepository, activities: tuple[BrokerActivity, ...] = ()) -> None:
+    """Explicit successful broker activity evidence, never a production fallback."""
+    record_fee_evidence(repo, activities, checked_at_ms=repo.clock(), history_complete=True)
+
+
+def remove_budget_schema_for_legacy_fixture(conn: sqlite3.Connection) -> None:
+    """Restore the pre-budget shape before exercising an earlier migration."""
+    assert not conn.execute("SELECT 1 FROM deployment_budgets LIMIT 1").fetchone()
+    conn.execute("DROP TABLE deployment_budgets")
+    conn.execute("DROP TABLE account_risk_policy")
+    conn.execute("ALTER TABLE envelope_reservations DROP COLUMN exact_reference_price")
+    conn.execute("ALTER TABLE envelope_reservations DROP COLUMN fee_provision_cents")
+    conn.execute("DROP TRIGGER trg_budget_authority_monotonic")
+    conn.execute("ALTER TABLE control_meta DROP COLUMN authorization_version")
 
 
 def _clock_at(start_ms: int) -> _TestClock:
@@ -304,6 +324,7 @@ def envelope_repo(
     clerk = ClerkSqliteRepository.initialize(
         account_id=ENVELOPE_ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
     )
+    complete_fee_evidence(clerk)
     yield clerk
     clerk.close()
 
@@ -406,6 +427,12 @@ def day_pnl_repo(
     )
     yield clerk
     clerk.close()
+
+
+
+@pytest.fixture
+def day_pnl_fees(day_pnl_repo: ClerkSqliteRepository) -> None:
+    complete_fee_evidence(day_pnl_repo)
 
 
 def _accept_day_pnl_enter(

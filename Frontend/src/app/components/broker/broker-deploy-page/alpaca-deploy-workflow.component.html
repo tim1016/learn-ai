@@ -1,19 +1,25 @@
 <div class="alpaca-deploy">
-  <!-- Readiness already on screen outranks a refresh that failed: it degrades
-       to an explicit staleness banner rather than collapsing the pane. -->
-  @if (currentView(); as view) {
+  @if (shownReceipt(); as deployReceipt) {
+    <app-deploy-launch-receipt [receipt]="deployReceipt" />
+    @if (deployReceipt.status === 'pending') {
+      <button type="button" (click)="recoveredCommand.reload()">Check deployment status</button>
+    }
+    <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
+  } @else if (recoverySid() && !submitting() && !hasFrozenCommand()) {
+    <section role="status" aria-label="Recover deployment result">
+      <h3>Checking the recorded deployment</h3>
+      <p>A refresh never starts a second bot. The recorded result will show whether money was committed and the bot launched.</p>
+      @if (recoveredCommand.error()) { <p role="alert">The deployment result could not be read. Check again before preparing a fresh deployment.</p> }
+      <button type="button" (click)="recoveredCommand.reload()" [disabled]="recoveredCommand.isLoading()">Check deployment status</button>
+      <button type="button" (click)="newDeployment()">Prepare a new deployment</button>
+    </section>
+  } @else if (currentView(); as view) {
     @if (stalenessNotice(); as notice) {
       <section class="deploy-stale" role="alert" aria-label="Deployment readiness is stale">
         <strong>{{ notice }}</strong>
         <button type="button" (click)="reload()">Retry</button>
       </section>
     }
-    @if (receipt(); as deployReceipt) {
-      <app-deploy-launch-receipt [receipt]="deployReceipt" />
-      @if (deployReceipt.execution_mode === 'live') {
-        <app-live-arming [target]="deployTarget(deployReceipt.account_id)" [sid]="deployReceipt.bot.strategy_instance_id" />
-      }
-    } @else {
       <form class="deploy-form" novalidate (submit)="$event.preventDefault(); submit()">
         <div class="deploy-split">
           <div class="deploy-split__form">
@@ -82,7 +88,15 @@
               <p>{{ view.exit_steps_summary }}</p>
             </fieldset>
 
+            <app-deploy-budget-review
+              [target]="budgetTarget()" [body]="budgetBody()" [disabled]="submitting()"
+              (reviewed)="budgetConsent.set($event)"
+            />
+
             <app-deploy-parameters-section
+              [qualifiedConfiguration]="selectedStrategy()?.qualified_configuration ?? null"
+              (qualifiedConfigurationSelected)="useQualifiedConfiguration($event)"
+              (dryRunRequested)="setExecutionMode('dry_run')"
               [paramsSchema]="paramsSchema()"
               [values]="ticket().parameters"
               (parameterChange)="setParameter($event)"
@@ -122,7 +136,7 @@
             @if (admissionDecision(); as decision) {
               @if (!decision.allowed) { <p role="alert">{{ decision.explanation }} {{ decision.next_step }}</p> }
             }
-            <small id="deploy-submit-guidance" aria-live="polite">{{ submissionReadiness().guidance }}</small>
+            <small id="deploy-submit-guidance" aria-live="polite">{{ submitGuidance() }}</small>
             <!-- Server-observed, never a client clock (temporal-rigor.md). -->
             <small class="deploy-footer__observed" data-testid="deploy-footer-observed">
               Readiness observed <app-timestamp-display [value]="view.evaluated_at_ms" mode="local" />
@@ -130,7 +144,6 @@
           </div>
         </footer>
       </form>
-    }
   } @else if (deployView.isLoading()) {
     <section class="deploy-loading" role="status" aria-label="Loading deployment readiness">
       <span></span><span></span><span></span>

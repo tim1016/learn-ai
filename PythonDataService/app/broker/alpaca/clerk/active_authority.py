@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Sequence
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
@@ -47,7 +48,7 @@ from app.broker.alpaca.clerk.live_authority import (
     InstanceSealsForAccount,
     select_live_clerk_runtime,
 )
-from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate, LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_authority import (
     activate_shadow_clerk_authority,
@@ -60,10 +61,12 @@ from app.broker.alpaca.clerk.sqlite.activation import (
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.synthetic_activation import (
     SyntheticActivationInvalid,
@@ -270,6 +273,7 @@ async def select_active_clerk_runtime(
             account_mode=account.account_mode,
             artifacts_root=artifacts_root,
             verify_activation=_verify_paper_activation,
+            live_envelope=LiveEnvelopeGate(values=live_envelope_values, custody_is_simulated=False),
             repository_opener=repository_opener,
             startup_recovery_timeout_s=startup_recovery_timeout_s,
             execution_lease_wait_timeout_s=execution_lease_wait_timeout_s,
@@ -298,6 +302,8 @@ async def select_active_clerk_runtime(
         clerk=composed.facade,
         sweep=composed.sweep,
         hold_sync=composed.hold_sync,
+        envelope_sync=composed.envelope_sync,
+        fee_sync=composed.fee_sync,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=composed.repository,
             intake=composed.facade.intake,
@@ -341,11 +347,15 @@ async def select_synthetic_clerk_runtime(
     activation_store: SyntheticActivationStore | None = None,
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+    simulation_initial_cash: Decimal | None = None,
+    projection_only: bool = False,
 ) -> ActiveClerkRuntime:
     """Recover one explicit synthetic account without consulting Alpaca.
 
     The caller provides a synthetic read/trade pair.  Identity, activation and
     the opened repository must agree before a Clerk is returned.
+    A projection-only opening retains existing custody recovery, but never
+    samples simulated financial state or starts its observation cadence.
     """
     try:
         require_synthetic_account_id(account_id)
@@ -379,6 +389,7 @@ async def select_synthetic_clerk_runtime(
 
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
+    envelope_sync: LiveEnvelopeSync | None = None
     try:
         repository = repository_opener(account_id, artifacts_root)
         meta = repository.control_meta_snapshot()
@@ -393,12 +404,14 @@ async def select_synthetic_clerk_runtime(
             trade=ports.trade,
             intake=intake,
         )
+        envelope = LiveEnvelopeGate(values=None, custody_is_simulated=True)
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
             trade=guarded_trade,
             intake=intake,
             authority_kind="synthetic",
+            live_envelope=envelope,
             # A simulator is a paper environment by construction (ADR 0054).
             account_mode="paper",
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
@@ -430,9 +443,18 @@ async def select_synthetic_clerk_runtime(
             # relies on the boot scan for its terminal-evidence closure —
             # the same posture every authority had before ADR 0050.
         )
+        envelope_sync = LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=envelope,
+            simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
+        # Explicit transient consent can price the first deployment before
+        # its command commits. Recovery uses the durable commitment instead.
+        if not projection_only:
+            await envelope_sync.tick()
+            envelope_sync.start()
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
     except Exception as exc:
+        if envelope_sync is not None:
+            await envelope_sync.stop()
         if sweep is not None:
             await sweep.stop()
         if repository is not None:
@@ -450,6 +472,7 @@ async def select_synthetic_clerk_runtime(
         authority_kind="synthetic",
         clerk=facade,
         sweep=sweep,
+        envelope_sync=envelope_sync,
         _sqlite_repository=repository,
         account_id=account_id,
         account_authority_kind="synthetic",

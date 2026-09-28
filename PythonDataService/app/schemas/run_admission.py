@@ -122,7 +122,7 @@ class ArmingAdmissionFact(BaseModel):
 
 
 class StartRuntimeAdmissionFact(BaseModel):
-    """Runner-owned recovery and restart-intensity evidence for Start."""
+    """Runner-owned recovery evidence for Start."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -131,7 +131,6 @@ class StartRuntimeAdmissionFact(BaseModel):
         "BOOT_RECOVERY_INCOMPLETE",
         "RECOVERY_SWEEP_EVALUATING",
         "RECOVERY_UNCERTAIN",
-        "RESTART_INTENSITY_EXCEEDED",
     ]
     observed_at_ms: int = Field(ge=0)
     explanation: str
@@ -183,16 +182,15 @@ CORPUS_UNCOVERED_EXPLANATION = (
     "is exploratory and not citable as qualification evidence."
 )
 CORPUS_UNCOVERED_NEXT_STEP = (
-    "Deploy at the registered validated settings, or run golden qualification for these "
-    "parameters, before citing this run as evidence."
+    "Use qualified configuration in Deploy, or choose Try in Dry Run to explore these settings without orders."
 )
 ARMING_NEXT_STEP = (
-    "Arm this instance with scripts.manage_alpaca_arming plan, then apply; until then the "
-    "Clerk refuses every ENTER it makes."
+    "Open Configuration and review the Budget authority upgrade. Then deploy a fresh run "
+    "with its own budget and Live consent; historical grants cannot be renewed."
 )
 ARMING_REQUIRED_ADMITTED_NOTE = (
-    "The instance is not armed: this launch may run and manage exposure, and every ENTER "
-    "it makes is refused until an operator arms it (ADR 0059 D11)."
+    "This legacy run has no current entry permission. Reducing recovery remains available; "
+    "review Budget authority upgrade in Configuration before a fresh Deploy."
 )
 
 
@@ -243,7 +241,7 @@ class ProgramBuildAdmissionFact(BaseModel):
     evidence_refs: tuple[str, ...] = ()
     explanation: str
     next_step: str | None = None
-    # How this verdict was obtained. Admission (Start/Resume) always proves the
+    # How this verdict was obtained. Admission (Deploy) always proves the
     # running bytes live, which is the default. A panel read replays the durable
     # per-run record instead, and says so rather than leaving a stale
     # ``verified_at_ms`` as the only clue that no re-proof happened.
@@ -257,9 +255,9 @@ class ProgramBuildAdmissionFact(BaseModel):
     wiring: Literal["MATCHED", "DRIFTED", "NOT_CHECKED"] = "NOT_CHECKED"
     # ADR 0054. Whether the golden corpus behind ``golden_trace_root`` covers
     # the resolved parameter point and symbol. ``UNCOVERED`` alongside
-    # ``state="PROVEN"`` is the paper-testing posture: the bytes are proven
-    # against their receipt, a proven paper account admits the run carrying
-    # this stamp, and anywhere else refuses it (``PROGRAM_CORPUS_UNCOVERED``).
+    # ``state="PROVEN"`` means the bytes are proven against their receipt.
+    # Only Dry Run admits an uncovered tuple; broker modes refuse it
+    # (``PROGRAM_CORPUS_UNCOVERED``).
     # Whether to admit is the pure policy's decision, never this fact's.
     corpus_coverage: Literal["COVERED", "UNCOVERED", "NOT_CHECKED"] = "NOT_CHECKED"
 
@@ -322,70 +320,7 @@ class StartRunFacts(BaseModel):
     arming: ArmingAdmissionFact | None = None
 
 
-class ResumeCheckpointAdmissionFact(BaseModel):
-    """Durable STOP checkpoint compared with fresh Clerk custody on Resume."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    account_id: str
-    stopped_run_id: str
-    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    exposure: dict[str, float]
-    approved: bool
-    evidence_ref: str
-
-
-class TerminalEvidenceAdmissionFact(BaseModel):
-    """Whether the prior run's terminal evidence is safe for Resume to touch.
-
-    Mirrors exactly what ``BotRunEvidenceService.preserve_terminal`` will do
-    at activation: an existing receipt is reused, an absent one is
-    synthesized from the lifecycle summary, and either is "ready". Only a
-    receipt or lifecycle projection that fails to read is unready.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    state: Literal["RECEIPT_READY", "SUMMARY_READY", "UNREADABLE"]
-    evidence_ref: str
-    explanation: str
-    next_step: str | None = None
-
-
-class ResumeRunFacts(BaseModel):
-    """Bot-owned immutable and lifecycle facts for a proposed new run."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    operation: Literal["RESUME"] = "RESUME"
-    strategy_instance_id: str
-    proposed_run_id: str
-    prior_run_id: str
-    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    sealed_account_id: str
-    # Mode is immutable per instance (set at Start); Resume replays the same
-    # tier the instance was created with. See StartRunFacts.mode for why this
-    # is required, not defaulted.
-    mode: Literal["log_only", "dry_run", "trade"]
-    program_build: ProgramBuildAdmissionFact
-    validation: StrategyValidationAdmissionFact
-    runtime: StartRuntimeAdmissionFact
-    process: RunProcessAdmissionFact
-    market_data: MarketDataAdmissionFact
-    market_liveness: MarketLivenessFact
-    extended_hours: ExtendedHoursAdmissionFact
-    start_window: StartWindowFact | None = None
-    desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
-    phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
-    carryover_policy: Literal["FORBID", "ALLOW"]
-    carryover_account_policy_enabled: bool
-    exposure_carryover_supported: bool
-    checkpoint: ResumeCheckpointAdmissionFact | None
-    terminal_evidence: TerminalEvidenceAdmissionFact
-    arming: ArmingAdmissionFact | None = None
-
-
-RunAdmissionFacts = StartRunFacts | ResumeRunFacts
+RunAdmissionFacts = StartRunFacts
 
 
 class RunAdmissionFactAges(BaseModel):
@@ -406,6 +341,7 @@ class RunAdmissionDecision(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # Historical admission receipts remain readable; only StartRunFacts can be evaluated.
     operation: Literal["START", "RESUME"]
     allowed: bool
     reason_code: str

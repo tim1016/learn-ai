@@ -63,7 +63,6 @@ from app.broker.contract.models import (
 )
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
-from app.broker.ibkr.config import live_artifacts_root
 from app.config import settings
 from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,
@@ -75,7 +74,7 @@ from app.schemas.account_pnl_attribution import (
     AccountPnlReconciliationResponse,
     PortfolioHistoryProofResponse,
 )
-from app.schemas.alpaca_fee_reconciliation import SessionFeeReconciliation
+from app.schemas.alpaca_fee_reconciliation import DeploymentFeeAttribution, SessionFeeReconciliation
 from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.broker_v2_panel import LaneAttentionItem, LaneAttentionRead
@@ -105,13 +104,11 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret_always,
 )
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
-from app.services.alpaca_fee_reconciliation import session_fee_reconciliation
+from app.services.alpaca_fee_reconciliation import deployment_fee_attribution, session_fee_reconciliation
 from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
 from app.services.alpaca_live_verdict import (
     alpaca_live_verdict,
-    observe_arming,
     observe_loss_hold,
-    observe_shadow_state,
 )
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
@@ -369,6 +366,14 @@ async def list_activities(
         broker,
         lambda port: port.list_activities(after_ms=after_ms, limit=limit),
     )
+
+
+@router.get("/{broker}/fees/attribution", response_model=DeploymentFeeAttribution)
+async def get_deployment_fee_attribution(broker: str, strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=96)) -> DeploymentFeeAttribution:
+    """Canonical lifetime fee evidence, including stopped deployment ownership."""
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Fee attribution is available for Alpaca accounts.")
+    return await _run(broker, lambda _port: deployment_fee_attribution(strategy_instance_id))
 
 
 @router.get(
@@ -988,7 +993,7 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
     """The server-derived live verdict (ADR 0059 D8).
 
     Never contacts the broker: settings, the clerk selection outcome, and a
-    read of the durable shadow evidence are the only inputs.
+    read of current account risk and budget authority are the only inputs.
     """
     if broker != "alpaca":
         raise HTTPException(
@@ -1010,24 +1015,7 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
         settings=alpaca_settings,
         runtime=runtime,
         now_ms=observed_at_ms,
-        shadow_state=(
-            None if alpaca_settings is None else observe_shadow_state(runtime, alpaca_settings.clerk_dir)
-        ),
         loss_hold=observe_loss_hold(runtime),
-        arming=(
-            None
-            if alpaca_settings is None
-            else observe_arming(
-                runtime,
-                alpaca_settings.clerk_dir,
-                # The resolver, not its result: resolving the runner's root
-                # reads legacy ``IbkrSettings`` and can refuse, and a paper or
-                # absent-authority verdict reads nothing under it.
-                live_artifacts_root,
-                settings=alpaca_settings,
-                now_ms=observed_at_ms,
-            )
-        ),
     )
 
 

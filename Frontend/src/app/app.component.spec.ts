@@ -107,7 +107,7 @@ describe('AppComponent', () => {
   it('renders the shell mode-neutral for every verdict — the per-lane pills own the mode signal', () => {
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
 
-    for (const finalVerdict of ['paper', 'live-unarmed', 'live-armed'] as const) {
+    for (const finalVerdict of ['paper', 'shadow', 'live'] as const) {
       service.setState(TEST_CLERK_ID, fakeVerdictState(finalVerdict));
       fixture.detectChanges();
 

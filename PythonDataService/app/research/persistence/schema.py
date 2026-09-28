@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -484,6 +484,11 @@ DDL_V9: tuple[str, ...] = (
     'CREATE INDEX IF NOT EXISTS "IX_RecencyLaunches_JobId" ON "RecencyLaunches" ("JobId")',
 )
 
+# Nullable on purpose: no current conventions are backfilled into old evidence.
+DDL_V10: tuple[str, ...] = (
+    "ALTER TABLE research_backtest_runs ADD COLUMN IF NOT EXISTS evidence_provenance_json JSONB NULL",
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -494,6 +499,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (7, DDL_V7),
     (8, DDL_V8),
     (9, DDL_V9),
+    (10, DDL_V10),
 )
 
 

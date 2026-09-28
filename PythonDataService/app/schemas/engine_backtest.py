@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.models.responses import LeanStatisticsResponse
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
 
@@ -422,6 +423,7 @@ class EngineEvaluationWindowResponse(BaseModel):
 
 
 class EngineBacktestResponse(BaseModel):
+    evidence_provenance: RunEvidenceProvenance | None = None
     corporate_action_versions: dict[str, str] = Field(default_factory=dict)
     success: bool
     strategy_name: str

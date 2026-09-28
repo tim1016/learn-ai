@@ -1,0 +1,18 @@
+<section class="budget-authority" aria-labelledby="budget-authority-title">
+  <h3 id="budget-authority-title">Deployment budgets</h3>
+  @if (state.isLoading()) { <p role="status">Reading this account's deployment authority…</p> }
+  @else if (state.error()) { <p role="alert">Deployment authority is unavailable. Refresh before changing it.</p> }
+  @else if (view(); as current) {
+    <p>{{ current.detail }}</p>
+    <p>Account: <strong>{{ current.account_id }}</strong></p>
+    @if (current.state === 'legacy') {
+      <p>{{ current.active_run_count }} active run(s) will be stopped. Existing positions, orders and unsettled charges stay visible and recoverable.</p>
+      <p>After the switch, review a dollar budget and Deploy afresh. Old trading permission does not become a budget.</p>
+      <button type="button" [disabled]="!canApply()" [attr.aria-busy]="busy()" (click)="apply()">{{ busy() ? 'Switching to budgets…' : 'Stop bots and use budgets' }}</button>
+    } @else {
+      <p role="status">Budget-backed Deploy is enabled for this account.</p>
+    }
+  } @else { <p>Waiting for the selected account's current connection.</p> }
+  @if (refusal(); as error) { <app-configuration-refusal [refusal]="error" (reloadRequested)="state.reload()" /> }
+  <button type="button" [disabled]="busy() || state.isLoading()" (click)="state.reload()">Refresh deployment authority</button>
+</section>

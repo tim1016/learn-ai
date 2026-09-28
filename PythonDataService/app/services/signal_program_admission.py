@@ -95,28 +95,6 @@ class SignalProgramSealError(ValueError):
     """A new instance cannot produce a complete semantic v2 seal."""
 
 
-class LegacyProgramUnreconstructibleError(SignalProgramSealError):
-    """A legacy instance's persisted v1 parameters cannot seal exactly.
-
-    PRD Sec 11.5 draws a hard line here: every other missing-precondition
-    case (no sealed account yet, no current validation evidence) is
-    transient — the same Resume attempt succeeds once the precondition
-    clears, so it stays a plain :class:`SignalProgramSealError`. Two
-    conditions are permanent legacy-data gaps instead — no future retry of
-    the same instance fixes either one, so both clone a successor instance
-    with explicit lineage rather than append an inexact seal onto the
-    original identity:
-
-    * the persisted parameter set no longer validates against the
-      *currently* registered contract; or
-    * a persisted parameter has no factual origin — it was supplied at
-      deploy time (so it is not the schema default by omission) but no
-      origin was ever recorded for it, and guessing from a value-vs-
-      current-default comparison is exactly the unsound inference this
-      error exists to refuse (see :func:`_legacy_parameter_origins`).
-    """
-
-
 def build_start_program_seal(
     binding: BrokerBotBinding,
     validation: StrategyValidationAdmissionFact,
@@ -147,10 +125,8 @@ def build_start_program_seal(
       entry fails closed with :class:`SignalProgramSealError`.
 
     Fresh deploys through ``paper_deploy_service`` always supply a complete
-    ``parameter_origins`` mapping. A caller reconstructing a pre-v2 instance
-    with no recorded origins must build a complete mapping first — see
-    :func:`_legacy_parameter_origins`, used only by
-    :func:`reconstruct_legacy_program_seal`.
+    ``parameter_origins`` mapping. Historical seals remain readable; new
+    deployment always seals a fresh identity with current explicit choices.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     if registration is None or registration.signal_program_factory is None:
@@ -242,138 +218,6 @@ def build_start_program_seal(
     )
 
 
-_LEGACY_CLONE_ID_SUFFIX_LEN = 12
-
-
-def legacy_migration_clone_instance_id(strategy_instance_id: str) -> str:
-    """Deterministically derive the one PRD Sec 11.5 clone id for an instance.
-
-    Pure and stable: the same source instance always yields the same clone
-    id, so a repeated Resume attempt against an unreconstructible legacy
-    instance can never mint a second clone — the caller's create-once write
-    (:meth:`BotBindingRepository.ensure_legacy_migration_clone_lineage`)
-    collapses onto the same path every time. The suffix is a content hash of
-    the source id rather than a counter or timestamp, which keeps this
-    function callable from a pure preview with no storage access.
-    """
-    digest = hashlib.sha256(strategy_instance_id.encode("utf-8")).hexdigest()[:_LEGACY_CLONE_ID_SUFFIX_LEN]
-    suffix = f"-legacy2-{digest}"
-    budget = max(1, 128 - len(suffix))
-    return f"{strategy_instance_id[:budget]}{suffix}"
-
-
-def reconstruct_legacy_program_seal(
-    binding: BrokerBotBinding,
-    validation: StrategyValidationAdmissionFact,
-) -> SealedBotProgram | None:
-    """Attempt to append an exact v2 seal to an instance that predates it.
-
-    PRD Sec 11.5: a missing seal on an *existing* strategy instance means it
-    was deployed before the v2 seal format existed, not that it is a fresh
-    Start. This mirrors :func:`build_start_program_seal` exactly, with one
-    addition — two permanent legacy-data gaps are distinguished from every
-    other reason sealing can fail today (no sealed account yet, no current
-    validation evidence): those remain transient and return ``None`` here,
-    exactly like an un-registered program does, so the caller's existing
-    generic ``PROGRAM_BUILD_UNPROVEN`` handling still applies and a later
-    Resume attempt can still succeed once the precondition clears. Either a
-    persisted parameter set that no longer validates against the
-    *currently* registered contract, or a persisted parameter with no
-    factual origin, instead raises
-    :class:`LegacyProgramUnreconstructibleError`, because no future retry of
-    *this* instance can fix it — the caller must clone a successor.
-
-    Pre-v2 instances never recorded ``strategy_param_origins``, so this is
-    also the one place a complete origin mapping is assembled from
-    whatever facts are available — see :func:`_legacy_parameter_origins`,
-    which refuses (rather than guesses) when a parameter has none.
-    """
-    registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
-    if registration is None or registration.signal_program_factory is None:
-        return None
-    try:
-        validated = registration.param_schema.model_validate(
-            {**(binding.strategy_params or {}), "symbol": binding.symbol}
-        )
-    except ValidationError as exc:
-        raise LegacyProgramUnreconstructibleError(
-            f"Strategy instance '{binding.strategy_instance_id}' persisted parameters no "
-            f"longer validate against the currently registered '{binding.strategy_key}' contract."
-        ) from exc
-    origins = _legacy_parameter_origins(
-        strategy_instance_id=binding.strategy_instance_id,
-        strategy_key=binding.strategy_key,
-        effective=validated.model_dump(mode="json"),
-        requested=binding.strategy_params or {},
-        recorded_origins=binding.strategy_param_origins,
-    )
-    try:
-        return build_start_program_seal(binding, validation, parameter_origins=origins)
-    except SignalProgramSealError:
-        return None
-
-
-def _legacy_parameter_origins(
-    *,
-    strategy_instance_id: str,
-    strategy_key: str,
-    effective: dict[str, Any],
-    requested: dict[str, Any],
-    recorded_origins: dict[str, ParameterOrigin]
-    | None,
-) -> dict[str, ParameterOrigin]:
-    """Build a complete, *factual* origin map for a pre-v2 instance, or refuse.
-
-    Called only from :func:`reconstruct_legacy_program_seal`. Every entry
-    here is a fact about this exact instance, never an inference from
-    comparing an effective value to today's registered default — a value
-    matching the current default does not prove it was never an explicit
-    deploy-time override, because the default can drift after deploy time
-    (and an old override can later be adopted as the new default). Two
-    factual sources fill this map:
-
-    * ``recorded_origins`` already carries an explicit entry for the
-      parameter — an earlier partial migration, or a post-seal deploy,
-      recorded it — so that recorded origin is used verbatim; or
-    * the parameter name is genuinely absent from ``requested``
-      (``binding.strategy_params``) — the caller never supplied it, so
-      Pydantic filled it from *this exact* ``param_schema``'s default just
-      now, the same way :func:`build_start_program_seal` treats an
-      unsupplied parameter on a fresh deploy. That is a fact about this
-      seal's own construction, not a guess reconstructed from history.
-
-    A parameter present in ``requested`` with no recorded origin has no
-    factual source at all: it was supplied explicitly at some past deploy,
-    but which value-vs-default choice that was is lost. Guessing from
-    today's default is precisely the unsound inference this function
-    exists to refuse, so it raises
-    :class:`LegacyProgramUnreconstructibleError` instead — routing the
-    caller to the clone path (PRD Sec 11.5) rather than sealing a guess as
-    exact identity.
-    """
-    recorded = recorded_origins or {}
-    origins: dict[str, ParameterOrigin] = {}
-    unresolved: list[str] = []
-    for name in effective:
-        if name == "symbol":
-            continue
-        if name in recorded:
-            origins[name] = recorded[name]
-        elif name not in requested:
-            origins[name] = "registered_default"
-        else:
-            unresolved.append(name)
-    if unresolved:
-        raise LegacyProgramUnreconstructibleError(
-            f"Strategy instance '{strategy_instance_id}' has no recorded origin for "
-            f"parameter(s) {sorted(unresolved)} of the currently registered "
-            f"'{strategy_key}' contract. Each was supplied explicitly at some past "
-            "deploy, but its deploy-time origin was never recorded and cannot be "
-            "reconstructed from today's registered default."
-        )
-    return origins
-
-
 def prove_running_program_build(
     binding: BrokerBotBinding,
     *,
@@ -397,7 +241,7 @@ def prove_running_program_build(
             verified_at_ms,
             explanation=(
                 "The instance has no complete v2 Signal Program seal. Legacy bytes remain inspectable, "
-                "but this instance must be cloned before it can Resume."
+                "but a fresh deployment is required to start another run."
             ),
         )
     configured = seal.configured_signal
@@ -428,7 +272,7 @@ def prove_running_program_build(
     # that is not running. Refuse until the restart makes them one again.
     # #2450 review: this second source read stays inside the fail-closed
     # guard too -- a checkout that removes or replaces a declared source
-    # mid-pull makes it raise, and a Start/Resume in that window must get
+    # mid-pull makes it raise, and a Deploy in that window must get
     # this refusal, never an internal error escaping the boundary.
     try:
         drifted = imported_source_drift(contract)
@@ -769,16 +613,13 @@ def _unproven(
 
 __all__ = [
     "DEFAULT_QUALIFICATION_MANIFEST",
-    "LegacyProgramUnreconstructibleError",
     "ProgramBuildQualificationManifest",
     "ProgramBuildQualificationReceipt",
     "SignalProgramSealError",
     "build_start_program_seal",
     "imported_source_drift",
-    "legacy_migration_clone_instance_id",
     "prove_running_program_build",
     "qualification_receipt_payload",
-    "reconstruct_legacy_program_seal",
     "record_imported_program_sources",
     "running_artifact_digest",
     "running_wiring_digest",

@@ -21,12 +21,10 @@ function verdict(overrides: Partial<AlpacaLiveVerdict>): AlpacaLiveVerdict {
     mode_agreement: 'agreed',
     clerk_authority: 'sqlite',
     clerk_refusal_reason_code: null,
-    armed_instance_count: 0,
-    envelope_state: 'not_applicable',
+    budget_authority_version: 2,
+    deployment_readiness: 'ready',
     // A paper verdict carries no envelope and no hold, and the server says so
     // with 'not_applicable' on both. The live cases below opt in explicitly.
-    envelope_agreement: 'not_applicable',
-    shadow_state: 'not_applicable',
     loss_hold: 'not_applicable',
     final_verdict: 'paper',
     headline: 'Paper account PA9 — no real money at risk',
@@ -124,25 +122,23 @@ describe('AlpacaLiveBannerComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
-  it('renders a live-unarmed account as a compact "Live" pill, with the armed count in its accessible name and tooltip, never its account number', async () => {
+  it('renders Live with server-authored deployment readiness and no standalone arming count', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
         observed_account_id: '9LIVE0001',
-        envelope_state: 'configured_unsealed',
-        envelope_agreement: 'unsealed',
-        shadow_state: 'none',
-        final_verdict: 'live-unarmed',
-        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
-        detail: 'Every order path refuses.',
+        final_verdict: 'live',
+        headline: 'LIVE account 9LIVE0001 — review deployment budget',
+        detail: 'Review a budget in Deploy before starting a bot.',
       }),
       lastError: null,
     });
     const status = screen.getByRole('status');
-    expect(status.className).toContain('is-live-unarmed');
+    expect(status.className).toContain('is-live');
     expect(status.textContent?.trim()).toBe('Live');
-    expect(status.getAttribute('aria-label')).toContain('0 armed');
-    expect(status.getAttribute('title')).toContain('0 armed');
+    expect(status.getAttribute('aria-label')).toContain('review deployment budget');
+    expect(status.getAttribute('aria-label')).not.toContain('armed');
+    expect(status.getAttribute('title')).toContain('Review a budget in Deploy');
     // The account number names the account but guards nothing here — the lane
     // label already names it, and the number belongs only on Configuration and
     // in the confirmation of a consequential action (ADR 0064; #2188). It can
@@ -157,21 +153,18 @@ describe('AlpacaLiveBannerComponent', () => {
         configured_mode: 'live',
         observed_account_id: '9LIVE0001',
         clerk_authority: 'shadow',
-        envelope_state: 'sealed',
-        envelope_agreement: 'agreed',
-        shadow_state: 'complete',
-        armed_instance_count: 2,
-        final_verdict: 'live-armed',
-        headline: 'LIVE account 9LIVE0001 — 2 instances armed, shadowing',
+        final_verdict: 'shadow',
+        headline: 'Shadow account 9LIVE0001 — simulated trading',
         detail: 'The shadow port synthesizes fills and submits nothing.',
       }),
       lastError: null,
     });
 
     const status = screen.getByRole('status');
-    expect(status.textContent?.trim()).toBe('Live');
+    expect(status.textContent?.trim()).toBe('Shadow');
     expect(status.getAttribute('aria-label')).toContain('Shadow authority');
-    expect(status.getAttribute('aria-label')).toContain('2 armed');
+    expect(status.className).toContain('is-shadow');
+    expect(status.getAttribute('aria-label')).not.toContain('armed');
     expect(status.getAttribute('title')).toContain('Shadow authority');
     expect(status.textContent).not.toContain('9LIVE0001');
   });
@@ -182,12 +175,9 @@ describe('AlpacaLiveBannerComponent', () => {
         configured_mode: 'live',
         observed_account_id: '9LIVE0001',
         clerk_authority: 'sqlite',
-        envelope_state: 'configured_unsealed',
-        envelope_agreement: 'unsealed',
-        shadow_state: 'none',
-        final_verdict: 'live-unarmed',
-        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
-        detail: 'Every order path refuses.',
+        final_verdict: 'live',
+        headline: 'LIVE account 9LIVE0001 — review deployment budget',
+        detail: 'Review a budget in Deploy before starting a bot.',
       }),
       lastError: null,
     });
@@ -200,12 +190,9 @@ describe('AlpacaLiveBannerComponent', () => {
       verdict: verdict({
         configured_mode: 'live',
         observed_account_id: '9LIVE0001',
-        envelope_state: 'configured_unsealed',
-        envelope_agreement: 'unsealed',
-        shadow_state: 'none',
-        final_verdict: 'live-unarmed',
-        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
-        detail: 'Every order path refuses.',
+        final_verdict: 'live',
+        headline: 'LIVE account 9LIVE0001 — review deployment budget',
+        detail: 'Review a budget in Deploy before starting a bot.',
         loss_hold: 'held',
       }),
       lastError: null,
@@ -220,12 +207,9 @@ describe('AlpacaLiveBannerComponent', () => {
       verdict: verdict({
         configured_mode: 'live',
         observed_account_id: '9LIVE0001',
-        envelope_state: 'configured_unsealed',
-        envelope_agreement: 'unsealed',
-        shadow_state: 'none',
-        final_verdict: 'live-unarmed',
-        headline: 'LIVE account 9LIVE0001 — real money, no instance armed',
-        detail: 'Every order path refuses.',
+        final_verdict: 'live',
+        headline: 'LIVE account 9LIVE0001 — review deployment budget',
+        detail: 'Review a budget in Deploy before starting a bot.',
         loss_hold: 'clear',
       }),
       lastError: null,
@@ -330,25 +314,22 @@ describe('AlpacaLiveBannerComponent', () => {
     },
   );
 
-  it('renders a live-armed account in the loudest treatment, with the armed count in its accessible name', async () => {
+  it('shows real Live custody distinctly even when the account is ready for deployment review', async () => {
     await renderWith(LIVE_LANE, {
       verdict: verdict({
         configured_mode: 'live',
         observed_account_id: '9LIVE0001',
-        armed_instance_count: 1,
-        envelope_state: 'sealed',
-        envelope_agreement: 'agreed',
-        shadow_state: 'complete',
-        final_verdict: 'live-armed',
-        headline: 'LIVE account 9LIVE0001 — 1 instance armed, nothing submitted yet',
+        final_verdict: 'live',
+        headline: 'LIVE account 9LIVE0001 — review deployment budget, nothing submitted yet',
         detail: 'No path submits a real-money order in this slice.',
       }),
       lastError: null,
     });
     const status = screen.getByRole('status');
-    expect(status.className).toContain('is-live-armed');
+    expect(status.className).toContain('is-live');
     expect(status.textContent?.trim()).toBe('Live');
-    expect(status.getAttribute('aria-label')).toContain('1 armed');
+    expect(status.getAttribute('aria-label')).toContain('review deployment budget');
+    expect(status.getAttribute('aria-label')).not.toContain('armed');
     expect(status.textContent).not.toContain('9LIVE0001');
   });
 
@@ -393,24 +374,23 @@ describe('AlpacaLiveBannerComponent', () => {
     const liveAState: LaneVerdictState = {
       verdict: verdict({
         configured_mode: 'live',
-        final_verdict: 'live-unarmed',
-        headline: 'LIVE account — real money, no instance armed',
-        detail: 'Every order path refuses.',
+        final_verdict: 'live',
+        headline: 'LIVE account — real money, review deployment budget',
+        detail: 'Review a budget in Deploy before starting a bot.',
       }),
       lastError: null,
     };
     const liveBState: LaneVerdictState = {
       verdict: verdict({
         configured_mode: 'live',
-        final_verdict: 'live-armed',
-        armed_instance_count: 1,
-        headline: 'LIVE account — 1 instance armed',
+        final_verdict: 'live',
+        headline: 'LIVE account — review deployment budget',
         detail: 'No path submits yet.',
       }),
       lastError: null,
     };
     // A second live clerk on the same broker (ADR 0062 Phase 5) — liveA is
-    // unarmed and liveB is armed, but both still read the same pill word
+    // waiting for review and liveB is ready, but both read the same pill word
     // "Live", which is exactly the collision a raw lane count cannot see.
     await renderWith(liveA, liveAState, [paper, liveA, liveB], new Map([['clrk_live_b', liveBState]]));
 
@@ -424,7 +404,7 @@ describe('AlpacaLiveBannerComponent', () => {
     const live = testLane({ clerk_id: 'clrk_live', display_label: 'Live' });
     const booting = testLane({ clerk_id: 'clrk_booting', display_label: 'Booting' });
     const liveState: LaneVerdictState = {
-      verdict: verdict({ configured_mode: 'live', final_verdict: 'live-unarmed' }),
+      verdict: verdict({ configured_mode: 'live', final_verdict: 'live' }),
       lastError: null,
     };
     // `booting` is left at the default UNPOLLED_LANE_STATE ("Mode not yet

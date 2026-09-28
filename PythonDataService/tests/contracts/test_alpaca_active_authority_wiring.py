@@ -380,7 +380,7 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     # this seam, and its start/stop order is semantic -- it holds a second
     # projection handle on the repository, so it starts first and stops first.
     # Stated exactly once, in `_ordered_taps`, and read by all three sites.
-    assert source.count("(envelope_sync, hold_sync, sweep)") == 1, (
+    assert source.count("(fee_sync, envelope_sync, hold_sync, sweep)") == 1, (
         "the tap order belongs in one tuple; three hand-kept branch orders is "
         "what `_ordered_taps` exists to retire"
     )
@@ -391,7 +391,7 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     start_taps_body = source[
         source.index("def start_background_taps") : source.index("async def close")
     ]
-    assert start_taps_body.count("sweep=None)") >= 1, (
+    assert "sweep=None" in start_taps_body, (
         "`start_background_taps` must not start the reconciliation sweep, or "
         "the periodic sweep races the boot reconciliation pass"
     )
@@ -438,26 +438,6 @@ def test_the_shadow_composition_hands_the_envelope_the_live_read_port() -> None:
     )
 
 
-def test_the_shadow_composition_hands_the_sync_the_accounts_arming_ledger() -> None:
-    """ADR 0059 D3/R10, pinned structurally because the failure is a missing call.
-
-    Without the ledger the gate is unsealed forever, ``envelope_agreement`` can
-    never leave ``unsealed``, and ``LIVE_ENVELOPE_DISAGREEMENT`` can never be
-    refused -- and every unit test still passes.
-    """
-    shadow_source = (APPLICATION_ROOT / "broker/alpaca/clerk/shadow_authority.py").read_text(encoding="utf-8")
-    runtime_source = (APPLICATION_ROOT / "broker/alpaca/clerk/active_runtime.py").read_text(encoding="utf-8")
-
-    assert (
-        "arming_ledger=LiveArmingLedger(artifacts_root, live_account_id=account.account_id)" in shadow_source
-    ), (
-        "the shadow authority must build the arming ledger on the LIVE account id; the "
-        "shadow: custody namespace is not where an arming record lives"
-    )
-    assert "arming_ledger=arming_ledger," in runtime_source, (
-        "compose_repository_runtime must hand the arming ledger to LiveEnvelopeSync, or "
-        "the sealed envelope is never refreshed"
-    )
 
 
 def test_the_live_composition_binds_the_real_trade_port_and_both_gates() -> None:

@@ -16,6 +16,14 @@
     <div><dt>Data policy</dt><dd>{{ golden().validation_case.data_policy ? 'Recorded' : 'Not recorded' }}</dd></div>
     <div><dt>Parity group</dt><dd>{{ golden().validation_case.parity_group_id ?? 'No paired run' }}</dd></div>
   </dl>
+  @if (golden().evidence_applicability; as applicability) {
+    <section aria-label="Evidence applicability">
+      <h4>Evidence conventions · {{ applicability.status | receiptLabel }}</h4>
+      <p>{{ applicability.explanation }}</p>
+      <a routerLink="/strategy-lab" [queryParams]="{ run: golden().source_run_id }">Open saved configuration to rerun</a>
+      <p>Keep this baseline, inspect the new run and its parity comparison, then designate and explicitly review the new Golden case.</p>
+    </section>
+  }
   <app-golden-validation-scope [golden]="golden()" />
   <p class="golden-case__rationale"><strong>Baseline note:</strong> {{ golden().rationale }}</p>
 </article>

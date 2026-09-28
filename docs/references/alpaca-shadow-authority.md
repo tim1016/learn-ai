@@ -1,6 +1,12 @@
 # Alpaca shadow authority — the custody world, the session journal, the twin comparison, and the receipt
 
-**Status:** canonical for ADR 0059 slice 4 (2026-09-08). Lineage: live.
+**Status:** historical slice-4 provenance with current supersession (2026-09-27).
+Shadow remains an independently activated simulation authority with no-submit
+ports and shared simulated economics. PRD #2540 / #2547 removes its session
+journal, receipt, exclusively used paper-twin comparison, and sessions/receipt
+CLI commands. They grant no deployment permission and are not prerequisites.
+Configuration is the normal activation surface; the `activate` CLI recovery
+fallback remains. Historical descriptions below do not restore retired controls.
 
 ADR 0059 D2 says a live Alpaca account never gets a mutating Clerk until a sealed
 instance has proven itself. This note records what slice 4 built to make that

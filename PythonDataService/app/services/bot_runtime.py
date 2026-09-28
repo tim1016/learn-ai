@@ -1,4 +1,4 @@
-"""In-process bot task state, pause gating, and mode execution."""
+"""In-process bot task state, decision fencing, and mode execution."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from app.engine.strategy.signal_program import EvaluationMode
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeed
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_dry_run import DryRunActivityJournal
-from app.services.bot_runner_errors import RunAdmissionRefusedError, UnknownBotError
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
 from app.services.source_bar_ledger import SourceBarLedger
 
@@ -34,15 +33,15 @@ class ManagedBot:
     task: asyncio.Task[None] = field(repr=False)
     stop_reason_code: str | None = None
     finalized: bool = False
-    # A new managed run evaluates immediately; Pause is the only transition
+    # A new managed run evaluates immediately; Stop is the transition
     # that closes this gate.
     run_gate: asyncio.Event = field(default_factory=_open_run_gate, repr=False)
 
 
-class PauseAwareFeed:
-    """Progress the feed while a paused run is restricted to observation.
+class DecisionFenceFeed:
+    """Fence in-flight decisions when a run is being stopped.
 
-    A pause is deliberately not a stream backpressure mechanism.  Holding or
+    The stop fence is deliberately not a stream backpressure mechanism.  Holding or
     discarding source bars would make the next strategy decision depend on an
     operator's timing and leave retained-bar replay unable to reproduce the
     session.  The runner reads ``observe_only`` per closed bar and settles any
@@ -61,7 +60,7 @@ class PauseAwareFeed:
 
     @property
     def observe_only(self) -> bool:
-        """True only while the same live run remains paused."""
+        """True after Stop has closed the decision fence."""
         return not self._gate.is_set()
 
     async def stream_bars(
@@ -96,26 +95,6 @@ class PauseAwareFeed:
         return self._source.health(symbol)
 
 
-def require_live_managed_bot(
-    managed_bots: dict[str, ManagedBot],
-    broker: str,
-    strategy_instance_id: str,
-) -> ManagedBot:
-    """Return the exact live task that may accept same-run controls."""
-    managed = managed_bots.get(strategy_instance_id)
-    if managed is None or managed.task.done():
-        raise RunAdmissionRefusedError(
-            "The bot has no authoritatively live run.",
-            detail="Use Resume only after the prior run has terminal evidence.",
-        )
-    if managed.binding.broker != broker:
-        raise UnknownBotError(
-            f"Bot '{strategy_instance_id}' is not bound to broker '{broker}'.",
-            detail=f"The bot's binding carries broker '{managed.binding.broker}'.",
-        )
-    return managed
-
-
 async def execute_bot_run(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
@@ -124,8 +103,8 @@ async def execute_bot_run(
     instance_dir: Path,
     source_bars: SourceBarLedger | None,
 ) -> None:
-    """Execute one binding's configured mode behind its same-run pause gate."""
-    run_feed = PauseAwareFeed(feed, run_gate) if run_gate is not None else feed
+    """Execute one binding's configured mode behind its terminal stop fence."""
+    run_feed = DecisionFenceFeed(feed, run_gate) if run_gate is not None else feed
     if binding.mode == "trade":
         if source_bars is None:
             raise RuntimeError("Paper trade runs require their durable source-bar ledger.")

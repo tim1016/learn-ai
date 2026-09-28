@@ -20,7 +20,7 @@ import {
 import { type ResourceTarget, withCommand } from '../../../fleet/resource-target';
 import { laneFenceIsEnforceable, LANE_FENCE_UNENFORCEABLE_MESSAGE } from '../../../fleet/lane-fence';
 
-const UI_ACTIVATION_REASON = "Enable Paper access from the Alpaca Deploy page.";
+const UI_ACTIVATION_ACTION = "from the Alpaca Deploy page.";
 
 interface PaperAccessFailure {
   message: string;
@@ -134,7 +134,7 @@ export class DeployPaperAccessComponent {
       const plan = await this.panelService.preparePaperAccess(
         target,
         strategy.strategy_key,
-        UI_ACTIVATION_REASON,
+        `Enable ${this.modeLabel()} access ${UI_ACTIVATION_ACTION}`,
       );
       if (identity !== this.identity()) return;
       this.flow.set({ kind: "review", plan, target, strategyKey: strategy.strategy_key });
@@ -208,7 +208,7 @@ export class DeployPaperAccessComponent {
       }
     }
     return {
-      message: "Paper access could not be reviewed.",
+      message: `${this.modeLabel()} access could not be reviewed.`,
       explanation: "The data plane did not return a current approval plan.",
       nextAction: "Check connectivity, then try the review again.",
     };

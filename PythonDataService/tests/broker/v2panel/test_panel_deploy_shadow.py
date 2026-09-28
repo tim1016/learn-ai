@@ -109,7 +109,7 @@ def test_shadow_world_authors_shadow_and_dry_run_only(monkeypatch: pytest.Monkey
     assert view.account_mode == "live"
     assert view.account_label == f"Alpaca shadow · {LIVE_ACCT}"
     offered = {mode.mode: mode.availability for mode in view.execution_modes}
-    assert offered == {"dry_run": "available", "shadow": "available", "live": "planned"}
+    assert offered == {"dry_run": "available", "shadow": "available"}
     assert all("paper" not in strategy.admissible_modes for strategy in view.strategies)
     assert any("shadow" in strategy.admissible_modes for strategy in view.strategies)
     assert view.eligibility.eligible is True  # account_ready admits the shadow world
@@ -127,12 +127,12 @@ def _paper_view(monkeypatch: pytest.MonkeyPatch) -> AlpacaPaperDeployView:
     )
 
 
-def test_real_paper_world_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_real_paper_world_offers_paper_and_dry_run_only(monkeypatch: pytest.MonkeyPatch) -> None:
     view = _paper_view(monkeypatch)
 
     assert view.account_mode == "paper"
     assert view.account_label == f"Alpaca paper · {ACCT}"
-    assert {mode.mode for mode in view.execution_modes} == {"dry_run", "paper", "live"}
+    assert {mode.mode for mode in view.execution_modes} == {"dry_run", "paper"}
     assert any("paper" in strategy.admissible_modes for strategy in view.strategies)
 
 
@@ -281,7 +281,7 @@ def test_shadow_receipt_names_the_shadow_world_not_paper(monkeypatch: pytest.Mon
         "The deployment binding is durable; the shadow Clerk synthesizes every fill "
         "against this live account's real reads and submits nothing (ADR 0059 D2)."
     )
-    assert receipt.next_action == "Open the bot panel and verify the first synthesized shadow receipt."
+    assert receipt.next_action == "Open the bot panel and verify the first synthesized fill."
     prose = (receipt.message, receipt.explanation, receipt.next_action)
     assert not any("paper" in sentence.lower() for sentence in prose)
 

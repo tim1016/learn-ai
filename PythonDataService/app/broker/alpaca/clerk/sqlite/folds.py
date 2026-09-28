@@ -20,6 +20,9 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.account_risk import fold_account_risk_policy
+from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_version, fold_budget_authority_cutover
+from app.broker.alpaca.clerk.sqlite.budget_folds import fold_deploy_committed, fold_deploy_launched
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     FILL_QTY_EPSILON,
@@ -299,6 +302,8 @@ def _attach_command_receipt(
 
 
 def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    if authorization_version(conn) >= 2:
+        raise ValueError("Legacy Start cannot grant spending authority after budget cutover")
     facts = RunStartedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
@@ -329,6 +334,8 @@ def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
 
 
 def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.budget_folds import release_stopped_budget
+
     facts = RunStoppedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "UPDATE runs SET state = 'STOPPED', stopped_at_ms = ? WHERE run_id = ?",
@@ -350,6 +357,7 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         recorded_at_ms=payload["recorded_at_ms"],
     )
     _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload)
+    release_stopped_budget(conn, payload)
 
 
 def _fold_strategy_instance_retired(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -488,6 +496,22 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         "UPDATE commands SET effect_operation_id = ? WHERE command_id = ?",
         (payload["effect_operation_id"], payload["command_id"]),
     )
+    if facts.cash_reference_price is not None:
+        from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
+        from app.broker.alpaca.clerk.money import normalize_money
+        from app.broker.alpaca.clerk.sqlite.envelope_reservations import append_envelope_reservation_row
+
+        if type(facts.fee_provision_cents) is not int or facts.fee_provision_cents < 0:
+            raise ValueError("ENTER fee provision must be nonnegative integer cents")
+        if normalize_money(facts.cash_reference_price) <= 0:
+            raise ValueError("ENTER cash reference must be positive")
+        append_envelope_reservation_row(
+            conn, effect_operation_id=payload["effect_operation_id"],
+            reservation=EnvelopeReservation(
+                quantity=facts.leg["quantity"], reference_price=float(facts.cash_reference_price),
+                exact_reference_price=facts.cash_reference_price, fee_provision_cents=facts.fee_provision_cents,
+            ), reserved_at_ms=payload["recorded_at_ms"],
+        )
 
 
 def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -1519,10 +1543,29 @@ def _fold_account_hold_resolved_v9(conn: sqlite3.Connection, payload: dict[str, 
     )
 
 
+def _fold_fee_evidence(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import fold_fee_evidence
+
+    fold_fee_evidence(conn, payload)
+
+
+
+def _fold_simulation_baseline(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.simulated_account import fold_simulation_baseline
+
+    fold_simulation_baseline(conn, payload)
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
+DEFAULT_FOLD_REGISTRY.register("BUDGET_AUTHORITY_CUTOVER", fold_budget_authority_cutover)
+DEFAULT_FOLD_REGISTRY.register("FEE_EVIDENCE_OBSERVED", _fold_fee_evidence)
+DEFAULT_FOLD_REGISTRY.register("SIMULATION_SESSION_BASELINE", _fold_simulation_baseline)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_RETIRED", _fold_strategy_instance_retired)
 DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
+
+DEFAULT_FOLD_REGISTRY.register("DEPLOY_COMMITTED", fold_deploy_committed)
+DEFAULT_FOLD_REGISTRY.register("DEPLOY_LAUNCHED", fold_deploy_launched)
 DEFAULT_FOLD_REGISTRY.register("RUN_STOPPED", _fold_run_stopped)
 DEFAULT_FOLD_REGISTRY.register("COMMAND_REJECTED", _fold_command_rejected)
 DEFAULT_FOLD_REGISTRY.register("ENTER_ACCEPTED", _fold_enter_accepted)
@@ -1585,6 +1628,7 @@ def _fold_exit_terms_sealed(conn: sqlite3.Connection, payload: dict[str, Any]) -
     fold_exit_terms(conn, payload["strategy_instance_id"], ExitTerms.model_validate_json(payload["facts_json"]))
 
 
+DEFAULT_FOLD_REGISTRY.register("ACCOUNT_RISK_LIMITS_APPLIED", fold_account_risk_policy)
 DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_SEALED", _fold_exit_terms_sealed)
 DEFAULT_FOLD_REGISTRY.register("EXIT_TERMS_UPGRADE_COMPLETED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("EXIT_RECOVERY_EVALUATED", _fold_exit_recovery_evaluated)

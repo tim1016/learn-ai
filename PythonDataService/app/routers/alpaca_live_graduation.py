@@ -11,6 +11,7 @@ from app.schemas.alpaca_live_graduation import (
     LiveGraduationApplyRequest,
     LiveGraduationPlanView,
     LiveGraduationStatus,
+    ShadowActivationOutcome,
 )
 from app.services.alpaca_live_graduation import (
     AlpacaLiveGraduationService,
@@ -18,6 +19,7 @@ from app.services.alpaca_live_graduation import (
     get_alpaca_live_graduation_service,
     restart_after_graduation,
 )
+from app.services.alpaca_shadow_activation import ShadowActivationRefused, activate_shadow_from_configuration
 
 router = APIRouter(
     prefix="/api/brokers/alpaca/accounts/{account_id}/live-graduation",
@@ -86,3 +88,13 @@ async def apply_live_graduation(
     background_tasks.add_task(restart_after_graduation)
     return outcome
 
+
+
+@router.post("/shadow-activation", response_model=ShadowActivationOutcome, status_code=status.HTTP_202_ACCEPTED)
+async def activate_shadow_authority(account_id: AccountId, background_tasks: BackgroundTasks) -> ShadowActivationOutcome:
+    try:
+        outcome = await activate_shadow_from_configuration(account_id)
+    except ShadowActivationRefused as error:
+        _raise_refusal(LiveGraduationRefused(error.reason, str(error), error.next_action))
+    background_tasks.add_task(restart_after_graduation)
+    return outcome

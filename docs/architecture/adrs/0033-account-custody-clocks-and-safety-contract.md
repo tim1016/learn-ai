@@ -1,5 +1,13 @@
 # ADR 0033: Account custody clocks and the safety composition contract
 
+> **2026-09-27 lifecycle supersession:** Active Alpaca bots now use Deploy, Stop
+> and a fresh Deploy again. Pause, Continue and Resume described below are
+> historical; same-run feed/order recovery and guarded Flatten remain. See
+> [ADR 0038's lifecycle amendment](0038-alpaca-sole-bot-control-plane.md#2026-09-27-amendment-deploy-is-the-only-start-path).
+> The runner's per-bot restart-intensity refusal in Start admission is retired
+> with them: every Deploy is a fresh identity and nothing restarts on its own,
+> so no restart remains to throttle.
+
 **Status:** Accepted
 
 - **Date:** 2026-07-27

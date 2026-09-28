@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
 )
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
+    ExternalOrderResource,
     OrderResource,
     TransitionInput,
 )
@@ -705,6 +706,47 @@ async def _recover_fills_on_terminal_enters(
         )
 
 
+async def _refresh_external_order_evidence(
+    repo: ClerkSqliteRepository, *, broker_orders: list[BrokerOrder],
+    trade: BrokerTradePort, intake: ReentrantAsyncLock,
+) -> None:
+    """Refresh retained foreign obligations that disappeared from open orders.
+
+    A reviewed GTC can close outside any recent-history window. Its exact
+    identity lookup supplies positive terminal proof; absence or failure
+    leaves the retained obligation unknown. Acknowledgement changes neither
+    the worklist nor the economics. Broker I/O always stays outside intake.
+    """
+    in_snapshot = {order.order_id for order in broker_orders}
+    for known in await to_thread(repo.external_order_resources):
+        if (known.broker_order_id in in_snapshot
+                or (known.broker_state in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+                    and known.filled_quantity is not None)
+                or known.client_order_id == f"missing-client-order-id:{known.broker_order_id}"):
+            continue
+        try:
+            observed = await trade.get_order_by_client_order_id(known.client_order_id)
+        except BrokerError as exc:
+            logger.warning("could not refresh a retained external order", extra={
+                "action": "external_order_lookup_failed", "account_id": repo.account_id,
+                "broker_order_id": known.broker_order_id, "error": str(exc),
+            })
+            continue
+        if (observed is not None and observed.order_id == known.broker_order_id
+                and observed.client_order_id == known.client_order_id
+                and observed.observed_at_ms >= known.observed_at_ms):
+            await _under_intake(intake, _fold_external_order_lookup, repo, known, observed)
+
+
+def _fold_external_order_lookup(
+    repo: ClerkSqliteRepository, known: ExternalOrderResource, observed: BrokerOrder,
+) -> None:
+    # A trade-update or review may have arrived during the broker lookup.
+    # Preserve that newer evidence; the next pass can refresh it if needed.
+    if repo.external_order(known.external_order_id) == known:
+        observe_or_record_unfoldable(repo, order=observed)
+
+
 def _record_terminal_enter_lookup(
     repo: ClerkSqliteRepository, *, order_ref: str, trigger: Trigger
 ) -> None:
@@ -1037,6 +1079,8 @@ async def _reconcile_account_serialized(
     if snapshot is None:
         return AccountReconciliationResult(verdict="stale")
     broker_orders, broker_positions = snapshot
+
+    await _refresh_external_order_evidence(repo, broker_orders=broker_orders, trade=trade, intake=intake)
 
     await _under_intake(
         intake,

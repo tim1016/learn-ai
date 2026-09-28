@@ -19,7 +19,6 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.services.bot_runner import BotTaskRegistry
 from tests._helpers.bot_runner.custody import admission_guard_for
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -42,7 +41,6 @@ def _compose(
     registry = BotTaskRegistry(
         tmp_path / "runner",
         feed_resolver=lambda: feed,
-        restart_policy=RestartIntensityPolicy(threshold=100),
         boot_recovery_required=False,
         start_custody_guard=admission_guard_for(clerk),
         market_liveness=_tradable_market_liveness,

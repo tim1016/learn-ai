@@ -257,6 +257,7 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "override_explanation",
         "blocked_explanation",
         "params_schema",
+        "qualified_configuration",
     }
     assert strategy["validation_case_symbol"] == "SPY"
     assert strategy["validation_case_parameters"] == {}
@@ -306,12 +307,6 @@ async def test_deploy_view_is_closed_paper_only_contract(
             "label": "Paper",
             "availability": "available",
             "explanation": "Orders route only to the selected Alpaca paper account through the Clerk.",
-        },
-        {
-            "mode": "live",
-            "label": "Live",
-            "availability": "planned",
-            "explanation": "Live is unavailable on a paper account. Select a live account to deploy real-money bots.",
         },
     ]
     assert [row["preset"] for row in body["sizing_options"]] == [

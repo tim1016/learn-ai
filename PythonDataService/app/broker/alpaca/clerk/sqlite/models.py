@@ -150,6 +150,8 @@ class ExternalOrderResource:
     acknowledgement_sequence: int | None = None
     observation_recorded_at_ms: int | None = None
     acknowledgement_recorded_at_ms: int | None = None
+    broker_state: str | None = None
+    filled_quantity: float | None = None
 
 
 @dataclass(frozen=True)

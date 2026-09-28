@@ -173,3 +173,151 @@ async def test_synthetic_runtime_uses_the_runners_clock_for_broker_custody_and_s
             assert (await broker.get_clock_evidence()).observed_at_ms == clock()
     finally:
         await close_synthetic_clerk_runtimes()
+
+
+async def test_private_budget_seed_refreshes_preview_then_survives_runtime_release(tmp_path: Path, monkeypatch) -> None:
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_authority import SyntheticBindingAuthority
+    from app.services.broker_v2_panel import budget_deploy
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
+    sid = "private-budget"
+    clock = _TestClock(NOON)
+    consent = DeployBudgetConsent(committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic")
+    binding = _trade_binding(sid).model_copy(update={"mode": "dry_run", "sealed_account_id": f"sim:{sid}", "exit_terms": TERMS, "budget_consent": consent})
+    authority = SyntheticBindingAuthority(binding=binding, artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        runtime_in_use=lambda _: False, brokers={}, clock=clock)
+    try:
+        await authority.ensure_recoverable()
+        async with authority.runtime_for_projection() as runtime:
+            assert runtime.sqlite_repository.budget_authority_version() == 2
+            assert runtime.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(500)
+            authority.binding = binding.model_copy(update={"budget_consent": consent.model_copy(update={"committed_cents": 70_000})})
+            await authority.ensure_recoverable()
+            assert runtime.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(700)
+            runtime.clerk._quote_source = lambda symbol, now: SimpleNamespace(ask=100)
+            await runtime.clerk.register_strategy_run(authority.binding)
+            await runtime.clerk.record_deployment_launch(authority.binding)
+            await runtime.clerk.stop_strategy_run(strategy_instance_id=sid, run_id=binding.run_id, reason="owner_stop")
+            await runtime.envelope_sync.tick()
+            before = tuple(runtime.sqlite_repository.custody_transitions())
+        await authority.release_if_unused()
+        clock.advance(86_400_000)
+        # Restart has no transient consent: custody's one stored commitment
+        # is the initial cash source and the command remains a read.
+        authority.binding = binding.model_copy(update={"budget_consent": None})
+        monkeypatch.setattr(budget_deploy, "_primary", lambda account: object())
+        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: SimpleNamespace(
+            binding_for_control=lambda broker, identity: authority.binding,
+            synthetic_runtime_for_projection=lambda _: authority.runtime_for_projection(),
+        ))
+        receipt = await budget_deploy.command_receipt("PARENT", sid)
+        assert receipt.status == "deployed" and receipt.committed_usd == "700.00"
+        async with authority.runtime_for_projection() as recovered:
+            assert tuple(recovered.sqlite_repository.custody_transitions()) == before
+            assert recovered.envelope_sync.risk_snapshot().observation is None
+            assert recovered.envelope_sync._task is None
+            assert recovered.sqlite_repository.active_run(sid) is None
+            assert len([item for item in recovered.sqlite_repository.custody_transitions() if item["transition_kind"] == "DEPLOY_COMMITTED"]) == 1
+    finally:
+        await close_synthetic_clerk_runtimes()
+
+
+async def test_projection_cannot_activate_a_new_private_authority_or_prepare_consent(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_authority import SyntheticBindingAuthority
+
+    sid = "unactivated-read"
+    binding = _trade_binding(sid).model_copy(update={
+        "mode": "dry_run", "budget_consent": DeployBudgetConsent(
+            committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="review", world="synthetic",
+        ),
+    })
+    authority = SyntheticBindingAuthority(binding=binding, artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        runtime_in_use=lambda _: False, brokers={})
+    async with authority.runtime_for_projection() as runtime:
+        assert runtime.clerk is None
+        assert runtime.startup_failure.reason_code == "SYNTHETIC_ACTIVATION_REQUIRED"
+    assert SyntheticActivationStore(tmp_path).latest(authority.account_id) is None
+    assert not (tmp_path / "accounts" / "alpaca" / authority.account_id / "clerk.db").exists()
+
+
+async def test_cold_projection_and_concurrent_start_share_lifecycle_fence(tmp_path: Path) -> None:
+    import asyncio
+    from decimal import Decimal
+
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_authority import BindingAuthoritySelector
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+
+    sid = "projection-start-race"
+    binding = _trade_binding(sid).model_copy(update={
+        "mode": "dry_run", "sealed_account_id": f"sim:{sid}", "budget_consent": DeployBudgetConsent(
+            committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="review", world="synthetic",
+        ),
+    })
+    selector = BindingAuthoritySelector(artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        real_projector=cast(AlpacaLifecycleProjector, object()), external_start_guard=None,
+        runtime_in_use=lambda _: False, clock=_TestClock(NOON))
+    owner = selector.for_binding(binding)
+    await owner.ensure_recoverable()
+    await owner.release_if_unused()
+    read = selector.for_binding(binding.model_copy(update={"budget_consent": None}))
+    starter = selector.for_binding(binding)
+    try:
+        async with read.runtime_for_projection() as cold:
+            assert cold.envelope_sync.risk_snapshot().observation is None
+            starting = asyncio.create_task(starter.ensure_recoverable())
+            await asyncio.sleep(0)
+            assert not starting.done()
+            assert get_clerk_runtime(f"sim:{sid}") is cold
+        await asyncio.wait_for(starting, timeout=5)
+        hot = get_clerk_runtime(f"sim:{sid}")
+        assert hot is not None and hot is not cold
+        assert hot.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(500)
+        assert hot.envelope_sync._task is not None and not hot.envelope_sync._task.done()
+        # A later projection of an active runtime neither closes nor replaces its cadence.
+        async with selector.for_binding(binding).runtime_for_projection() as projected:
+            assert projected is hot
+        assert get_clerk_runtime(f"sim:{sid}") is hot
+        assert not hot.envelope_sync._task.done()
+    finally:
+        await close_synthetic_clerk_runtimes()
+
+
+async def test_admission_promotes_a_cold_projection_before_it_becomes_in_use(tmp_path: Path) -> None:
+    from decimal import Decimal
+
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_authority import BindingAuthoritySelector
+    from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+
+    sid = "promoted-projection"
+    binding = _trade_binding(sid).model_copy(update={"mode": "dry_run", "budget_consent": DeployBudgetConsent(
+        committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="review", world="synthetic",
+    )})
+    in_use = False
+    selector = BindingAuthoritySelector(artifacts_root=tmp_path, lifecycle_repo_for=lambda _: None,
+        real_projector=cast(AlpacaLifecycleProjector, object()), external_start_guard=None,
+        runtime_in_use=lambda _: in_use, clock=_TestClock(NOON))
+    owner = selector.for_binding(binding)
+    await owner.ensure_recoverable()
+    await owner.release_if_unused()
+    try:
+        async with selector.for_binding(binding).runtime_for_projection() as runtime:
+            assert runtime.envelope_sync._task is None
+            await selector.for_binding(binding).ensure_recoverable()
+            in_use = True
+            assert runtime.envelope_sync.risk_snapshot().observation.cash_available_usd == Decimal(500)
+        assert get_clerk_runtime(f"sim:{sid}") is runtime
+        assert runtime.envelope_sync._task is not None and not runtime.envelope_sync._task.done()
+    finally:
+        await close_synthetic_clerk_runtimes()

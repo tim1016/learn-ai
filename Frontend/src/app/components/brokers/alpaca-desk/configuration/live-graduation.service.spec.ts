@@ -43,6 +43,15 @@ describe('LiveGraduationService', () => {
     request.flush({});
   });
 
+  it('activates Shadow through the selected lane with no caller-authored evidence', () => {
+    void service.activateShadow(TARGET);
+    const request = http.expectOne(`${BASE}/shadow-activation`);
+    expect(request.request.method).toBe('POST');
+    expect(Object.keys(request.request.body)).toEqual(['command_context']);
+    expect(request.request.body.command_context.target).toEqual({ account_id: ACCOUNT });
+    request.flush({});
+  });
+
   it('prepares through a custody command envelope with no caller-authored evidence', () => {
     void service.prepare(TARGET);
 

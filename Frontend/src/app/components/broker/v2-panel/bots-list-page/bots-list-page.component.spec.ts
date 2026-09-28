@@ -51,7 +51,7 @@ async function renderPage(
       overrides.runBotAction ??
       vi.fn(() =>
         Promise.resolve({
-          action_id: 'resume',
+          action_id: 'stop',
           applied: true,
           revision: 1,
           concurrency_token: 'next-token',
@@ -383,32 +383,32 @@ describe('BotsListPageComponent', () => {
 
   it('toasts the backend-authored reason and refreshes the fleet on a rejected action', async () => {
     const view = await renderPage([fakeCatalogBot()], {
-      panelActions: [fakePanelAction('resume')],
+      panelActions: [fakePanelAction('stop')],
     });
     view.mockPanelService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 409,
         error: {
           detail: {
-            action_id: 'resume',
+            action_id: 'stop',
             outcome: 'conflict',
             receipt_id: null,
             recorded_at_ms: 1_700_000_000_000,
-            message: 'This bot is no longer ready to resume.',
+            message: 'This bot is no longer ready to stop.',
             why: 'Its custody state changed after this button was shown.',
           },
         },
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
 
     await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
     expect(view.mockMessageService.add).toHaveBeenCalledWith(
       expect.objectContaining({
         severity: 'warn',
         detail:
-          'This bot is no longer ready to resume. Its custody state changed after this button was shown.',
+          'This bot is no longer ready to stop. Its custody state changed after this button was shown.',
       }),
     );
   });

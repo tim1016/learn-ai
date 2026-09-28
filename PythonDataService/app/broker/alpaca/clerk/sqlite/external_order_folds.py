@@ -46,6 +46,10 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
         raise ValueError("external order side must be BUY or SELL")
     if not math.isfinite(facts.qty) or facts.qty < 0:
         raise ValueError("external order quantity must be finite and non-negative")
+    if facts.filled_quantity is not None and (
+        not math.isfinite(facts.filled_quantity) or facts.filled_quantity < 0
+    ):
+        raise ValueError("external filled quantity must be finite and non-negative")
     if not facts.order_type:
         raise ValueError("external order type must be non-empty")
     for price_name, price in (

@@ -4,7 +4,7 @@ import type { LaneVerdictState } from '../services/alpaca-live-verdict.service';
 /** One server-shaped verdict for any final verdict value. The fields are
  * inert fixture values; `final_verdict` varies because that is the field
  * every consumer branches on, and `overrides` names the few others a
- * particular consumer reads (armed count, shadow authority). */
+ * particular consumer reads (readiness, shadow authority). */
 export function fakeAlpacaLiveVerdict(
   finalVerdict: AlpacaLiveVerdict['final_verdict'],
   overrides: Partial<AlpacaLiveVerdict> = {},
@@ -13,12 +13,10 @@ export function fakeAlpacaLiveVerdict(
     configured_mode: finalVerdict === 'paper' ? 'paper' : 'live',
     observed_account_id: null,
     mode_agreement: 'agreed',
-    clerk_authority: 'sqlite',
+    clerk_authority: finalVerdict === 'shadow' ? 'shadow' : 'sqlite',
     clerk_refusal_reason_code: null,
-    armed_instance_count: 0,
-    envelope_state: 'not_applicable',
-    envelope_agreement: 'not_applicable',
-    shadow_state: 'not_applicable',
+    budget_authority_version: 2,
+    deployment_readiness: 'ready',
     loss_hold: 'not_applicable',
     final_verdict: finalVerdict,
     headline: 'fixture verdict',

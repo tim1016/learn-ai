@@ -38,6 +38,39 @@ describe('BrokerV2PanelService run evidence', () => {
 
   afterEach(() => http.verify());
 
+  it('routes a read-only budget preview and preserves the consent string in the command envelope', async () => {
+    const body = {
+      strategy_instance_id: 'sid-001', strategy_key: 'deployment_validation' as const, symbol: 'SPY', execution_mode: 'paper' as const,
+      sizing: { preset: 'safe_canary' as const, quantity: 1 }, carryover_policy: 'FORBID' as const,
+      exit_terms: { exit_allowance_bps: 10, band_multiple: 2, spread_cap_bps: 10 },
+      budget: { amount_usd: '1234.56', risk_revision: 7, review_token: 'review-proof' },
+    };
+    const preview = service.previewBudget(target('PA9'), body);
+    const read = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/budget-preview');
+    expect(read.request.body).toEqual(body);
+    read.flush({ state: 'ready', review_token: 'review-proof' });
+    await preview;
+    const command = service.deployBudgetBot(target('PA9'), body);
+    const write = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots');
+    expect(write.request.body.budget).toEqual(body.budget);
+    expect(write.request.body.command_context.idempotency_key).toBe('command-key-1');
+    write.flush({ status: 'pending', committed_usd: '1234.56' });
+    await expect(command).resolves.toMatchObject({ status: 'pending', committed_usd: '1234.56' });
+  });
+
+  it('reads budget and durable deployment status through the selected account and escaped bot identity', async () => {
+    const budget = service.getBudget(target('PA9'), 'sid/1');
+    const money = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/budget');
+    expect(money.request.method).toBe('GET');
+    money.flush({ state: 'unavailable', free_usd: null });
+    await expect(budget).resolves.toMatchObject({ free_usd: null });
+    const command = service.getDeployCommand(target('PA9'), 'sid/1');
+    const status = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/deploy-command');
+    expect(status.request.method).toBe('GET');
+    status.flush({ status: 'pending' });
+    await expect(command).resolves.toMatchObject({ status: 'pending' });
+  });
+
   it('loads the current run from the clerk-scoped run endpoint', async () => {
     const response = service.getCurrentRun(
       resourceTarget('alpaca paper', CLERK, { accountId: 'account/1', entityId: 'sid/001' }),
@@ -309,19 +342,11 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     confirmation: null,
   };
 
-  // `resume`'s token additionally derives from resume-admission evidence
-  // (configuration_hash, evidence_refs) that can legitimately change while
-  // `allowed` — and so `enabled` — stays true, so unlike Stop it CAN be
-  // re-offered enabled with a different token after a 409.
-  const staleResume: PanelAction = {
-    action_id: 'resume',
-    revision: 1,
-    concurrency_token: 'tok-stale',
-    enabled: true,
-    label: 'Resume',
-    explanation: '',
-    blockers: [],
-    confirmation: null,
+  // A recovery action can remain available with a new evidence token.
+  const staleRecovery: PanelAction = {
+    action_id: 'resolve_execution_coverage', revision: 1,
+    concurrency_token: 'tok-stale', enabled: true,
+    label: 'Resolve execution coverage', explanation: '', blockers: [], confirmation: null,
   };
 
   const staleFlattenStop: PanelAction = {
@@ -351,7 +376,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     ({ detail: { message: 'stale' } });
 
   it('refetches a fresh token and retries once when a transient 409 clears (unconfirmed action)', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleResume);
+    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleRecovery);
 
     const first = http.expectOne(ACTIONS_URL);
     const firstIdempotencyKey = (first.request.body as {
@@ -361,7 +386,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     await tick();
 
     http.expectOne(PANEL_URL).flush({
-      actions: [{ ...staleResume, concurrency_token: 'tok-fresh' }],
+      actions: [{ ...staleRecovery, concurrency_token: 'tok-fresh' }],
     });
     await tick();
 
@@ -372,13 +397,13 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     // token, so a transport retry cannot execute a second lifecycle action.
     expect(retry.request.body.idempotency_key).toBe(firstIdempotencyKey);
     retry.flush({
-      action_id: 'resume',
+      action_id: 'resolve_execution_coverage',
       receipt_id: 'r-1',
       recorded_at_ms: 1,
       applied: true,
       revision: 2,
       concurrency_token: 'tok-fresh',
-      message: 'resumed',
+      message: 'Recovered',
     });
 
     await expect(promise).resolves.toMatchObject({ receipt_id: 'r-1' });
@@ -439,7 +464,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     http.expectNone(PANEL_URL);
   });
 
-  it('sends a stop on the quiesce operation a draining lane routes, and a resume on /actions', async () => {
+  it('sends a stop on the quiesce operation a draining lane routes, and recovery on /actions', async () => {
     const stop = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleStop);
     const stopRequest = http.expectOne(QUIESCE_URL);
     expect(stopRequest.request.method).toBe('POST');
@@ -447,12 +472,12 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     stopRequest.flush({ action_id: 'stop', receipt_id: 'r-stop', recorded_at_ms: 1, applied: true });
     await expect(stop).resolves.toMatchObject({ receipt_id: 'r-stop' });
 
-    const resume = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleResume);
+    const recovery = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleRecovery);
     http.expectNone(QUIESCE_URL);
     http
       .expectOne(ACTIONS_URL)
-      .flush({ action_id: 'resume', receipt_id: 'r-resume', recorded_at_ms: 1, applied: true });
-    await expect(resume).resolves.toMatchObject({ receipt_id: 'r-resume' });
+      .flush({ action_id: 'resolve_execution_coverage', receipt_id: 'r-stop', recorded_at_ms: 1, applied: true });
+    await expect(recovery).resolves.toMatchObject({ receipt_id: 'r-stop' });
   });
 
   const request = (actionId: PanelActionRequest['action_id']): PanelActionRequest => ({
@@ -482,7 +507,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     await expect(pending).resolves.toMatchObject({ action_id: actionId });
   });
 
-  it.each(['resume', 'continue', 'pause', 'resolve_execution_coverage', 'retire'] as const)(
+  it.each(['resolve_execution_coverage', 'retire'] as const)(
     'sends %s on /actions, which a draining lane refuses',
     async (actionId) => {
       const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request(actionId));
@@ -524,7 +549,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
       routingEpoch: 4,
     });
 
-    await expect(service.runBotAction(unkeyed, 'sid-1', staleResume))
+    await expect(service.runBotAction(unkeyed, 'sid-1', staleRecovery))
       .rejects.toThrow(/interaction owner/i);
     http.expectNone(ACTIONS_URL);
   });

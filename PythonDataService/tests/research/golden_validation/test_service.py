@@ -601,3 +601,45 @@ async def test_only_python_runs_can_be_designated_and_linked_runs_are_retained(c
     assert accepted.state == "accepted_engine_agreement"
     assert await backtest_repo.delete_run(conn, left) == "golden_validation_evidence"
     assert await backtest_repo.delete_run(conn, right) == "golden_validation_evidence"
+
+
+@pytest.mark.parametrize("provenance", [None, {
+    "schema_version": 1, "data_contract": "spec_local_zip_partial/v1",
+    "statistics_basis": "paired_realized_trade_ledger/v1",
+    "daily_return_convention": "platform_skip_first_session/v1",
+}])
+async def test_unknown_or_affected_conventions_need_deliberate_override_and_freeze_it(conn, unique: str, provenance) -> None:
+    payload = engine_payload(symbol=unique, evidence_provenance_json=None if provenance is None else json.dumps(provenance))
+    run_id = await _run(conn, payload)
+    designated = await _designate(conn, run_id, unique)
+    original_case = designated.golden_run.validation_case_json
+    arguments = dict(
+        golden_run_id=designated.golden_run.id, command_id=f"risk-review-{unique}",
+        expected_evidence_revision=designated.evidence.revision, decision="accept",
+        reason="I accept these recorded limitations for this exact configuration.",
+        quantconnect_backtest_id=None, authorized_program_version=None, actor="test:reviewer",
+    )
+    with pytest.raises(service.GoldenRunIneligibleError, match="Manual override"):
+        await service.review(conn, **arguments)
+    accepted = await service.review(conn, **arguments, acknowledge_provenance_risk=True)
+    assert accepted.latest_review.classification == "manual_override"
+    assert accepted.review_is_current is True
+    assert json.loads(accepted.latest_review.evidence_json)["acknowledge_provenance_risk"] is True
+    assert accepted.golden_run.validation_case_json == original_case
+    assert accepted.validation_case["evidence_provenance"] == (None if provenance is None else {**provenance, "data_availability_hash": None})
+    repeated = await service.review(conn, **arguments, acknowledge_provenance_risk=True)
+    assert repeated.latest_review.id == accepted.latest_review.id
+    with pytest.raises(service.CommandConflictError):
+        await service.review(conn, **arguments)
+
+
+async def test_rerunning_does_not_mutate_or_accept_the_old_baseline(conn, unique: str) -> None:
+    old = await _designate(conn, await _run(conn, engine_payload(symbol=unique, evidence_provenance_json=None)), unique)
+    rerun = await _designate(conn, await _run(conn, engine_payload(symbol=unique)), unique + "-rerun")
+    assert old.golden_run.id != rerun.golden_run.id
+    assert old.evidence_applicability.status == "unknown"
+    assert rerun.evidence_applicability.status == "current"
+    assert rerun.latest_review is None
+    preserved = await service.get_dossier(conn, old.golden_run.id)
+    assert preserved.validation_case == old.validation_case
+    assert preserved.reviews == old.reviews

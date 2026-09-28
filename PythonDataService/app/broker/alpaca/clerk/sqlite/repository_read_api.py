@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.sqlite import envelope_reservations, reads, writes
@@ -30,7 +31,9 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.budgets import AccountBudget
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.services.alpaca_fee_attribution import FeeAttribution
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +57,12 @@ class SqliteLifecycleRecoveryCandidate:
 
 class ClerkSqliteRepositoryReadApi:
     """Read-only public methods mixed into :class:`ClerkSqliteRepository`."""
+
+    def budget_authority_version(self: ClerkSqliteRepository) -> int:
+        from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_version
+
+        with self._write_lock:
+            return authorization_version(self._conn)
 
     def get_command(self: ClerkSqliteRepository, command_id: str) -> CommandResource | None:
         """Return one command through the shared committed-read coordinator."""
@@ -411,6 +420,11 @@ class ClerkSqliteRepositoryReadApi:
                 for order in reads.external_orders(self._conn)
             ]
 
+    def external_order_resources(self: ClerkSqliteRepository) -> tuple[ExternalOrderResource, ...]:
+        """Retained external evidence, including current lifecycle proof for reconciliation."""
+        with self._write_lock:
+            return tuple(reads.external_orders(self._conn))
+
     def external_orders_observed_since(self: ClerkSqliteRepository, *, since_ms: int) -> int:
         """Count foreign orders observed at or after ``since_ms`` (ADR 0059 D4)."""
         with self._write_lock:
@@ -743,3 +757,31 @@ class ClerkSqliteRepositoryReadApi:
             return envelope_reservations.reserved_cash_usd(
                 self._conn, seen_before_ms=seen_before_ms
             )
+
+    def reserved_cash_decimal(self: ClerkSqliteRepository, *, seen_before_ms: int) -> Decimal:
+        """Canonical exact claim total for cash admission, under the write fence."""
+        with self._write_lock:
+            return envelope_reservations.reserved_cash_decimal(self._conn, seen_before_ms=seen_before_ms)
+
+    def deployment_budget(self: ClerkSqliteRepository, strategy_instance_id: str) -> dict | None:
+        """Immutable consent and its durable launch/release outcome."""
+        with self._write_lock:
+            row = self._conn.execute("SELECT * FROM deployment_budgets WHERE strategy_instance_id=?", (strategy_instance_id,)).fetchone()
+            return None if row is None else dict(row)
+
+    def fee_attribution(self: ClerkSqliteRepository, *, now_ms: int) -> FeeAttribution:
+        """The canonical custody fee projection, fresh only while this process's producer is."""
+        from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
+
+        with self._write_lock:
+            return custody_fee_attribution(
+                self._conn, now_ms=now_ms, evidence_checked_at_ms=self._fee_evidence_checked_at_ms
+            )
+
+    def account_budget(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountBudget:
+        """One revision-coherent money authority for preview and admission."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget
+
+        with self._write_lock:
+            fees = self.fee_attribution(now_ms=self.clock())
+            return project_account_budget(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)

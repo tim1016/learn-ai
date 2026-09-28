@@ -79,7 +79,7 @@ _FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 # action omitted here is silently deleted on the way to Angular however
 # completely its guard, performer and lens are wired -- which is exactly what
 # happened to `retire` (#1778, S5).
-SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume", "retire", "archive"})
+SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"retire", "archive"})
 
 
 def adapt_sqlite_panel(

@@ -126,3 +126,17 @@ def test_a_missing_trade_quantity_defaults_to_one_share() -> None:
     record = record_from_payload(engine_payload(trades=[{**trade(), "quantity": None}]))
 
     assert record.trades[0].quantity == 1.0
+
+
+def test_imports_without_producer_conventions_remain_unknown_and_malformed_metadata_refuses() -> None:
+    legacy = engine_payload()
+    legacy.pop("evidence_provenance_json")
+    assert record_from_payload(legacy).evidence_provenance_json is None
+    with pytest.raises(RunPayloadError, match="producer conventions"):
+        record_from_payload(engine_payload(evidence_provenance_json='{"schema_version":1}'))
+
+
+def test_recorded_conventions_survive_the_persistence_boundary() -> None:
+    payload = engine_payload()
+    record = record_from_payload(payload)
+    assert json.loads(record.evidence_provenance_json)["daily_return_convention"] == "initial_capital_first_session/v1"

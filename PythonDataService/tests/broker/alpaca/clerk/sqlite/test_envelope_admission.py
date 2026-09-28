@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     LiveEnvelopeGate,
     LiveEnvelopeValues,
 )
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
@@ -51,6 +52,9 @@ def _gate(
             equity_usd=cash,
             last_equity_usd=cash,
             position_count=0,
+            risk_cash_flow_evidence_complete=True,
+            risk_cash_flow_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
+            risk_equity_window_start_ms=day_pnl_window_start_ms(observed_at_ms),
         )
     )
     return gate
@@ -108,6 +112,18 @@ def test_a_market_enter_beyond_cash_is_refused_and_nothing_is_written(
     assert "100100.00 USD" in (exc_info.value.decision.why or "")
     assert envelope_repo.control_meta_snapshot().control_revision == before
     assert envelope_repo.reserved_cash_usd(seen_before_ms=T0) == 0.0
+
+
+def test_fractional_cent_shortage_is_refused_without_float_tolerance(
+    envelope_repo: ClerkSqliteRepository, active_instance: tuple[str, str]
+) -> None:
+    sid, run_id = active_instance
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        _accept(
+            envelope_repo, sid, run_id, decision_id="exact-cash",
+            leg=_leg(quantity=1), envelope=_gate(cash=100), reference_price=100.0000000001,
+        )
+    assert _refusal(exc_info) == LIVE_ENVELOPE_CASH_EXCEEDED
 
 
 def test_two_instances_cannot_spend_the_same_cash(

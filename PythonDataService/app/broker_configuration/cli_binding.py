@@ -1,10 +1,9 @@
 """Resolving the effective broker revision from an operator CLI.
 
-The three ``manage_alpaca_*`` ceremonies are not the worker. They are separate
+The remaining ``manage_alpaca_*`` recovery tools are not the worker. They are separate
 processes where ``app/main.py``'s lifespan has installed no binding, so each has
 to resolve one itself — and they must resolve the *same* revision the worker
-would, or an operator could arm one configuration while the service runs
-another.
+would, so recovery cannot target a different configuration from the running service.
 
 They deliberately resolve **less** than
 :func:`~app.broker_configuration.worker_binding.resolve_worker_binding`: they
@@ -21,8 +20,7 @@ recovery tool, importing the arming ceremony to borrow it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from app.broker.alpaca.active_binding import (
@@ -88,15 +86,6 @@ def _installed_profiles_service() -> BrokerConfigurationService | None:
     return broker_configuration_runtime.get_broker_configuration_service()
 
 
-@contextmanager
-def arming_configuration_handover() -> Iterator[None]:
-    """Keep CLI resolution and append on one effective selection during Apply."""
-    service = _installed_profiles_service()
-    if service is None:
-        yield
-        return
-    with service.selection_handover():
-        yield
 
 
 def _unbound_from(exc: BrokerConfigurationError) -> UnboundBroker:
@@ -171,7 +160,7 @@ def effective_broker(
     # Same gate as the worker's, in the same place relative to ``decide``: this
     # installation has cut over, so a variable the profiles database replaced is
     # stale. Without it here, the operator CLIs would keep answering on an
-    # installation the worker itself refuses to bind -- and an arming ceremony
+    # installation the worker itself refuses to bind -- and a recovery operation
     # is the last place two resolvers should disagree about what is in force.
     stale_refusal = retired_environment_refusal()
     if stale_refusal is not None:
@@ -203,7 +192,7 @@ def effective_alpaca_settings(
     """:func:`effective_broker`'s settings, for the callers with no staged check.
 
     The shadow and SQLite-Clerk CLIs read one scalar apiece off the effective
-    revision and have no arming ceremony to gate, so they take this shape rather
+    revision and do not mutate deployment permission, so they take this shape rather
     than restating the resolution.
     """
     return effective_broker(service_factory=service_factory).settings
@@ -215,38 +204,3 @@ __all__ = [
     "effective_alpaca_settings",
     "effective_broker",
 ]
-
-
-def require_arming_the_effective_revision(selection: InstallationSelection | None) -> None:
-    """Arm the effective revision only, never a merely staged one (D3, D5).
-
-    A staged revision governs nothing until the operator presses Apply and the
-    worker binds it. Sealing one anyway would put the arming record in
-    ``LIVE_ENVELOPE_DISAGREEMENT`` against the envelope the running worker is
-    actually enforcing -- and would look armed until it did. The refusal names
-    both revisions, because the operator's next question is always which of the
-    two they were looking at.
-
-    ``status`` and ``disarm`` are deliberately not gated: reading the state and
-    revoking a permission are exactly what an operator needs while a change is
-    pending, and neither seals anything.
-    """
-    from app.broker.alpaca.clerk.live_arming import LiveArmingRefused
-
-    if selection is None:
-        return
-    # Both halves, the same guard ``binding_decision.decide`` applies: a row
-    # naming no exact revision is not a staged revision to disagree with.
-    if selection.staged_profile_id is None or selection.staged_revision is None:
-        return
-    staged = (selection.staged_profile_id, selection.staged_revision)
-    effective = (selection.effective_profile_id, selection.effective_revision)
-    if staged == effective:
-        return
-    raise LiveArmingRefused(
-        "LIVE_ARMING_REVISION_STAGED",
-        f"broker configuration {revision_reference(*staged)} is staged but "
-        f"{revision_reference(*effective)} is effective; this ceremony arms the effective "
-        "revision only. Apply the staged revision and restart the service, or stage the "
-        "effective one again, then plan.",
-    )

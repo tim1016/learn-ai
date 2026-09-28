@@ -18,8 +18,8 @@ Two steps, because the six numbers being imported bound real money::
 written. The token is the plan's own content hash, so a plan file whose numbers
 were edited no longer verifies.
 
-Run it against the Clerk volume, in the data-plane image, exactly as the arming
-and shadow CLIs are run (see ``docs/references/alpaca-credential-slots.md``
+Run it against the Clerk volume, in the data-plane image, exactly as the shadow
+CLI is run (see ``docs/references/alpaca-credential-slots.md``
 § "Cutting over")::
 
     podman compose run --rm --no-deps python-service \
@@ -120,7 +120,7 @@ class ConfigurationOperatorRefusal(ValueError):
 
     Distinct from ``ConfigurationImportRefused``, which is the *ceremony*
     refusing something it understood. A plan file that is not a plan is exit 1;
-    a plan that no longer verifies is exit 2. Same split the arming CLI makes.
+    a plan that no longer verifies is exit 2.
     """
 
 
@@ -178,8 +178,7 @@ def _plan(args: argparse.Namespace) -> int:
     )
     atomic_write_json(args.plan_out, jsonable(plan))
     # Printed beside the plan, never written into it: these are what the operator
-    # does next, not content the token attests to. Same split the arming CLI
-    # makes for its before-after envelope diff.
+    # does next, not content the token attests to.
     _write(
         {
             "plan": plan,

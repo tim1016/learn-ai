@@ -1071,3 +1071,34 @@ def test_reconcilable_effect_operations_scope_to_one_custody_subject(
     assert healthy == []
 
     repo.close()
+
+
+@pytest.mark.parametrize("first_module", [
+    "app.broker_configuration.envelope",
+    "app.broker.alpaca.clerk.live_envelope",
+    "app.broker.alpaca.clerk.sqlite.uncertainty_causes",
+    "app.broker.alpaca.clerk.sqlite",
+])
+def test_public_repository_exports_survive_pure_module_first_import(first_module: str) -> None:
+    """A fresh interpreter must not depend on pytest's earlier import order."""
+    import subprocess
+    import sys
+
+    probe = """
+import importlib
+import sys
+importlib.import_module(sys.argv[1])
+assert 'app.broker.alpaca.clerk.sqlite.repository' not in sys.modules
+from app.broker.alpaca.clerk import sqlite
+from app.broker.alpaca.clerk.sqlite import models, reads, repository
+for name in sqlite.__all__:
+    owner = models if hasattr(models, name) else repository
+    assert getattr(sqlite, name) is getattr(owner, name), name
+assert reads is importlib.import_module('app.broker.alpaca.clerk.sqlite.reads')
+assert not hasattr(sqlite, 'unknown_repository_export')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe, first_module],
+        cwd=Path(__file__).resolve().parents[5], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

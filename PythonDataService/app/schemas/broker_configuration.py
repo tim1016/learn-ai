@@ -42,9 +42,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
+from app.broker_configuration.envelope import (
+    InvalidLiveEnvelope,
+    ValidatedLiveEnvelope,
+    ValidatedPaperAllowances,
+    require_whole_cent_loss_cap,
+)
 from app.broker_configuration.records import (
     AccountNickname,
     AlpacaDeskState,
@@ -81,35 +86,24 @@ class _Response(BaseModel):
 
 
 class LiveEnvelopePayload(BaseModel):
-    """The six values, named exactly as ``LiveEnvelopeValues`` names them.
+    """The four current account bounds; retired session counts are rejected.
 
-    The mapping to the dataclass is an identity, so no rename layer can drift
-    (contract §2.4). The bounds restate ``AlpacaSettings``' domain for an early,
-    field-level 422; ``ValidatedLiveEnvelope`` enforces the same domain again on
-    every path into storage, which is where the rule actually lives.
-
-    ``strict=True`` is load-bearing, not tidiness. In Pydantic's default lax
-    mode this DTO sits *in front* of ``ValidatedLiveEnvelope`` and normalises
-    before it: ``{"shadow_sessions": true}`` would arrive as ``1`` and the
-    by-name ``int`` check downstream would never see the boolean it exists to
-    refuse — a real-money session count silently minted from ``true``. Strict
-    ``int`` refuses ``True``, ``1.0`` and ``"3"``; strict ``float`` still
-    accepts an ``int`` and widens it, which is exactly what ``AlpacaSettings``'
-    ``float`` annotation does with ``5000``.
+    Historical revisions retain their full hash-bearing representation in storage.
+    The configuration API projects only the fields a trader can currently edit.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     loss_fraction: float = Field(gt=0, lt=1, allow_inf_nan=False)
     loss_usd: float = Field(gt=0, allow_inf_nan=False)
-    shadow_sessions: int = Field(ge=1)
-    arming_max_sessions: int = Field(ge=1)
     xh_entry_bps: float = Field(ge=0, lt=10_000, allow_inf_nan=False)
     xh_exit_bps: float = Field(ge=0, lt=10_000, allow_inf_nan=False)
 
     @classmethod
     def from_record(cls, envelope: ValidatedLiveEnvelope | None) -> LiveEnvelopePayload | None:
-        return None if envelope is None else cls(**envelope.to_mapping())
+        return None if envelope is None else cls(
+            **{field: getattr(envelope, field) for field in cls.model_fields}
+        )
 
 
 class PaperXhAllowancesPayload(BaseModel):
@@ -124,12 +118,12 @@ class PaperXhAllowancesPayload(BaseModel):
     or the send-time re-price of an exit sent after its session. A
     regular-hours run's EXIT on the day's last bar goes out after the close
     as such a limit, so Start of a regular-hours run refuses
-    ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set, and so does a
-    Resume. A held position must pass the carry-over and checkpoint gates;
-    unsupported carry-over requires Flatten before Resume (#2504).
+    ``EXTENDED_HOURS_ALLOWANCE_UNSET`` until both are set. A held position is
+    never carried into a new deployment; resolving it requires Flatten before
+    a fresh Deploy (#2504).
 
     Paper only, and only the two: a live revision carries its pair inside
-    ``live_envelope``, sealed at arming. ``extra="forbid"`` refuses a live-only
+    ``live_envelope``, sealed at Deploy. ``extra="forbid"`` refuses a live-only
     value (``loss_usd``, a session count) offered here rather than dropping it,
     and ``strict=True`` refuses ``true`` or ``"5"`` for the reason
     ``LiveEnvelopePayload`` states. The bounds restate the envelope's; the
@@ -603,3 +597,40 @@ __all__ = [
     "SelectionPutRequest",
     "SelectionResponse",
 ]
+
+
+class AccountRiskApplyRequest(_ClosedRequest):
+    expected_risk_revision: int = Field(ge=0, strict=True)
+    expected_selection_generation: int = Field(ge=0, strict=True)
+    loss_fraction: float = Field(gt=0, lt=1, strict=True, allow_inf_nan=False)
+    loss_usd: float = Field(gt=0, strict=True, allow_inf_nan=False)
+
+    @field_validator("loss_usd")
+    @classmethod
+    def whole_cent_cap(cls, value: float) -> float:
+        # Delegates to the canonical whole-cent check (app/broker_configuration/envelope.py)
+        # so this boundary never disagrees with the domain object it feeds.
+        try:
+            require_whole_cent_loss_cap(value)
+        except InvalidLiveEnvelope as exc:
+            raise ValueError(str(exc)) from exc
+        return value
+
+
+class AccountRiskStateResponse(_Response):
+    account_id: str
+    risk_revision: int
+    selection_generation: int
+    loss_fraction: float | None
+    loss_usd: float | None
+    applied_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    entry_state: Literal["ready", "held", "unknown"]
+    detail: str
+    hold_loss_limit_usd: float | None = None
+    hold_session_start_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    hold_policy_revision: int | None = None
+
+
+class AccountRiskClearRequest(_ClosedRequest):
+    expected_risk_revision: int = Field(ge=0, strict=True)
+    expected_selection_generation: int = Field(ge=0, strict=True)

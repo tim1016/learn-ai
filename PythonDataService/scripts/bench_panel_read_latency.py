@@ -313,8 +313,8 @@ class _BenchBrokerPort:
 class _BenchRegistry:
     """Liveness stand-in: production answers this from an in-memory dict."""
 
-    def __init__(self, receipts_root: Path, sids: list[str], stopped_count: int) -> None:
-        self._receipts_root = receipts_root
+    def __init__(self, artifacts_root: Path, sids: list[str], stopped_count: int) -> None:
+        self.artifacts_root = artifacts_root
         self._sids = sids
         self._stopped = set(sids[:stopped_count])
 
@@ -376,9 +376,6 @@ class _BenchRegistry:
             exit_terms=None,
             mode="trade",
         )
-
-    def panel_action_receipt_path(self, sid: str) -> Path:
-        return self._receipts_root / f"{sid}-panel-action-receipts.json"
 
     def dry_run_activity(self, broker: str, sid: str) -> list[object]:
         return []

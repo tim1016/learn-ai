@@ -171,7 +171,7 @@ def _report_payload() -> dict[str, Any]:
             "observed_revision_count": 25,
             "revision_sequence": [41, 41, 42, 42, 43],
             "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-            "presented_action_id": "resume",
+            "presented_action_id": "deploy_again",
             "correlation_records": list(ui_correlation_records()),
             "lifecycle_request_count": 0,
             "lifecycle_action_ids": [],

@@ -21,13 +21,14 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
-    ENVELOPE_SYNC_INTERVAL_S,
     FILL_VISIBILITY_GRACE_MS,
     LIVE_ENVELOPE_CASH_EXCEEDED,
+    LIVE_ENVELOPE_UNOBSERVED,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
     LiveEnvelopeGate,
 )
+from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -50,6 +51,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
     TODAY_OPEN,
     _TestClock,
+    complete_fee_evidence,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 
@@ -183,9 +185,10 @@ async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
         repository: ClerkSqliteRepository,
         read: _Read | _LiveBroker,
         *,
-        simulated: bool = True,
+        simulated: bool = False,
         **loop: Any,
     ) -> LiveEnvelopeSync:
+        complete_fee_evidence(repository)
         sync = LiveEnvelopeSync(
             repo=repository,
             read=read,
@@ -212,6 +215,73 @@ def _sync_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.name == SYNC_LOGGER]
 
 
+async def test_budget_authority_mode_disagreement_remains_visible_through_failed_read(tmp_path, make_sync) -> None:
+    from app.broker.contract.errors import BrokerAccountModeDisagreement
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _new_budget_repo
+
+    class Read(_Read):
+        disagree = True
+
+        async def get_account(self) -> BrokerAccountSnapshot:
+            if self.disagree:
+                raise BrokerAccountModeDisagreement("Account changed", broker="alpaca")
+            return await super().get_account()
+
+    repo = _new_budget_repo(tmp_path)
+    broker = Read()
+    sync = make_sync(repo, broker)
+    try:
+        assert await sync.tick() == "mode_disagreed"
+        assert sync.account_mode_disagreed and sync.risk_snapshot().observation is None
+        broker.disagree, broker.fail = False, True
+        assert await sync.tick() == "read_failed"
+        assert sync.account_mode_disagreed
+        broker.fail = False
+        assert await sync.tick() == "observed"
+        assert not sync.account_mode_disagreed
+    finally:
+        await sync.stop()
+        repo.close()
+
+
+@pytest.mark.parametrize("via_tick", [False, True])
+async def test_risk_apply_cannot_republish_evidence_after_mode_disagreement(tmp_path, make_sync, via_tick: bool) -> None:
+    from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
+    from app.broker.contract.errors import BrokerAccountModeDisagreement
+    from tests.broker.alpaca.clerk.sqlite.test_account_risk_policy import _policy
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _new_budget_repo
+
+    class Read(_Read):
+        disagree = False
+
+        async def get_account(self) -> BrokerAccountSnapshot:
+            if self.disagree:
+                raise BrokerAccountModeDisagreement("wrong account", broker="alpaca")
+            return await super().get_account()
+
+    repo = _new_budget_repo(tmp_path)
+    broker = Read()
+    sync = make_sync(repo, broker)
+    try:
+        assert await sync.tick() == "observed"
+        broker.disagree = True
+        if via_tick:
+            assert await sync.tick() == "mode_disagreed"
+        else:
+            with pytest.raises(BrokerAccountModeDisagreement):
+                await sync.observe()
+        sync.apply_risk_policy(_policy(2, 200), expected_revision=1)
+        assert sync.account_mode_disagreed
+        assert not current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock()).allowed
+        broker.disagree = False
+        await sync.observe()
+        assert not sync.account_mode_disagreed
+        assert current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock()).allowed
+    finally:
+        await sync.stop()
+        repo.close()
+
+
 async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
@@ -231,33 +301,16 @@ async def test_a_tick_crossing_et_midnight_withdraws_the_observation(
 ) -> None:
     just_before_midnight_et = NOON + 12 * 60 * 60 * 1_000 - 1
     just_after_midnight_et = just_before_midnight_et + 2
-    day_pnl_clock.value = just_before_midnight_et
     sync = make_sync(
         day_pnl_repo,
         _Read(account_observed_at_ms=just_after_midnight_et),
     )
+    day_pnl_clock.value = just_before_midnight_et
 
     assert await sync.tick() == "unknown"
     assert sync.envelope.latest_observation() is None
 
 
-async def test_simulated_custody_subtracts_what_the_clerks_own_fills_would_have_spent(
-    day_pnl_repo: ClerkSqliteRepository,
-    seeded_open_buy: None,
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """Under simulated custody the broker's cash never moved (plan R2)."""
-    sync = make_sync(day_pnl_repo, _Read(), simulated=True)
-    await sync.tick()
-    shadow = sync.envelope.latest_observation()
-    assert shadow is not None and shadow.cash_available_usd == pytest.approx(99_000.0)
-    assert shadow.broker_cash_usd == pytest.approx(100_000.0)
-
-    real = make_sync(day_pnl_repo, _Read(), simulated=False)
-    await real.tick()
-    observation = real.envelope.latest_observation()
-    assert observation is not None
-    assert observation.cash_available_usd == pytest.approx(100_000.0)
 
 
 async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
@@ -699,6 +752,7 @@ def _observed_gate(*, cash: float, simulated: bool) -> LiveEnvelopeGate:
             broker_cash_usd=cash,
             cash_available_usd=cash,
             equity_usd=cash,
+            risk_cash_flow_evidence_complete=True, risk_cash_flow_window_start_ms=day_pnl_window_start_ms(T0), risk_equity_window_start_ms=day_pnl_window_start_ms(T0),
             last_equity_usd=cash,
             position_count=0,
         )
@@ -731,7 +785,7 @@ def _fill_all_ten(
     repo: ClerkSqliteRepository, clock: _TestClock, accepted: EnterSubmission
 ) -> Callable[[], None]:
     return lambda: _append_slice(
-        repo, accepted, execution_id="exec-mid-read", quantity=10, source_event_at_ms=clock()
+        repo, accepted, execution_id="exec-mid-read", quantity=10, source_event_at_ms=clock(), fee=0.0
     )
 
 
@@ -767,7 +821,7 @@ async def test_a_fill_recorded_while_the_broker_is_read_stays_reserved(
     assert envelope_repo.position(first_instance[0], "SPY") == 10.0
     with pytest.raises(AdmissionBlockedError) as refused:
         _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
-    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+    assert refused.value.decision.reason_code == LIVE_ENVELOPE_UNOBSERVED
     # The observation is dated when its reads were issued, not when they returned.
     assert reading.observation.observed_at_ms == T0
 
@@ -817,47 +871,28 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
     assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
 
 
-async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observation(
-    envelope_repo: ClerkSqliteRepository,
-    envelope_clock: _TestClock,
-    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """Shadow errs toward refusing, and recovers on the next observation.
 
-    Under simulated custody the broker's cash never moves, so the envelope
-    subtracts what the Clerk's own fills spent (plan R2) -- read *after* the
-    broker answered. A fill recorded mid-read is therefore in
-    ``cash_available`` and still reserved: counted twice, never zero times.
-    The account's true free cash is $1,000 and the envelope offers none, so
-    the second $1,000 ENTER is refused. The next observation, issued past the
-    fill-visibility grace, counts the fill once and admits it.
-    """
-    first_instance, second_instance = two_active_instances
-    first = _enter(
-        envelope_repo,
-        first_instance,
-        symbol="SPY",
-        envelope=_observed_gate(cash=2_000.0, simulated=True),
-    )
-    read = _FillLandsMidRead(
-        clock=envelope_clock,
-        cash=2_000.0,
-        record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
-    )
-    sync = make_sync(envelope_repo, read, simulated=True)
 
-    mid_read = (await sync.observe()).observation
-    assert mid_read.cash_available_usd == pytest.approx(1_000.0)
-    assert envelope_repo.reserved_cash_usd(
-        seen_before_ms=mid_read.fills_seen_before_ms
-    ) == pytest.approx(1_000.0)
-    with pytest.raises(AdmissionBlockedError) as refused:
-        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
-    assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
+@pytest.mark.parametrize("via_tick", [False, True])
+async def test_rejected_transfer_read_cannot_be_revived_by_risk_apply(tmp_path, make_sync, via_tick: bool) -> None:
+    from tests.broker.alpaca.clerk.sqlite.test_account_risk_policy import _policy
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _new_budget_repo
 
-    envelope_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
-    next_tick = (await sync.observe()).observation
-    assert next_tick.cash_available_usd == pytest.approx(1_000.0)
-    assert envelope_repo.reserved_cash_usd(seen_before_ms=next_tick.fills_seen_before_ms) == 0.0
-    assert _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope).created
+    repo = _new_budget_repo(tmp_path)
+    broker = _Read()
+    sync = make_sync(repo, broker)
+    try:
+        assert await sync.tick() == "observed"
+        broker.activity_error = BrokerEvidenceUnavailable("incomplete transfer pages")
+        if via_tick:
+            assert await sync.tick() == "unknown"
+        else:
+            with pytest.raises(BrokerEvidenceUnavailable):
+                await sync.observe()
+        assert sync.apply_risk_policy(_policy(2, 200), expected_revision=1).observation is None
+        assert sync.envelope.latest_observation() is None
+        broker.activity_error = None
+        assert await sync.tick() == "observed"
+    finally:
+        await sync.stop()
+        repo.close()

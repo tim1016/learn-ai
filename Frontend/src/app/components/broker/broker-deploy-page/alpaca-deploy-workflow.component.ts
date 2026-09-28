@@ -21,16 +21,17 @@ import {
   validate,
 } from '@angular/forms/signals';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 
 import {
   BrokerV2PanelService,
   type DeployBotBody,
-  type DeployBotReceipt,
+  type BudgetDeployReceipt,
   type DeployBotStrategy,
   type DeployBotView,
   type DeployExecutionMode,
   type DeployStrategyParamsSchema,
+  type QualifiedDeployConfiguration,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { laneKey, type ResourceTarget, withAccount, withCommand } from '../../../fleet/resource-target';
@@ -40,7 +41,7 @@ import {
   fencedTarget,
   type LaneFence,
 } from '../../../fleet/lane-fence';
-import { LiveArmingComponent } from '../shared/live-arming/live-arming.component';
+import { DeployBudgetReviewComponent, budgetReviewContext, type ReviewedDeploymentBudget } from './deploy-budget-review.component';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
   DeployExecutionSectionComponent,
@@ -145,7 +146,7 @@ interface FrozenDeployCommand {
     DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
-    LiveArmingComponent,
+    DeployBudgetReviewComponent,
     DeployPaperAccessComponent,
     DeployParametersSectionComponent,
     TimestampDisplayComponent,
@@ -168,6 +169,7 @@ export class AlpacaDeployWorkflowComponent {
   private termsSeeded = false;
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
 
   /** Still read for the `?strategy=` deep link; the lens param is gone. */
@@ -178,7 +180,7 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
   protected readonly invalidParameterFields = signal<ReadonlySet<string>>(new Set());
-  protected readonly receipt = signal<DeployBotReceipt | null>(null);
+  protected readonly receipt = signal<BudgetDeployReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   /** Retained only while the exact deploy intent has no terminal receipt. */
   private readonly frozenCommand = signal<FrozenDeployCommand | null>(null);
@@ -459,7 +461,7 @@ export class AlpacaDeployWorkflowComponent {
     const checks = view.readiness_checks;
     const ready = checks.filter((check) => check.ready).length;
     return {
-      label: this.submissionReadiness().canSubmit ? 'Ready' : 'Blocked',
+      label: this.canSubmit() ? 'Ready' : 'Blocked',
       counts: `${ready} of ${checks.length}`,
     };
   });
@@ -581,7 +583,49 @@ export class AlpacaDeployWorkflowComponent {
     return { canSubmit: true, guidance: 'Ready to deploy this bot.' };
   });
 
-  protected readonly canSubmit = computed(() => this.submissionReadiness().canSubmit);
+  protected readonly budgetTarget = computed(() => this.deployTarget(this.accountId().trim()));
+  protected readonly budgetConsent = signal<ReviewedDeploymentBudget | null>(null);
+  protected readonly budgetBody = computed<DeployBotBody | null>(() => {
+    const strategy = this.selectedStrategy();
+    if (strategy === null || this.exitTerms() === null || this.ticketForm.instanceId().invalid()
+      || this.ticketForm.symbol().invalid() || this.ticketForm.quantity().invalid() || this.invalidParameterFields().size > 0) return null;
+    return this.deployBody(this.ticket(), strategy);
+  });
+  private readonly validBudget = computed(() => {
+    const consent = this.budgetConsent();
+    const body = this.budgetBody();
+    return consent && body && consent.context === budgetReviewContext(this.budgetTarget(), body)
+      ? consent.budget : null;
+  });
+  protected readonly canSubmit = computed(() => this.submissionReadiness().canSubmit && this.validBudget() !== null);
+  protected readonly submitGuidance = computed(() => this.submissionReadiness().canSubmit && this.validBudget() === null
+    ? 'Review a dollar budget and complete any Live confirmation before deploying.' : this.submissionReadiness().guidance);
+  protected readonly hasFrozenCommand = computed(() => this.frozenCommand() !== null);
+  protected readonly recoverySid = computed(() => {
+    const sid = this.queryParams().get('deployment');
+    return sid && INSTANCE_ID_RE.test(sid) ? sid : null;
+  });
+  protected readonly recoveredCommand = resource({
+    params: () => {
+      const sid = this.recoverySid();
+      return sid && INSTANCE_ID_RE.test(sid) ? { sid, target: this.deployTarget(this.accountId()) } : undefined;
+    },
+    loader: ({ params }) => this.panelService.getDeployCommand(params.target, params.sid),
+  });
+  protected readonly shownReceipt = computed(() => {
+    const own = this.receipt();
+    const recovered = this.recoveredCommand.hasValue() ? this.recoveredCommand.value() : null;
+    const receipt = own?.status === 'pending' && recovered?.command_id === own.command_id ? recovered : (own ?? recovered);
+    return receipt && sameAlpacaAccount(receipt.account_id, this.accountId()) ? receipt : null;
+  });
+
+  protected async newDeployment(): Promise<void> {
+    this.receipt.set(null);
+    this.frozenCommand.set(null);
+    this.budgetConsent.set(null);
+    this.ticket.update(ticket => ({ ...ticket, instanceId: '' }));
+    await this.router.navigate([], { relativeTo: this.route, queryParams: { deployment: null }, queryParamsHandling: 'merge', replaceUrl: true });
+  }
 
   constructor() {
     this.destroyRef.onDestroy(() => {
@@ -761,6 +805,19 @@ export class AlpacaDeployWorkflowComponent {
     }));
   }
 
+  protected useQualifiedConfiguration(configuration: QualifiedDeployConfiguration): void {
+    // The shared instrument card already proved this pick's lake coverage.
+    // Apply the exact server tuple together; never merge it with old overrides.
+    const current = this.ticket();
+    if (current.symbol === configuration.symbol && sameParameterValues(current.parameters, configuration.parameters)
+      && this.invalidParameterFields().size === 0) return;
+    this.clearAdmission();
+    this.budgetConsent.set(null);
+    this.invalidParameterFields.set(new Set());
+    this.ticket.update(ticket => ({ ...ticket, symbol: configuration.symbol, parameters: { ...configuration.parameters } }));
+    this.scheduleSymbolScope(configuration.symbol);
+  }
+
   protected setInvalidParameterFields(fields: ReadonlySet<string>): void {
     this.invalidParameterFields.set(fields);
   }
@@ -882,7 +939,9 @@ export class AlpacaDeployWorkflowComponent {
     this.submitError.set(null);
     this.admissionDecision.set(null);
     const ticket = this.ticket();
-    const body = this.deployBody(ticket, strategy);
+    const budget = this.validBudget();
+    if (budget === null) { this.submitting.set(false); return; }
+    const body = { ...this.deployBody(ticket, strategy), budget };
     const commandTarget = this.commandTargetFor(body, view.account_id);
 
     try {
@@ -893,7 +952,11 @@ export class AlpacaDeployWorkflowComponent {
       if (!this.submissionStillCurrent(body)) return;
       this.admissionDecision.set(decision);
       if (!decision.allowed) return;
-      this.receipt.set(await this.panelService.deployBot(commandTarget, body));
+      // A read-only recovery hint survives refresh; the server receipt remains
+      // the authority for whether this command committed or started anything.
+      await this.router.navigate([], { relativeTo: this.route, queryParams: { deployment: body.strategy_instance_id }, queryParamsHandling: 'merge', replaceUrl: true });
+      if (!this.submissionStillCurrent(body)) return;
+      this.receipt.set(await this.panelService.deployBudgetBot(commandTarget, body));
       this.frozenCommand.set(null);
     } catch (error) {
       const decision = this.admissionFromError(error);
@@ -993,7 +1056,9 @@ export class AlpacaDeployWorkflowComponent {
     const strategy = this.selectedStrategy();
     if (!strategy) return false;
     const current = this.deployBody(this.ticket(), strategy);
-    return current.strategy_instance_id === submitted.strategy_instance_id
+    return JSON.stringify(this.validBudget()) === JSON.stringify(submitted.budget)
+      && JSON.stringify(current.exit_terms) === JSON.stringify(submitted.exit_terms)
+      && current.strategy_instance_id === submitted.strategy_instance_id
       && current.strategy_key === submitted.strategy_key
       && current.symbol === submitted.symbol
       && current.sizing?.preset === submitted.sizing?.preset

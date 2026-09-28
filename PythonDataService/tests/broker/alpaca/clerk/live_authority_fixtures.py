@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, select_active_clerk_runtime
-from app.broker.alpaca.clerk.live_arming_ceremony import instance_seal_hashes
+from app.broker.alpaca.clerk.live_arming_history import instance_seal_hashes
 from app.broker.alpaca.clerk.live_authority import InstanceSealsForAccount
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord
+from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
@@ -34,14 +35,16 @@ def live_activation(
     account_id: str = LIVE_ACCT,
     authority_generation: int = 1,
     db_identity_token: str = "live-db",
+    artifacts_root: Path | None = None,
 ) -> ActivationRecord:
     """The cutover's activation record for the live account — the second leg of Decision 1."""
+    proof_sha = "0" * 64 if artifacts_root is None else atomic_write_json(artifacts_root / "proof.json", {"account_id": account_id})
     return ActivationRecord.create(
         account_id=account_id,
         authority_generation=authority_generation,
         db_identity_token=db_identity_token,
         broker_proof_reference="proof.json",
-        broker_proof_sha256="0" * 64,
+        broker_proof_sha256=proof_sha,
         legacy_quarantine_manifest="quarantine.json",
         legacy_quarantine_manifest_sha256="1" * 64,
         activated_at_ms=1,
@@ -138,7 +141,7 @@ async def compose_live(
     meta = repository.control_meta_snapshot()
     repository.close()
     activation = live_activation(
-        authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token
+        authority_generation=meta.authority_generation, db_identity_token=meta.db_identity_token, artifacts_root=tmp_path
     )
     return await select_active_clerk_runtime(
         read=broker,

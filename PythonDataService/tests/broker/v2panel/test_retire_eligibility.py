@@ -48,13 +48,12 @@ def _ctx(
     return ActionGuardContext(
         running=running,
         phase=phase,
-        desired_state="STOPPED",
         hold_active=False,
         freeze_active=False,
         reconciliation_verdict="clean",
         outstanding_intents=0,
         has_exposure=has_exposure,
-        resume_admission=None,
+
         flatten_supported=True,
         account_id="PA3KWXU1C4C3",
         strategy_instance_id="Aug11",
