@@ -19,7 +19,9 @@ from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhase
 from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_binding_repository import (
+    BrokerBotBinding,
     RunOutcomeConflictError,
+    alpaca_v1_action_plan,
 )
 from app.services.bot_runner import (
     CarryoverPolicyRefusedError,
@@ -246,6 +248,47 @@ async def test_conflicting_terminal_outcome_does_not_mutate_lifecycle(tmp_path: 
         )
 
     assert _lifecycle_json(tmp_path) == lifecycle_before
+
+
+@pytest.mark.asyncio
+async def test_run_history_pages_previous_runs_without_changing_current_target(
+    tmp_path: Path,
+) -> None:
+    """Pre-#2550 accounts already carry multi-run history on disk; this page
+    must keep walking it forever. ``resume_existing`` (the flow the original
+    version of this test used to build multiple runs) was removed by #2550,
+    so the three runs are seeded directly through the durable run-evidence
+    repository (``BotBindingRepository.record_launch``) instead."""
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    action_plan = alpaca_v1_action_plan("SPY")
+    first = BrokerBotBinding(
+        strategy_instance_id=_SID,
+        broker="alpaca",
+        symbol="SPY",
+        action_plan=action_plan,
+        run_id="run-1",
+        created_at_ms=_T0,
+    )
+    second = first.model_copy(update={"run_id": "run-2", "created_at_ms": _T0 + 1_000})
+    third = first.model_copy(update={"run_id": "run-3", "created_at_ms": _T0 + 2_000})
+
+    registry._bindings.record_launch(first, launch_reason="deploy")
+    registry._bindings.record_launch(second, launch_reason="deploy")
+    registry._bindings.record_launch(third, launch_reason="deploy")
+
+    first_page = registry.run_history("alpaca", _SID, cursor=None, limit=1)
+    second_page = registry.run_history(
+        "alpaca",
+        _SID,
+        cursor=first_page.next_cursor,
+        limit=1,
+    )
+
+    assert [run.run_id for run in first_page.runs] == ["run-2"]
+    assert first_page.next_cursor == "run-2"
+    assert [run.run_id for run in second_page.runs] == ["run-1"]
+    assert second_page.next_cursor is None
+    assert registry.current_run("alpaca", _SID).run_id == "run-3"
 
 
 @pytest.mark.asyncio
