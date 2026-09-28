@@ -207,13 +207,16 @@ notional cap, no symbol allowlist, no session restriction.
   one proof page beyond the first page that crosses the date boundary; a
   missing, repeated, cyclic, or out-of-order cursor raises instead of returning
   a partial set. Non-object rows, rows that cannot be mapped, rows lacking a
-  nonblank broker id, and rows not definitively `executed` make the read
-  unavailable. This rejected-evidence condition withdraws the prior envelope
-  observation immediately; only a transient transport failure uses the normal
-  freshness age-out. Duplicate activity ids carrying different economic evidence
-  do the same; economically identical duplicates are collapsed. Missing
-  timestamps, missing or non-finite amounts, and a date-only transfer on the
-  boundary session make `DayPnl.known` false rather than turning an
+  nonblank broker id, rows not definitively `executed`, and rows whose raw
+  `net_amount` is missing, non-numeric, non-finite, or a JSON boolean make the
+  read unavailable. This rejected-evidence condition withdraws the prior
+  envelope observation immediately; only a transient transport failure uses
+  the normal freshness age-out. Duplicate activity ids carrying different
+  economic evidence do the same; economically identical duplicates are
+  collapsed. The canonical evaluator defensively treats contract activities
+  with missing or non-finite amounts as unknown too. Missing timestamps and a
+  date-only transfer on the boundary session make `DayPnl.known` false rather
+  than turning an
   unclassified cash movement into profit or loss. A sync tick whose account
   snapshot lands in a different ET loss window than its transfer queries is
   also unknown and withdraws the prior observation.

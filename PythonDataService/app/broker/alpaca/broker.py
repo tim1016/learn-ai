@@ -17,6 +17,7 @@ process-wide settings lazily on first use, exactly as it always has.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from itertools import pairwise
 
@@ -103,6 +104,20 @@ def _validate_transfer_payload(payload: object) -> None:
             detail=(
                 "Only definitively executed transfers can adjust account day P&L; "
                 "pending or statusless rows are unavailable evidence."
+            ),
+        )
+    raw_amount = payload.get("net_amount")
+    try:
+        numeric_amount = float(raw_amount)
+    except (TypeError, ValueError):
+        numeric_amount = math.nan
+    if isinstance(raw_amount, bool) or not math.isfinite(numeric_amount):
+        raise BrokerEvidenceUnavailable(
+            "An Alpaca transfer activity had no valid net amount.",
+            broker=BROKER_ID,
+            detail=(
+                "Transfer net_amount must be a finite non-boolean number before "
+                "it can adjust account day P&L."
             ),
         )
 

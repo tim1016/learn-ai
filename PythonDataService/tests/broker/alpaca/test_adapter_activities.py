@@ -15,7 +15,7 @@ from app.broker.alpaca.adapter import (
     rfc3339_to_ms,
 )
 from app.broker.alpaca.broker import AlpacaBroker
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
@@ -361,6 +361,40 @@ async def test_transfer_cursor_rejects_a_transfer_that_is_not_executed(
     )
 
     with pytest.raises(BrokerUnavailable, match="was not executed"):
+        await broker.list_activities(
+            after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
+            limit=25,
+            activity_type="TRANS",
+        )
+
+
+@pytest.mark.parametrize(
+    "net_amount",
+    [
+        pytest.param(True, id="true"),
+        pytest.param(False, id="false"),
+        pytest.param(None, id="missing"),
+        pytest.param("", id="empty"),
+        pytest.param("NaN", id="non-finite"),
+        pytest.param("not-a-number", id="non-numeric"),
+    ],
+)
+async def test_transfer_cursor_rejects_an_invalid_raw_net_amount(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    net_amount: object,
+) -> None:
+    non_trade = load_alpaca_fixture("activities", "activities.json")[1]
+    transfer = {
+        **non_trade,
+        "id": "invalid-amount",
+        "activity_type": "CSD",
+        "net_amount": net_amount,
+    }
+    broker = AlpacaBroker(
+        client=_ActivitiesClient({None: [transfer]})  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="valid net amount"):
         await broker.list_activities(
             after_ms=rfc3339_to_ms("2026-07-21T00:00:00Z"),
             limit=25,
