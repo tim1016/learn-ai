@@ -33,11 +33,21 @@ Subcommands
     cash-delta attribution is unambiguous. Refuses on any endpoint other than
     ``paper-api.alpaca.markets`` — it places real (paper) orders.
 
-Both write a JSON report (``--out``, default stdout) with per-fill records and
-the delay distribution; every timestamp is int64 ms UTC. Exit 0 with the
-report, 2 with a single ``REFUSED:``/``DISQUALIFIED:`` line on stderr when the
-measurement could not run. Zero fills observed is a valid report (``observe``
-on a quiet account), not a refusal.
+Both write a JSON report (``--out``, default stdout with the human summary
+on stderr, so the default stream stays one valid JSON document) with
+per-fill records and the bound distribution; every timestamp is int64 ms UTC
+(raw vendor ISO fields are stored as parsed ``*_ms`` integers). Each measured
+fill carries a ``status``: ``led_stream`` (the reflecting read answered
+before the event's receipt — cash provably visible at the receipt instant,
+bound 0), ``resolved`` (read issued at/after the receipt — bound at issue
+time), or ``interval_censored_at_receipt`` (read issued before the receipt
+but answered after it — bound at answer time; a straddling answer proves
+nothing about the receipt instant). Censored statuses — ``no_baseline``,
+``not_visible_within_window``, and passive mode's ``overlapping_fills`` —
+carry no bound. Exit 0 with the report, 2 with a single ``REFUSED:``/
+``DISQUALIFIED:`` line on stderr when the measurement could not run. Zero
+fills observed is a valid report (``observe`` on a quiet account), not a
+refusal.
 
 Run directly::
 
@@ -49,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import json
 import math
 import os
@@ -60,8 +71,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 PAPER_ENDPOINT = "https://paper-api.alpaca.markets"
@@ -90,7 +102,7 @@ class CashReading(NamedTuple):
 
     issued_at_ms: int
     answered_at_ms: int
-    cash: Optional[float]  # None when the read failed (kept for cadence audit)
+    cash: float | None  # None when the read failed (kept for cadence audit)
 
 
 class FillEvent(NamedTuple):
@@ -104,42 +116,48 @@ class FillEvent(NamedTuple):
     qty: float
     price: float
     order_id: str
-    broker_at_ms: Optional[int]  # the event's own "timestamp", when parseable
-    raw: Dict[str, Any]  # the event payload verbatim (no secrets ride this stream)
+    broker_at_ms: int | None  # the event's own "timestamp", when parseable
+    raw: dict[str, Any]  # the event payload verbatim (no secrets ride this stream)
 
     @property
     def notional_usd(self) -> float:
         return self.qty * self.price
 
 
-def parse_fill_event(data: Dict[str, Any], receipt_at_ms: int) -> Optional[FillEvent]:
+def parse_fill_event(data: dict[str, Any], receipt_at_ms: int) -> FillEvent | None:
     """One ``trade_updates`` event payload → a :class:`FillEvent`, or ``None``.
 
-    ``None`` means "not a fill" (``new``/``canceled``/…) or a payload too
-    malformed to attribute — both are skipped, never guessed at.
+    ``None`` means "not a fill" (``new``/``canceled``/…), a payload too
+    malformed to attribute, or a side other than exactly ``buy``/``sell`` —
+    a drifted side would silently reverse the reflection band's direction
+    (every non-``buy`` is treated as a sell), so it is skipped, never guessed
+    at.
     """
     if data.get("event") not in FILL_EVENTS:
         return None
     order = data.get("order") or {}
     qty = _to_float(data.get("qty"))
     price = _to_float(data.get("price"))
+    side = str(data.get("side") or order.get("side") or "").lower()
     if qty is None or price is None or qty <= 0 or price <= 0 or not order.get("id"):
+        return None
+    if side not in ("buy", "sell"):
         return None
     return FillEvent(
         receipt_at_ms=receipt_at_ms,
         execution_id=str(data.get("execution_id") or ""),
         event_type=str(data["event"]),
         symbol=str(order.get("symbol") or ""),
-        side=str(data.get("side") or order.get("side") or ""),
+        side=side,
         qty=qty,
         price=price,
         order_id=str(order["id"]),
         broker_at_ms=parse_iso_ms(data.get("timestamp")),
-        raw=data,
+        raw=normalize_raw_event(data),
     )
 
 
-def _to_float(value: Any) -> Optional[float]:
+def _to_float(value: Any) -> float | None:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -147,7 +165,7 @@ def _to_float(value: Any) -> Optional[float]:
     return parsed if parsed == parsed else None  # NaN guard
 
 
-def parse_iso_ms(value: Any) -> Optional[int]:
+def parse_iso_ms(value: Any) -> int | None:
     """Alpaca's RFC3339 ``timestamp`` → int64 ms UTC, or ``None``.
 
     ``trade_updates`` timestamps carry nanosecond precision (9 fractional
@@ -172,11 +190,11 @@ def parse_iso_ms(value: Any) -> Optional[int]:
     except ValueError:
         return None
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.replace(tzinfo=timezone.utc)  # noqa: UP017 (3.9 host script)
     return int(moment.timestamp() * 1000)
 
 
-def baseline_cash(readings: List[CashReading], before_ms: int) -> Optional[float]:
+def baseline_cash(readings: list[CashReading], before_ms: int) -> float | None:
     """The cash of the last read issued strictly before ``before_ms``.
 
     This is the fill's "before" world: with one fill in flight, any cash
@@ -188,6 +206,36 @@ def baseline_cash(readings: List[CashReading], before_ms: int) -> Optional[float
     return None
 
 
+# ``trade_updates`` timestamps that do not end in ``_at``: the event's own
+# ``timestamp`` and ``at`` fields.
+_TEMPORAL_KEYS = ("timestamp", "at")
+
+
+def normalize_raw_event(node: Any, key: str = "") -> Any:
+    """Convert a raw event's ISO-8601 temporal fields to int64 ms UTC.
+
+    The repository's storage rule bans ISO strings as a persisted format, and
+    the committed report stores ``raw_event`` verbatim for auditability — so
+    every ``timestamp``/``*_at`` string is parsed to ``*_ms`` (recursing into
+    the nested ``order`` object). An unparseable temporal string is dropped,
+    never stored as ISO and never guessed at; every non-temporal field keeps
+    its wire value.
+    """
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for item_key, value in node.items():
+            if (item_key in _TEMPORAL_KEYS or item_key.endswith("_at")) and isinstance(value, str):
+                parsed = parse_iso_ms(value)
+                if parsed is not None:
+                    out[f"{item_key}_ms"] = parsed
+            else:
+                out[item_key] = normalize_raw_event(value, item_key)
+        return out
+    if isinstance(node, list):
+        return [normalize_raw_event(item, key) for item in node]
+    return node
+
+
 def read_reflects_fill(cash: float, fill: FillEvent, before_cash: float) -> bool:
     threshold = before_cash + fill.notional_usd * REFLECTED_NOTIONAL_FRACTION * (
         -1.0 if fill.side == "buy" else 1.0
@@ -197,11 +245,11 @@ def read_reflects_fill(cash: float, fill: FillEvent, before_cash: float) -> bool
 
 def first_reflecting_read(
     fill: FillEvent,
-    readings: List[CashReading],
+    readings: list[CashReading],
     before_cash: float,
     *,
     from_ms: int,
-) -> Optional[CashReading]:
+) -> CashReading | None:
     """The first read issued at/after ``from_ms`` whose cash reflects the fill.
 
     ``before_cash`` is the fill's pre-execution cash level — the caller
@@ -221,7 +269,7 @@ def first_reflecting_read(
     return None
 
 
-def summarize(delays_ms: List[int]) -> Dict[str, Optional[int]]:
+def summarize(delays_ms: list[int]) -> dict[str, int | None]:
     """Nearest-rank delay distribution; empty input yields all-None fields."""
     if not delays_ms:
         return {
@@ -260,7 +308,7 @@ class StreamRefused(Exception):
 class AlpacaHttpError(StreamRefused):
     """A REST call Alpaca answered with an HTTP error; ``body`` is parsed JSON."""
 
-    def __init__(self, status: int, path: str, body: Dict[str, Any]) -> None:
+    def __init__(self, status: int, path: str, body: dict[str, Any]) -> None:
         super().__init__(f"HTTP {status} on {path}: {json.dumps(body)[:400]}")
         self.status = status
         self.body = body
@@ -284,7 +332,7 @@ class _WsReader:
             count -= len(chunk)
         return b"".join(chunks)
 
-    def read_message(self, send_pong: Callable[[bytes], None]) -> Optional[Tuple[int, bytes]]:
+    def read_message(self, send_pong: Callable[[bytes], None]) -> tuple[int, bytes] | None:
         """One complete message ``(opcode, payload)``; answers pings inline.
 
         Returns ``None`` on a server close frame. Fragmented messages are
@@ -321,9 +369,9 @@ class TradeUpdatesStream:
         self._url = endpoint.replace("https://", "wss://").replace("http://", "ws://") + "/stream"
         self._key_id = key_id
         self._secret_key = secret_key
-        self._sock: Optional[ssl.SSLSocket] = None
+        self._sock: ssl.SSLSocket | None = None
         self._send_lock = threading.Lock()
-        self._keepalive: Optional[threading.Timer] = None
+        self._keepalive: threading.Timer | None = None
 
     # -- frame plumbing ----------------------------------------------------
 
@@ -344,7 +392,7 @@ class TradeUpdatesStream:
         with self._send_lock:
             self._sock.sendall(header + mask + masked)
 
-    def _send_json(self, message: Dict[str, Any]) -> None:
+    def _send_json(self, message: dict[str, Any]) -> None:
         self._send_frame(_WsReader.TEXT, json.dumps(message).encode())
 
     def send_pong(self, payload: bytes) -> None:
@@ -412,6 +460,20 @@ class TradeUpdatesStream:
                     raise StreamRefused("authorization rejected (check credentials)")
                 break
         self._send_json({"action": "listen", "data": {"streams": ["trade_updates"]}})
+        # Wait out the subscription acknowledgement: order submission rides a
+        # separate HTTP connection, so a round trip accepted and filled before
+        # the websocket server processed the subscription would lose its fill
+        # event — the exact observation this script exists to time.
+        while True:
+            message = reader.read_message(self.send_pong)
+            if message is None:
+                raise StreamRefused("stream closed awaiting the listening acknowledgement")
+            frame = json.loads(message[1])
+            if frame.get("stream") == "listening":
+                streams = frame.get("data", {}).get("streams") or []
+                if "trade_updates" not in streams:
+                    raise StreamRefused(f"subscription refused; listening streams: {streams}")
+                break
         self._schedule_keepalive()
 
     def reader(self) -> _WsReader:
@@ -424,14 +486,11 @@ class TradeUpdatesStream:
             self._keepalive.cancel()
             self._keepalive = None
         if self._sock is not None:
-            try:
+            # Teardown best effort only: the socket may already be gone.
+            with contextlib.suppress(OSError):
                 self._send_frame(_WsReader.CLOSE, b"")
-            except OSError:
-                pass
-            try:
+            with contextlib.suppress(OSError):
                 self._sock.close()
-            except OSError:
-                pass
             self._sock = None
 
 
@@ -449,7 +508,7 @@ class AlpacaRest:
             "Content-Type": "application/json",
         }
 
-    def _request(self, path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Any:
+    def _request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
             self._endpoint + path, data=data, method=method, headers=self._headers
@@ -465,7 +524,7 @@ class AlpacaRest:
                 parsed = {"message": raw}
             raise AlpacaHttpError(exc.code, path, parsed) from exc
 
-    def read_account_cash(self) -> Tuple[CashReading, Dict[str, Any]]:
+    def read_account_cash(self) -> tuple[CashReading, dict[str, Any]]:
         """One account read, stamped at issue (never at answer)."""
         issued = now_ms()
         payload = self._request("/v2/account")
@@ -474,13 +533,13 @@ class AlpacaRest:
             payload,
         )
 
-    def asset(self, symbol: str) -> Dict[str, Any]:
+    def asset(self, symbol: str) -> dict[str, Any]:
         return self._request("/v2/assets/" + urllib.request.quote(symbol, safe=""))
 
-    def submit_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
+    def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         return self._request("/v2/orders", "POST", order)
 
-    def submit_sell(self, symbol: str, qty: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    def submit_sell(self, symbol: str, qty: str) -> tuple[dict[str, Any], str | None]:
         """Submit a market sell, retrying once at the broker's stated balance.
 
         Paper crypto can credit a position a hair below the order's own
@@ -507,7 +566,7 @@ class AlpacaRest:
                 f"sell retried at broker-stated available qty {available}",
             )
 
-    def get_order(self, order_id: str) -> Dict[str, Any]:
+    def get_order(self, order_id: str) -> dict[str, Any]:
         return self._request("/v2/orders/" + order_id)
 
 
@@ -519,11 +578,11 @@ class AccountPoller(threading.Thread):
         self._rest = rest
         self._interval_ms = interval_ms
         self._stopped = threading.Event()
-        self.readings: List[CashReading] = []
+        self.readings: list[CashReading] = []
         self._lock = threading.Lock()
         self.errors = 0
 
-    def snapshot(self) -> List[CashReading]:
+    def snapshot(self) -> list[CashReading]:
         with self._lock:
             return list(self.readings)
 
@@ -556,18 +615,30 @@ class FillSink:
 
     def __init__(self) -> None:
         self.closed = threading.Event()
-        self.close_reason: Optional[str] = None
+        self.close_reason: str | None = None
         self._lock = threading.Lock()
-        self.events: List[Tuple[Dict[str, Any], int]] = []
+        self.events: list[tuple[dict[str, Any], int]] = []
 
-    def push(self, data: Dict[str, Any], receipt_at_ms: int) -> None:
+    def push(self, data: dict[str, Any], receipt_at_ms: int) -> None:
         with self._lock:
             self.events.append((data, receipt_at_ms))
 
-    def drain(self) -> List[Tuple[Dict[str, Any], int]]:
+    def drain(self) -> list[tuple[dict[str, Any], int]]:
         with self._lock:
             out, self.events = self.events, []
         return out
+
+    def requeue(self, events: list[tuple[dict[str, Any], int]]) -> None:
+        """Return drained, non-matching events so later waiters still see them.
+
+        An event for the *next* order routinely arrives while waiting for the
+        current one; without the requeue it would be discarded as non-matching
+        and silently vanish from the measurement.
+        """
+        if not events:
+            return
+        with self._lock:
+            self.events = events + self.events
 
     def close(self, reason: str) -> None:
         self.close_reason = reason
@@ -594,11 +665,11 @@ def _stream_thread(stream: TradeUpdatesStream, sink: FillSink) -> None:
             if frame.get("stream") != "trade_updates":
                 continue
             sink.push(frame.get("data") or {}, receipt)
-    except (StreamRefused, OSError, ssl.SSLError, socket.timeout) as exc:
+    except (TimeoutError, StreamRefused, OSError, ssl.SSLError) as exc:
         sink.close(f"stream error: {exc}")
 
 
-def _wait_for(condition: Callable[[], Any], timeout_s: float) -> Optional[Any]:
+def _wait_for(condition: Callable[[], Any], timeout_s: float) -> Any | None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         result = condition()
@@ -610,7 +681,7 @@ def _wait_for(condition: Callable[[], Any], timeout_s: float) -> Optional[Any]:
 
 def _await_order_terminal(
     rest: AlpacaRest, order_id: str, timeout_s: float
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Poll the order until a terminal state (sizing only; never for timing).
 
     The stream remains the only receipt-time source; this REST poll exists so
@@ -619,7 +690,7 @@ def _await_order_terminal(
     """
     deadline = time.monotonic() + timeout_s
 
-    def terminal() -> Optional[Dict[str, Any]]:
+    def terminal() -> dict[str, Any] | None:
         order = rest.get_order(order_id)
         return order if order.get("status") in ("filled", "canceled", "expired", "rejected") else None
 
@@ -632,79 +703,45 @@ def _await_order_terminal(
 
 
 def _await_order_fill_events(
-    sink: FillSink, order_id: str, timeout_s: float
-) -> List[FillEvent]:
+    sink: FillSink, order_id: str, timeout_s: float, trailing_grace_s: float = 0.6
+) -> list[FillEvent]:
     """Every fill event the stream delivered for ``order_id`` within the window.
 
-    Non-matching events are preserved for later correlation (a completing
-    ``fill`` can trail the ``partial_fill`` the caller already consumed).
+    A ``partial_fill`` and its completing ``fill`` can arrive in separate
+    drains, so after the first match the wait keeps draining for
+    ``trailing_grace_s`` (reset by each further match) before returning —
+    otherwise the trailing event would be swallowed by the next order's wait
+    and dropped as non-matching. Non-matching events are always requeued for
+    later waiters.
     """
-    pending: List[Tuple[Dict[str, Any], int]] = []
-    matches: List[FillEvent] = []
+    matches: list[FillEvent] = []
+    requeue: list[tuple[dict[str, Any], int]] = []
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        for data, receipt in sink.drain():
-            event = parse_fill_event(data, receipt)
-            if event is not None and event.order_id == order_id:
-                matches.append(event)
-            else:
-                pending.append((data, receipt))
-        if matches:
-            break
-        time.sleep(0.05)
-    for data, receipt in pending:
-        event = parse_fill_event(data, receipt)
-        if event is not None and event.order_id == order_id:
-            matches.append(event)
+    last_match_at: float | None = None
+    try:
+        while time.monotonic() < deadline:
+            for data, receipt in sink.drain():
+                event = parse_fill_event(data, receipt)
+                if event is not None and event.order_id == order_id:
+                    matches.append(event)
+                    last_match_at = time.monotonic()
+                else:
+                    requeue.append((data, receipt))
+            if (
+                matches
+                and last_match_at is not None
+                and time.monotonic() - last_match_at >= trailing_grace_s
+            ):
+                break
+            time.sleep(0.05)
+    finally:
+        sink.requeue(requeue)
     return matches
 
 
-def _record_fill(
-    fill: FillEvent,
-    poller: AccountPoller,
-    visibility_timeout_s: float,
-    baseline_before_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Correlate one fill against the read series; waits for visibility.
-
-    ``baseline_before_ms`` anchors the pre-fill cash to the last read issued
-    before that instant. Generated fills pass their order's submission time —
-    strictly before execution, so the baseline can never already include the
-    fill even when the broker lands the cash *before* the stream event
-    arrives (the dominant observation on paper crypto, 2026-09-27). Without
-    it the pre-receipt read may already be post-fill, and a fill visible at
-    receipt would be misread as never becoming visible.
-
-    Three verdicts: ``visible_before_receipt`` (the cash effect was already
-    readable before the stream event arrived — the safe direction for the
-    envelope, since a read issued at the receipt instant already reflects the
-    fill), ``resolved`` (first reflecting read issued at/after the receipt —
-    an upper bound quantized by the poll cadence), and
-    ``not_visible_within_window`` (no reflecting read inside the window — the
-    dangerous direction; the fill's visibility delay exceeds the window).
-    """
-    readings = poller.snapshot()
-    if baseline_before_ms is not None:
-        before_cash = baseline_cash(readings, baseline_before_ms)
-        baseline_source = "order-submission"
-        anchor_ms = baseline_before_ms
-    else:
-        # Passive mode: the broker's own execution timestamp is the only
-        # pre-fill anchor, and it is a cross-clock comparison.
-        anchor_ms = min(fill.broker_at_ms, fill.receipt_at_ms) if (
-            fill.broker_at_ms is not None
-        ) else fill.receipt_at_ms
-        before_cash = baseline_cash(readings, anchor_ms)
-        baseline_source = "broker-timestamp-or-receipt"
-
-    def find() -> Optional[CashReading]:
-        if before_cash is None:
-            return None
-        return first_reflecting_read(
-            fill, poller.snapshot(), before_cash, from_ms=anchor_ms
-        )
-
-    record: Dict[str, Any] = {
+def _common_fill_fields(fill: FillEvent, baseline_source: str, before_cash: float | None) -> dict[str, Any]:
+    """The wire-side fields every fill record carries, correlation-independent."""
+    return {
         "execution_id": fill.execution_id,
         "event_type": fill.event_type,
         "symbol": fill.symbol,
@@ -720,6 +757,71 @@ def _record_fill(
         "baseline_cash_usd": before_cash,
         "raw_event": fill.raw,
     }
+
+
+def _classify_visibility(fill: FillEvent, reading: CashReading) -> tuple[str, int]:
+    """Status + honest delay bound for one fill whose reflecting read is known.
+
+    What a reflecting read proves depends on where its answer landed relative
+    to the fill's stream receipt:
+
+    - answered at/before the receipt → the cash was visible *before* the
+      Clerk could have recorded the fill: ``led_stream``, bound 0.
+    - issued at/after the receipt → ``resolved``; the bound is
+      ``issued − receipt`` under the envelope's issue-time dating (the true
+      transition is somewhere in the preceding read gap, so this too is an
+      upper bound).
+    - issued before but answered after the receipt → ``interval_censored_at_receipt``:
+      the cash was visible no later than the answer and possibly before the
+      receipt — a read whose answer postdates the receipt proves nothing
+      about the receipt instant, so the bound is ``answered − receipt``, not
+      zero.
+    """
+    if reading.answered_at_ms <= fill.receipt_at_ms:
+        return "led_stream", 0
+    if reading.issued_at_ms >= fill.receipt_at_ms:
+        return "resolved", reading.issued_at_ms - fill.receipt_at_ms
+    return "interval_censored_at_receipt", reading.answered_at_ms - fill.receipt_at_ms
+
+
+def _record_fill(
+    fill: FillEvent,
+    poller: AccountPoller,
+    visibility_timeout_s: float,
+    baseline_before_ms: int | None = None,
+) -> dict[str, Any]:
+    """Correlate one fill against the read series; waits for visibility.
+
+    ``baseline_before_ms`` anchors the pre-fill cash to the last read issued
+    before that instant. Generated fills pass their order's submission time —
+    strictly before execution, so the baseline can never already include the
+    fill even when the broker lands the cash *before* the stream event
+    arrives. Without it the pre-receipt read may already be post-fill, and a
+    fill visible at receipt would be misread as never becoming visible.
+
+    Censored statuses — ``no_baseline``, ``not_visible_within_window``, and
+    (passive mode only) ``overlapping_fills`` — carry no bound and never
+    enter the distribution.
+    """
+    readings = poller.snapshot()
+    if baseline_before_ms is not None:
+        anchor_ms = baseline_before_ms
+        baseline_source = "order-submission"
+    else:
+        # Passive mode: the broker's own execution timestamp is the only
+        # pre-fill anchor, and it is a cross-clock comparison.
+        anchor_ms = min(fill.broker_at_ms, fill.receipt_at_ms) if (
+            fill.broker_at_ms is not None
+        ) else fill.receipt_at_ms
+        baseline_source = "broker-timestamp-or-receipt"
+    before_cash = baseline_cash(readings, anchor_ms)
+
+    def find() -> CashReading | None:
+        if before_cash is None:
+            return None
+        return first_reflecting_read(fill, poller.snapshot(), before_cash, from_ms=anchor_ms)
+
+    record = _common_fill_fields(fill, baseline_source, before_cash)
     reading = find()
     if reading is None and before_cash is not None:
         reading = _wait_for(find, visibility_timeout_s)
@@ -731,13 +833,11 @@ def _record_fill(
     record["first_reflecting_read_issued_at_ms"] = reading.issued_at_ms
     record["first_reflecting_read_answered_at_ms"] = reading.answered_at_ms
     record["first_reflecting_read_cash_usd"] = reading.cash
-    if reading.issued_at_ms < fill.receipt_at_ms:
-        record["status"] = "visible_before_receipt"
-        record["cash_led_receipt_by_ms"] = fill.receipt_at_ms - reading.issued_at_ms
-    else:
-        record["status"] = "resolved"
-        record["visibility_delay_ms"] = reading.issued_at_ms - fill.receipt_at_ms
-        record["visibility_delay_answer_ms"] = reading.answered_at_ms - fill.receipt_at_ms
+    status, bound_ms = _classify_visibility(fill, reading)
+    record["status"] = status
+    record["visibility_bound_ms"] = bound_ms
+    if status == "led_stream":
+        record["cash_led_receipt_by_ms"] = fill.receipt_at_ms - reading.answered_at_ms
     return record
 
 
@@ -746,22 +846,31 @@ def _floor_to_increment(value: float, increment: float) -> float:
 
 
 def _await_settled_reads(poller: AccountPoller, equal_reads: int, timeout_s: float) -> bool:
-    """Wait until ``equal_reads`` consecutive reads agree on the cash level.
+    """Wait until ``equal_reads`` consecutive *new* reads agree on the cash.
 
     Without this, one round's sell credit and the next round's buy debit can
     land inside a single read gap and net out, making neither leg's cash step
     individually observable (the two censored fills of the 2026-09-27
     rehearsal run). Settling between legs gives each fill's transition its
-    own gap. Returns False on timeout — the caller proceeds, and any affected
-    fill is then honestly censored.
+    own gap. Only readings the poller appended since the last visit count:
+    the loop wakes faster than the poller reads (100 ms vs ~290 ms p50), so
+    counting unchanged snapshots would certify one read as two. Returns
+    False on timeout — the caller proceeds, and any affected fill is then
+    honestly censored.
     """
     deadline = time.monotonic() + timeout_s
     stable = 0
-    last: Optional[float] = None
+    last: float | None = None
+    processed = 0
     while time.monotonic() < deadline:
         snapshot = poller.snapshot()
-        if snapshot:
-            cash = snapshot[-1].cash
+        # Every reading appended since the last visit counts exactly once —
+        # the loop wakes faster than the poller reads (100 ms vs ~290 ms
+        # p50), so a visit can find several new readings, and skipping the
+        # backlog would let a stable pair slip by uncounted.
+        for reading in snapshot[processed:]:
+            processed += 1
+            cash = reading.cash
             if cash is not None and cash == last:
                 stable += 1
                 if stable >= equal_reads:
@@ -784,8 +893,8 @@ def _run_one_roundtrip(
     min_order_size: float,
     visibility_timeout_s: float,
     poll_ms: int,
-    skipped: List[str],
-) -> List[Dict[str, Any]]:
+    skipped: list[str],
+) -> list[dict[str, Any]]:
     """One BUY/SELL round trip; returns the fill records it produced.
 
     Sequential by construction: the sell is sized from the buy's terminal
@@ -793,7 +902,7 @@ def _run_one_roundtrip(
     censored), so at most one fill is in flight and the cash-delta
     attribution to each fill is unambiguous.
     """
-    fills: List[Dict[str, Any]] = []
+    fills: list[dict[str, Any]] = []
     # Start from an observed, settled cash level so the first baseline is real.
     _await_settled_reads(poller, equal_reads=2, timeout_s=10.0)
     buy_submitted_ms = now_ms()
@@ -825,6 +934,46 @@ def _run_one_roundtrip(
             f"(min {min_order_size}, increment {increment})"
         )
         return fills
+    try:
+        return _sell_back_round(rest, sink, poller, index, symbol, sell_qty,
+                                visibility_timeout_s, skipped, fills)
+    except AlpacaHttpError as exc:
+        # The buy already filled, so a failed later step (a 429/5xx on the
+        # sell submission or an order-status read) cannot be reduced to a
+        # skipped note: the account would silently stay long and its cash
+        # transitions would corrupt every later round's attribution. Unwind
+        # once at the broker-stated balance; if the unwind itself fails,
+        # abort the run — the operator must know the account is not flat.
+        unwind_note = None
+        try:
+            _, unwind_note = rest.submit_sell(
+                symbol, f"{sell_qty:.10f}".rstrip("0").rstrip(".")
+            )
+        except AlpacaHttpError as unwind_exc:
+            raise StreamRefused(
+                f"round {index}: sell failed ({exc}) and the unwind sell also "
+                f"failed ({unwind_exc}); the account is NOT flat — sell the "
+                f"{symbol} position manually before measuring again"
+            ) from unwind_exc
+        skipped.append(
+            f"round {index}: sell failed ({exc}); unwind sold {sell_qty}"
+            + (f" ({unwind_note})" if unwind_note else "")
+        )
+        return fills
+
+
+def _sell_back_round(
+    rest: AlpacaRest,
+    sink: FillSink,
+    poller: AccountPoller,
+    index: int,
+    symbol: str,
+    sell_qty: float,
+    visibility_timeout_s: float,
+    skipped: list[str],
+    fills: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Submit the round's sell leg, record its fills, and settle afterwards."""
     sell_submitted_ms = now_ms()
     sell, sell_note = rest.submit_sell(symbol, f"{sell_qty:.10f}".rstrip("0").rstrip("."))
     if sell_note:
@@ -855,7 +1004,7 @@ def run_roundtrips(
     notional_usd: float,
     poll_ms: int,
     visibility_timeout_s: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     asset = rest.asset(symbol)
     # Crypto assets declare ``min_trade_increment``; equities declare
     # ``size_increment``. Either floors the sell leg below the filled quantity
@@ -867,8 +1016,8 @@ def run_roundtrips(
     poller = AccountPoller(rest, poll_ms)
     poller.start()
     baseline_reading, baseline_account = rest.read_account_cash()
-    fills: List[Dict[str, Any]] = []
-    skipped: List[str] = []
+    fills: list[dict[str, Any]] = []
+    skipped: list[str] = []
     try:
         for index in range(count):
             sink.fail_fast()
@@ -904,6 +1053,65 @@ def run_roundtrips(
     )
 
 
+def _correlate_passive_fills(
+    events: list[FillEvent], readings: list[CashReading], visibility_timeout_s: float
+) -> list[dict[str, Any]]:
+    """Correlate passively observed fills offline, censoring overlaps.
+
+    The reflection band attributes a cash step to exactly one fill, which is
+    only valid with one fill in flight — `roundtrips` guarantees that;
+    normal account activity does not. Two overlapping fills can make a
+    same-direction neighbour look reflected early, or opposing effects
+    cancel into a false censor. Each fill's attribution window runs from its
+    baseline anchor to its resolution (the reflecting read's answer, or the
+    censor window's end); any fill whose window intersects another's is
+    reported ``overlapping_fills`` with no bound rather than emitting a
+    per-fill delay from cash another fill moved.
+    """
+    window_ms = int(visibility_timeout_s * 1000)
+    attributed: list[tuple[dict[str, Any], int, int]] = []
+    for fill in sorted(events, key=lambda event: event.receipt_at_ms):
+        anchor_ms = min(fill.broker_at_ms, fill.receipt_at_ms) if (
+            fill.broker_at_ms is not None
+        ) else fill.receipt_at_ms
+        before_cash = baseline_cash(readings, anchor_ms)
+        record = _common_fill_fields(fill, "broker-timestamp-or-receipt", before_cash)
+        if before_cash is None:
+            record["status"] = "no_baseline"
+            resolution_ms = anchor_ms + window_ms
+        else:
+            reading = first_reflecting_read(fill, readings, before_cash, from_ms=anchor_ms)
+            if reading is None:
+                record["status"] = "not_visible_within_window"
+                record["window_s"] = visibility_timeout_s
+                resolution_ms = anchor_ms + window_ms
+            else:
+                record["first_reflecting_read_issued_at_ms"] = reading.issued_at_ms
+                record["first_reflecting_read_answered_at_ms"] = reading.answered_at_ms
+                record["first_reflecting_read_cash_usd"] = reading.cash
+                status, bound_ms = _classify_visibility(fill, reading)
+                record["status"] = status
+                record["visibility_bound_ms"] = bound_ms
+                if status == "led_stream":
+                    record["cash_led_receipt_by_ms"] = fill.receipt_at_ms - reading.answered_at_ms
+                resolution_ms = reading.answered_at_ms
+        attributed.append((record, anchor_ms, resolution_ms))
+
+    overlapped = [False] * len(attributed)
+    for i in range(len(attributed)):
+        for j in range(i + 1, len(attributed)):
+            _, start_i, end_i = attributed[i]
+            _, start_j, end_j = attributed[j]
+            if start_i < end_j and start_j < end_i:
+                overlapped[i] = overlapped[j] = True
+    return [
+        {**attributed[index][0], "status": "overlapping_fills"}
+        if overlapped[index]
+        else attributed[index][0]
+        for index in range(len(attributed))
+    ]
+
+
 def run_observe(
     rest: AlpacaRest,
     stream: TradeUpdatesStream,
@@ -911,25 +1119,34 @@ def run_observe(
     duration_s: float,
     poll_ms: int,
     visibility_timeout_s: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     sink = FillSink()
     threading.Thread(target=_stream_thread, args=(stream, sink), daemon=True).start()
     poller = AccountPoller(rest, poll_ms)
     poller.start()
     baseline_reading, baseline_account = rest.read_account_cash()
-    fills: List[Dict[str, Any]] = []
-    deadline = time.monotonic() + duration_s
+    deadline_wall_ms = baseline_reading.issued_at_ms + int(duration_s * 1000)
+    events: list[FillEvent] = []
     try:
-        while time.monotonic() < deadline:
+        while now_ms() < deadline_wall_ms:
             sink.fail_fast()
             for data, receipt in sink.drain():
                 event = parse_fill_event(data, receipt)
-                if event is not None:
-                    fills.append(_record_fill(event, poller, visibility_timeout_s))
+                if event is not None and event.receipt_at_ms <= deadline_wall_ms:
+                    events.append(event)
             time.sleep(0.25)
+        # Final drain: the last sleep can straddle the deadline, and a fill
+        # received inside the window must not vanish because of where it fell
+        # in the polling loop. Events received after the window are excluded
+        # by their own receipt time.
+        for data, receipt in sink.drain():
+            event = parse_fill_event(data, receipt)
+            if event is not None and event.receipt_at_ms <= deadline_wall_ms:
+                events.append(event)
     finally:
         poller.stop()
         poller.join(timeout=5)
+    fills = _correlate_passive_fills(events, poller.snapshot(), visibility_timeout_s)
     final_reading, _ = rest.read_account_cash()
     return _report(
         mode="passive-observe",
@@ -947,27 +1164,36 @@ def run_observe(
 def _report(
     *,
     mode: str,
-    symbol: Optional[str],
+    symbol: str | None,
     poll_ms: int,
     baseline: CashReading,
     final: CashReading,
     account_number: str,
-    fills: List[Dict[str, Any]],
-    notes: Dict[str, Any],
-    readings: Optional[List[CashReading]] = None,
-) -> Dict[str, Any]:
+    fills: list[dict[str, Any]],
+    notes: dict[str, Any],
+    readings: list[CashReading] | None = None,
+) -> dict[str, Any]:
     # The distribution answers the envelope's question per fill: how long
-    # after the Clerk could have recorded the fill (its stream receipt) must
-    # an account read be issued before it reflects the fill? A fill whose
-    # cash landed before the event is already reflected at the receipt
-    # instant — delay 0. Only genuinely unresolved fills are censored.
-    measured = [record for record in fills if record["status"] in ("resolved", "visible_before_receipt")]
-    censored = [record for record in fills if record["status"] not in ("resolved", "visible_before_receipt")]
-    delays = [
-        record.get("visibility_delay_ms", 0) for record in measured
+    # after the Clerk could have recorded the fill (its stream receipt) is
+    # the fill's cash *provably* visible? Every measured status contributes
+    # its honest upper bound (``visibility_bound_ms``): 0 for a read that
+    # answered before the receipt, the issue-time delay for a post-receipt
+    # read, and the answer-time delay for a read that straddled the receipt.
+    # Censored statuses (``no_baseline``, ``not_visible_within_window``,
+    # ``overlapping_fills``) carry no bound and never enter the distribution.
+    measured = [
+        record
+        for record in fills
+        if record["status"] in ("led_stream", "resolved", "interval_censored_at_receipt")
     ]
-    report: Dict[str, Any] = {
-        "schema": "fill-visibility-measurement/1",
+    censored = [
+        record
+        for record in fills
+        if record["status"] not in ("led_stream", "resolved", "interval_censored_at_receipt")
+    ]
+    delays = [record["visibility_bound_ms"] for record in measured]
+    report: dict[str, Any] = {
+        "schema": "fill-visibility-measurement/2",
         "mode": mode,
         "symbol": symbol,
         "account_number": account_number,
@@ -984,10 +1210,12 @@ def _report(
     if readings is not None:
         # The full read series makes the report self-auditable: every delay
         # above can be recomputed from it plus the fill records alone.
-        intervals = [
-            later.issued_at_ms - earlier.issued_at_ms
-            for earlier, later in zip(readings, readings[1:])
-        ]
+        intervals = []
+        previous: CashReading | None = None
+        for reading in readings:
+            if previous is not None:
+                intervals.append(reading.issued_at_ms - previous.issued_at_ms)
+            previous = reading
         report["read_series"] = [
             {
                 "issued_at_ms": reading.issued_at_ms,
@@ -1000,7 +1228,7 @@ def _report(
     return report
 
 
-def _print_summary(report: Dict[str, Any]) -> None:
+def _print_summary(report: dict[str, Any], stream: Any = sys.stdout) -> None:
     distribution = report["distribution"]
     print(
         "fills={count} min={min_ms}ms p50={p50_ms}ms p90={p90_ms}ms p95={p95_ms}ms "
@@ -1009,11 +1237,12 @@ def _print_summary(report: Dict[str, Any]) -> None:
             poll=report["poll_interval_ms"],
             mode=report["mode"],
             **distribution,
-        )
+        ),
+        file=stream,
     )
 
 
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     # Shared options live on a parent parser so they parse both before and
     # after the subcommand name (``--poll-ms 200 roundtrips`` and
     # ``roundtrips --poll-ms 200`` both work).
@@ -1084,9 +1313,14 @@ def main(argv: List[str]) -> int:
     if args.out:
         with open(args.out, "w") as handle:
             handle.write(payload + "\n")
+        # stdout stays human-readable when the report went to a file.
+        _print_summary(report)
     else:
+        # The report is the document; the summary is commentary. Keeping the
+        # summary off stdout leaves `... | jq .` and output redirection with
+        # one valid JSON document.
         print(payload)
-    _print_summary(report)
+        _print_summary(report, stream=sys.stderr)
     return 0
 
 

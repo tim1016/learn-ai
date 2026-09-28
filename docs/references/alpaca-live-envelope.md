@@ -175,29 +175,36 @@ notional cap, no symbol allowlist, no session restriction.
   on `trade_updates`, the first account read (dated when its request was
   issued, the `observed_at_ms` discipline) whose cash reflects the fill. On
   the paper account's BTC/USD fills — 45 events in the committed run plus
-  three rehearsal runs, ~150 observations, one idle account — the cash **led**
-  the stream event by 35–425 ms (median 222 ms) in every resolvable case: a
-  read issued at the receipt instant already reflected the fill, and no fill
-  ever showed cash lagging its event. The worst post-receipt delay observed
-  anywhere was 401 ms, itself poll-cadence quantization (reads p95 438 ms),
-  not propagation. The committed fixture
+  three rehearsal runs, ~150 observations, one idle account — the cash never
+  lagged a fill's event by more than a read's own round trip. Per fill, what
+  the first reflecting read proves depends on where its *answer* landed
+  relative to the receipt: 2 fills' cash was provably visible before the
+  event (the read answered 24 ms ahead of it); for the other 42 the read was
+  issued before the event and answered at most 329 ms after it, so
+  visibility at the receipt instant is interval-censored — provably no worse
+  than 329 ms after the event, possibly before. The worst bound observed
+  across every run was 401 ms, itself poll-cadence quantization (reads p95
+  438 ms apart), not propagation. The committed fixture
   (`tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json`, with
-  `attribution.md`) carries the full read series so every delay is
+  `attribution.md`) carries the full read series so every bound is
   recomputable.
 
-  So the grace stays at 5 s. The measurement removes the fear it guarded
-  against on the measured path (cash arriving seconds after the event), but
-  it does not license shrinking: the sample is crypto-only, weekend, one
-  paper account, while the envelope gates equity ENTERs under market-hours
-  load Alpaca's docs still refuse to bound. Five seconds remains an order of
-  magnitude over everything observed, under one 15 s sync interval, so a fill
-  stays reserved at most one observation longer than it otherwise would
+  So the grace stays at 5 s. The measurement removes the feared seconds-long
+  lag on the measured path — a read issued one grace after the receipt
+  reflects the fill with an order of magnitude to spare — but it does not
+  license shrinking: the sample is crypto-only, weekend, one paper account,
+  while the envelope gates equity ENTERs under market-hours load Alpaca's
+  docs still refuse to bound. Five seconds remains an order of magnitude
+  over everything observed, under one 15 s sync interval, so a fill stays
+  reserved at most one observation longer than it otherwise would
   (`tests/broker/alpaca/clerk/test_live_envelope.py` pins it below the
-  interval and above the measured maximum plus a documented cushion).
-  Over-reserving refuses an ENTER that would have fit; under-reserving admits
-  a second ENTER against cash already spent. Re-measure any time — including
-  equity fills on a trading day — with the same script's `observe` mode,
-  which is read-only and places nothing.
+  interval and above the measured maximum times a documented cushion
+  factor). Over-reserving refuses an ENTER that would have fit;
+  under-reserving admits a second ENTER against cash already spent.
+  Re-measure any time — including equity fills on a trading day — with the
+  same script's `observe` mode, which is read-only, places nothing, and
+  censors fills whose attribution windows overlap rather than emitting
+  per-fill delays from cash another fill moved.
 - **Under shadow a fill can count twice, never zero times.** Simulated custody
   subtracts `account_net_cash_spent_usd()`, read *after* the broker answered,
   so a fill recorded during the read (or inside the grace) is both subtracted

@@ -67,16 +67,22 @@ OBSERVATION_MAX_AGE_MS = 45_000
 #
 # Five seconds, confirmed by measurement (#2487): on the paper account's
 # BTC/USD fills (2026-09-28, 45 fill events plus three rehearsal runs, ~150
-# observations) the account cash never lagged a fill's trade update -- it
-# led the stream event by 35-425 ms, so a read issued at the receipt instant
-# already reflected the fill (fixture:
+# observations) the account cash never lagged a fill's trade update by more
+# than a read's own round trip. In the committed run, 2 fills' cash was
+# provably visible before the event; for the other 42 the first reflecting
+# read answered at most 329 ms after the event (visibility at the receipt
+# instant is interval-censored, not zero), and the worst bound across every
+# run was 401 ms -- itself read-cadence quantization (reads p95 438 ms
+# apart). A read issued one grace after the fill's receipt reflects it with
+# an order of magnitude to spare (fixture:
 # ``tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json``).
 # The margin is kept at 5 s rather than tightened because that sample is
 # crypto-only, weekend, one idle account: the equity engine the envelope
-# actually gates is unmeasured, Alpaca publishes no ordering promise, and the
-# cost of the margin is bounded by one 15 s observation of over-reservation.
-# Pinned below the interval -- and above the measured maximum plus its
-# documented cushion -- by ``tests/broker/alpaca/clerk/test_live_envelope.py``.
+# actually gates is unmeasured, Alpaca publishes no ordering promise, and
+# the cost of the margin is bounded by one 15 s observation of
+# over-reservation. Pinned below the interval -- and above the measured
+# maximum plus its documented cushion factor -- by
+# ``tests/broker/alpaca/clerk/test_live_envelope.py``.
 FILL_VISIBILITY_GRACE_MS = 5_000
 _CASH_EPSILON_USD = 1e-9
 

@@ -1,5 +1,5 @@
 {
-  "schema": "fill-visibility-measurement/1",
+  "schema": "fill-visibility-measurement/2",
   "mode": "generated-roundtrips",
   "symbol": "BTC/USD",
   "account_number": "PA-FIXTURE-PAPER",
@@ -24,17 +24,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.9,
       "raw_event": {
-        "at": "2026-09-28T02:08:46.304081Z",
+        "at_ms": 1790561326304,
         "event_id": "01M3JWB570WXHNW7EP0QQ7JXHQ",
         "event": "fill",
-        "timestamp": "2026-09-28T02:08:46.284366625Z",
+        "timestamp_ms": 1790561326284,
         "order": {
           "id": "fixture-order-0000",
           "client_order_id": "fixture-client-0000",
-          "created_at": "2026-09-28T02:08:46.283064163Z",
-          "updated_at": "2026-09-28T02:08:46.303610202Z",
-          "submitted_at": "2026-09-28T02:08:46.283064163Z",
-          "filled_at": "2026-09-28T02:08:46.284366625Z",
+          "created_at_ms": 1790561326283,
+          "updated_at_ms": 1790561326303,
+          "submitted_at_ms": 1790561326283,
+          "filled_at_ms": 1790561326284,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -63,7 +63,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83643.107",
         "qty": "0.000175822",
@@ -75,8 +75,8 @@
       "first_reflecting_read_issued_at_ms": 1790561326007,
       "first_reflecting_read_answered_at_ms": 1790561326309,
       "first_reflecting_read_cash_usd": 99923.19,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 245
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 57
     },
     {
       "execution_id": "fixture-exec-0001",
@@ -93,17 +93,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99923.19,
       "raw_event": {
-        "at": "2026-09-28T02:08:47.253701Z",
+        "at_ms": 1790561327253,
         "event_id": "01M3JWB64NKMR5SK2770NHAZ21",
         "event": "fill",
-        "timestamp": "2026-09-28T02:08:47.247972113Z",
+        "timestamp_ms": 1790561327247,
         "order": {
           "id": "fixture-order-0001",
           "client_order_id": "fixture-client-0001",
-          "created_at": "2026-09-28T02:08:47.246449294Z",
-          "updated_at": "2026-09-28T02:08:47.25330624Z",
-          "submitted_at": "2026-09-28T02:08:47.246449294Z",
-          "filled_at": "2026-09-28T02:08:47.247972113Z",
+          "created_at_ms": 1790561327246,
+          "updated_at_ms": 1790561327253,
+          "submitted_at_ms": 1790561327246,
+          "filled_at_ms": 1790561327247,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -132,7 +132,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83629.4",
         "qty": "0.000175382",
@@ -144,8 +144,8 @@
       "first_reflecting_read_issued_at_ms": 1790561327039,
       "first_reflecting_read_answered_at_ms": 1790561327363,
       "first_reflecting_read_cash_usd": 99937.82,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 159
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 165
     },
     {
       "execution_id": "fixture-exec-0002",
@@ -162,17 +162,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.82,
       "raw_event": {
-        "at": "2026-09-28T02:08:48.303965Z",
+        "at_ms": 1790561328303,
         "event_id": "01M3JWB75F4V47SCYK4B7S5XGH",
         "event": "fill",
-        "timestamp": "2026-09-28T02:08:48.271351405Z",
+        "timestamp_ms": 1790561328271,
         "order": {
           "id": "fixture-order-0002",
           "client_order_id": "fixture-client-0002",
-          "created_at": "2026-09-28T02:08:48.270163892Z",
-          "updated_at": "2026-09-28T02:08:48.303492125Z",
-          "submitted_at": "2026-09-28T02:08:48.270163892Z",
-          "filled_at": "2026-09-28T02:08:48.271351405Z",
+          "created_at_ms": 1790561328270,
+          "updated_at_ms": 1790561328303,
+          "submitted_at_ms": 1790561328270,
+          "filled_at_ms": 1790561328271,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -201,7 +201,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83657.42",
         "qty": "0.000175844",
@@ -211,7 +211,8 @@
         "settle_date": "2026-09-27"
       },
       "status": "not_visible_within_window",
-      "window_s": 30.0
+      "window_s": 30.0,
+      "visibility_bound_ms": null
     },
     {
       "execution_id": "fixture-exec-0003",
@@ -228,17 +229,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99923.11,
       "raw_event": {
-        "at": "2026-09-28T02:09:19.404705Z",
+        "at_ms": 1790561359404,
         "event_id": "01M3JWC5HCNJKKR27F5F5C4BDP",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:19.378568826Z",
+        "timestamp_ms": 1790561359378,
         "order": {
           "id": "fixture-order-0003",
           "client_order_id": "fixture-client-0003",
-          "created_at": "2026-09-28T02:09:19.376810299Z",
-          "updated_at": "2026-09-28T02:09:19.404184901Z",
-          "submitted_at": "2026-09-28T02:09:19.376810299Z",
-          "filled_at": "2026-09-28T02:09:19.378568826Z",
+          "created_at_ms": 1790561359376,
+          "updated_at_ms": 1790561359404,
+          "submitted_at_ms": 1790561359376,
+          "filled_at_ms": 1790561359378,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -267,7 +268,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83664.51",
         "qty": "0.000175404",
@@ -279,8 +280,8 @@
       "first_reflecting_read_issued_at_ms": 1790561358983,
       "first_reflecting_read_answered_at_ms": 1790561359415,
       "first_reflecting_read_cash_usd": 99937.75,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 366
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 66
     },
     {
       "execution_id": "fixture-exec-0004",
@@ -297,17 +298,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.75,
       "raw_event": {
-        "at": "2026-09-28T02:09:20.203795Z",
+        "at_ms": 1790561360203,
         "event_id": "01M3JWC6ABNYMS33FPX00DHFS2",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:20.196922038Z",
+        "timestamp_ms": 1790561360196,
         "order": {
           "id": "fixture-order-0004",
           "client_order_id": "fixture-client-0004",
-          "created_at": "2026-09-28T02:09:20.195313947Z",
-          "updated_at": "2026-09-28T02:09:20.20326305Z",
-          "submitted_at": "2026-09-28T02:09:20.195313947Z",
-          "filled_at": "2026-09-28T02:09:20.196922038Z",
+          "created_at_ms": 1790561360195,
+          "updated_at_ms": 1790561360203,
+          "submitted_at_ms": 1790561360195,
+          "filled_at_ms": 1790561360196,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -336,7 +337,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83692.53",
         "qty": "0.000175776",
@@ -348,8 +349,8 @@
       "first_reflecting_read_issued_at_ms": 1790561359970,
       "first_reflecting_read_answered_at_ms": 1790561360335,
       "first_reflecting_read_cash_usd": 99923.04,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 169
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 196
     },
     {
       "execution_id": "fixture-exec-0005",
@@ -366,17 +367,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99923.04,
       "raw_event": {
-        "at": "2026-09-28T02:09:21.154352Z",
+        "at_ms": 1790561361154,
         "event_id": "01M3JWC782Y9S0NJ8XKM5GWPAY",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:21.141337108Z",
+        "timestamp_ms": 1790561361141,
         "order": {
           "id": "fixture-order-0005",
           "client_order_id": "fixture-client-0005",
-          "created_at": "2026-09-28T02:09:21.139556935Z",
-          "updated_at": "2026-09-28T02:09:21.153876805Z",
-          "submitted_at": "2026-09-28T02:09:21.139556935Z",
-          "filled_at": "2026-09-28T02:09:21.141337108Z",
+          "created_at_ms": 1790561361139,
+          "updated_at_ms": 1790561361153,
+          "submitted_at_ms": 1790561361139,
+          "filled_at_ms": 1790561361141,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -405,7 +406,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83654.15",
         "qty": "0.000175336",
@@ -417,8 +418,8 @@
       "first_reflecting_read_issued_at_ms": 1790561360900,
       "first_reflecting_read_answered_at_ms": 1790561361173,
       "first_reflecting_read_cash_usd": 99937.67,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 198
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 75
     },
     {
       "execution_id": "fixture-exec-0006",
@@ -435,17 +436,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.67,
       "raw_event": {
-        "at": "2026-09-28T02:09:22.004004Z",
+        "at_ms": 1790561362004,
         "event_id": "01M3JWC82MEYCCE2DASSD6YZP8",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:21.96105689Z",
+        "timestamp_ms": 1790561361961,
         "order": {
           "id": "fixture-order-0006",
           "client_order_id": "fixture-client-0006",
-          "created_at": "2026-09-28T02:09:21.959846532Z",
-          "updated_at": "2026-09-28T02:09:22.003498841Z",
-          "submitted_at": "2026-09-28T02:09:21.959846532Z",
-          "filled_at": "2026-09-28T02:09:21.96105689Z",
+          "created_at_ms": 1790561361959,
+          "updated_at_ms": 1790561362003,
+          "submitted_at_ms": 1790561361959,
+          "filled_at_ms": 1790561361961,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -474,7 +475,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83693.79",
         "qty": "0.000175748",
@@ -486,8 +487,8 @@
       "first_reflecting_read_issued_at_ms": 1790561361717,
       "first_reflecting_read_answered_at_ms": 1790561362004,
       "first_reflecting_read_cash_usd": 99922.96,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 234
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 53
     },
     {
       "execution_id": "fixture-exec-0007",
@@ -504,17 +505,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.96,
       "raw_event": {
-        "at": "2026-09-28T02:09:22.954413Z",
+        "at_ms": 1790561362954,
         "event_id": "01M3JWC90AWRHN59J7TDDDE4TX",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:22.941447167Z",
+        "timestamp_ms": 1790561362941,
         "order": {
           "id": "fixture-order-0007",
           "client_order_id": "fixture-client-0007",
-          "created_at": "2026-09-28T02:09:22.939543021Z",
-          "updated_at": "2026-09-28T02:09:22.953940868Z",
-          "submitted_at": "2026-09-28T02:09:22.939543021Z",
-          "filled_at": "2026-09-28T02:09:22.941447167Z",
+          "created_at_ms": 1790561362939,
+          "updated_at_ms": 1790561362953,
+          "submitted_at_ms": 1790561362939,
+          "filled_at_ms": 1790561362941,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -543,7 +544,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83655.95",
         "qty": "0.000175308",
@@ -555,8 +556,8 @@
       "first_reflecting_read_issued_at_ms": 1790561362565,
       "first_reflecting_read_answered_at_ms": 1790561363007,
       "first_reflecting_read_cash_usd": 99937.59,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 337
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 105
     },
     {
       "execution_id": "fixture-exec-0008",
@@ -573,17 +574,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.59,
       "raw_event": {
-        "at": "2026-09-28T02:09:23.804352Z",
+        "at_ms": 1790561363804,
         "event_id": "01M3JWC9TWD3W9Y04RQ8EJDJ4Z",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:23.768939628Z",
+        "timestamp_ms": 1790561363768,
         "order": {
           "id": "fixture-order-0008",
           "client_order_id": "fixture-client-0008",
-          "created_at": "2026-09-28T02:09:23.767679157Z",
-          "updated_at": "2026-09-28T02:09:23.803905497Z",
-          "submitted_at": "2026-09-28T02:09:23.767679157Z",
-          "filled_at": "2026-09-28T02:09:23.768939628Z",
+          "created_at_ms": 1790561363767,
+          "updated_at_ms": 1790561363803,
+          "submitted_at_ms": 1790561363767,
+          "filled_at_ms": 1790561363768,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -612,7 +613,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83648.78",
         "qty": "0.000175827",
@@ -624,8 +625,8 @@
       "first_reflecting_read_issued_at_ms": 1790561363612,
       "first_reflecting_read_answered_at_ms": 1790561363878,
       "first_reflecting_read_cash_usd": 99922.88,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 135
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 131
     },
     {
       "execution_id": "fixture-exec-0009",
@@ -642,17 +643,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.88,
       "raw_event": {
-        "at": "2026-09-28T02:09:24.704405Z",
+        "at_ms": 1790561364704,
         "event_id": "01M3JWCAQ0NBMWGJ90TPVY05VT",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:24.685603361Z",
+        "timestamp_ms": 1790561364685,
         "order": {
           "id": "fixture-order-0009",
           "client_order_id": "fixture-client-0009",
-          "created_at": "2026-09-28T02:09:24.684097208Z",
-          "updated_at": "2026-09-28T02:09:24.703895766Z",
-          "submitted_at": "2026-09-28T02:09:24.684097208Z",
-          "filled_at": "2026-09-28T02:09:24.685603361Z",
+          "created_at_ms": 1790561364684,
+          "updated_at_ms": 1790561364703,
+          "submitted_at_ms": 1790561364684,
+          "filled_at_ms": 1790561364685,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -681,7 +682,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83648.31",
         "qty": "0.00011955",
@@ -693,8 +694,8 @@
       "first_reflecting_read_issued_at_ms": 1790561364459,
       "first_reflecting_read_answered_at_ms": 1790561364747,
       "first_reflecting_read_cash_usd": 99937.5,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 191
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 97
     },
     {
       "execution_id": "fixture-exec-0010",
@@ -711,17 +712,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.88,
       "raw_event": {
-        "at": "2026-09-28T02:09:24.704419Z",
+        "at_ms": 1790561364704,
         "event_id": "01M3JWCAQ0NBMWGJ90TV5SW6G8",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:24.685618731Z",
+        "timestamp_ms": 1790561364685,
         "order": {
           "id": "fixture-order-0009",
           "client_order_id": "fixture-client-0009",
-          "created_at": "2026-09-28T02:09:24.684097208Z",
-          "updated_at": "2026-09-28T02:09:24.703950188Z",
-          "submitted_at": "2026-09-28T02:09:24.684097208Z",
-          "filled_at": "2026-09-28T02:09:24.685618731Z",
+          "created_at_ms": 1790561364684,
+          "updated_at_ms": 1790561364703,
+          "submitted_at_ms": 1790561364684,
+          "filled_at_ms": 1790561364685,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -750,7 +751,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83646.05",
         "qty": "0.000055837",
@@ -762,8 +763,8 @@
       "first_reflecting_read_issued_at_ms": 1790561364459,
       "first_reflecting_read_answered_at_ms": 1790561364747,
       "first_reflecting_read_cash_usd": 99937.5,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 191
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 97
     },
     {
       "execution_id": "fixture-exec-0011",
@@ -780,17 +781,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.5,
       "raw_event": {
-        "at": "2026-09-28T02:09:25.554619Z",
+        "at_ms": 1790561365554,
         "event_id": "01M3JWCBHJKCZZRKF11NRNAFPH",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:25.53486155Z",
+        "timestamp_ms": 1790561365534,
         "order": {
           "id": "fixture-order-0010",
           "client_order_id": "fixture-client-0010",
-          "created_at": "2026-09-28T02:09:25.533586436Z",
-          "updated_at": "2026-09-28T02:09:25.554185294Z",
-          "submitted_at": "2026-09-28T02:09:25.533586436Z",
-          "filled_at": "2026-09-28T02:09:25.53486155Z",
+          "created_at_ms": 1790561365533,
+          "updated_at_ms": 1790561365554,
+          "submitted_at_ms": 1790561365533,
+          "filled_at_ms": 1790561365534,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -819,7 +820,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83654.66",
         "qty": "0.000175845",
@@ -831,8 +832,8 @@
       "first_reflecting_read_issued_at_ms": 1790561365315,
       "first_reflecting_read_answered_at_ms": 1790561365630,
       "first_reflecting_read_cash_usd": 99922.79,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 181
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 134
     },
     {
       "execution_id": "fixture-exec-0012",
@@ -849,17 +850,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.79,
       "raw_event": {
-        "at": "2026-09-28T02:09:26.604374Z",
+        "at_ms": 1790561366604,
         "event_id": "01M3JWCCJCKW5GJDTFCPSX6QHP",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:26.600065218Z",
+        "timestamp_ms": 1790561366600,
         "order": {
           "id": "fixture-order-0011",
           "client_order_id": "fixture-client-0011",
-          "created_at": "2026-09-28T02:09:26.598169166Z",
-          "updated_at": "2026-09-28T02:09:26.603883367Z",
-          "submitted_at": "2026-09-28T02:09:26.598169166Z",
-          "filled_at": "2026-09-28T02:09:26.600065218Z",
+          "created_at_ms": 1790561366598,
+          "updated_at_ms": 1790561366603,
+          "submitted_at_ms": 1790561366598,
+          "filled_at_ms": 1790561366600,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -888,7 +889,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83649.26",
         "qty": "0.000175405",
@@ -900,8 +901,8 @@
       "first_reflecting_read_issued_at_ms": 1790561366471,
       "first_reflecting_read_answered_at_ms": 1790561366754,
       "first_reflecting_read_cash_usd": 99937.42,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 72
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 211
     },
     {
       "execution_id": "fixture-exec-0013",
@@ -918,17 +919,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.42,
       "raw_event": {
-        "at": "2026-09-28T02:09:27.603953Z",
+        "at_ms": 1790561367603,
         "event_id": "01M3JWCDHKFNV5S5CBKNPH6CJQ",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:27.572925196Z",
+        "timestamp_ms": 1790561367572,
         "order": {
           "id": "fixture-order-0012",
           "client_order_id": "fixture-client-0012",
-          "created_at": "2026-09-28T02:09:27.57149577Z",
-          "updated_at": "2026-09-28T02:09:27.603431845Z",
-          "submitted_at": "2026-09-28T02:09:27.57149577Z",
-          "filled_at": "2026-09-28T02:09:27.572925196Z",
+          "created_at_ms": 1790561367571,
+          "updated_at_ms": 1790561367603,
+          "submitted_at_ms": 1790561367571,
+          "filled_at_ms": 1790561367572,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -957,7 +958,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83651.84",
         "qty": "0.000175845",
@@ -969,8 +970,8 @@
       "first_reflecting_read_issued_at_ms": 1790561367323,
       "first_reflecting_read_answered_at_ms": 1790561367753,
       "first_reflecting_read_cash_usd": 99922.71,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 222
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 208
     },
     {
       "execution_id": "fixture-exec-0014",
@@ -987,17 +988,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.71,
       "raw_event": {
-        "at": "2026-09-28T02:09:28.70424Z",
+        "at_ms": 1790561368704,
         "event_id": "01M3JWCEM0ERTN26NP8DS961A8",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:28.660796652Z",
+        "timestamp_ms": 1790561368660,
         "order": {
           "id": "fixture-order-0013",
           "client_order_id": "fixture-client-0013",
-          "created_at": "2026-09-28T02:09:28.659240523Z",
-          "updated_at": "2026-09-28T02:09:28.703632091Z",
-          "submitted_at": "2026-09-28T02:09:28.659240523Z",
-          "filled_at": "2026-09-28T02:09:28.660796652Z",
+          "created_at_ms": 1790561368659,
+          "updated_at_ms": 1790561368703,
+          "submitted_at_ms": 1790561368659,
+          "filled_at_ms": 1790561368660,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1026,7 +1027,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83646.05",
         "qty": "0.000007818",
@@ -1038,8 +1039,8 @@
       "first_reflecting_read_issued_at_ms": 1790561368298,
       "first_reflecting_read_answered_at_ms": 1790561368705,
       "first_reflecting_read_cash_usd": 99937.33,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 349
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 58
     },
     {
       "execution_id": "fixture-exec-0015",
@@ -1056,17 +1057,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.71,
       "raw_event": {
-        "at": "2026-09-28T02:09:28.704254Z",
+        "at_ms": 1790561368704,
         "event_id": "01M3JWCEM0ERTN26NP8DWTAH4X",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:28.660810672Z",
+        "timestamp_ms": 1790561368660,
         "order": {
           "id": "fixture-order-0013",
           "client_order_id": "fixture-client-0013",
-          "created_at": "2026-09-28T02:09:28.659240523Z",
-          "updated_at": "2026-09-28T02:09:28.7036843Z",
-          "submitted_at": "2026-09-28T02:09:28.659240523Z",
-          "filled_at": "2026-09-28T02:09:28.660810672Z",
+          "created_at_ms": 1790561368659,
+          "updated_at_ms": 1790561368703,
+          "submitted_at_ms": 1790561368659,
+          "filled_at_ms": 1790561368660,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1095,7 +1096,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83643.47",
         "qty": "0.000167587",
@@ -1107,8 +1108,8 @@
       "first_reflecting_read_issued_at_ms": 1790561368298,
       "first_reflecting_read_answered_at_ms": 1790561368705,
       "first_reflecting_read_cash_usd": 99937.33,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 349
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 58
     },
     {
       "execution_id": "fixture-exec-0016",
@@ -1125,17 +1126,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.33,
       "raw_event": {
-        "at": "2026-09-28T02:09:29.604003Z",
+        "at_ms": 1790561369604,
         "event_id": "01M3JWCFG49FXX7C26G1S0ZSD1",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:29.562136617Z",
+        "timestamp_ms": 1790561369562,
         "order": {
           "id": "fixture-order-0014",
           "client_order_id": "fixture-client-0014",
-          "created_at": "2026-09-28T02:09:29.560695799Z",
-          "updated_at": "2026-09-28T02:09:29.603488359Z",
-          "submitted_at": "2026-09-28T02:09:29.560695799Z",
-          "filled_at": "2026-09-28T02:09:29.562136617Z",
+          "created_at_ms": 1790561369560,
+          "updated_at_ms": 1790561369603,
+          "submitted_at_ms": 1790561369560,
+          "filled_at_ms": 1790561369562,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1164,7 +1165,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83625.05",
         "qty": "0.000167637",
@@ -1176,8 +1177,8 @@
       "first_reflecting_read_issued_at_ms": 1790561369292,
       "first_reflecting_read_answered_at_ms": 1790561369721,
       "first_reflecting_read_cash_usd": 99922.62,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 254
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 175
     },
     {
       "execution_id": "fixture-exec-0017",
@@ -1194,17 +1195,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.33,
       "raw_event": {
-        "at": "2026-09-28T02:09:29.604014Z",
+        "at_ms": 1790561369604,
         "event_id": "01M3JWCFG49FXX7C26G5QYESFE",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:29.562152977Z",
+        "timestamp_ms": 1790561369562,
         "order": {
           "id": "fixture-order-0014",
           "client_order_id": "fixture-client-0014",
-          "created_at": "2026-09-28T02:09:29.560695799Z",
-          "updated_at": "2026-09-28T02:09:29.603538975Z",
-          "submitted_at": "2026-09-28T02:09:29.560695799Z",
-          "filled_at": "2026-09-28T02:09:29.562152977Z",
+          "created_at_ms": 1790561369560,
+          "updated_at_ms": 1790561369603,
+          "submitted_at_ms": 1790561369560,
+          "filled_at_ms": 1790561369562,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1233,7 +1234,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83648.4",
         "qty": "0.000008208",
@@ -1245,8 +1246,8 @@
       "first_reflecting_read_issued_at_ms": 1790561369292,
       "first_reflecting_read_answered_at_ms": 1790561369721,
       "first_reflecting_read_cash_usd": 99922.62,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 254
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 175
     },
     {
       "execution_id": "fixture-exec-0018",
@@ -1263,17 +1264,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.62,
       "raw_event": {
-        "at": "2026-09-28T02:09:30.553931Z",
+        "at_ms": 1790561370553,
         "event_id": "01M3JWCGDS130PMHV2FYFM2Q8Z",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:30.527298565Z",
+        "timestamp_ms": 1790561370527,
         "order": {
           "id": "fixture-order-0015",
           "client_order_id": "fixture-client-0015",
-          "created_at": "2026-09-28T02:09:30.525450807Z",
-          "updated_at": "2026-09-28T02:09:30.553449676Z",
-          "submitted_at": "2026-09-28T02:09:30.525450807Z",
-          "filled_at": "2026-09-28T02:09:30.527298565Z",
+          "created_at_ms": 1790561370525,
+          "updated_at_ms": 1790561370553,
+          "submitted_at_ms": 1790561370525,
+          "filled_at_ms": 1790561370527,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1302,7 +1303,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83622.47",
         "qty": "0.00006642",
@@ -1314,8 +1315,8 @@
       "first_reflecting_read_issued_at_ms": 1790561370323,
       "first_reflecting_read_answered_at_ms": 1790561370608,
       "first_reflecting_read_cash_usd": 99937.23,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 172
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 113
     },
     {
       "execution_id": "fixture-exec-0019",
@@ -1332,17 +1333,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.62,
       "raw_event": {
-        "at": "2026-09-28T02:09:30.553944Z",
+        "at_ms": 1790561370553,
         "event_id": "01M3JWCGDS130PMHV2FZYJEAEF",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:30.527313235Z",
+        "timestamp_ms": 1790561370527,
         "order": {
           "id": "fixture-order-0015",
           "client_order_id": "fixture-client-0015",
-          "created_at": "2026-09-28T02:09:30.525450807Z",
-          "updated_at": "2026-09-28T02:09:30.553503366Z",
-          "submitted_at": "2026-09-28T02:09:30.525450807Z",
-          "filled_at": "2026-09-28T02:09:30.527313235Z",
+          "created_at_ms": 1790561370525,
+          "updated_at_ms": 1790561370553,
+          "submitted_at_ms": 1790561370525,
+          "filled_at_ms": 1790561370527,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1371,7 +1372,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83622.47",
         "qty": "0.000108984",
@@ -1383,8 +1384,8 @@
       "first_reflecting_read_issued_at_ms": 1790561370323,
       "first_reflecting_read_answered_at_ms": 1790561370608,
       "first_reflecting_read_cash_usd": 99937.23,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 172
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 113
     },
     {
       "execution_id": "fixture-exec-0020",
@@ -1401,17 +1402,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.23,
       "raw_event": {
-        "at": "2026-09-28T02:09:31.404135Z",
+        "at_ms": 1790561371404,
         "event_id": "01M3JWCH8C1ZVRFHYFSG5F1CJG",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:31.380428174Z",
+        "timestamp_ms": 1790561371380,
         "order": {
           "id": "fixture-order-0016",
           "client_order_id": "fixture-client-0016",
-          "created_at": "2026-09-28T02:09:31.379123158Z",
-          "updated_at": "2026-09-28T02:09:31.403616699Z",
-          "submitted_at": "2026-09-28T02:09:31.379123158Z",
-          "filled_at": "2026-09-28T02:09:31.380428174Z",
+          "created_at_ms": 1790561371379,
+          "updated_at_ms": 1790561371403,
+          "submitted_at_ms": 1790561371379,
+          "filled_at_ms": 1790561371380,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1440,7 +1441,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83625.05",
         "qty": "0.00011959",
@@ -1452,8 +1453,9 @@
       "first_reflecting_read_issued_at_ms": 1790561371036,
       "first_reflecting_read_answered_at_ms": 1790561371322,
       "first_reflecting_read_cash_usd": 99922.23,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 310
+      "status": "led_stream",
+      "visibility_bound_ms": 0,
+      "cash_led_receipt_by_ms": 24
     },
     {
       "execution_id": "fixture-exec-0021",
@@ -1470,17 +1472,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.23,
       "raw_event": {
-        "at": "2026-09-28T02:09:31.404149Z",
+        "at_ms": 1790561371404,
         "event_id": "01M3JWCH8C1ZVRFHYFSK0JNT06",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:31.380435924Z",
+        "timestamp_ms": 1790561371380,
         "order": {
           "id": "fixture-order-0016",
           "client_order_id": "fixture-client-0016",
-          "created_at": "2026-09-28T02:09:31.379123158Z",
-          "updated_at": "2026-09-28T02:09:31.403670299Z",
-          "submitted_at": "2026-09-28T02:09:31.379123158Z",
-          "filled_at": "2026-09-28T02:09:31.380435924Z",
+          "created_at_ms": 1790561371379,
+          "updated_at_ms": 1790561371403,
+          "submitted_at_ms": 1790561371379,
+          "filled_at_ms": 1790561371380,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1509,7 +1511,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83675.056",
         "qty": "0.000056257",
@@ -1521,8 +1523,9 @@
       "first_reflecting_read_issued_at_ms": 1790561371036,
       "first_reflecting_read_answered_at_ms": 1790561371322,
       "first_reflecting_read_cash_usd": 99922.23,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 310
+      "status": "led_stream",
+      "visibility_bound_ms": 0,
+      "cash_led_receipt_by_ms": 24
     },
     {
       "execution_id": "fixture-exec-0022",
@@ -1539,17 +1542,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.52,
       "raw_event": {
-        "at": "2026-09-28T02:09:32.504813Z",
+        "at_ms": 1790561372504,
         "event_id": "01M3JWCJAR5A728D2EQSMRZ1VF",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:32.458676921Z",
+        "timestamp_ms": 1790561372458,
         "order": {
           "id": "fixture-order-0017",
           "client_order_id": "fixture-client-0017",
-          "created_at": "2026-09-28T02:09:32.456968281Z",
-          "updated_at": "2026-09-28T02:09:32.504223375Z",
-          "submitted_at": "2026-09-28T02:09:32.456968281Z",
-          "filled_at": "2026-09-28T02:09:32.458676921Z",
+          "created_at_ms": 1790561372456,
+          "updated_at_ms": 1790561372504,
+          "submitted_at_ms": 1790561372456,
+          "filled_at_ms": 1790561372458,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1578,7 +1581,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83622.47",
         "qty": "0.000010606",
@@ -1590,8 +1593,8 @@
       "first_reflecting_read_issued_at_ms": 1790561372192,
       "first_reflecting_read_answered_at_ms": 1790561372483,
       "first_reflecting_read_cash_usd": 99937.14,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 254
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 37
     },
     {
       "execution_id": "fixture-exec-0023",
@@ -1608,17 +1611,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.52,
       "raw_event": {
-        "at": "2026-09-28T02:09:32.504829Z",
+        "at_ms": 1790561372504,
         "event_id": "01M3JWCJAR5A728D2EQYNDSFY3",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:32.458691311Z",
+        "timestamp_ms": 1790561372458,
         "order": {
           "id": "fixture-order-0017",
           "client_order_id": "fixture-client-0017",
-          "created_at": "2026-09-28T02:09:32.456968281Z",
-          "updated_at": "2026-09-28T02:09:32.504283976Z",
-          "submitted_at": "2026-09-28T02:09:32.456968281Z",
-          "filled_at": "2026-09-28T02:09:32.458691311Z",
+          "created_at_ms": 1790561372456,
+          "updated_at_ms": 1790561372504,
+          "submitted_at_ms": 1790561372456,
+          "filled_at_ms": 1790561372458,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1647,7 +1650,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83621.5",
         "qty": "0.00011959",
@@ -1659,8 +1662,8 @@
       "first_reflecting_read_issued_at_ms": 1790561372192,
       "first_reflecting_read_answered_at_ms": 1790561372483,
       "first_reflecting_read_cash_usd": 99937.14,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 255
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 36
     },
     {
       "execution_id": "fixture-exec-0024",
@@ -1677,17 +1680,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.52,
       "raw_event": {
-        "at": "2026-09-28T02:09:32.504836Z",
+        "at_ms": 1790561372504,
         "event_id": "01M3JWCJAR5A728D2EQZ2ZAADN",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:32.458699771Z",
+        "timestamp_ms": 1790561372458,
         "order": {
           "id": "fixture-order-0017",
           "client_order_id": "fixture-client-0017",
-          "created_at": "2026-09-28T02:09:32.456968281Z",
-          "updated_at": "2026-09-28T02:09:32.504317706Z",
-          "submitted_at": "2026-09-28T02:09:32.456968281Z",
-          "filled_at": "2026-09-28T02:09:32.458699771Z",
+          "created_at_ms": 1790561372456,
+          "updated_at_ms": 1790561372504,
+          "submitted_at_ms": 1790561372456,
+          "filled_at_ms": 1790561372458,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1716,7 +1719,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83605.01",
         "qty": "0.000045211",
@@ -1728,8 +1731,8 @@
       "first_reflecting_read_issued_at_ms": 1790561372192,
       "first_reflecting_read_answered_at_ms": 1790561372483,
       "first_reflecting_read_cash_usd": 99937.14,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 255
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 36
     },
     {
       "execution_id": "fixture-exec-0025",
@@ -1746,17 +1749,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.14,
       "raw_event": {
-        "at": "2026-09-28T02:09:33.404242Z",
+        "at_ms": 1790561373404,
         "event_id": "01M3JWCK6WEPNG7X9AE0BY119X",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:33.388519922Z",
+        "timestamp_ms": 1790561373388,
         "order": {
           "id": "fixture-order-0018",
           "client_order_id": "fixture-client-0018",
-          "created_at": "2026-09-28T02:09:33.387108064Z",
-          "updated_at": "2026-09-28T02:09:33.403813272Z",
-          "submitted_at": "2026-09-28T02:09:33.387108064Z",
-          "filled_at": "2026-09-28T02:09:33.388519922Z",
+          "created_at_ms": 1790561373387,
+          "updated_at_ms": 1790561373403,
+          "submitted_at_ms": 1790561373387,
+          "filled_at_ms": 1790561373388,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1785,7 +1788,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83635.4",
         "qty": "0.000175859",
@@ -1797,8 +1800,8 @@
       "first_reflecting_read_issued_at_ms": 1790561373082,
       "first_reflecting_read_answered_at_ms": 1790561373393,
       "first_reflecting_read_cash_usd": 99922.43,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 266
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 45
     },
     {
       "execution_id": "fixture-exec-0026",
@@ -1815,17 +1818,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.43,
       "raw_event": {
-        "at": "2026-09-28T02:09:34.404542Z",
+        "at_ms": 1790561374404,
         "event_id": "01M3JWCM64SC797P8MX9V3GZ1W",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:34.35756065Z",
+        "timestamp_ms": 1790561374357,
         "order": {
           "id": "fixture-order-0019",
           "client_order_id": "fixture-client-0019",
-          "created_at": "2026-09-28T02:09:34.355539686Z",
-          "updated_at": "2026-09-28T02:09:34.40397478Z",
-          "submitted_at": "2026-09-28T02:09:34.355539686Z",
-          "filled_at": "2026-09-28T02:09:34.35756065Z",
+          "created_at_ms": 1790561374355,
+          "updated_at_ms": 1790561374403,
+          "submitted_at_ms": 1790561374355,
+          "filled_at_ms": 1790561374357,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1854,7 +1857,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83615.98",
         "qty": "0.00011959",
@@ -1866,8 +1869,8 @@
       "first_reflecting_read_issued_at_ms": 1790561374068,
       "first_reflecting_read_answered_at_ms": 1790561374351,
       "first_reflecting_read_cash_usd": 99937.05,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 279
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 4
     },
     {
       "execution_id": "fixture-exec-0027",
@@ -1884,17 +1887,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.43,
       "raw_event": {
-        "at": "2026-09-28T02:09:34.404558Z",
+        "at_ms": 1790561374404,
         "event_id": "01M3JWCM64SC797P8MXB0B1K8B",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:34.35757957Z",
+        "timestamp_ms": 1790561374357,
         "order": {
           "id": "fixture-order-0019",
           "client_order_id": "fixture-client-0019",
-          "created_at": "2026-09-28T02:09:34.355539686Z",
-          "updated_at": "2026-09-28T02:09:34.40402872Z",
-          "submitted_at": "2026-09-28T02:09:34.355539686Z",
-          "filled_at": "2026-09-28T02:09:34.35757957Z",
+          "created_at_ms": 1790561374355,
+          "updated_at_ms": 1790561374404,
+          "submitted_at_ms": 1790561374355,
+          "filled_at_ms": 1790561374357,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1923,7 +1926,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000055829",
@@ -1935,8 +1938,8 @@
       "first_reflecting_read_issued_at_ms": 1790561374068,
       "first_reflecting_read_answered_at_ms": 1790561374351,
       "first_reflecting_read_cash_usd": 99937.05,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 279
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 4
     },
     {
       "execution_id": "fixture-exec-0028",
@@ -1953,17 +1956,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99937.05,
       "raw_event": {
-        "at": "2026-09-28T02:09:35.304645Z",
+        "at_ms": 1790561375304,
         "event_id": "01M3JWCN287X1Y4FDVTTB4MH71",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:35.289948741Z",
+        "timestamp_ms": 1790561375289,
         "order": {
           "id": "fixture-order-0020",
           "client_order_id": "fixture-client-0020",
-          "created_at": "2026-09-28T02:09:35.288420662Z",
-          "updated_at": "2026-09-28T02:09:35.304160592Z",
-          "submitted_at": "2026-09-28T02:09:35.288420662Z",
-          "filled_at": "2026-09-28T02:09:35.289948741Z",
+          "created_at_ms": 1790561375288,
+          "updated_at_ms": 1790561375304,
+          "submitted_at_ms": 1790561375288,
+          "filled_at_ms": 1790561375289,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -1992,7 +1995,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83618.56",
         "qty": "0.000175859",
@@ -2004,8 +2007,8 @@
       "first_reflecting_read_issued_at_ms": 1790561375071,
       "first_reflecting_read_answered_at_ms": 1790561375347,
       "first_reflecting_read_cash_usd": 99922.34,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 175
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 101
     },
     {
       "execution_id": "fixture-exec-0029",
@@ -2022,17 +2025,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.34,
       "raw_event": {
-        "at": "2026-09-28T02:09:36.60454Z",
+        "at_ms": 1790561376604,
         "event_id": "01M3JWCPAWP3GNSTMWJFWHM655",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:36.572531719Z",
+        "timestamp_ms": 1790561376572,
         "order": {
           "id": "fixture-order-0021",
           "client_order_id": "fixture-client-0021",
-          "created_at": "2026-09-28T02:09:36.570814231Z",
-          "updated_at": "2026-09-28T02:09:36.604016966Z",
-          "submitted_at": "2026-09-28T02:09:36.570814231Z",
-          "filled_at": "2026-09-28T02:09:36.572531719Z",
+          "created_at_ms": 1790561376570,
+          "updated_at_ms": 1790561376604,
+          "submitted_at_ms": 1790561376570,
+          "filled_at_ms": 1790561376572,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2061,7 +2064,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000063771",
@@ -2073,8 +2076,8 @@
       "first_reflecting_read_issued_at_ms": 1790561376222,
       "first_reflecting_read_answered_at_ms": 1790561376577,
       "first_reflecting_read_cash_usd": 99936.96,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 327
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 28
     },
     {
       "execution_id": "fixture-exec-0030",
@@ -2091,17 +2094,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.34,
       "raw_event": {
-        "at": "2026-09-28T02:09:36.604554Z",
+        "at_ms": 1790561376604,
         "event_id": "01M3JWCPAWP3GNSTMWJGK8JXFR",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:36.572545679Z",
+        "timestamp_ms": 1790561376572,
         "order": {
           "id": "fixture-order-0021",
           "client_order_id": "fixture-client-0021",
-          "created_at": "2026-09-28T02:09:36.570814231Z",
-          "updated_at": "2026-09-28T02:09:36.60406633Z",
-          "submitted_at": "2026-09-28T02:09:36.570814231Z",
-          "filled_at": "2026-09-28T02:09:36.572545679Z",
+          "created_at_ms": 1790561376570,
+          "updated_at_ms": 1790561376604,
+          "submitted_at_ms": 1790561376570,
+          "filled_at_ms": 1790561376572,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2130,7 +2133,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000111648",
@@ -2142,8 +2145,8 @@
       "first_reflecting_read_issued_at_ms": 1790561376222,
       "first_reflecting_read_answered_at_ms": 1790561376577,
       "first_reflecting_read_cash_usd": 99936.96,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 329
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 26
     },
     {
       "execution_id": "fixture-exec-0031",
@@ -2160,17 +2163,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.96,
       "raw_event": {
-        "at": "2026-09-28T02:09:37.454323Z",
+        "at_ms": 1790561377454,
         "event_id": "01M3JWCQ5E6R7PJRVY6ATBX6XC",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:37.421561479Z",
+        "timestamp_ms": 1790561377421,
         "order": {
           "id": "fixture-order-0022",
           "client_order_id": "fixture-client-0022",
-          "created_at": "2026-09-28T02:09:37.420380183Z",
-          "updated_at": "2026-09-28T02:09:37.453846773Z",
-          "submitted_at": "2026-09-28T02:09:37.420380183Z",
-          "filled_at": "2026-09-28T02:09:37.421561479Z",
+          "created_at_ms": 1790561377420,
+          "updated_at_ms": 1790561377453,
+          "submitted_at_ms": 1790561377420,
+          "filled_at_ms": 1790561377421,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2199,7 +2202,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83615.19",
         "qty": "0.000175859",
@@ -2211,8 +2214,8 @@
       "first_reflecting_read_issued_at_ms": 1790561377171,
       "first_reflecting_read_answered_at_ms": 1790561377474,
       "first_reflecting_read_cash_usd": 99922.26,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 226
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 77
     },
     {
       "execution_id": "fixture-exec-0032",
@@ -2229,17 +2232,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.26,
       "raw_event": {
-        "at": "2026-09-28T02:09:38.60464Z",
+        "at_ms": 1790561378604,
         "event_id": "01M3JWCR9C9EPT1VPJRKAZWDKQ",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:38.55911567Z",
+        "timestamp_ms": 1790561378559,
         "order": {
           "id": "fixture-order-0023",
           "client_order_id": "fixture-client-0023",
-          "created_at": "2026-09-28T02:09:38.557438157Z",
-          "updated_at": "2026-09-28T02:09:38.604158959Z",
-          "submitted_at": "2026-09-28T02:09:38.557438157Z",
-          "filled_at": "2026-09-28T02:09:38.55911567Z",
+          "created_at_ms": 1790561378557,
+          "updated_at_ms": 1790561378604,
+          "submitted_at_ms": 1790561378557,
+          "filled_at_ms": 1790561378559,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2268,7 +2271,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000127552",
@@ -2280,8 +2283,8 @@
       "first_reflecting_read_issued_at_ms": 1790561378361,
       "first_reflecting_read_answered_at_ms": 1790561378631,
       "first_reflecting_read_cash_usd": 99936.87,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 190
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 80
     },
     {
       "execution_id": "fixture-exec-0033",
@@ -2298,17 +2301,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.26,
       "raw_event": {
-        "at": "2026-09-28T02:09:38.60467Z",
+        "at_ms": 1790561378604,
         "event_id": "01M3JWCR9C9EPT1VPJRQJ7P70D",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:38.5591275Z",
+        "timestamp_ms": 1790561378559,
         "order": {
           "id": "fixture-order-0023",
           "client_order_id": "fixture-client-0023",
-          "created_at": "2026-09-28T02:09:38.557438157Z",
-          "updated_at": "2026-09-28T02:09:38.604218979Z",
-          "submitted_at": "2026-09-28T02:09:38.557438157Z",
-          "filled_at": "2026-09-28T02:09:38.5591275Z",
+          "created_at_ms": 1790561378557,
+          "updated_at_ms": 1790561378604,
+          "submitted_at_ms": 1790561378557,
+          "filled_at_ms": 1790561378559,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2337,7 +2340,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000047867",
@@ -2349,8 +2352,8 @@
       "first_reflecting_read_issued_at_ms": 1790561378361,
       "first_reflecting_read_answered_at_ms": 1790561378631,
       "first_reflecting_read_cash_usd": 99936.87,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 190
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 80
     },
     {
       "execution_id": "fixture-exec-0034",
@@ -2367,17 +2370,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.87,
       "raw_event": {
-        "at": "2026-09-28T02:09:39.453993Z",
+        "at_ms": 1790561379453,
         "event_id": "01M3JWCS3XSW4WMVK54QKWHBPB",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:39.447327676Z",
+        "timestamp_ms": 1790561379447,
         "order": {
           "id": "fixture-order-0024",
           "client_order_id": "fixture-client-0024",
-          "created_at": "2026-09-28T02:09:39.445998421Z",
-          "updated_at": "2026-09-28T02:09:39.453574455Z",
-          "submitted_at": "2026-09-28T02:09:39.445998421Z",
-          "filled_at": "2026-09-28T02:09:39.447327676Z",
+          "created_at_ms": 1790561379445,
+          "updated_at_ms": 1790561379453,
+          "submitted_at_ms": 1790561379445,
+          "filled_at_ms": 1790561379447,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2406,7 +2409,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83649.12",
         "qty": "0.000175859",
@@ -2418,8 +2421,8 @@
       "first_reflecting_read_issued_at_ms": 1790561379353,
       "first_reflecting_read_answered_at_ms": 1790561379621,
       "first_reflecting_read_cash_usd": 99922.16,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 35
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 233
     },
     {
       "execution_id": "fixture-exec-0035",
@@ -2436,17 +2439,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.16,
       "raw_event": {
-        "at": "2026-09-28T02:09:40.404297Z",
+        "at_ms": 1790561380404,
         "event_id": "01M3JWCT1MRP3ZDNC4R4RGGF6M",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:40.376376097Z",
+        "timestamp_ms": 1790561380376,
         "order": {
           "id": "fixture-order-0025",
           "client_order_id": "fixture-client-0025",
-          "created_at": "2026-09-28T02:09:40.374622992Z",
-          "updated_at": "2026-09-28T02:09:40.40389497Z",
-          "submitted_at": "2026-09-28T02:09:40.374622992Z",
-          "filled_at": "2026-09-28T02:09:40.376376097Z",
+          "created_at_ms": 1790561380374,
+          "updated_at_ms": 1790561380403,
+          "submitted_at_ms": 1790561380374,
+          "filled_at_ms": 1790561380376,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2475,7 +2478,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000175419",
@@ -2487,8 +2490,8 @@
       "first_reflecting_read_issued_at_ms": 1790561379930,
       "first_reflecting_read_answered_at_ms": 1790561380419,
       "first_reflecting_read_cash_usd": 99936.79,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 425
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 64
     },
     {
       "execution_id": "fixture-exec-0036",
@@ -2505,17 +2508,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.79,
       "raw_event": {
-        "at": "2026-09-28T02:09:41.254094Z",
+        "at_ms": 1790561381254,
         "event_id": "01M3JWCTW6C2RY0A57M1ZEWZ5F",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:41.230110316Z",
+        "timestamp_ms": 1790561381230,
         "order": {
           "id": "fixture-order-0026",
           "client_order_id": "fixture-client-0026",
-          "created_at": "2026-09-28T02:09:41.22861343Z",
-          "updated_at": "2026-09-28T02:09:41.253561342Z",
-          "submitted_at": "2026-09-28T02:09:41.22861343Z",
-          "filled_at": "2026-09-28T02:09:41.230110316Z",
+          "created_at_ms": 1790561381228,
+          "updated_at_ms": 1790561381253,
+          "submitted_at_ms": 1790561381228,
+          "filled_at_ms": 1790561381230,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2544,7 +2547,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83615.19",
         "qty": "0.0001196",
@@ -2556,8 +2559,8 @@
       "first_reflecting_read_issued_at_ms": 1790561381155,
       "first_reflecting_read_answered_at_ms": 1790561381441,
       "first_reflecting_read_cash_usd": 99922.09,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 42
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 244
     },
     {
       "execution_id": "fixture-exec-0037",
@@ -2574,17 +2577,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.79,
       "raw_event": {
-        "at": "2026-09-28T02:09:41.254108Z",
+        "at_ms": 1790561381254,
         "event_id": "01M3JWCTW6C2RY0A57M5N8HXX9",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:41.230123816Z",
+        "timestamp_ms": 1790561381230,
         "order": {
           "id": "fixture-order-0026",
           "client_order_id": "fixture-client-0026",
-          "created_at": "2026-09-28T02:09:41.22861343Z",
-          "updated_at": "2026-09-28T02:09:41.253614402Z",
-          "submitted_at": "2026-09-28T02:09:41.22861343Z",
-          "filled_at": "2026-09-28T02:09:41.230123816Z",
+          "created_at_ms": 1790561381228,
+          "updated_at_ms": 1790561381253,
+          "submitted_at_ms": 1790561381228,
+          "filled_at_ms": 1790561381230,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2613,7 +2616,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83615.19",
         "qty": "0.000056254",
@@ -2625,8 +2628,8 @@
       "first_reflecting_read_issued_at_ms": 1790561381155,
       "first_reflecting_read_answered_at_ms": 1790561381441,
       "first_reflecting_read_cash_usd": 99922.09,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 42
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 244
     },
     {
       "execution_id": "fixture-exec-0038",
@@ -2643,17 +2646,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.09,
       "raw_event": {
-        "at": "2026-09-28T02:09:42.204704Z",
+        "at_ms": 1790561382204,
         "event_id": "01M3JWCVSWZ3C7JADWMHRD9C16",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:42.156983428Z",
+        "timestamp_ms": 1790561382156,
         "order": {
           "id": "fixture-order-0027",
           "client_order_id": "fixture-client-0027",
-          "created_at": "2026-09-28T02:09:42.155061816Z",
-          "updated_at": "2026-09-28T02:09:42.204175417Z",
-          "submitted_at": "2026-09-28T02:09:42.155061816Z",
-          "filled_at": "2026-09-28T02:09:42.156983428Z",
+          "created_at_ms": 1790561382155,
+          "updated_at_ms": 1790561382204,
+          "submitted_at_ms": 1790561382155,
+          "filled_at_ms": 1790561382156,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2682,7 +2685,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83615.17",
         "qty": "0.0001196",
@@ -2694,8 +2697,8 @@
       "first_reflecting_read_issued_at_ms": 1790561381992,
       "first_reflecting_read_answered_at_ms": 1790561382280,
       "first_reflecting_read_cash_usd": 99936.71,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 156
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 132
     },
     {
       "execution_id": "fixture-exec-0039",
@@ -2712,17 +2715,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.09,
       "raw_event": {
-        "at": "2026-09-28T02:09:42.204722Z",
+        "at_ms": 1790561382204,
         "event_id": "01M3JWCVSWZ3C7JADWMNR3ZP2J",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:42.156993298Z",
+        "timestamp_ms": 1790561382156,
         "order": {
           "id": "fixture-order-0027",
           "client_order_id": "fixture-client-0027",
-          "created_at": "2026-09-28T02:09:42.155061816Z",
-          "updated_at": "2026-09-28T02:09:42.20423052Z",
-          "submitted_at": "2026-09-28T02:09:42.155061816Z",
-          "filled_at": "2026-09-28T02:09:42.156993298Z",
+          "created_at_ms": 1790561382155,
+          "updated_at_ms": 1790561382204,
+          "submitted_at_ms": 1790561382155,
+          "filled_at_ms": 1790561382156,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2751,7 +2754,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83612.61",
         "qty": "0.000055814",
@@ -2763,8 +2766,8 @@
       "first_reflecting_read_issued_at_ms": 1790561381992,
       "first_reflecting_read_answered_at_ms": 1790561382280,
       "first_reflecting_read_cash_usd": 99936.71,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 156
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 132
     },
     {
       "execution_id": "fixture-exec-0040",
@@ -2781,17 +2784,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.71,
       "raw_event": {
-        "at": "2026-09-28T02:09:43.053726Z",
+        "at_ms": 1790561383053,
         "event_id": "01M3JWCWMD56GMRJB5535NX6A9",
         "event": "partial_fill",
-        "timestamp": "2026-09-28T02:09:43.024539106Z",
+        "timestamp_ms": 1790561383024,
         "order": {
           "id": "fixture-order-0028",
           "client_order_id": "fixture-client-0028",
-          "created_at": "2026-09-28T02:09:43.023483241Z",
-          "updated_at": "2026-09-28T02:09:43.053201569Z",
-          "submitted_at": "2026-09-28T02:09:43.023483241Z",
-          "filled_at": "2026-09-28T02:09:43.024539106Z",
+          "created_at_ms": 1790561383023,
+          "updated_at_ms": 1790561383053,
+          "submitted_at_ms": 1790561383023,
+          "filled_at_ms": 1790561383024,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2820,7 +2823,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83622.8",
         "qty": "0.00011959",
@@ -2832,8 +2835,8 @@
       "first_reflecting_read_issued_at_ms": 1790561382841,
       "first_reflecting_read_answered_at_ms": 1790561383131,
       "first_reflecting_read_cash_usd": 99922.0,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 154
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 136
     },
     {
       "execution_id": "fixture-exec-0041",
@@ -2850,17 +2853,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.71,
       "raw_event": {
-        "at": "2026-09-28T02:09:43.053736Z",
+        "at_ms": 1790561383053,
         "event_id": "01M3JWCWMD56GMRJB5556ER9ME",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:43.024548386Z",
+        "timestamp_ms": 1790561383024,
         "order": {
           "id": "fixture-order-0028",
           "client_order_id": "fixture-client-0028",
-          "created_at": "2026-09-28T02:09:43.023483241Z",
-          "updated_at": "2026-09-28T02:09:43.053250873Z",
-          "submitted_at": "2026-09-28T02:09:43.023483241Z",
-          "filled_at": "2026-09-28T02:09:43.024548386Z",
+          "created_at_ms": 1790561383023,
+          "updated_at_ms": 1790561383053,
+          "submitted_at_ms": 1790561383023,
+          "filled_at_ms": 1790561383024,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2889,7 +2892,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83644.6",
         "qty": "0.000056267",
@@ -2901,8 +2904,8 @@
       "first_reflecting_read_issued_at_ms": 1790561382841,
       "first_reflecting_read_answered_at_ms": 1790561383131,
       "first_reflecting_read_cash_usd": 99922.0,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 154
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 136
     },
     {
       "execution_id": "fixture-exec-0042",
@@ -2919,17 +2922,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99922.0,
       "raw_event": {
-        "at": "2026-09-28T02:09:44.104269Z",
+        "at_ms": 1790561384104,
         "event_id": "01M3JWCXN88EKS9YYDE2NC18XH",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:44.081051605Z",
+        "timestamp_ms": 1790561384081,
         "order": {
           "id": "fixture-order-0029",
           "client_order_id": "fixture-client-0029",
-          "created_at": "2026-09-28T02:09:44.079623588Z",
-          "updated_at": "2026-09-28T02:09:44.103765151Z",
-          "submitted_at": "2026-09-28T02:09:44.079623588Z",
-          "filled_at": "2026-09-28T02:09:44.081051605Z",
+          "created_at_ms": 1790561384079,
+          "updated_at_ms": 1790561384103,
+          "submitted_at_ms": 1790561384079,
+          "filled_at_ms": 1790561384081,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -2958,7 +2961,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83620.4",
         "qty": "0.000175417",
@@ -2970,8 +2973,8 @@
       "first_reflecting_read_issued_at_ms": 1790561383784,
       "first_reflecting_read_answered_at_ms": 1790561384092,
       "first_reflecting_read_cash_usd": 99936.63,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 267
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 41
     },
     {
       "execution_id": "fixture-exec-0043",
@@ -2988,17 +2991,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99936.63,
       "raw_event": {
-        "at": "2026-09-28T02:09:45.10382Z",
+        "at_ms": 1790561385103,
         "event_id": "01M3JWCYMFY45J1PYH1SSN4BD3",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:45.08304662Z",
+        "timestamp_ms": 1790561385083,
         "order": {
           "id": "fixture-order-0030",
           "client_order_id": "fixture-client-0030",
-          "created_at": "2026-09-28T02:09:45.081333718Z",
-          "updated_at": "2026-09-28T02:09:45.103375231Z",
-          "submitted_at": "2026-09-28T02:09:45.081333718Z",
-          "filled_at": "2026-09-28T02:09:45.08304662Z",
+          "created_at_ms": 1790561385081,
+          "updated_at_ms": 1790561385103,
+          "submitted_at_ms": 1790561385081,
+          "filled_at_ms": 1790561385083,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -3027,7 +3030,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83661.63",
         "qty": "0.000175857",
@@ -3039,8 +3042,8 @@
       "first_reflecting_read_issued_at_ms": 1790561384937,
       "first_reflecting_read_answered_at_ms": 1790561385375,
       "first_reflecting_read_cash_usd": 99921.92,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 109
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 329
     },
     {
       "execution_id": "fixture-exec-0044",
@@ -3057,17 +3060,17 @@
       "baseline_source": "order-submission",
       "baseline_cash_usd": 99921.92,
       "raw_event": {
-        "at": "2026-09-28T02:09:46.204318Z",
+        "at_ms": 1790561386204,
         "event_id": "01M3JWCZPWST51PF5J3RM9NWKB",
         "event": "fill",
-        "timestamp": "2026-09-28T02:09:46.165497937Z",
+        "timestamp_ms": 1790561386165,
         "order": {
           "id": "fixture-order-0031",
           "client_order_id": "fixture-client-0031",
-          "created_at": "2026-09-28T02:09:46.163928086Z",
-          "updated_at": "2026-09-28T02:09:46.203886074Z",
-          "submitted_at": "2026-09-28T02:09:46.163928086Z",
-          "filled_at": "2026-09-28T02:09:46.165497937Z",
+          "created_at_ms": 1790561386163,
+          "updated_at_ms": 1790561386203,
+          "submitted_at_ms": 1790561386163,
+          "filled_at_ms": 1790561386165,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -3096,7 +3099,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83620.4",
         "qty": "0.000175417",
@@ -3108,8 +3111,8 @@
       "first_reflecting_read_issued_at_ms": 1790561385934,
       "first_reflecting_read_answered_at_ms": 1790561386204,
       "first_reflecting_read_cash_usd": 99936.55,
-      "status": "visible_before_receipt",
-      "cash_led_receipt_by_ms": 211
+      "status": "interval_censored_at_receipt",
+      "visibility_bound_ms": 59
     }
   ],
   "censored_fills": [
@@ -3131,14 +3134,14 @@
         "at": "2026-09-28T02:08:48.303965Z",
         "event_id": "01M3JWB75F4V47SCYK4B7S5XGH",
         "event": "fill",
-        "timestamp": "2026-09-28T02:08:48.271351405Z",
+        "timestamp_ms": 1790561328271,
         "order": {
           "id": "fixture-order-0002",
           "client_order_id": "fixture-client-0002",
-          "created_at": "2026-09-28T02:08:48.270163892Z",
-          "updated_at": "2026-09-28T02:08:48.303492125Z",
-          "submitted_at": "2026-09-28T02:08:48.270163892Z",
-          "filled_at": "2026-09-28T02:08:48.271351405Z",
+          "created_at_ms": 1790561328270,
+          "updated_at_ms": 1790561328303,
+          "submitted_at_ms": 1790561328270,
+          "filled_at_ms": 1790561328271,
           "expired_at": null,
           "cancel_requested_at": null,
           "canceled_at": null,
@@ -3167,7 +3170,7 @@
           "trail_percent": null,
           "trail_price": null,
           "hwm": null,
-          "expires_at": "2026-12-24T21:00:00Z"
+          "expires_at_ms": 1798146000000
         },
         "price": "83657.42",
         "qty": "0.000175844",
@@ -3177,16 +3180,17 @@
         "settle_date": "2026-09-27"
       },
       "status": "not_visible_within_window",
-      "window_s": 30.0
+      "window_s": 30.0,
+      "visibility_bound_ms": null
     }
   ],
   "distribution": {
     "count": 44,
     "min_ms": 0,
-    "p50_ms": 0,
-    "p90_ms": 0,
-    "p95_ms": 0,
-    "max_ms": 0
+    "p50_ms": 80,
+    "p90_ms": 211,
+    "p95_ms": 244,
+    "max_ms": 329
   },
   "notes": {
     "notional_usd": 15.0,
@@ -3208,7 +3212,8 @@
       "round 14: sell retried at broker-stated available qty 0.000175417",
       "round 15: sell retried at broker-stated available qty 0.000175417"
     ],
-    "read_errors": 0
+    "read_errors": 0,
+    "classification": "v2: per-fill visibility_bound_ms replaces the issued-time-only delay; a read that answered after the receipt censors at the answer time (#2549 review)."
   },
   "read_series": [
     {
