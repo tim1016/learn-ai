@@ -24,7 +24,8 @@ const MONEY_SURFACES = [
   // Surfaces slices 2–4 will add fall under the convention by name or place.
   "src/app/components/broker/v2-panel/bot-money/bot-money.component",
   "src/app/components/broker/broker-deploy-page/deploy-money-step.component",
-  "src/app/components/brokers/alpaca-workspace/alpaca-home.component",
+  "src/app/components/brokers/alpaca-home/alpaca-home.component",
+  "src/app/components/brokers/alpaca-home/home-bot-row.component",
 ];
 
 /** Shapes that must be refused everywhere. */

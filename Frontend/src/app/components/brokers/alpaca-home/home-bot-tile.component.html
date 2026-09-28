@@ -17,18 +17,18 @@
 <app-home-sparkline [bars]="bars()" [markers]="markers()" />
 
 @if (slice) {
-  <app-money-bar [segments]="strip()" size="mini" [caption]="'Money held by ' + bot.strategy_instance_id" />
+  <app-money-bar [segments]="strip()" size="mini" [caption]="stripCaption()" />
 }
 
 <footer class="home-tile__foot">
   <span class="home-tile__fact">
     @switch (bot.group) {
       @case ('dry_run') {
-        sim cash {{ bot.simulated_cash_usd ? (bot.simulated_cash_usd | currency: 'USD') : 'not recorded' }}
+        sim cash {{ (bot.simulated_cash_usd | authoredUsd) ?? 'not recorded' }}
       }
       @case ('holding') { {{ bot.status_explanation }} }
       @default {
-        @if (slice) { balance {{ slice.amount_usd | currency: 'USD' }} } @else { money unavailable }
+        @if (slice) { balance {{ slice.amount_usd | authoredUsd }} } @else { money unavailable }
       }
     }
   </span>

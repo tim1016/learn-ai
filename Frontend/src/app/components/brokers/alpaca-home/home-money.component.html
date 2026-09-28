@@ -3,7 +3,7 @@
   <header class="home-money__head">
     <h2 id="home-money-title" class="home-money__title">Where the money is</h2>
     @if (money.kind === 'ready') {
-      <span class="home-money__total">{{ money.view.total_usd | currency: 'USD' }}</span>
+      <span class="home-money__total">{{ money.view.total_usd | authoredUsd }}</span>
       <span class="home-money__sub">{{ money.view.detail }}</span>
     }
   </header>

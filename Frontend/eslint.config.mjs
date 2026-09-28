@@ -36,7 +36,9 @@ import noMoneyAliasArithmetic from "./eslint-rules/no-money-alias-arithmetic.mjs
 //        money bar, `account-money-state.ts`, the bot page's budget card,
 //        Deploy's budget/Money step — name a new money component that way);
 //      - the account workspace directory `components/brokers/alpaca-workspace/`
-//        (its header and the Home / Activity / Settings pages built there);
+//        (its header and the pages built there);
+//      - the account's Home in `components/brokers/alpaca-home/`: its page,
+//        bot rows, Wall tiles and Finished results (its bar is `home-money`);
 //      - the Accounts page and its account cards.
 // ---------------------------------------------------------------------------
 const MONEY_NAME = "/_(usd|bps)$/";
@@ -115,6 +117,11 @@ const moneySurfaces = (extension) => [
   `src/app/**/*budget*.${extension}`,
   `src/app/**/*budget*/**/*.${extension}`,
   `src/app/components/brokers/alpaca-workspace/**/*.${extension}`,
+  // Home's money: its page, bot rows, Wall tiles and Finished results (its
+  // bar is `home-money`, a money surface by name).
+  ...["alpaca-home", "home-bot-row", "home-bot-tile", "home-finished"].map(
+    (name) => `src/app/components/brokers/alpaca-home/${name}.component.${extension}`,
+  ),
   `src/app/components/brokers/alpaca-desk/alpaca-account-list-page.component.${extension}`,
   `src/app/components/brokers/alpaca-desk/alpaca-lane-card.component.${extension}`,
 ];

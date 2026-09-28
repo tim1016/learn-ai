@@ -27,11 +27,11 @@
             </td>
             <td class="home-finished__num">{{ row.bot.trade_count ?? 'unknown' }}</td>
             <td class="home-finished__num">
-              {{ row.bot.final_result_usd ? (row.bot.final_result_usd | currency: 'USD') : 'unknown' }}
+              {{ (row.bot.final_result_usd | authoredUsd) ?? 'unknown' }}
             </td>
             <td>
               <a class="home-finished__again" [routerLink]="row.again.commands" [queryParams]="row.again.queryParams"
-                 [attr.aria-label]="'Deploy again from ' + row.bot.strategy_instance_id">Deploy again</a>
+                 [attr.aria-label]="row.againLabel">Deploy again</a>
             </td>
           </tr>
         }

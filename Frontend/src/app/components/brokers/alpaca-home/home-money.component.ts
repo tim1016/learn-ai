@@ -1,7 +1,7 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import type { AccountMoneyState } from '../../broker/v2-panel/lib/account-money-state';
 
@@ -20,7 +20,7 @@ import type { AccountMoneyState } from '../../broker/v2-panel/lib/account-money-
 @Component({
   selector: 'app-home-money',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, MoneyBarComponent, RouterLink],
+  imports: [AuthoredUsdPipe, MoneyBarComponent, RouterLink],
   templateUrl: './home-money.component.html',
   styleUrl: './home-money.component.scss',
 })

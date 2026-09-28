@@ -1,4 +1,3 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -6,6 +5,7 @@ import {
   accountWorkspaceBotRoute,
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import type { ChartBar, ChartFillMarker } from '../../broker/v2-panel/gallery/lib/gallery.types';
@@ -30,7 +30,7 @@ const GROUP_WORDS: Readonly<Record<HomeBot['bot']['group'], string>> = {
 @Component({
   selector: 'app-home-bot-tile',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, HomeBotActionComponent, HomeSparklineComponent, MoneyBarComponent, RouterLink],
+  imports: [AuthoredUsdPipe, HomeBotActionComponent, HomeSparklineComponent, MoneyBarComponent, RouterLink],
   templateUrl: './home-bot-tile.component.html',
   styleUrl: './home-bot-tile.component.scss',
   host: {
@@ -52,6 +52,7 @@ export class HomeBotTileComponent {
   protected readonly groupWords = computed(() => GROUP_WORDS[this.entry().bot.group]);
   protected readonly strip = computed(() => homeBotStrip(this.entry()));
   protected readonly hue = computed(() => homeBotHue(this.entry()));
+  protected readonly stripCaption = computed(() => `Money held by ${this.entry().bot.strategy_instance_id}`);
   protected readonly pnl = computed(() => {
     const bot = this.entry().bot;
     return fmtSignedCurrency(bot.group === 'holding' ? bot.open_pnl : bot.day_pnl);

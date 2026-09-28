@@ -1,4 +1,3 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -8,6 +7,7 @@ import {
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.types';
 
 /**
@@ -20,7 +20,7 @@ import type { BotCatalogView } from '../../broker/v2-panel/lib/broker-v2-panel.t
 @Component({
   selector: 'app-home-finished',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, RouterLink, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, RouterLink, TimestampDisplayComponent],
   templateUrl: './home-finished.component.html',
   styleUrl: './home-finished.component.scss',
 })
@@ -33,6 +33,7 @@ export class HomeFinishedComponent {
       bot,
       page: accountWorkspaceBotRoute(this.account(), bot.strategy_instance_id).commands,
       again: accountWorkspaceDeployAgainRoute(this.account(), bot.strategy_instance_id),
+      againLabel: `Deploy again from ${bot.strategy_instance_id}`,
     })),
   );
 }

@@ -1,4 +1,3 @@
-import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -6,6 +5,7 @@ import {
   accountWorkspaceBotRoute,
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
+import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
 import { HomeBotActionComponent } from './home-bot-action.component';
@@ -24,7 +24,7 @@ import { homeBotHue, homeBotStrip, type HomeBot } from './home-bots';
 @Component({
   selector: 'app-home-bot-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, HomeBotActionComponent, MoneyBarComponent, RouterLink],
+  imports: [AuthoredUsdPipe, HomeBotActionComponent, MoneyBarComponent, RouterLink],
   templateUrl: './home-bot-row.component.html',
   styleUrl: './home-bot-row.component.scss',
   host: {
@@ -45,6 +45,7 @@ export class HomeBotRowComponent {
   /** The strip draws this bot's own slice and nothing else. */
   protected readonly strip = computed(() => homeBotStrip(this.entry()));
   protected readonly hue = computed(() => homeBotHue(this.entry()));
+  protected readonly stripCaption = computed(() => `Money held by ${this.entry().bot.strategy_instance_id}`);
 
   /** The P&L beside the row, and what it is: today's for a running bot (or a
    * Dry Run's, simulated), the shares' open P&L for a stopped one. */

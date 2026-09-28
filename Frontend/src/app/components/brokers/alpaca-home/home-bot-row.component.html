@@ -21,20 +21,20 @@
   @if (bot.group === 'dry_run') {
     <span class="home-row__caption">
       simulated starting cash
-      {{ bot.simulated_cash_usd ? (bot.simulated_cash_usd | currency: 'USD') : 'not recorded' }}
+      {{ (bot.simulated_cash_usd | authoredUsd) ?? 'not recorded' }}
     </span>
   } @else if (slice) {
-    <app-money-bar [segments]="strip()" size="row" [caption]="'Money held by ' + bot.strategy_instance_id" />
+    <app-money-bar [segments]="strip()" size="row" [caption]="stripCaption()" />
     @if (slice.parts; as parts) {
       <span class="home-row__caption">
-        balance {{ slice.amount_usd | currency: 'USD' }} · free {{ parts.free_usd | currency: 'USD' }}
+        balance {{ slice.amount_usd | authoredUsd }} · free {{ parts.free_usd | authoredUsd }}
         @if (slice.shortfall_usd; as shortfall) {
-          · <strong>short of next entry {{ shortfall | currency: 'USD' }}</strong>
+          · <strong>short of next entry {{ shortfall | authoredUsd }}</strong>
         }
       </span>
     } @else {
       <span class="home-row__caption">
-        held {{ slice.amount_usd | currency: 'USD' }} · released {{ slice.released_usd | currency: 'USD' }}
+        held {{ slice.amount_usd | authoredUsd }} · released {{ slice.released_usd | authoredUsd }}
       </span>
     }
   } @else {
