@@ -1,4 +1,5 @@
-<aside
+<!-- A div: `aside` may not carry the status or alert role (AXE aria-allowed-role). -->
+<div
   #outcome
   class="action-receipt"
   tabindex="-1"
@@ -8,12 +9,18 @@
 >
   <div>
     <strong>{{ receipt().outcome | receiptLabel }}</strong>
+    @if (reasonCode(); as code) {
+      <span class="action-receipt__reason">{{ code | receiptLabel }}</span>
+    }
     <span>{{ receipt().message }}</span>
     @if (receipt().remediation) {
       <span>{{ receipt().remediation }}</span>
+    }
+    @if (availableAtMs(); as opensAt) {
+      <span>Next session opens <app-timestamp-display [value]="opensAt" mode="local" />.</span>
     }
     <app-timestamp-display [value]="receipt().recordedAtMs" mode="local" />
     @if (receipt().receiptId) { <code>{{ receipt().receiptId }}</code> }
   </div>
   <button type="button" aria-label="Dismiss action receipt" (click)="dismissed.emit()">×</button>
-</aside>
+</div>

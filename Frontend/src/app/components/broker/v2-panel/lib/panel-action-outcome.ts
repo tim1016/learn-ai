@@ -33,6 +33,9 @@ export interface ActionRejection {
    * kind rather than render it (e.g. a stale-generation refusal triggering a
    * directory refresh, #2068). */
   readonly reasonCode: string | null;
+  /** When the refused thing can next be tried — a closed session's next open —
+   * when the backend said. */
+  readonly availableAtMs?: number | null;
 }
 
 /** Parses a rejected `runBotAction` call's outcome, message, and remediation. */

@@ -34,11 +34,39 @@ const STEP_LABELS: Readonly<Record<FlattenStepId, string>> = {
   sell: 'Sell',
 };
 
-export function initialFlattenSteps(): readonly FlattenStepView[] {
+/** A Dry Run's position lives in its own simulated account, never at Alpaca. */
+const DRY_RUN_STEP_LABELS: Readonly<Record<FlattenStepId, string>> = {
+  ...STEP_LABELS,
+  reconcile: 'Check the position in its simulated account',
+};
+
+export function initialFlattenSteps(mode: BotPanelView['mode']): readonly FlattenStepView[] {
+  const labels = mode === 'dry_run' ? DRY_RUN_STEP_LABELS : STEP_LABELS;
   return (['reconcile', 'plan', 'sell'] as const).map((id) => ({
-    id, label: STEP_LABELS[id], state: 'waiting', message: null,
+    id, label: labels[id], state: 'waiting', message: null,
   }));
 }
+
+/**
+ * The one way a flatten step changes: the sequence reports through it, and
+ * so does the extended-hours ticket that finishes its Sell step.
+ */
+export function settleFlattenStep(
+  steps: readonly FlattenStepView[] | null,
+  step: FlattenStepId,
+  state: FlattenStepState,
+  message: string | null,
+): readonly FlattenStepView[] | null {
+  return steps?.map((item) => (item.id === step ? { ...item, state, message } : item)) ?? null;
+}
+
+/** A step is still running: the owner must not start another flatten over it. */
+export function flattenUnderway(steps: readonly FlattenStepView[] | null): boolean {
+  return steps?.some((step) => step.state === 'running') ?? false;
+}
+
+/** The Sell step's words while the extended-hours ticket waits for the owner's limit. */
+const LIMIT_TICKET_OPEN = 'Outside regular hours this sale needs a limit price. Set it below.';
 
 /** What the sequence ended with. */
 export type FlattenOutcome =
@@ -65,8 +93,37 @@ class StepRefused extends Error {
   }
 }
 
+/** The backend's refusal, with its code and — for a closed session — when the next one opens. */
+function refusal(
+  message: string,
+  why: string | null = null,
+  reasonCode: string | null = null,
+  availableAtMs: number | null = null,
+): ActionRejection {
+  return { outcome: 'failure', message, why, reasonCode, availableAtMs };
+}
+
 function refused(message: string, why: string | null = null): StepRefused {
-  return new StepRefused({ outcome: 'failure', message, why, reasonCode: null });
+  return new StepRefused(refusal(message, why));
+}
+
+/** Why a checked sale cannot go out as a prepared plan: no plan at all, in the Clerk's words. */
+function unavailablePlan(check: SqliteRecoveryActionCheck): ActionRejection {
+  return refusal(
+    check.capability.unavailable_reason ?? check.capability.explanation,
+    check.capability.next_step,
+    check.capability.unavailable_reason_code ?? null,
+  );
+}
+
+/** Why the Clerk will not price this sale now, or `null` when it will. */
+function refusedPricing(check: SqliteRecoveryActionCheck): ActionRejection | null {
+  const pricing = check.reduction_pricing ?? null;
+  if (pricing === null) return refusal('The prepared sale did not say how it would be sent. Nothing was sent.');
+  if (pricing.kind === 'refused') {
+    return refusal(pricing.explanation, pricing.next_step, pricing.reason_code, pricing.available_at_ms ?? null);
+  }
+  return null;
 }
 
 /** The named command as a fresh panel presents it, enabled, or the backend's reason it is not. */
@@ -87,12 +144,7 @@ function describePlan(plan: SqliteSafeFlattenPlan): string {
 /** The plan sells exactly the one position the owner confirmed, or nothing is sent. */
 function verifiedPlan(check: SqliteRecoveryActionCheck, request: FlattenRequest): SqliteSafeFlattenPlan {
   const plan = check.capability.reduction_plan;
-  if (plan === null) {
-    throw refused(
-      check.capability.unavailable_reason ?? check.capability.explanation,
-      check.capability.next_step,
-    );
-  }
+  if (plan === null) throw new StepRefused(unavailablePlan(check));
   const [leg] = plan.legs;
   const matches = plan.legs.length === 1
     && leg.symbol === request.symbol
@@ -143,11 +195,11 @@ export async function runFlattenSequence(
     deps.report(step, 'running', null);
     const pricing = check.reduction_pricing ?? null;
     if (pricing?.kind === 'extended_limit') {
-      deps.report(step, 'running', 'Outside regular hours this sale needs a limit price. Set it below.');
+      deps.report(step, 'running', LIMIT_TICKET_OPEN);
       return { kind: 'needs_limit', plan, pricing };
     }
-    if (pricing?.kind === 'refused') throw refused(pricing.explanation, pricing.next_step);
-    if (pricing === null) throw refused('The prepared sale did not say how it would be sent. Nothing was sent.');
+    const pricingRefusal = refusedPricing(check);
+    if (pricingRefusal !== null) throw new StepRefused(pricingRefusal);
     const execute = presentedAction(await deps.readPanel(), 'execute_safe_flatten', 'the prepared sale');
     const result = await deps.runAction(execute);
     deps.report(step, 'done', result.message);
@@ -159,4 +211,33 @@ export async function runFlattenSequence(
     deps.report(step, 'failed', rejection.message);
     return { kind: 'failed', step, rejection };
   }
+}
+
+/** What a quote refresh leaves of an open extended-hours ticket. */
+export type RefreshedLimitTicket =
+  | {
+    readonly kind: 'ticket';
+    readonly plan: SqliteSafeFlattenPlan;
+    readonly pricing: SqliteExtendedLimitPricing;
+  }
+  | { readonly kind: 'ended'; readonly rejection: ActionRejection };
+
+/**
+ * Read a quote refresh of the extended-hours ticket (#2007): the plan still
+ * goes out as a limit order, or the ticket ends with the Clerk's reason —
+ * the plan is gone, the session closed, or the regular session opened and
+ * the sale no longer takes a limit. An ended ticket finishes the Sell step.
+ */
+export function refreshedLimitTicket(check: SqliteRecoveryActionCheck): RefreshedLimitTicket {
+  const plan = check.capability.reduction_plan;
+  if (plan === null) return { kind: 'ended', rejection: unavailablePlan(check) };
+  const pricing = check.reduction_pricing ?? null;
+  if (pricing?.kind === 'extended_limit' && plan.legs.length === 1) return { kind: 'ticket', plan, pricing };
+  return {
+    kind: 'ended',
+    rejection: refusedPricing(check) ?? refusal(
+      'The regular session has opened, so this sale no longer takes a limit price. Nothing was sent.',
+      'Flatten again to sell at market.',
+    ),
+  };
 }

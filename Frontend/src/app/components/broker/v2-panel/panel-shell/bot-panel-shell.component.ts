@@ -79,11 +79,15 @@ import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotDetailsComponent } from '../bot-page/bot-details.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import {
+  flattenUnderway,
   initialFlattenSteps,
+  refreshedLimitTicket,
   runFlattenSequence,
+  settleFlattenStep,
   type FlattenOutcome,
   type FlattenRequest,
   type FlattenStepId,
+  type FlattenStepState,
   type FlattenStepView,
 } from '../bot-page/flatten-sequence';
 import {
@@ -130,6 +134,20 @@ interface PreparedSafeFlatten {
 
 /** An extended-hours ticket re-reads the live quote this often while open (#2007). */
 const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
+
+/** The commands of a safe flatten: from anywhere on the page, each opens the
+ * stranded-position warning's one confirmation (H30). */
+const SAFE_FLATTEN_ACTION_IDS: ReadonlySet<PanelAction['action_id']> = new Set([
+  'prepare_safe_flatten',
+  'execute_safe_flatten',
+]);
+
+/** Why a Flatten trigger opened no confirmation. */
+const FLATTEN_NOT_OFFERED = {
+  underway: 'A flatten is already under way on this page. Nothing more was sent.',
+  elsewhere: 'Flatten is offered for a stopped bot holding one position, from the warning at the top of its page. '
+    + 'Nothing was sent.',
+} as const;
 
 /** The command each flatten step sends, named on a refusal's receipt. */
 const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_id']>> = {
@@ -379,13 +397,18 @@ export class BotPanelShellComponent {
   /** A stopped bot that still holds shares has no one managing them (H31). */
   protected readonly stranded = computed(() => this.panel()?.health.running === false && this.holdsShares());
 
-  /** The flatten sequence's steps on this bot, once the owner confirmed one. */
+  /** The flatten sequence's steps on this bot, once the owner confirmed one.
+   * Written only through `settleFlattenStep`. */
   protected readonly flattenSteps = linkedSignal({
     source: this.routeIdentity,
     computation: (): readonly FlattenStepView[] | null => null,
   });
+  /** A step is still running — the sequence, or its Sell step waiting on the
+   * extended-hours ticket — so no second flatten can start. */
+  protected readonly flattenInProgress = computed(() => flattenUnderway(this.flattenSteps()));
 
   private readonly receiptView = viewChild(PanelActionReceiptComponent);
+  private readonly strandedWarning = viewChild(StrandedPositionWarningComponent);
   private readonly flattenTicketView = viewChild<ElementRef<HTMLElement>>('flattenTicket');
 
   /** FR-006 (#2202): history read identity is broker + clerk + account + sid
@@ -512,6 +535,10 @@ export class BotPanelShellComponent {
 
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;
+    if (SAFE_FLATTEN_ACTION_IDS.has(action.action_id)) {
+      this.offerFlatten(action);
+      return;
+    }
     // An action is bound to the rendered lane, not the reactive route. Capture
     // both before any branch can await or display a confirmation.
     const fence = this.openFence();
@@ -529,10 +556,6 @@ export class BotPanelShellComponent {
       ], {
         queryParams: this.custodyTimelineQuery(action, sid),
       });
-      return;
-    }
-    if (action.action_id === 'prepare_safe_flatten') {
-      await this.prepareSafeFlatten(action, target, sid);
       return;
     }
     if (action.action_id === 'recover_exact_execution_evidence') {
@@ -590,7 +613,8 @@ export class BotPanelShellComponent {
    * extended-hours ticket, where the owner sets the limit price.
    */
   protected async onFlattenConfirmed(request: FlattenRequest): Promise<void> {
-    if (this.actionPending()) return;
+    const panel = this.panel();
+    if (this.actionPending() || this.flattenInProgress() || panel === null) return;
     const fence = this.openFence();
     const verdict = laneFenceVerdict(fence, this.fleetDirectory.lane(this.broker(), this.clerkId()));
     if (!verdict.ok) {
@@ -606,7 +630,7 @@ export class BotPanelShellComponent {
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     this.preparedFlatten.set(null);
-    this.flattenSteps.set(initialFlattenSteps());
+    this.flattenSteps.set(initialFlattenSteps(panel.mode));
     try {
       const outcome = await runFlattenSequence({
         readPanel: () => this.panelSvc.getPanel(target, sid),
@@ -618,9 +642,7 @@ export class BotPanelShellComponent {
           sid,
         ),
         report: (step, state, message) => {
-          if (!ownership.stillOwns()) return;
-          this.flattenSteps.update((steps) =>
-            steps?.map((item) => (item.id === step ? { ...item, state, message } : item)) ?? null);
+          if (ownership.stillOwns()) this.settleFlattenStep(step, state, message);
         },
       }, request);
       this.finishFlatten(outcome, ownership, target, sid);
@@ -648,14 +670,7 @@ export class BotPanelShellComponent {
         afterNextRender(() => this.flattenTicketView()?.nativeElement.focus(), { injector: this.injector });
         return;
       case 'failed':
-        ownership.deliverOutcome({
-          actionId: FLATTEN_STEP_ACTIONS[outcome.step],
-          outcome: outcome.rejection.outcome,
-          receiptId: null,
-          recordedAtMs: Date.now(),
-          message: outcome.rejection.message,
-          remediation: outcome.rejection.why,
-        });
+        ownership.deliverOutcome(this.refusalReceipt(FLATTEN_STEP_ACTIONS[outcome.step], outcome.rejection));
         if (outcome.rejection.reasonCode === 'clerk_binding_generation_conflict') {
           void this.fleetDirectory.refresh().catch(() => {
             this.messageService.add(actionOutcomeToast('failure', LANE_FENCE_REFRESH_FAILED_MESSAGE));
@@ -665,47 +680,48 @@ export class BotPanelShellComponent {
     }
   }
 
-  private async prepareSafeFlatten(
-    action: PanelAction,
-    target: ResourceTarget,
-    sid: string,
-  ): Promise<void> {
-    const ownership = this.beginActionOwnership();
-    this.actionPending.set(true);
-    this.actionReceipt.set(null);
+  /**
+   * Every safe-flatten trigger on the page — the Checks fold, a blocker's
+   * move, the header — opens the stranded-position warning's confirmation,
+   * so a flatten always runs as the one confirmed sequence (H30). With no
+   * position to offer, or a flatten already under way, nothing opens and the
+   * owner is told why.
+   */
+  private offerFlatten(action: PanelAction): void {
+    if (this.strandedWarning()?.openConfirm()) return;
+    this.beginActionOwnership().deliverOutcome(this.conflictReceipt(
+      action,
+      this.flattenInProgress() ? FLATTEN_NOT_OFFERED.underway : FLATTEN_NOT_OFFERED.elsewhere,
+    ));
+  }
+
+  /** The one writer of the flatten steps: the sequence reports through it,
+   * and the extended-hours ticket's outcomes finish its Sell step. */
+  private settleFlattenStep(step: FlattenStepId, state: FlattenStepState, message: string | null): void {
+    this.flattenSteps.update((steps) => settleFlattenStep(steps, step, state, message));
+  }
+
+  /** The extended-hours ticket closed without a sale: its Sell step fails
+   * with the Clerk's reason, and the owner hears it. */
+  private endLimitTicket(rejection: ActionRejection): void {
     this.preparedFlatten.set(null);
-    try {
-      const check = await this.brokers.checkSqliteSafeFlatten(
-        target.clerkId,
-        this.requiredAccountId(target),
-        { action_id: 'prepare_safe_flatten', concurrency_token: action.concurrency_token },
-        sid,
-      );
-      if (!ownership.stillOwns()) return;
-      const plan = check.capability.reduction_plan;
-      this.preparedFlatten.set(
-        plan === null
-          ? null
-          : {
-            plan,
-            pricing: check.reduction_pricing ?? null,
-            receivedAtMs: Date.now(),
-            target,
-            sid,
-            quoteError: null,
-          },
-      );
-      this.messageService.add({
-        severity: 'info',
-        summary: check.capability.label,
-        detail: check.capability.next_step,
-      });
-    } catch (error) {
-      ownership.deliverOutcome(this.errorReceipt(error, action));
-      await this.liveStore.refresh();
-    } finally {
-      this.actionPending.set(false);
-    }
+    this.settleFlattenStep('sell', 'failed', rejection.message);
+    this.beginActionOwnership().deliverOutcome(this.refusalReceipt('execute_safe_flatten', rejection));
+  }
+
+  /** A refused flatten step as the owner reads it: the backend's words, its
+   * code, and when the next session opens if that is the reason. */
+  private refusalReceipt(actionId: PanelAction['action_id'], rejection: ActionRejection): ActionReceiptView {
+    return {
+      actionId,
+      outcome: rejection.outcome,
+      receiptId: null,
+      recordedAtMs: Date.now(),
+      message: rejection.message,
+      remediation: rejection.why,
+      reasonCode: rejection.reasonCode,
+      availableAtMs: rejection.availableAtMs ?? null,
+    };
   }
 
   /**
@@ -750,18 +766,18 @@ export class BotPanelShellComponent {
           prepared.sid,
         );
         if (this.preparedFlatten() !== prepared) return;
-        const plan = check.capability.reduction_plan;
-        this.preparedFlatten.set(
-          plan === null
-            ? null
-            : {
-              ...prepared,
-              plan,
-              pricing: check.reduction_pricing ?? null,
-              receivedAtMs: Date.now(),
-              quoteError: null,
-            },
-        );
+        const refreshed = refreshedLimitTicket(check);
+        if (refreshed.kind === 'ended') {
+          this.endLimitTicket(refreshed.rejection);
+          return;
+        }
+        this.preparedFlatten.set({
+          ...prepared,
+          plan: refreshed.plan,
+          pricing: refreshed.pricing,
+          receivedAtMs: Date.now(),
+          quoteError: null,
+        });
       } catch (error) {
         if (this.preparedFlatten() !== prepared) return;
         const rejection = this.describeRejection(error, prepare);
@@ -837,31 +853,27 @@ export class BotPanelShellComponent {
       // exposure is on its way out when nothing has left (Codex review
       // 2026-09-19).
       const reachedBroker = result.orders.some((order) => order.broker_order_id !== null);
+      const message = !result.applied
+        ? 'This flatten had already been sent; the durable result was replayed.'
+        : reachedBroker
+          ? `Limit order sent at $${price}. It fills only at that price or better; await its `
+            + 'fill before treating exposure as flat.'
+          : `Flatten accepted at $${price}, but no order has reached the broker yet. `
+            + 'The Clerk keeps trying; nothing is flat until the order exists and fills.';
+      if (ownership.stillOwns()) this.settleFlattenStep('sell', 'done', message);
       ownership.deliverOutcome({
         actionId: 'execute_safe_flatten',
         outcome: 'success',
         receiptId: result.receipt_id,
         recordedAtMs: result.recorded_at_ms,
-        message: !result.applied
-          ? 'This flatten had already been sent; the durable result was replayed.'
-          : reachedBroker
-            ? `Limit order sent at $${price}. It fills only at that price or better; await its `
-              + 'fill before treating exposure as flat.'
-            : `Flatten accepted at $${price}, but no order has reached the broker yet. `
-              + 'The Clerk keeps trying; nothing is flat until the order exists and fills.',
+        message,
         remediation: null,
       });
       await this.liveStore.refresh();
     } catch (error) {
       const rejection = deriveActionRejection(error, 'Action "Execute safe flatten" failed.');
-      ownership.deliverOutcome({
-        actionId: 'execute_safe_flatten',
-        outcome: rejection.outcome,
-        receiptId: null,
-        recordedAtMs: Date.now(),
-        message: rejection.message,
-        remediation: rejection.why,
-      });
+      if (ownership.stillOwns()) this.settleFlattenStep('sell', 'failed', rejection.message);
+      ownership.deliverOutcome(this.refusalReceipt('execute_safe_flatten', rejection));
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);

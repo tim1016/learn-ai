@@ -20,7 +20,7 @@ const STEP_STATE_TEXT: Readonly<Record<FlattenStepState, string>> = {
   waiting: 'Waiting',
   running: 'In progress',
   done: 'Done',
-  failed: 'Stopped',
+  failed: 'Failed',
 };
 
 /**
@@ -28,7 +28,8 @@ const STEP_STATE_TEXT: Readonly<Record<FlattenStepState, string>> = {
  * a stopped bot that still holds shares says no bot is managing them, why it
  * stopped, and offers Flatten with an inline confirmation that names exactly
  * what will be sold. Confirming runs the whole flatten sequence; its steps
- * report here as they go.
+ * report here as they go. Every other Flatten trigger on the page opens this
+ * same confirmation (`openConfirm`), so there is one way to flatten.
  */
 @Component({
   selector: 'app-stranded-position-warning',
@@ -70,9 +71,19 @@ export class StrandedPositionWarningComponent {
 
   protected readonly dutyOutcome = computed(() => this.panel().health.duty_outcome ?? null);
 
-  protected askToFlatten(): void {
+  /** A Dry Run's shares are simulated: it is checked and sold in its own simulated account. */
+  protected readonly dryRun = computed(() => this.panel().mode === 'dry_run');
+
+  /**
+   * Ask the owner to confirm selling the one position, with the keyboard on
+   * the confirmation. `false` — nothing opened — when there is no single
+   * position to sell or a flatten is already under way.
+   */
+  openConfirm(): boolean {
+    if (this.position() === null || this.pending()) return false;
     this.confirming.set(true);
     afterNextRender(() => this.confirmButton()?.nativeElement.focus(), { injector: this.injector });
+    return true;
   }
 
   protected cancel(): void {

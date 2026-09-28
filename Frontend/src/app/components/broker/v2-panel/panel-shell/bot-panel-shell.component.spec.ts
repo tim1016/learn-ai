@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import type {
   HistoricalExecutionRecoveryPlan,
@@ -359,18 +359,48 @@ const EXECUTE_SAFE_FLATTEN_ACTION = {
   confirmation: null,
 } satisfies PanelAction;
 
-function extendedFlattenSnapshot(prepareToken = 'plan-token-17'): BotPanelLiveSnapshot {
-  const snapshot = safeFlattenSnapshot();
+const ENABLED_EXECUTE = { ...EXECUTE_SAFE_FLATTEN_ACTION, enabled: true, concurrency_token: 'execute-token-18' };
+
+const RECONCILE_ACTION = {
+  action_id: 'reconcile_now', revision: 17, concurrency_token: 'reconcile-token-17', enabled: true,
+  label: 'Reconcile now', explanation: 'Reconcile this bot now.', blockers: [], confirmation: null,
+} satisfies PanelAction;
+
+/** A crashed bot still holding 2.5 QQQ, with no header action (the backend's
+ * rule): the stranded-position warning is where it is flattened (H30–H31). */
+function strandedPanel(overrides: Partial<BotPanelView> = {}): BotPanelView {
   return {
-    ...snapshot,
-    panel: {
-      ...snapshot.panel,
-      actions: [
-        { ...PREPARE_SAFE_FLATTEN_ACTION, concurrency_token: prepareToken },
-        EXECUTE_SAFE_FLATTEN_ACTION,
-      ],
+    ...PANEL,
+    mode: 'trade',
+    revision: 17,
+    exposure: { QQQ: 2.5 },
+    health: {
+      ...PANEL.health,
+      running: false,
+      desired_state: 'STOPPED',
+      desired_state_label: 'Stopped',
+      duty_outcome: {
+        kind: 'CRASHED', reason_code: 'FEED_DEATH', label: 'Crashed: market data stopped',
+        explanation: 'The market-data feed stopped delivering bars.',
+        recorded_at_ms: 1_753_800_000_000, run_id: 'run-current', exposure_notices: [],
+      },
     },
+    actions: [RECONCILE_ACTION],
+    primary_action: null,
+    ...overrides,
   };
+}
+
+/** The stranded bot as the extended-hours flatten sees it: Prepare re-mints
+ * each pass, and Execute waits unpriced until the owner sets a limit (#2007). */
+function extendedFlattenSnapshot(prepareToken = 'plan-token-17'): BotPanelLiveSnapshot {
+  return liveSnapshot(strandedPanel({
+    actions: [
+      RECONCILE_ACTION,
+      { ...PREPARE_SAFE_FLATTEN_ACTION, concurrency_token: prepareToken },
+      EXECUTE_SAFE_FLATTEN_ACTION,
+    ],
+  }));
 }
 
 function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
@@ -911,49 +941,86 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByText('run-current')).toBeTruthy();
   });
 
-  it('refreshes and renders the safe-flatten plan without posting a panel mutation', async () => {
-    mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [
-        provideRouter([]),
-        { provide: BrokerV2PanelService, useValue: mockService },
-        { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService },
-      ],
+  describe('every safe-flatten trigger routes into the warning (H30)', () => {
+    /** The panel with one flatten command presented in its Checks fold. */
+    function checksSnapshot(panel: BotPanelView, action: PanelAction): BotPanelLiveSnapshot {
+      return liveSnapshot({
+        ...panel,
+        actions: [...panel.actions, action],
+        readiness_checks: [{
+          operation: action.action_id,
+          label: action.label,
+          ready: true,
+          scope: 'bot',
+          authority: 'Alpaca SQLite Clerk',
+          explanation: action.explanation,
+          evidence: { primary: true },
+          evaluated_at_ms: 1_753_800_000_000,
+          cure: null,
+        }],
+        readiness_ready_count: 1,
+      });
+    }
+
+    async function renderWith(snapshot: BotPanelLiveSnapshot) {
+      const view = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: { ...mockService, getLiveSnapshot: vi.fn().mockResolvedValue(snapshot) } },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await view.fixture.whenStable();
+      view.fixture.detectChanges();
+      return view;
+    }
+
+    async function clickChecksAction(fixture: ComponentFixture<BotPanelShellComponent>, label: string): Promise<void> {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`Ready ${label}`, 'i') }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      fireEvent.click(await screen.findByRole('button', { name: label }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it.each([
+      ['Prepare safe flatten', PREPARE_SAFE_FLATTEN_ACTION],
+      ['Execute safe flatten', ENABLED_EXECUTE],
+    ])('opens the warning’s confirmation from the Checks fold (%s) and sends nothing', async (label, action) => {
+      const { fixture } = await renderWith(checksSnapshot(strandedPanel(), action));
+
+      await clickChecksAction(fixture, label);
+
+      await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell 2.5 QQQ'));
+      expect(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).toBeTruthy();
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
-    await fixture.whenStable();
-    fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', {
-      name: /Ready Prepare safe flatten/i,
-    }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+    it('refuses a safe flatten of a running bot and sends nothing', async () => {
+      const { fixture } = await renderWith(safeFlattenSnapshot());
 
-    const planRegion = await screen.findByRole('region', {
-      name: 'Prepared safe-flatten reduction plan',
+      await clickChecksAction(fixture, 'Prepare safe flatten');
+
+      const outcome = await screen.findByRole('alert', { name: 'Action outcome' });
+      expect(outcome.textContent).toContain(
+        'Flatten is offered for a stopped bot holding one position, from the warning at the top of its page.',
+      );
+      expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' })).toBeNull();
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
-    expect(within(planRegion).getByText('Qqq')).toBeTruthy();
-    expect(within(planRegion).getByText('2.5')).toBeTruthy();
-    expect(within(planRegion).getByText(/Inside the regular session this flatten is a market order/))
-      .toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
-    expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledWith(
-      'clrk_spec',
-      'DUM284968',
-      { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
-      'sid-001',
-    );
-    expect(mockService.runBotAction).not.toHaveBeenCalled();
 
-    fixture.componentRef.setInput('sid', 'sid-002');
-    fixture.detectChanges();
+    it('gives a stopped bot still holding shares no header action; its Flatten is the warning’s', async () => {
+      const { container } = await renderWith(liveSnapshot(strandedPanel()));
 
-    expect(screen.queryByRole('region', {
-      name: 'Prepared safe-flatten reduction plan',
-    })).toBeNull();
+      expect(container.querySelector('.bot-banner__actions app-panel-action-button')).toBeNull();
+      const warning = screen.getByRole('region', { name: /No bot is managing 2.5 QQQ/ });
+      expect(within(warning).getByRole('button', { name: 'Flatten…' }).hasAttribute('disabled')).toBe(false);
+    });
   });
 
   it('prepares and explicitly confirms historical exact-execution recovery', async () => {
@@ -1080,17 +1147,20 @@ describe('BotPanelShellComponent', () => {
     expect(screen.queryByRole('heading', { name: 'Confirm exact execution recovery' })).toBeNull();
   });
 
-  it('discards a safe-flatten response after route identity changes', async () => {
+  it('discards a flatten’s checked plan after route identity changes', async () => {
     const pendingCapability = deferred<SqliteRecoveryActionCheck>();
-    mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
-    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(
-      pendingCapability.promise,
-    );
+    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(pendingCapability.promise);
+    const getPanel = vi.fn()
+      .mockResolvedValueOnce(strandedPanel())
+      .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
         provideRouter([]),
-        { provide: BrokerV2PanelService, useValue: mockService },
+        {
+          provide: BrokerV2PanelService,
+          useValue: { ...mockService, getLiveSnapshot: vi.fn().mockResolvedValue(extendedFlattenSnapshot()), getPanel },
+        },
         { provide: BrokersService, useValue: brokersMock },
         { provide: MessageService, useValue: messageService },
       ],
@@ -1098,22 +1168,29 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', {
-      name: /Ready Prepare safe flatten/i,
-    }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+    await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
 
     fixture.componentRef.setInput('sid', 'sid-002');
     fixture.detectChanges();
-    pendingCapability.resolve({ capability: SAFE_FLATTEN_CAPABILITY, reduction_pricing: null });
+    pendingCapability.resolve({
+      capability: SAFE_FLATTEN_CAPABILITY,
+      reduction_pricing: {
+        kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
+        bid: 480.1, ask: 480.2, bid_size: 300, ask_size: 200,
+        quote_observed_at_ms: Date.now(), quote_max_age_ms: 10_000,
+        exit_allowance_bps: 20, suggested_limit_price: 479.13, band_limit_price: 478.17,
+        spread: 0.1, spread_bps: 2.08, wide_spread: false, spread_warning_bps: 50, proposal: null,
+      },
+    });
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.queryByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
   });
 
   describe('action outcome ownership (#2471)', () => {
@@ -1211,7 +1288,23 @@ describe('BotPanelShellComponent', () => {
       }
     }
 
+    afterEach(() => {
+      // These specs point the shared doubles at a stranded bot; every later
+      // spec reads the defaults.
+      mockService.getLiveSnapshot.mockReset().mockResolvedValue(liveSnapshot());
+      mockService.getPanel.mockReset().mockResolvedValue(PANEL);
+      brokersMock.checkSqliteSafeFlatten.mockReset().mockResolvedValue({
+        capability: SAFE_FLATTEN_CAPABILITY,
+        reduction_pricing: { kind: 'regular_session' },
+      });
+    });
+
+    /** Flatten the stranded bot from its warning, the one way a flatten
+     * starts: reconcile, a fresh panel, then the checked plan (H30). */
     async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
+      mockService.getPanel
+        .mockResolvedValueOnce(strandedPanel())
+        .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
       const { fixture } = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
         providers: [
@@ -1223,13 +1316,25 @@ describe('BotPanelShellComponent', () => {
       });
       await fixture.whenStable();
       fixture.detectChanges();
-      fireEvent.click(screen.getByRole('button', { name: /Ready Prepare safe flatten/i }));
-      await fixture.whenStable();
-      fixture.detectChanges();
-      fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
-      await fixture.whenStable();
-      fixture.detectChanges();
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+      await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
+      await settle(fixture);
       return fixture;
+    }
+
+    /** Each step's label and state, then the backend's words for it, as read aloud. */
+    function progress(): string {
+      const list = screen.getByRole('list', { name: 'Flatten progress' });
+      return [...list.querySelectorAll('li > *')].map((part) => part.textContent?.trim()).join(' ');
+    }
+
+    function outcomeText(role: 'alert' | 'status'): string {
+      return screen.getByRole(role, { name: 'Action outcome' }).textContent?.replace(/\s+/g, ' ') ?? '';
+    }
+
+    function flattenButton(): HTMLButtonElement {
+      return screen.getByRole('button', { name: 'Flatten…' });
     }
 
     /** The Clerk's pricing, carrying its reading of the suggested price. */
@@ -1309,6 +1414,9 @@ describe('BotPanelShellComponent', () => {
       const fixture = await prepareFlatten();
 
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      // The Sell step waits on the ticket, and no second flatten can start over it.
+      expect(progress()).toContain('Sell: In progress');
+      expect(flattenButton().disabled).toBe(true);
       expect(within(ticket).getByText('Pre-market')).toBeTruthy();
       expect(within(ticket).getByText(/\$480\.10/)).toBeTruthy();
       expect(within(ticket).getByText(/\$480\.20/)).toBeTruthy();
@@ -1330,10 +1438,65 @@ describe('BotPanelShellComponent', () => {
         'execute-token-17',
         { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
       );
-      expect(mockService.runBotAction).not.toHaveBeenCalled();
+      // Only the reconcile went through a plain action: the sale went through the ticket.
+      expect(mockService.runBotAction.mock.calls.map((call: unknown[]) => (call[2] as PanelAction).action_id))
+        .toEqual(['reconcile_now']);
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' }))
         .toBeNull();
-      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+      expect(outcomeText('status')).toMatch(/Limit order sent at \$479\.13/);
+      // The ticket's outcome settles the Sell step, and Flatten is offered again.
+      expect(progress()).toContain('Sell: Done Limit order sent at $479.13');
+      await vi.waitFor(() => expect(flattenButton().disabled).toBe(false));
+    });
+
+    it('fails the Sell step when the limit order is refused', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      mockService.executeExtendedSafeFlatten.mockRejectedValueOnce(new HttpErrorResponse({
+        status: 409,
+        error: { detail: { reason: 'stale_action_token', message: 'The flatten changed before it was sent.' } },
+      }));
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
+      await settle(fixture);
+
+      expect(progress()).toContain('Sell: Failed The flatten changed before it was sent.');
+      expect(outcomeText('alert')).toContain('The flatten changed before it was sent.');
+      await vi.waitFor(() => expect(flattenButton().disabled).toBe(false));
+    });
+
+    it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));
+      const fixture = await prepareFlatten();
+      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+        capability: {
+          ...SAFE_FLATTEN_CAPABILITY,
+          available: false,
+          reduction_plan: null,
+          unavailable_reason_code: 'NO_ATTRIBUTED_POSITION',
+          unavailable_reason: 'This bot no longer holds a position to sell.',
+          next_step: 'Nothing is left to flatten.',
+        },
+        reduction_pricing: null,
+      } satisfies SqliteRecoveryActionCheck);
+
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Refresh quote' }));
+      await settle(fixture);
+
+      expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+      expect(progress()).toContain('Sell: Failed This bot no longer holds a position to sell.');
+      const outcome = outcomeText('alert');
+      expect(outcome).toContain('No Attributed Position');
+      expect(outcome).toContain('Nothing is left to flatten.');
+      expect(document.activeElement?.classList.contains('action-receipt')).toBe(true);
+      expect(flattenButton().disabled).toBe(false);
     });
 
     it('takes the execute token from a live panel read while the live projection is stalled (#2353)', async () => {
@@ -1376,7 +1539,7 @@ describe('BotPanelShellComponent', () => {
         'execute-token-live',
         { limit_price: 479.13, quote_observed_at_ms: observedAtMs },
       );
-      expect(screen.getByText(/Limit order sent at \$479\.13/)).toBeTruthy();
+      expect(outcomeText('status')).toMatch(/Limit order sent at \$479\.13/);
     });
 
     it('never says an order was sent when none reached the broker', async () => {
@@ -1405,7 +1568,8 @@ describe('BotPanelShellComponent', () => {
       fireEvent.click(within(ticket).getByRole('button', { name: 'Send limit order' }));
       await settle(fixture);
 
-      expect(screen.getByText(/no order has reached the broker yet/)).toBeTruthy();
+      expect(outcomeText('status')).toMatch(/no order has reached the broker yet/);
+      expect(progress()).toMatch(/Sell: Done Flatten accepted at \$479\.13, but no order has reached the broker yet/);
       expect(screen.queryByText(/Limit order sent/)).toBeNull();
     });
 
@@ -1457,26 +1621,63 @@ describe('BotPanelShellComponent', () => {
       expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();
     });
 
-    it('names when the next session opens instead of offering a ticket', async () => {
-      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
+    it.each([
+      ['NO_SESSION_OPEN', 1_753_862_400_000, 'No Session Open'],
+      ['SIMULATED_RECOVERY_PRICE_UNAVAILABLE', null, 'Simulated Recovery Price Unavailable'],
+    ] as const)('names a refused sale’s code (%s) and when the next session opens, instead of a ticket', async (code, opensAt, label) => {
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
       brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'refused',
-          reason_code: 'NO_SESSION_OPEN',
-          explanation: 'No trading session would be open when an order sent now reaches the broker, so no reduction can be sent.',
-          next_step: 'Flatten again once the next session opens.',
-          available_at_ms: 1_753_862_400_000,
+          reason_code: code,
+          explanation: 'No sale can be priced now, so nothing was sent.',
+          next_step: 'Flatten again later.',
+          available_at_ms: opensAt,
         },
       } satisfies SqliteRecoveryActionCheck);
       await prepareFlatten();
 
-      const plan = await screen.findByRole('region', { name: 'Prepared safe-flatten reduction plan' });
-      expect(within(plan).getByText(/No trading session would be open/)).toBeTruthy();
-      expect(within(plan).getByText(
-        formatTimestampDisplay(1_753_862_400_000, { mode: 'et' }),
-      )).toBeTruthy();
+      await screen.findByRole('alert', { name: 'Action outcome' });
+      const outcome = outcomeText('alert');
+      expect(outcome).toContain(label);
+      expect(outcome).toContain('No sale can be priced now, so nothing was sent.');
+      if (opensAt === null) {
+        expect(outcome).not.toContain('Next session opens');
+      } else {
+        expect(outcome).toContain(`Next session opens ${formatTimestampDisplay(opensAt, { mode: 'local' })}`);
+      }
+      expect(progress()).toContain('Sell: Failed');
       expect(screen.queryByRole('region', { name: 'Extended-hours flatten limit order' })).toBeNull();
+    });
+
+    it('fails the check step, with the backend’s words, when Reconcile is refused', async () => {
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      mockService.getPanel.mockResolvedValueOnce(strandedPanel());
+      mockService.runBotAction.mockRejectedValueOnce(new HttpErrorResponse({
+        status: 409,
+        error: { detail: { reason: 'stale_action_token', message: 'The custody state changed.', why: 'Try again.' } },
+      }));
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: mockService },
+          { provide: BrokersService, useValue: brokersMock },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
+      expect(document.activeElement?.textContent).toContain('Stale Action Token');
+      expect(document.activeElement?.textContent).toContain('The custody state changed.');
+      expect(progress()).toContain('Check the position with Alpaca: Failed The custody state changed.');
+      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
     });
   });
 
@@ -2167,12 +2368,6 @@ describe('BotPanelShellComponent', () => {
   });
 
   describe('the one view (#2563)', () => {
-    const RECONCILE_ACTION = {
-      action_id: 'reconcile_now', revision: 17, concurrency_token: 'reconcile-token-17', enabled: true,
-      label: 'Reconcile now', explanation: 'Reconcile this bot now.', blockers: [], confirmation: null,
-    } satisfies PanelAction;
-    const ENABLED_EXECUTE = { ...EXECUTE_SAFE_FLATTEN_ACTION, enabled: true, concurrency_token: 'execute-token-18' };
-
     beforeEach(() => {
       brokersMock.checkSqliteSafeFlatten.mockReset();
       brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
@@ -2180,28 +2375,6 @@ describe('BotPanelShellComponent', () => {
         reduction_pricing: { kind: 'regular_session' },
       });
     });
-
-    function strandedPanel(overrides: Partial<BotPanelView> = {}): BotPanelView {
-      return {
-        ...PANEL,
-        mode: 'trade',
-        revision: 17,
-        exposure: { QQQ: 2.5 },
-        health: {
-          ...PANEL.health,
-          running: false,
-          desired_state: 'STOPPED',
-          desired_state_label: 'Stopped',
-          duty_outcome: {
-            kind: 'CRASHED', reason_code: 'FEED_DEATH', label: 'Crashed: market data stopped',
-            explanation: 'The market-data feed stopped delivering bars.',
-            recorded_at_ms: 1_753_800_000_000, run_id: 'run-current', exposure_notices: [],
-          },
-        },
-        actions: [RECONCILE_ACTION],
-        ...overrides,
-      };
-    }
 
     async function renderPage(panel: BotPanelView, service: Partial<typeof mockService> = {}) {
       const view = await render(BotPanelShellComponent, {
@@ -2344,7 +2517,7 @@ describe('BotPanelShellComponent', () => {
       await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
       expect(runBotAction).toHaveBeenCalledTimes(1);
       expect(document.activeElement?.textContent).toContain('does not match the 2.5 QQQ you confirmed. Nothing was sent.');
-      expect(screen.getByRole('list', { name: 'Flatten progress' }).textContent).toContain('Prepare the sale: Stopped');
+      expect(screen.getByRole('list', { name: 'Flatten progress' }).textContent).toContain('Prepare the sale: Failed');
     });
 
     it('stops at the checked plan outside regular hours and hands the keyboard to the limit ticket', async () => {
@@ -2371,6 +2544,29 @@ describe('BotPanelShellComponent', () => {
       expect(runBotAction).toHaveBeenCalledTimes(1);
       expect(screen.getByRole('list', { name: 'Flatten progress' }).textContent)
         .toContain('Outside regular hours this sale needs a limit price. Set it below.');
+      expect(screen.getByRole('button', { name: 'Flatten…' }).hasAttribute('disabled')).toBe(true);
+    });
+
+    it('checks and sells a Dry Run’s shares in its simulated account, never at Alpaca', async () => {
+      const dryRun = (overrides: Partial<BotPanelView> = {}) => strandedPanel({ mode: 'dry_run', ...overrides });
+      const getPanel = vi.fn()
+        .mockResolvedValueOnce(dryRun())
+        .mockResolvedValueOnce(dryRun({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }))
+        .mockResolvedValueOnce(dryRun({ actions: [RECONCILE_ACTION, ENABLED_EXECUTE] }));
+      const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ message: 'Done.' }));
+      await renderPage(dryRun(), { getPanel, runBotAction });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
+      const confirm = screen.getByRole('group', { name: 'Sell 2.5 QQQ?' });
+      expect(confirm.textContent).toContain('The sale is simulated at the live IBKR price; nothing is sent to Alpaca.');
+      expect(confirm.textContent).not.toContain('checked with Alpaca');
+      expect(confirm.textContent).not.toContain('free to deploy');
+      await userEvent.click(within(confirm).getByRole('button', { name: 'Sell 2.5 QQQ' }));
+
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(2));
+      const steps = screen.getByRole('list', { name: 'Flatten progress' }).textContent ?? '';
+      expect(steps).toContain('Check the position in its simulated account: Done');
+      expect(steps).not.toContain('Alpaca');
     });
 
     it('returns the keyboard to Flatten when the confirmation is cancelled', async () => {

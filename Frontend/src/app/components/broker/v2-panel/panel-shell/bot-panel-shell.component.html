@@ -46,7 +46,7 @@
       <app-stranded-position-warning
         [panel]="panelData"
         [steps]="flattenSteps()"
-        [pending]="actionPending()"
+        [pending]="actionPending() || flattenInProgress()"
         (flatten)="onFlattenConfirmed($event)"
       />
     }
