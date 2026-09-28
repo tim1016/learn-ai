@@ -398,12 +398,10 @@ async def deployment_fee_attribution(strategy_instance_id: str | None = None) ->
 
 @money_context()
 def _deployment_fee_view(clerk: SqliteAlpacaClerkFacade) -> DeploymentFeeAttribution:
-    from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
-
     repo = clerk.repository
     with repo.write_fence() as conn:
         now = repo.clock()
-        projection = custody_fee_attribution(conn, now_ms=now)
+        projection = repo.fee_attribution(now_ms=now)
         meta = repo.control_meta_snapshot()
         config = {row["subject_id"]: (row["strategy_instance_id"], row["display_name"]) for row in conn.execute(
             "SELECT s.subject_id, s.strategy_instance_id, c.display_name FROM custody_subjects s LEFT JOIN bot_config c ON c.strategy_instance_id = s.strategy_instance_id"

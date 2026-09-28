@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.budgets import AccountBudget
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.services.alpaca_fee_attribution import FeeAttribution
 
 
 @dataclass(frozen=True, slots=True)
@@ -768,11 +769,19 @@ class ClerkSqliteRepositoryReadApi:
             row = self._conn.execute("SELECT * FROM deployment_budgets WHERE strategy_instance_id=?", (strategy_instance_id,)).fetchone()
             return None if row is None else dict(row)
 
-    def account_budget(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountBudget:
-        """One revision-coherent money authority for preview and admission."""
-        from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget
+    def fee_attribution(self: ClerkSqliteRepository, *, now_ms: int) -> FeeAttribution:
+        """The canonical custody fee projection, fresh only while this process's producer is."""
         from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 
         with self._write_lock:
-            fees = custody_fee_attribution(self._conn, now_ms=self.clock())
+            return custody_fee_attribution(
+                self._conn, now_ms=now_ms, evidence_checked_at_ms=self._fee_evidence_checked_at_ms
+            )
+
+    def account_budget(self: ClerkSqliteRepository, *, cash: object, seen_before_ms: int, modelled_fees_seen_before_ms: int | None = None) -> AccountBudget:
+        """One revision-coherent money authority for preview and admission."""
+        from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget
+
+        with self._write_lock:
+            fees = self.fee_attribution(now_ms=self.clock())
             return project_account_budget(self._conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees, modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)

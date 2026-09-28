@@ -28,7 +28,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
-from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
@@ -130,8 +129,7 @@ def risk_fill_sequence(repo: ClerkSqliteRepository) -> int:
 
 def risk_evidence_ready(repo: ClerkSqliteRepository, *, now_ms: int) -> bool:
     """Canonical fees/coverage gate spending without subtracting fees from equity twice."""
-    with repo._write_lock:
-        return custody_fee_attribution(repo._conn, now_ms=now_ms).known
+    return repo.fee_attribution(now_ms=now_ms).known
 
 
 def observed_day_pnl(*, observation: AccountObservation, now_ms: int, retained_start_ms: int | None = None, retained_equity_usd: float | None = None) -> DayPnl:
