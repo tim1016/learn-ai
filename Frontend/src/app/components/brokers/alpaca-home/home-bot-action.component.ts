@@ -2,7 +2,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
+  afterNextRender,
   computed,
+  inject,
   input,
   output,
   signal,
@@ -44,6 +47,7 @@ export class HomeBotActionComponent {
   readonly pending = input(false);
   readonly stopRequested = output<string>();
 
+  private readonly injector = inject(Injector);
   protected readonly confirming = signal(false);
   private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
   private readonly stopButton = viewChild<ElementRef<HTMLButtonElement>>('stopButton');
@@ -68,7 +72,9 @@ export class HomeBotActionComponent {
 
   protected ask(): void {
     this.confirming.set(true);
-    queueMicrotask(() => this.cancelButton()?.nativeElement.focus());
+    // After the render that draws Cancel, never before it: zoneless change
+    // detection runs after a microtask would (review B2).
+    this.focusAfterRender(() => this.cancelButton()?.nativeElement);
   }
 
   protected confirm(): void {
@@ -80,7 +86,11 @@ export class HomeBotActionComponent {
     if (!this.confirming()) return;
     this.confirming.set(false);
     // The Cancel button leaves the DOM with the confirmation; hand the
-    // keyboard back to the control that opened it.
-    queueMicrotask(() => this.stopButton()?.nativeElement.focus());
+    // keyboard back to the control that opened it, once it is enabled again.
+    this.focusAfterRender(() => this.stopButton()?.nativeElement);
+  }
+
+  private focusAfterRender(target: () => HTMLElement | undefined): void {
+    afterNextRender({ write: () => target()?.focus() }, { injector: this.injector });
   }
 }
