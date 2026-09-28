@@ -6,10 +6,16 @@ Split from ``tests/services/test_bot_runner.py`` (issue #1737).
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from app.marketdata.feed import ContinuityPolicy, MarketDataBar
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     alpaca_v1_action_plan,
@@ -87,17 +93,56 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     # deploy runs stamped corpus_coverage=UNCOVERED (ADR 0054), which is
     # irrelevant to what it proves.
     bars = _ema_parity_bars_through_first_exit()
-    feed = _FakeFeed(bars, mode="hold")
+    from app.lean_sidecar.trading_calendar import session_open_ms_utc
+    from app.utils.session_anchors import et_date_at_ms
+    # February predates pinned CAT fees. Preserve the fixture's prices and
+    # session-relative times in a fully pinned September trading week.
+    shift = session_open_ms_utc(date(2026, 9, 21)) - session_open_ms_utc(et_date_at_ms(bars[0].end_ms))
+    bars = [bar.model_copy(update={"start_ms": bar.start_ms + shift, "end_ms": bar.end_ms + shift,
+        "fetched_at_ms": bar.fetched_at_ms + shift}) for bar in bars]
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+    from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.utils import timestamps
+
+    # This fixture compresses several sessions into milliseconds. Advance the
+    # account clock and its cadence with the feed, not the process wall clock.
+    current_ms = [bars[0].end_ms]
+    monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: current_ms[0] / 1000))
+    monkeypatch.setattr(clerk_runtime, "_live_top_of_book", lambda _symbol, _now: SimpleNamespace(ask=bars[0].close))
+
+    original_open, original_initialize = ClerkSqliteRepository.open, ClerkSqliteRepository.initialize
+    replay_lease_ms = bars[-1].end_ms - bars[0].end_ms + 86_400_000
+    def replay_open(**kwargs: Any) -> ClerkSqliteRepository:
+        return original_open(**{**kwargs, "lease_ttl_ms": replay_lease_ms})
+    def replay_initialize(**kwargs: Any) -> ClerkSqliteRepository:
+        return original_initialize(**{**kwargs, "lease_ttl_ms": replay_lease_ms})
+    monkeypatch.setattr(ClerkSqliteRepository, "open", replay_open)
+    monkeypatch.setattr(ClerkSqliteRepository, "initialize", replay_initialize)
+
+    class ClockedFeed(_FakeFeed):
+        async def stream_bars(self, symbol: str, *, use_rth: bool = True, continuity: ContinuityPolicy | None = None) -> AsyncIterator[MarketDataBar]:
+            async for bar in super().stream_bars(symbol, use_rth=use_rth, continuity=continuity):
+                runtime = get_clerk_runtime(f"sim:{_SID}")
+                assert runtime is not None and runtime.sqlite_repository is not None and runtime.envelope_sync is not None
+                current_ms[0] = bar.end_ms
+                await runtime.envelope_sync.tick()
+                yield bar
+
+    feed = ClockedFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    deployed = await registry.deploy(
+    admitted = await registry.deploy_with_admission(
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
         symbol="SPY",
         mode="dry_run",
         quantity=3,
+        budget_consent=DeployBudgetConsent(committed_cents=1_000_000, risk_revision=0, actor="owner",
+            request_fingerprint="reviewed-dry-run-roundtrip", world="synthetic"),
     )
+    deployed = admitted.bot
     await _wait_for(lambda: feed.bars_consumed == len(bars))
     await _wait_for(lambda: len(registry.dry_run_activity("alpaca", _SID)) >= 2)
 
@@ -115,7 +160,6 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     # operations, not a runner-minted simulated order namespace.
     assert all(not row.order_ref.startswith("simulated:") for row in activity)
     from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
-    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
     from app.services.source_bar_ledger import SourceBarLedger
 
     account_id = synthetic_account_id_for_strategy(_SID)

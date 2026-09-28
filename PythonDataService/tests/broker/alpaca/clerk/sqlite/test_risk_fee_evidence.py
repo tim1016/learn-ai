@@ -13,7 +13,7 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.risk_admission import require_current_risk_admission
+from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness, require_current_risk_admission
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -177,3 +177,26 @@ def test_overflowed_total_is_unknown(day_pnl_repo: ClerkSqliteRepository) -> Non
     complete_fee_evidence(day_pnl_repo)
     overflowed = replace(_pnl(day_pnl_repo), realized_usd=1.7e308, unrealized_usd=1.7e308)
     assert not overflowed.known and overflowed.total_usd is None
+
+
+def test_read_only_risk_judgement_never_withdraws_or_raises_a_hold(day_pnl_repo: ClerkSqliteRepository) -> None:
+    from dataclasses import replace
+
+    from app.broker.alpaca.clerk.sqlite.account_risk import append_risk_policy
+
+    complete_fee_evidence(day_pnl_repo)
+    append_risk_policy(day_pnl_repo, policy=_policy(), expected_revision=0)
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    observation = replace(_observation(), risk_revision=1, unrealized_pl_usd=-101)
+    gate.publish(observation)
+    before = day_pnl_repo.custody_transitions()
+    for _ in range(2):
+        decision = current_risk_readiness(day_pnl_repo, envelope=gate, now_ms=NOON)
+        assert not decision.allowed and decision.breach_cause is not None
+    assert day_pnl_repo.custody_transitions() == before
+    assert gate.latest_observation() is observation
+    assert _hold(day_pnl_repo) is None
+    with pytest.raises(AdmissionBlockedError):
+        require_current_risk_admission(day_pnl_repo, envelope=gate, now_ms=NOON)
+    assert _hold(day_pnl_repo) is not None
+    assert gate.latest_observation() is None
