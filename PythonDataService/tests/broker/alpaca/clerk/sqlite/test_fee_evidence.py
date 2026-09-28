@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,10 +18,12 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
+from app.services.session_authority import et_minute_of_day_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     DAY_PNL_SID,
     NOON,
     YESTERDAY_NOON,
+    YESTERDAY_OPEN,
     _accept_day_pnl_enter,
     _append_day_pnl_slice,
     _clock_at,
@@ -124,7 +127,8 @@ def test_delta_records_project_the_same_attribution_as_one_full_union(tmp_path) 
     windows = [[first], [fee.model_copy(update={"observed_at_ms": NOON + 1}), first], [fee, first]]
     projections = []
     for name, reads in (("PA-delta", windows), ("PA-union", [[row for window in windows for row in window]])):
-        repo = ClerkSqliteRepository.initialize(account_id=name, artifacts_root=tmp_path, clock=_clock_at(NOON))
+        # Custody's chain begins on the fee day; older history is outside it.
+        repo = ClerkSqliteRepository.initialize(account_id=name, artifacts_root=tmp_path, clock=_clock_at(YESTERDAY_NOON))
         try:
             for read in reads:
                 record_fee_evidence(repo, read, checked_at_ms=NOON)
@@ -148,19 +152,21 @@ def test_truncated_and_stale_reads_fail_closed_instead_of_zero(day_pnl_repo) -> 
 
 
 def test_fee_projection_is_rebuilt_from_original_evidence(tmp_path) -> None:
-    clock = _clock_at(NOON)
-    repo = ClerkSqliteRepository.initialize(account_id="PA-fee", artifacts_root=tmp_path, clock=clock)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-fee", artifacts_root=tmp_path, clock=_clock_at(YESTERDAY_NOON))
     record_fee_evidence(
         repo,
         [_activity("fee", "FEE", YESTERDAY_NOON, -0.05), _activity("old", "CSD", YESTERDAY_NOON - 86_400_000)],
         checked_at_ms=NOON,
     )
     expected = custody_fee_attribution(repo._conn, now_ms=NOON, evidence_checked_at_ms=NOON)
+    assert expected.unattributed == Decimal("0.05")
     original = repo.custody_transitions()
     path = repo.db_path
     repo.close()
     path.rename(path.with_suffix(".backup"))
-    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="PA-fee", artifacts_root=tmp_path, clock=clock)
+    # A rebuild re-stamps control_meta.created_at_ms; custody's history floor
+    # comes from the replayed chain, so the rebuilt day keeps the fee day.
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="PA-fee", artifacts_root=tmp_path, clock=_clock_at(NOON))
     try:
         assert custody_fee_attribution(rebuilt._conn, now_ms=NOON, evidence_checked_at_ms=NOON) == expected
         assert rebuilt.custody_transitions() == original
@@ -289,6 +295,126 @@ async def test_backfill_keeps_an_uncovered_fill_day_fail_closed(day_pnl_repo) ->
     assert repo.fee_attribution(now_ms=NOON + 15_000).known
 
 
+def _outside_fill(key: str, at: int, *, side: str = "buy", order: str = "manual-order-1") -> BrokerActivity:
+    return BrokerActivity(
+        broker="alpaca", activity_id=key, native_order_id=order, activity_type="FILL",
+        category="trade_activity", symbol="SPY", side=side, quantity=1.0, price=100.0,
+        net_amount=None, occurred_at_ms=at, observed_at_ms=NOON,
+    )
+
+
+# Outside fills older than custody: a BUY before the pinned fee rates and a
+# short sale the fee model cannot price. Walking history to the provider's
+# exhaustion made either one refuse every deploy and ENTER forever (#2550).
+_ANCIENT_OUTSIDE_FILLS = pytest.mark.parametrize(
+    "ancient",
+    [
+        _outside_fill("ancient-buy", et_minute_of_day_ms(date(2026, 8, 20), 12 * 60)),
+        _outside_fill("ancient-short", et_minute_of_day_ms(date(2026, 9, 2), 12 * 60), side="sell_short"),
+    ],
+    ids=["unpinned-rate-buy", "sell-short"],
+)
+
+
+@_ANCIENT_OUTSIDE_FILLS
+async def test_head_read_at_custody_floor_never_walks_into_older_history(day_pnl_repo, ancient) -> None:
+    """Custody's floor bounds the walk; history before it is never read (#2550)."""
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    accepted = _accept_day_pnl_enter(repo, decision_id="today")
+    _append_day_pnl_slice(repo, accepted, execution_id="today-fill", side="BUY", quantity=1, price=400, occurred_at_ms=NOON - 1_000)
+    recent = [_activity(f"row-{index}", "CSD", NOON - (index + 1) * 300_000) for index in range(600)]
+    older = [_activity(f"old-{index}", "CSD", ancient.occurred_at_ms - (index + 1) * 1_000) for index in range(10)]
+    history = _PagedHistory([*recent, ancient, *older])
+    known = []
+    for _ in range(3):
+        await FeeEvidenceSync(repo=repo, read=history).tick()
+        known.append(repo.fee_attribution(now_ms=NOON).known)
+    assert known == [True, True, True]
+    # The head already reached custody's only day: no continuation is due.
+    assert history.tokens == [None, None, None]
+
+
+@_ANCIENT_OUTSIDE_FILLS
+async def test_walk_stops_at_custody_floor_and_never_attributes_older_rows(day_pnl_repo, ancient) -> None:
+    """The read that crosses the floor may carry older rows; they never count (#2550)."""
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    repo = day_pnl_repo
+    _seed(repo)  # custody's oldest fill day, before its genesis today, is the floor
+    today = [_activity(f"row-{index}", "CSD", NOON - (index + 1) * 1_000) for index in range(900)]
+    before_floor = [_activity(f"row-{900 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(150)]
+    beyond = [_activity(f"row-{1051 + index}", "CSD", ancient.occurred_at_ms - (index + 1) * 1_000) for index in range(500)]
+    history = _PagedHistory([*today, *before_floor, ancient, *beyond])
+    known = []
+    for _ in range(4):
+        await FeeEvidenceSync(repo=repo, read=history).tick()
+        known.append(repo.fee_attribution(now_ms=NOON).known)
+    assert known == [False, False, True, True]
+    assert history.tokens == [None, "row-299", None, "row-599", None, "row-899", None]
+    assert ancient.activity_id in {row.activity_id for record in _fee_records(repo) for row in record.activities}
+    assert not repo.fee_attribution(now_ms=NOON).external_fills
+
+
+def test_outside_fills_attribute_from_the_custody_floor_day_on(day_pnl_repo) -> None:
+    """Only days before the floor leave attribution; the floor day still claims (#2550)."""
+    repo = day_pnl_repo
+    _seed(repo)
+    on_floor = _outside_fill("floor-day-buy", YESTERDAY_OPEN, order="floor-day-order")
+    before_floor = _outside_fill("day-before-buy", YESTERDAY_NOON - 86_400_000, order="day-before-order")
+    record_fee_evidence(repo, [on_floor, before_floor], checked_at_ms=NOON, history_complete=True)
+    result = repo.fee_attribution(now_ms=NOON)
+    assert result.known
+    assert [fill.fill_id for fill in result.external_fills] == ["floor-day-buy"]
+    assert result.total_for("external:floor-day-order") == Decimal("0.01")
+    assert result.unobserved_cash_claim(cash_seen_before_ms=NOON) == Decimal("0.01")
+
+
+def test_outside_short_sale_on_a_custody_day_still_refuses(day_pnl_repo) -> None:
+    repo = day_pnl_repo
+    _seed(repo)
+    short = _outside_fill("floor-day-short", YESTERDAY_OPEN, side="sell_short")
+    record_fee_evidence(repo, [short], checked_at_ms=NOON, history_complete=True)
+    result = repo.fee_attribution(now_ms=NOON)
+    assert not result.known
+    assert "Account fill coverage is incomplete. Reconcile account executions before deploying." in result.unresolved
+
+
+async def test_walk_reaches_every_execution_of_a_tracked_external_order(day_pnl_repo) -> None:
+    """A tracked external order pulls the floor back to its oldest execution (#2550).
+
+    Its executions predate custody, but the budget needs all of them. One
+    witnessed fill is not enough: the walk continues until the order's
+    filled quantity is explained, then stops short of exhaustion.
+    """
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+    from app.broker.contract.models import BrokerOrder
+
+    repo = day_pnl_repo
+    observe_external_order(repo, order=BrokerOrder(
+        broker="alpaca", order_id="gtc-order", client_order_id="console-gtc", symbol="SPY",
+        asset_class="us_equity", side="buy", order_type="limit", time_in_force="gtc", quantity=5,
+        filled_quantity=2, limit_price=100, stop_price=None, filled_avg_price=100, status="canceled",
+        submitted_at_ms=None, created_at_ms=None, updated_at_ms=None, filled_at_ms=None,
+        canceled_at_ms=None, expired_at_ms=None, observed_at_ms=NOON,
+    ))
+    newer = _outside_fill("gtc-newer", YESTERDAY_NOON, order="gtc-order")
+    older = _outside_fill("gtc-older", et_minute_of_day_ms(date(2026, 9, 2), 12 * 60), order="gtc-order")
+    # The head reaches past custody's genesis day, so only the order drives the walk.
+    head = [_activity(f"row-{index}", "CSD", NOON - (index + 1) * 300_000) for index in range(300)]
+    between = [_activity(f"row-{301 + index}", "CSD", YESTERDAY_NOON - 86_400_000 - index) for index in range(599)]
+    beyond = [_activity(f"row-{901 + index}", "CSD", older.occurred_at_ms - 86_400_000 - index) for index in range(600)]
+    history = _PagedHistory([*head, newer, *between, older, *beyond])
+    for _ in range(4):
+        await FeeEvidenceSync(repo=repo, read=history).tick()
+    assert history.tokens == [None, "row-299", None, "row-599", None, "row-899", None]
+    result = repo.fee_attribution(now_ms=NOON)
+    assert result.known
+    assert sorted(fill.fill_id for fill in result.external_fills) == ["gtc-newer", "gtc-older"]
+
+
 async def test_guard_refuses_to_answer_a_continuation_with_the_newest_rows() -> None:
     from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
     from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
@@ -341,7 +467,9 @@ def test_corrected_fill_reprices_original_fee_day(day_pnl_repo) -> None:
 
 def test_one_observed_order_fee_keeps_other_order_provision_through_custody(tmp_path) -> None:
     now = NOON + 86_400_000
-    repo = ClerkSqliteRepository.initialize(account_id="PA-partial-fees", artifacts_root=tmp_path, clock=_clock_at(now))
+    # Custody's chain begins on the fills' day; older history is outside it.
+    clock = _clock_at(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-partial-fees", artifacts_root=tmp_path, clock=clock)
     try:
         fills = [_activity(key, "FILL", NOON).model_copy(update={
             "native_order_id": f"order-{key}", "symbol": "SPY", "side": "sell",
@@ -349,6 +477,7 @@ def test_one_observed_order_fee_keeps_other_order_provision_through_custody(tmp_
         }) for key in ("a", "b")]
         fee = _activity("fee-a", "FEE", NOON, -2).model_copy(update={"native_order_id": "order-a"})
         record_fee_evidence(repo, [*fills, fee], checked_at_ms=now, history_complete=True)
+        clock.advance(now - NOON)
         observed = repo.fee_attribution(now_ms=now)
         assert observed.known
         assert observed.total_for("external:order-a") == Decimal("2.00")
@@ -369,10 +498,13 @@ def test_unattributed_fee_stops_claiming_once_cash_observation_recognizes_it(tmp
     the same dollar twice and understated availability forever.
     """
     now = NOON
-    repo = ClerkSqliteRepository.initialize(account_id="PA-unattributed-fee", artifacts_root=tmp_path, clock=_clock_at(now))
+    # Custody's chain begins on the fee day; older history is outside it.
+    clock = _clock_at(YESTERDAY_NOON)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-unattributed-fee", artifacts_root=tmp_path, clock=clock)
     try:
         fee = _activity("fee-x", "FEE", YESTERDAY_NOON, -0.05).model_copy(update={"native_order_id": "order-x"})
         assert record_fee_evidence(repo, [fee], checked_at_ms=now, history_complete=True)
+        clock.advance(now - YESTERDAY_NOON)
         observed = repo.fee_attribution(now_ms=now)
         assert not observed.known and observed.unattributed == Decimal("0.05")
         assert observed.unobserved_cash_claim(cash_seen_before_ms=now) == Decimal("0.05")

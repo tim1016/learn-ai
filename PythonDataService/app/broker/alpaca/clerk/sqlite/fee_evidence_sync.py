@@ -8,6 +8,7 @@ import sqlite3
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort
@@ -46,9 +47,9 @@ class FeeEvidenceSync:
             next_page_token=head.next_page_token,
         )
         # A busy account's newest window never reaches an older fill day.
-        # Walk the rest of history one bounded read per tick, resuming from the
-        # cursor custody retained (so a restart continues), until the provider
-        # proves exhaustion. Coverage stays refused until the walk passes a day.
+        # Walk older history one bounded read per tick, resuming from the
+        # cursor custody retained (so a restart continues), until it reaches
+        # custody's history floor. Coverage stays refused until it passes a day.
         cursor = await asyncio.to_thread(fee_evidence_cursor, self._repo)
         if cursor is None:
             return grew
@@ -68,7 +69,9 @@ class FeeEvidenceSync:
         while True:
             try:
                 await self.tick()
-            except (BrokerError, TimeoutError, ValueError, sqlite3.Error, ClerkSqliteError):
+            # The walk's floor reads custody fills, so a projection error
+            # refuses this tick instead of ending the producer.
+            except (BrokerError, TimeoutError, ValueError, sqlite3.Error, ClerkSqliteError, EconomicProjectionError):
                 logger.warning("Account fee evidence could not be refreshed", exc_info=True)
             await asyncio.sleep(15)
 
