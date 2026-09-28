@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable, _external_cash_claim
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
@@ -16,7 +16,8 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderLeg, OrderSide
+from app.services.alpaca_fee_attribution import FeeFill
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _accept_day_pnl_enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_correction, _append_slice
@@ -214,6 +215,32 @@ def _external_fill(*, quantity: float = 6, observed_at: int = NOON) -> BrokerAct
         activity_type="FILL", category="trade_activity", symbol="SPY", side="buy",
         quantity=quantity, price=100, net_amount=None, occurred_at_ms=NOON, observed_at_ms=observed_at,
     )
+
+
+class _AnonymousExternalFee:
+    """A ``BudgetFees`` reader whose fee evidence boundary did NOT prove identity.
+
+    ``fee_evidence.py`` never emits a ``FeeFill`` with ``native_order_id=None``
+    for the shipped ``custody_fee_attribution`` reader — it drops such an
+    activity and marks the population incomplete instead. This double exists
+    to exercise ``_external_cash_claim`` in isolation, for the boundary itself
+    rather than that one caller.
+    """
+
+    external_fills = (
+        FeeFill(fill_id="anonymous-external-fill", subject_id="external:?", side=OrderSide.BUY,
+            quantity=Decimal(1), price=Decimal(100), native_order_id=None, observed_at_ms=NOON),
+    )
+
+
+def test_external_fill_without_native_order_id_fails_closed(tmp_path: Path) -> None:
+    """#2550: an unidentified external fill must refuse, never key claims by None."""
+    repo = _new_budget_repo(tmp_path)
+    try:
+        with repo.write_fence() as conn, pytest.raises(BudgetUnavailable):
+            _external_cash_claim(conn, _AnonymousExternalFee(), seen_before_ms=NOON)
+    finally:
+        repo.close()
 
 
 def test_reviewing_prior_day_external_gtc_order_does_not_release_its_money(tmp_path: Path) -> None:

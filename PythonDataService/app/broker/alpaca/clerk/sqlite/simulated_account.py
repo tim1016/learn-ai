@@ -184,6 +184,21 @@ class SimulatedAccountProjection:
         return baseline
 
     @money_context()
+    def establish_session_baseline(self, *, reference_cash: object, now_ms: int) -> SimulationBaseline:
+        """Persist the account's first ``SIMULATION_SESSION_BASELINE`` transition.
+
+        For activation flows that need only that side effect on a fresh,
+        history-free account — not a full ``AccountObservation``. ``_baseline``
+        already dedupes by session, so a second call for the same session
+        returns the existing baseline instead of appending another transition.
+        """
+        with self.repo._write_lock:
+            private = self.repo.account_id.startswith("sim:")
+            capital, persist = self._private_cash() if private else (normalize_money(reference_cash), True)
+            records = effective_fill_records(self.repo._conn, account_id=self.repo.account_id)
+            return self._baseline(records, capital=capital, now_ms=now_ms, persist=persist)
+
+    @money_context()
     def observe(self, *, reference_cash: object, observed_at_ms: int, now_ms: int) -> AccountObservation:
         """One synchronous custody-fenced projection; performs no broker calls.
 

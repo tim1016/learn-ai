@@ -40,12 +40,16 @@ definition in ``app/broker_configuration/errors.py``:
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPaperAllowances
+from app.broker_configuration.envelope import (
+    InvalidLiveEnvelope,
+    ValidatedLiveEnvelope,
+    ValidatedPaperAllowances,
+    require_whole_cent_loss_cap,
+)
 from app.broker_configuration.records import (
     AccountNickname,
     AlpacaDeskState,
@@ -604,9 +608,12 @@ class AccountRiskApplyRequest(_ClosedRequest):
     @field_validator("loss_usd")
     @classmethod
     def whole_cent_cap(cls, value: float) -> float:
-        amount = Decimal(str(value))
-        if amount.as_tuple().exponent < -2:
-            raise ValueError("The loss cap must be in whole cents")
+        # Delegates to the canonical whole-cent check (app/broker_configuration/envelope.py)
+        # so this boundary never disagrees with the domain object it feeds.
+        try:
+            require_whole_cent_loss_cap(value)
+        except InvalidLiveEnvelope as exc:
+            raise ValueError(str(exc)) from exc
         return value
 
 
