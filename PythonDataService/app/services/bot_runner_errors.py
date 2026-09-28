@@ -48,10 +48,6 @@ class MarketDataFeedUnavailableError(BotRunnerError):
     http_status = 503
 
 
-class RestartIntensityRefusedError(BotRunnerError):
-    http_status = 429
-
-
 class BootRecoveryIncompleteError(BotRunnerError):
     http_status = 503
 
@@ -123,7 +119,6 @@ def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
         "BOOT_RECOVERY_INCOMPLETE": BootRecoveryIncompleteError,
         "RECOVERY_SWEEP_EVALUATING": RecoverySweepEvaluatingError,
         "RECOVERY_UNCERTAIN": RecoveryUncertainError,
-        "RESTART_INTENSITY_EXCEEDED": RestartIntensityRefusedError,
     }
     error_type = error_types.get(decision.reason_code)
     if error_type is not None:

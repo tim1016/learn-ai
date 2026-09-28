@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen } from '@testing-library/angular';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
 import { BrokerV2PanelService, type DeployBotBody, type DeploymentBudgetPreview } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBudgetReviewComponent } from './deploy-budget-review.component';
@@ -35,7 +35,21 @@ async function reviewAmount(amount = '617.28') {
   await screen.findByText(/Reviewed budget:/);
 }
 
+const PRICE_WAIT: DeploymentBudgetPreview = {
+  state: 'awaiting_price', detail: 'Wait for a fresh IBKR price for this instrument, then review the budget.',
+  world: 'real_paper', custody_account_id: 'PA9',
+};
+
+async function renderPriceWait(previewBudget: ReturnType<typeof vi.fn>) {
+  vi.useFakeTimers();
+  await render(DeployBudgetReviewComponent, { inputs: { target: TARGET, body: BODY },
+    providers: [{ provide: BrokerV2PanelService, useValue: { previewBudget } }] });
+  await vi.advanceTimersByTimeAsync(0);
+}
+
 describe('deployment budget review', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('copies the server shortcut and keeps dollars fixed through refreshed cash evidence', async () => {
     const { previewBudget, reviewed } = await setup();
     fireEvent.click(screen.getByRole('button', { name: 'Half of unreserved cash · $617.28' }));
@@ -97,4 +111,30 @@ describe('deployment budget review', () => {
     expect(reviewed.mock.calls.at(-1)?.[0]).toBeNull();
   });
 
+  it('re-checks a price wait on its own until the IBKR quote arrives, then stops', async () => {
+    const previewBudget = vi.fn().mockResolvedValueOnce(PRICE_WAIT).mockResolvedValueOnce(PRICE_WAIT).mockResolvedValue(FACTS);
+    await renderPriceWait(previewBudget);
+    expect(screen.getByText(PRICE_WAIT.detail)).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(screen.getByText('Current account evidence is complete.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Half of unreserved cash · $617.28' })).toBeTruthy();
+    expect(previewBudget).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounds the automatic price re-checks and leaves the manual refresh', async () => {
+    const previewBudget = vi.fn().mockResolvedValue(PRICE_WAIT);
+    await renderPriceWait(previewBudget);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    const bounded = previewBudget.mock.calls.length;
+    expect(bounded).toBeGreaterThan(1);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(previewBudget).toHaveBeenCalledTimes(bounded);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh money' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(previewBudget).toHaveBeenCalledTimes(bounded + 1);
+    expect(screen.getByText(PRICE_WAIT.detail)).toBeTruthy();
+  });
 });

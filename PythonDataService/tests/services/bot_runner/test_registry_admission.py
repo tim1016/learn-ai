@@ -1,6 +1,5 @@
-"""``BotTaskRegistry`` admission and resume: restart intensity, listing,
-broker tags, resume/activation failures, run history, pause/continue, and
-carryover policy.
+"""``BotTaskRegistry`` admission and resume: listing, broker tags,
+resume/activation failures, run history, pause/continue, and carryover policy.
 
 Split from ``tests/services/test_bot_runner.py`` (issue #1737).
 """

@@ -19,9 +19,8 @@ Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 - bar stream ended on its own → ``"EXITED_UNVERIFIED"`` with
   ``BAR_STREAM_ENDED``.
 
-Restart intensity uses the canonical :class:`RestartIntensityPolicy`. Trade
-mode delegates effects to the Alpaca Clerk; the runner never authors broker
-execution truth.
+Trade mode delegates effects to the Alpaca Clerk; the runner never authors
+broker execution truth.
 
 All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
 """
@@ -47,7 +46,6 @@ from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.symbol_validity import symbol_unresolvable_for_mode
 from app.broker.v2panel.action_policy import evaluate_archive, evaluate_retirement
-from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
@@ -135,7 +133,6 @@ from app.services.bot_runner_errors import (
     InvalidStrategyInstanceIdError,
     MarketDataFeedUnavailableError,
     RecoveryUncertainError,
-    RestartIntensityRefusedError,
     RunAdmissionRefusedError,
     UnknownBotError,
     raise_run_refusal,
@@ -187,7 +184,6 @@ __all__ = [
     "LaneStoppedBot",
     "MarketDataFeedUnavailableError",
     "RecoveryUncertainError",
-    "RestartIntensityRefusedError",
     "RunAdmissionRefusedError",
     "UnknownBotError",
     "fleet_lane_start_gate",
@@ -435,7 +431,6 @@ class BotTaskRegistry:
         artifacts_root: Path,
         *,
         feed_resolver: Callable[[], MarketDataFeed | None],
-        restart_policy: RestartIntensityPolicy | None = None,
         now_ms: Callable[[], int] = now_ms_utc,
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
@@ -449,14 +444,12 @@ class BotTaskRegistry:
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
-        self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
         self._symbol_unresolvable = symbol_unresolvable
         self._market_liveness = market_liveness or market_liveness_fact
         self._registry_generation = uuid4().hex
         self._bots: dict[str, ManagedBot] = {}
         self._operation_locks: dict[str, asyncio.Lock] = {}
-        self._start_history: dict[str, list[int]] = {}
         # S5 (#1263) fail-closed start gate: no bot starts until the boot
         # recovery sweep has run, and none while recovery left an uncertain
         # outcome (the probe re-evaluates per deploy, so a later resolution
@@ -782,10 +775,6 @@ class BotTaskRegistry:
                 run_gate=run_gate,
             )
             self._bots[binding.strategy_instance_id] = managed
-            self._start_history[binding.strategy_instance_id] = [
-                *self._starts_in_window(binding.strategy_instance_id, now),
-                now,
-            ]
             # Let supervision enter its exception boundary before a Start releases
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
@@ -809,6 +798,29 @@ class BotTaskRegistry:
                     },
                     exc_info=True,
                 )
+            if cleanup_proven and task is not None and not task.done():
+                # The Clerk recorded STOP and released the budget, so the task
+                # this activation started must not keep supervising a stopped
+                # run. Compensation is the normal Stop past its durable commit;
+                # without that proof the task keeps holding its active run.
+                try:
+                    await self._stop_locked(
+                        binding.broker,
+                        binding.strategy_instance_id,
+                        updated_by=_UPDATED_BY,
+                        reason="activation_failed_after_registration",
+                        clerk_stop_already_committed=True,
+                    )
+                except Exception:
+                    logger.error(
+                        "A failed activation's task could not be stopped",
+                        extra={
+                            "action": "activation_failed_task_stop_failed",
+                            "strategy_instance_id": binding.strategy_instance_id,
+                            "run_id": binding.run_id,
+                        },
+                        exc_info=True,
+                    )
             # A resolved failure is reported as known only for a genuine
             # Exception with cleanup proven. asyncio.CancelledError and other
             # BaseException-only paths are not Exception instances, so they
@@ -859,9 +871,6 @@ class BotTaskRegistry:
             boot_recovery_report=self._boot_recovery_report,
             unresolved_intents_probe=self._unresolved_intents_probe,
             recovery_evaluation=self._recovery_evaluation,
-            projected_start_count=self._projected_start_count(strategy_instance_id, observed_at_ms),
-            restart_threshold=self._restart_policy.threshold,
-            restart_window_ms=self._restart_policy.window_ms,
         )
 
     async def retire(
@@ -1717,6 +1726,27 @@ class BotTaskRegistry:
                 )
             yield runtime
 
+    @asynccontextmanager
+    async def unbound_synthetic_runtime_for_projection(
+        self,
+        strategy_instance_id: str,
+    ) -> AsyncIterator[ActiveClerkRuntime | None]:
+        """Project the Dry Run authority a Deploy committed before recording its binding.
+
+        Deploy commits the private ``sim:`` authority's budget and run before
+        the launch writes the binding, so a crash in between leaves only that
+        authority's own activation to find it by. The read opens its sealed
+        store projection-only -- never activating, admitting or launching --
+        and yields ``None`` when no private authority was ever activated for
+        this identity.
+        """
+        authority = self._authorities.for_unbound_dry_run(strategy_instance_id)
+        if authority is None:
+            yield None
+            return
+        async with authority.runtime_for_projection() as runtime:
+            yield runtime
+
     async def _recover_synthetic_authorities_for_boot(self) -> None:
         """Compose each already-activated Dry Run authority before boot repair."""
         for binding in self._bindings.list_for_broker("alpaca"):
@@ -1736,10 +1766,10 @@ class BotTaskRegistry:
             binding=binding,
         )
 
-    def _synthetic_runtime_in_use(self, binding: BrokerBotBinding) -> bool:
+    def _synthetic_runtime_in_use(self, strategy_instance_id: str) -> bool:
         """Keep a deterministic per-instance runtime only while its task owns it."""
         return any(
-            managed.binding.strategy_instance_id == binding.strategy_instance_id
+            managed.binding.strategy_instance_id == strategy_instance_id
             and not managed.task.done()
             for managed in self._bots.values()
         )
@@ -1829,31 +1859,6 @@ class BotTaskRegistry:
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
         return self._confined_instance_dir(strategy_instance_id) / _CARRYOVER_CHECKPOINT_FILENAME
-
-    def _enforce_restart_intensity(self, strategy_instance_id: str, now_ms: int) -> None:
-        """Per-bot projection mirror of ``project_restart_intensity_gate``:
-        refuse when ``prior_starts_in_window + 1 >= threshold``."""
-        projected_count = self._projected_start_count(strategy_instance_id, now_ms)
-        if projected_count >= self._restart_policy.threshold:
-            raise RestartIntensityRefusedError(
-                f"Restart intensity for bot '{strategy_instance_id}': "
-                f"{projected_count} activation(s) within {self._restart_policy.window_ms} ms "
-                f"meets the threshold of {self._restart_policy.threshold}.",
-                detail="WAIT_OR_RECOVER_ACCOUNT_BEFORE_STARTING_ANOTHER_BOT",
-            )
-
-    def _projected_start_count(self, strategy_instance_id: str, now_ms: int) -> int:
-        """Return the next activation count without mutating preview state."""
-        return len(self._starts_in_window(strategy_instance_id, now_ms)) + 1
-
-    def _starts_in_window(self, strategy_instance_id: str, now_ms: int) -> list[int]:
-        """Return bounded activation history for the current policy window."""
-        window_start_ms = now_ms - self._restart_policy.window_ms
-        return [
-            start_ms
-            for start_ms in self._start_history.get(strategy_instance_id, [])
-            if window_start_ms <= start_ms <= now_ms
-        ]
 
     def _confined_instance_dir(self, strategy_instance_id: str) -> Path:
         try:

@@ -109,7 +109,7 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     # account clock and its cadence with the feed, not the process wall clock.
     current_ms = [bars[0].end_ms]
     monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: current_ms[0] / 1000))
-    monkeypatch.setattr(clerk_runtime, "_live_top_of_book", lambda _symbol, _now: SimpleNamespace(ask=bars[0].close))
+    monkeypatch.setattr(clerk_runtime, "prepared_top_of_book", lambda _symbol, _now: SimpleNamespace(ask=bars[0].close))
 
     original_open, original_initialize = ClerkSqliteRepository.open, ClerkSqliteRepository.initialize
     replay_lease_ms = bars[-1].end_ms - bars[0].end_ms + 86_400_000

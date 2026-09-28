@@ -255,12 +255,9 @@ async def resolve_start_runtime_fact(
     boot_recovery_required: bool,
     boot_recovery_report: BootRecoveryReport | None,
     unresolved_intents_probe: UnresolvedIntentsProbe | None,
-    projected_start_count: int,
-    restart_threshold: int,
-    restart_window_ms: int,
     recovery_evaluation: RecoveryEvaluationProbe | None = None,
 ) -> StartRuntimeAdmissionFact:
-    """Project recovery and restart intensity without mutating runner state.
+    """Project boot recovery and recovery intents without mutating runner state.
 
     ``boot_recovery_report`` is the boot sweep's report: absent while the
     sweep has not run; degraded when it names bots no lifecycle authority
@@ -327,20 +324,10 @@ async def resolve_start_runtime_fact(
                 ),
                 next_step="Resolve recovery intents before Start.",
             )
-    if projected_start_count >= restart_threshold:
-        return StartRuntimeAdmissionFact(
-            state="RESTART_INTENSITY_EXCEEDED",
-            observed_at_ms=observed_at_ms,
-            explanation=(
-                f"The next activation would be number {projected_start_count} inside "
-                f"the {restart_window_ms} ms restart window."
-            ),
-            next_step="Wait for the restart window to clear before Start.",
-        )
     return StartRuntimeAdmissionFact(
         state="READY",
         observed_at_ms=observed_at_ms,
-        explanation="Boot recovery and restart intensity admit Start.",
+        explanation="Boot recovery admits Start.",
     )
 
 

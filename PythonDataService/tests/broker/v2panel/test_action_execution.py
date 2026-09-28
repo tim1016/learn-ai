@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -522,6 +523,65 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
     assert result.applied is False
     assert result.receipt_id == "legacy"
     assert result.recorded_at_ms == legacy_observed_at_ms
+
+
+@pytest.mark.parametrize("retired_action_id", ["resume", "pause", "continue"])
+async def test_retired_action_receipts_stay_history_and_never_block_a_stop(
+    tmp_path: Path, retired_action_id: str,
+) -> None:
+    """#2550 review: a bot's ledger written before Resume/Pause/Continue were
+    retired must still load. Those receipts remain readable history, and the
+    bot's next command -- Stop included -- runs instead of failing the load."""
+    path = tmp_path / "panel_action_receipts.json"
+    compound = "\u001f".join((_SID, retired_action_id, "before-retirement"))
+    history = {
+        compound: {
+            "state": "succeeded",
+            "result": {
+                "action_id": retired_action_id,
+                "outcome": "success",
+                "receipt_id": "before-retirement",
+                "recorded_at_ms": 1_700_000_000_000,
+                "applied": True,
+                "revision": 7,
+                "concurrency_token": "token",
+                "message": f"{retired_action_id} applied",
+            },
+            "error_detail": None,
+        }
+    }
+    path.write_text(json.dumps(history), encoding="utf-8")
+
+    result = await execute_action(
+        _request(key="after-retirement"),
+        sid=_SID,
+        current_revision=42,
+        current_concurrency_token="token",
+        performers={"stop": lambda _operator, _reason: _noop()},
+        operator_identity="op",
+        store=DurableIdempotencyStore(path),
+    )
+
+    assert result.applied is True
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted[compound] == history[compound]
+    assert len(persisted) == 2
+
+
+async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path) -> None:
+    """A load failure must not mark the ledger loaded: the next command would
+    start from an empty ledger and overwrite the bot's receipt history."""
+    path = tmp_path / "panel_action_receipts.json"
+    compound = "\u001f".join((_SID, "stop", "truncated"))
+    path.write_text(json.dumps({compound: {"state": "succeeded", "result": {"action_id": "stop"}}}), encoding="utf-8")
+    original = path.read_text(encoding="utf-8")
+    store = DurableIdempotencyStore(path)
+
+    for _ in range(2):
+        with pytest.raises(ValidationError):
+            await store.reserve_or_get(_SID, "stop", "next-command")
+
+    assert path.read_text(encoding="utf-8") == original
 
 
 async def test_unwired_action_is_typed_not_available() -> None:

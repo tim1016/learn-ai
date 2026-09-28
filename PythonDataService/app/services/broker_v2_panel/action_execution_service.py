@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.v2panel.vocabulary import ActionId
-from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
+from app.schemas.broker_v2_panel import PanelActionReceipt, PanelActionRequest, PanelActionResult
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -381,7 +381,7 @@ _DEFAULT_IN_FLIGHT_WAIT_SECONDS = 5.0
 @dataclass
 class IdempotencyRecord:
     state: Literal["in_flight", "succeeded", "failed"]
-    result: PanelActionResult | None = None
+    result: PanelActionReceipt | None = None
     error_detail: str | None = None
     _event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -487,11 +487,15 @@ class DurableIdempotencyStore(IdempotencyStore):
     def _load(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
         if not self._path.is_file():
+            self._loaded = True
             return
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         legacy_observed_at_ms = self._path.stat().st_mtime_ns // 1_000_000
+        # Decode the whole ledger before adopting any of it: a record that
+        # cannot decode must refuse every command rather than leave a partial
+        # ledger that the next persist would write over the bot's history.
+        records: dict[tuple[str, str, str], IdempotencyRecord] = {}
         for compound, payload in raw.items():
             sid, action_id, key = compound.split("\u001f", 2)
             state = payload["state"]
@@ -505,10 +509,12 @@ class DurableIdempotencyStore(IdempotencyStore):
                 # file modification time is the earliest durable observation
                 # available after upgrade; use it instead of fabricating 1970.
                 result_payload.setdefault("recorded_at_ms", legacy_observed_at_ms)
-                result = PanelActionResult.model_validate(result_payload)
-                self._records[(sid, action_id, key)] = IdempotencyRecord(state="succeeded", result=result)
+                # A retired action's receipt decodes as history; a request can
+                # never name that action again, so it is never dispatched.
+                result = PanelActionReceipt.model_validate(result_payload)
+                records[(sid, action_id, key)] = IdempotencyRecord(state="succeeded", result=result)
             else:
-                self._records[(sid, action_id, key)] = IdempotencyRecord(
+                records[(sid, action_id, key)] = IdempotencyRecord(
                     state="failed",
                     error_detail=(
                         payload.get("error_detail")
@@ -516,6 +522,8 @@ class DurableIdempotencyStore(IdempotencyStore):
                         "Inspect Clerk evidence before issuing a new command."
                     ),
                 )
+        self._records.update(records)
+        self._loaded = True
 
     def _persist(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

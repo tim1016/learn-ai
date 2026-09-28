@@ -12,7 +12,6 @@ registry. Covers issue #1260 acceptance criteria:
 - daemon-free by construction (no daemon-client / subprocess imports).
 - container-side artifact paths only (everything under the tmp_path root).
 - broker-tagged bindings.
-- restart-intensity guard reusing the canonical policy semantics.
 
 This file holds only the autouse fixtures every test in the package
 needs by default. Test doubles, constants, and fixture-data builders used

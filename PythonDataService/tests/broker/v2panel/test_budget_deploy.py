@@ -25,6 +25,8 @@ from app.schemas.deployment_budget import (
     DeploymentBudgetView,
 )
 from app.schemas.exit_terms import ExitTermsInput
+from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
+from app.services import market_liveness
 from app.services.broker_v2_panel import budget_deploy
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -45,9 +47,20 @@ def test_budget_receipts_reject_out_of_domain_timestamps(model: type[BaseModel],
         model(**payload, **{field: MAX_TIMESTAMP_MS + 1})
 
 
-def _request(**updates) -> AlpacaPaperDeployRequest:
+def _publish_book(*asks: tuple[str, float]) -> None:
+    """Publish one fresh IBKR book to the real process store, as the status source does."""
+    market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
+        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=NOON, connection_changed_at_ms=NOON,
+        symbol_statuses=(), quotes=tuple(
+            TopOfBookQuote(symbol=symbol, bid=ask, ask=ask, source="ibkr.market_data.status", observed_at_ms=NOON)
+            for symbol, ask in asks
+        ),
+    ), now_ms=NOON)
+
+
+def _request(symbol: str = "SPY", **updates) -> AlpacaPaperDeployRequest:
     return AlpacaPaperDeployRequest(
-        strategy_instance_id="review-a", strategy_key="deployment_validation", symbol="SPY",
+        strategy_instance_id="review-a", strategy_key="deployment_validation", symbol=symbol,
         exit_terms=ExitTermsInput(band_multiple=2, spread_cap_bps=100, exit_allowance_bps=5),
         **updates,
     )
@@ -70,9 +83,11 @@ def authority(tmp_path, monkeypatch):
     runtime = SimpleNamespace(selected_account_id=repo.account_id, account_authority_kind="real_paper", sqlite_repository=repo, envelope_sync=SimpleNamespace(envelope=gate, risk_snapshot=lambda: snapshot))
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
     monkeypatch.setattr(budget_deploy, "get_clerk_runtime", lambda account_id: None)
-    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **kwargs: SimpleNamespace(ask=100.001, observed_at_ms=NOON)))
     monkeypatch.setattr(budget_deploy, "get_broker_configuration_service", lambda: SimpleNamespace(owner=lambda: SimpleNamespace(owner_id="server-owner")))
+    market_liveness.reset_market_liveness_store_for_testing()
+    _publish_book(("SPY", 100.001))
     yield repo, runtime, snapshot
+    market_liveness.reset_market_liveness_store_for_testing()
     repo.close()
 
 
@@ -124,6 +139,26 @@ async def test_recovery_returns_committed_outcome_even_after_evidence_expires(au
         await budget_deploy.command_receipt(repo.account_id, request.strategy_instance_id, altered)
 
 
+def test_preview_asks_ibkr_for_an_unwatched_symbol_and_recovers_once_its_quote_lands(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2550 review: no bot watches a first-time symbol, so the review itself must
+    register IBKR demand; otherwise the quote never arrives and Deploy deadlocks."""
+    store = market_liveness.get_market_liveness_store()
+    _publish_book()
+    monkeypatch.setattr("app.utils.timestamps.now_ms_utc", lambda: NOON)
+
+    waiting = budget_deploy.preview_budget("BUDGET-PAPER", _request(symbol="NVDA"), resolved_parameters={})
+
+    assert store.requested_symbols() == ("NVDA",)
+    assert waiting.state == "awaiting_price" and "fresh IBKR price" in waiting.detail
+    assert waiting.review_token is None and waiting.shortcuts == ()
+    _publish_book(("NVDA", 180))
+    ready = budget_deploy.preview_budget("BUDGET-PAPER", _request(symbol="NVDA"), resolved_parameters={})
+    assert ready.state == "ready" and ready.estimated_price_usd == "180.00"
+    assert "position_headroom" in {shortcut.key for shortcut in ready.shortcuts}
+
+
 def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:
     with pytest.raises(ValidationError):
         DeploymentBudgetInput(amount_usd="100.001", risk_revision=0)
@@ -145,15 +180,15 @@ def _committed_view(authority: tuple) -> tuple:
     return repo, runtime, gate
 
 
-def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: tuple) -> None:
     repo, runtime, gate = _committed_view(authority)
     assert budget_deploy._budget_view(runtime, "view").entry_eligible
     before = repo.custody_transitions()
-    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **_: SimpleNamespace(ask=200)))
+    _publish_book(("SPY", 200))
     view = budget_deploy._budget_view(runtime, "view")
     assert not view.entry_eligible and "200.01 USD" in view.detail
     assert view.free_usd == "200.00"
-    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **_: SimpleNamespace(ask=100)))
+    _publish_book(("SPY", 100))
     gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
     assert not budget_deploy._budget_view(runtime, "view").entry_eligible
     assert "account cash" in budget_deploy._budget_view(runtime, "view").detail
@@ -174,9 +209,13 @@ def test_budget_read_requires_a_fresh_price_and_observes_existing_holds(authorit
     from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
     from app.broker.alpaca.clerk.sqlite.uncertainty_causes import LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE
     repo, runtime, _ = _committed_view(authority)
-    monkeypatch.setattr(budget_deploy, "get_market_liveness_store", lambda: SimpleNamespace(top_of_book=lambda **_: None))
+    _publish_book()
     view = budget_deploy._budget_view(runtime, "view")
     assert not view.entry_eligible and "fresh IBKR price" in view.detail
+    # The read asks IBKR for the sealed symbol, so a bot no running process
+    # watches still gets a price to judge its next position against.
+    monkeypatch.setattr("app.utils.timestamps.now_ms_utc", lambda: NOON)
+    assert "SPY" in market_liveness.get_market_liveness_store().requested_symbols()
     assert view.committed_usd == "200.00"
     raise_account_hold(repo, reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, evidence_refs=["retained-loss"], cause_facts={
         "day_start_ms": NOON-1, "day_pnl_usd": -100, "loss_limit_usd": 100, "last_equity_usd": 1000, "observed_at_ms": NOON,
@@ -205,3 +244,59 @@ def test_budget_preview_refuses_post_observation_fill_without_mutating_risk(auth
     assert preview.review_token is None
     assert repo.custody_transitions() == before
     assert gate.latest_observation() == observation
+
+
+async def test_dry_run_receipt_survives_a_crash_before_the_launch_recorded_its_binding(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2550 review: Deploy commits the private authority's budget before the runner
+    records the binding. A crash in between must leave the committed command
+    recoverable from that authority's own durable evidence, not a 404 forever.
+    Its recovery only releases: the orphaned run stops and the command fails."""
+    from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.schemas.deployment_budget import DeployBudgetConsent
+    from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+    from app.services.bot_runner import BotTaskRegistry
+    from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+
+    sid = "crashed-before-binding"
+    clock = _TestClock(NOON)
+    binding = BrokerBotBinding(
+        strategy_instance_id=sid, strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY", mode="dry_run",
+        quantity=1, action_plan=alpaca_v1_action_plan("SPY"), run_id="run-1", created_at_ms=0,
+        sealed_account_id=f"sim:{sid}", exit_terms=TERMS, budget_consent=DeployBudgetConsent(
+            committed_cents=50_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic"),
+    )
+    primary_repo = ClerkSqliteRepository.initialize(account_id="PARENT", artifacts_root=tmp_path / "primary", clock=clock)
+
+    def registry() -> BotTaskRegistry:
+        return BotTaskRegistry(tmp_path, feed_resolver=lambda: None, now_ms=clock, boot_recovery_required=False)
+
+    try:
+        # The Deploy that crashed: its private authority committed the budget
+        # and run, then the process died before record_launch wrote a binding.
+        deploying = registry()
+        authority = deploying._authority_for(binding)
+        await authority.ensure_recoverable()
+        runtime = get_clerk_runtime(f"sim:{sid}")
+        runtime.clerk._quote_source = lambda symbol, now: SimpleNamespace(ask=100)
+        await runtime.clerk.register_strategy_run(binding)
+        await authority.release_if_unused()
+        assert get_clerk_runtime(f"sim:{sid}") is None
+
+        recovered = registry()
+        assert recovered.bindings_for_broker("alpaca") == []
+        monkeypatch.setattr(budget_deploy, "_primary", lambda account: SimpleNamespace(sqlite_repository=primary_repo))
+        monkeypatch.setattr(budget_deploy, "get_bot_task_registry", lambda: recovered)
+
+        receipt = await budget_deploy.command_receipt("PARENT", sid)
+
+        assert receipt is not None
+        assert receipt.status == "failed" and receipt.world == "synthetic" and receipt.committed_usd == "500.00"
+        assert receipt.run_id == f"{sid}:run-1"
+        # A read composes nothing that outlives it and records no binding.
+        assert get_clerk_runtime(f"sim:{sid}") is None
+        assert recovered.bindings_for_broker("alpaca") == []
+        # An identity no private authority ever held still reads the primary.
+        assert await budget_deploy.command_receipt("PARENT", "never-deployed") is None
+    finally:
+        await close_synthetic_clerk_runtimes()
+        primary_repo.close()

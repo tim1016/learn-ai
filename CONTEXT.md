@@ -448,7 +448,7 @@ so they survive a broker change.
   run may start for one immutable strategy instance. It is a pure function of
   the bot process fact, validation admission fact, and Clerk custody snapshot;
   market-data readiness is carried inside the bot-side facts together with
-  runner boot-recovery and restart-intensity evidence. Preview and execution
+  runner boot-recovery evidence. Preview and execution
   call the same typed policy, and Angular renders its explanation without
   recreating safety logic.
 - **Start custody fence** — the Clerk intake lock held across the final Start

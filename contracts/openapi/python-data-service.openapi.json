@@ -13833,7 +13833,8 @@
           "state": {
             "enum": [
               "ready",
-              "unavailable"
+              "unavailable",
+              "awaiting_price"
             ],
             "title": "State",
             "type": "string"

@@ -13826,7 +13826,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "ready" | "unavailable";
+            state: "ready" | "unavailable" | "awaiting_price";
             /** Unreserved Usd */
             unreserved_usd?: string | null;
             /**
