@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.desired_state import DesiredState
 from app.marketdata.feed import (
     FEED_REFUSAL_REASON_CODES,
@@ -42,7 +41,6 @@ from app.services.bot_runner import (
     InvalidStrategyInstanceIdError,
     MarketDataFeedUnavailableError,
     RecoveryUncertainError,
-    RestartIntensityRefusedError,
     RunAdmissionRefusedError,
     UnknownBotError,
 )
@@ -220,7 +218,6 @@ async def test_start_preview_and_execution_share_the_same_admission_policy(
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: feed,
-        restart_policy=RestartIntensityPolicy(threshold=100),
         now_ms=lambda: _RTH_MS,
         boot_recovery_required=False,
         start_custody_guard=_rth_start_guard,
@@ -253,7 +250,6 @@ async def test_start_allows_idle_connected_feed_to_establish_subscription(
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: feed,
-        restart_policy=RestartIntensityPolicy(threshold=100),
         now_ms=lambda: _RTH_MS,
         boot_recovery_required=False,
         start_custody_guard=_rth_start_guard,
@@ -283,7 +279,6 @@ async def test_start_does_not_call_expected_rth_silence_a_stalled_feed(
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: feed,
-        restart_policy=RestartIntensityPolicy(threshold=100),
         now_ms=lambda: _CLOSED_MS,
         boot_recovery_required=False,
         start_custody_guard=_closed_start_guard,
@@ -306,7 +301,6 @@ async def test_start_preview_and_execution_share_boot_recovery_refusal(
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: _FakeFeed([], mode="hold"),
-        restart_policy=RestartIntensityPolicy(threshold=100),
         start_custody_guard=_flat_start_guard,
     )
 
@@ -415,41 +409,12 @@ async def test_one_bots_unresolved_intent_does_not_refuse_a_sibling(
 
 
 @pytest.mark.asyncio
-async def test_start_preview_and_execution_share_restart_intensity_refusal(
-    tmp_path: Path,
-) -> None:
-    registry = _registry(
-        tmp_path,
-        _FakeFeed([], mode="hold"),
-        policy=RestartIntensityPolicy(threshold=1, window_ms=300_000),
-    )
-
-    preview = await registry.preview_start_admission(
-        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-        strategy_instance_id=_SID,
-        symbol="SPY",
-    )
-
-    assert preview.allowed is False
-    assert preview.reason_code == "RESTART_INTENSITY_EXCEEDED"
-    with pytest.raises(RestartIntensityRefusedError) as refused:
-        await registry.deploy(
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-        )
-    assert refused.value.admission_decision is not None
-    assert refused.value.admission_decision.reason_code == preview.reason_code
-
-
-@pytest.mark.asyncio
 async def test_start_refuses_cleanly_when_clerk_evidence_never_stabilizes(
     tmp_path: Path,
 ) -> None:
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: _FakeFeed([], mode="hold"),
-        restart_policy=RestartIntensityPolicy(threshold=100),
         boot_recovery_required=False,
         start_custody_guard=_changing_start_guard,
     )
@@ -474,7 +439,6 @@ async def test_start_timestamps_activation_after_custody_reconciliation(
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: _FakeFeed([], mode="hold", observed_at_ms=_T0 + 10_000),
-        restart_policy=RestartIntensityPolicy(threshold=100),
         now_ms=lambda: clock["now"],
         boot_recovery_required=False,
         start_custody_guard=delayed_custody_guard,

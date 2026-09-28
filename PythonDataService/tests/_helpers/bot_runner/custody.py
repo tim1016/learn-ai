@@ -29,7 +29,6 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_runner import BotTaskRegistry
@@ -114,7 +113,6 @@ def _registry(
     tmp_path: Path,
     feed: _FakeFeed | None,
     *,
-    policy: RestartIntensityPolicy | None = None,
     now_ms: Callable[[], int] = now_ms_utc,
     start_custody_guard: (
         Callable[[str], AbstractAsyncContextManager[AdmissionCustodyCut]] | None
@@ -123,7 +121,6 @@ def _registry(
     return BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: feed,
-        restart_policy=policy or RestartIntensityPolicy(threshold=100),
         # Boot recovery has its own suite (test_boot_recovery.py).
         boot_recovery_required=False,
         start_custody_guard=start_custody_guard or _flat_start_guard,

@@ -15,7 +15,6 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
-from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -196,7 +195,6 @@ def _registry_with_sqlite_clerk(
     registry = BotTaskRegistry(
         tmp_path / "runner",
         feed_resolver=lambda: feed,
-        restart_policy=RestartIntensityPolicy(threshold=100),
         boot_recovery_required=False,
         start_custody_guard=admission_guard_for(clerk),
         market_liveness=_tradable_market_liveness,

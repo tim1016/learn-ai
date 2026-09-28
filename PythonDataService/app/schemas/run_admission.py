@@ -122,7 +122,7 @@ class ArmingAdmissionFact(BaseModel):
 
 
 class StartRuntimeAdmissionFact(BaseModel):
-    """Runner-owned recovery and restart-intensity evidence for Start."""
+    """Runner-owned recovery evidence for Start."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -131,7 +131,6 @@ class StartRuntimeAdmissionFact(BaseModel):
         "BOOT_RECOVERY_INCOMPLETE",
         "RECOVERY_SWEEP_EVALUATING",
         "RECOVERY_UNCERTAIN",
-        "RESTART_INTENSITY_EXCEEDED",
     ]
     observed_at_ms: int = Field(ge=0)
     explanation: str
