@@ -357,6 +357,17 @@ describe('AlpacaHomeComponent', () => {
     expect(wall.start).toHaveBeenCalledWith('alpaca', TEST_CLERK_ID, TEST_ACCOUNT_ID, expect.anything(), expect.anything());
   });
 
+  it('keeps no arrangement of its own on the Wall: nothing drags, nothing is stored, nothing resets (D11)', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    await renderHome({ url: `${ACCOUNT_URL}?view=wall` });
+    await screen.findByText('STOPPED · STILL HOLDING');
+
+    expect(document.querySelectorAll('[draggable="true"], .cdk-drag, .cdk-drop-list')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: /reset/i })).toBeNull();
+    expect(setItem).not.toHaveBeenCalled();
+    setItem.mockRestore();
+  });
+
   it('names every bot’s symbol through the shared asset identity at its compact size, on the List and the Wall', async () => {
     const { view } = await renderHome();
 

@@ -1,12 +1,17 @@
+import { DOCUMENT } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
   computed,
   effect,
   ElementRef,
+  inject,
+  Injector,
+  afterNextRender,
   input,
   output,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
@@ -69,6 +74,11 @@ export class TypedHaltConfirmComponent {
   readonly confirmed = output();
   readonly cancelled = output();
 
+  private readonly _document = inject(DOCUMENT);
+  private readonly _injector = inject(Injector);
+  /** What had the keyboard when the dialog opened: a cancel hands it back. */
+  private _opener: HTMLElement | null = null;
+
   private readonly _typed = signal<string>('');
   private readonly _input = viewChild<ElementRef<HTMLInputElement>>('tokenInput');
   private readonly _cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
@@ -82,6 +92,8 @@ export class TypedHaltConfirmComponent {
       // Reset the typed field whenever the dialog re-opens so a prior
       // value cannot bleed into a fresh confirmation flow.
       if (this.open()) {
+        const active = untracked(() => this._document.activeElement);
+        this._opener = active instanceof HTMLElement ? active : null;
         this._typed.set('');
         // Focus the token input when present, otherwise (tokenless plain-confirm
         // mode) the Cancel control, so keyboard focus enters the dialog instead
@@ -109,8 +121,16 @@ export class TypedHaltConfirmComponent {
     this.confirmed.emit(undefined);
   }
 
+  /** Cancel, then hand the keyboard back to whatever opened the dialog once
+   * the host has closed it — never left on a dialog that is gone. A confirm
+   * does not: its host moves the keyboard to the outcome instead. */
   onCancel(): void {
+    const opener = this._opener;
     this.cancelled.emit(undefined);
+    afterNextRender(
+      { write: () => { if (!this.open() && opener?.isConnected) opener.focus(); } },
+      { injector: this._injector },
+    );
   }
 
   onEscape(): void {

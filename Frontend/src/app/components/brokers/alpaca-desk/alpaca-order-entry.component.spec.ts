@@ -854,6 +854,54 @@ describe('AlpacaOrderEntryComponent', () => {
     if (dialog === null) throw new Error('confirm-order dialog missing');
     expect(dialog.textContent).toContain('PA1');
   });
+
+  it('hands the keyboard back to Preview order when the Confirm order dialog is cancelled', async () => {
+    const view = await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        target: TARGET,
+        fence: FENCE,
+        expectedAccountId: 'PA1',
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+        },
+      },
+      providers: [
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        {
+          provide: BrokersService,
+          useValue: {
+            previewSqliteManualOrder: vi.fn().mockResolvedValue({
+              capability: {
+                available: true,
+                unavailable: null,
+                supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
+              },
+              preview_token: 'c'.repeat(64),
+              authority_generation: 1,
+              db_identity_token: 'db-token',
+              control_revision: 1,
+              subject_id: 'manual-operator:operator',
+            }),
+            getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+          },
+        },
+      ],
+    });
+    await fillFirstLeg(view, 'spy', '2');
+    const preview = screen.getByRole('button', { name: /Preview order/i });
+    preview.focus();
+
+    fireEvent.click(preview);
+    fireEvent.click(await screen.findByRole('button', { name: /^Cancel$/ }));
+    await view.fixture.whenStable();
+
+    await vi.waitFor(() => expect(document.activeElement).toBe(preview));
+  });
 });
 const TARGET = resourceTarget('alpaca', 'clrk_spec', {
   accountId: 'PA1', bindingGeneration: 7, routingEpoch: 4,

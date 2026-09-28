@@ -2,10 +2,13 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
+  afterNextRender,
   computed,
   inject,
   input,
   signal,
+  viewChild,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -111,6 +114,7 @@ interface BellItem {
   template: `
     @if (view(); as v) {
       <button
+        #trigger
         type="button"
         class="bell"
         [class]="v.tone"
@@ -176,9 +180,16 @@ export class LaneAttentionBellComponent {
     this.open.update((open) => !open);
   }
 
+  /** Escape closes the popover and hands the keyboard back to the bell
+   * that opened it — never left on a panel that is no longer there. */
   onEscape(): void {
+    if (!this.open()) return;
     this.open.set(false);
+    afterNextRender({ write: () => this.trigger()?.nativeElement.focus() }, { injector: this.injector });
   }
+
+  private readonly trigger = viewChild<ElementRef<HTMLButtonElement>>('trigger');
+  private readonly injector = inject(Injector);
 
   onDocumentMousedown(event: MouseEvent): void {
     // The panel and the button that opens it are both inside this host; a

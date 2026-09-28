@@ -275,5 +275,38 @@ describe('TypedHaltConfirmComponent', () => {
       expect(document.activeElement).toBe(cancel);
       (fixture.nativeElement as HTMLElement).remove();
     });
+
+    it('hands the keyboard back to what opened it when cancelled, once the host closes it', async () => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+      const opener = document.createElement('button');
+      opener.textContent = 'Flatten…';
+      document.body.appendChild(opener);
+      opener.focus();
+      const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
+      fixture.componentRef.setInput('open', false);
+      fixture.componentRef.setInput('heading', 'Backend title');
+      fixture.componentRef.setInput('message', 'Backend body.');
+      fixture.componentRef.setInput('consequence', 'Backend consequence.');
+      fixture.componentRef.setInput('confirmLabel', 'Backend confirm');
+      fixture.componentRef.setInput('requiredToken', '');
+      // The host closes the dialog on its cancelled output, as every host does.
+      fixture.componentInstance.cancelled.subscribe(() => fixture.componentRef.setInput('open', false));
+      document.body.appendChild(fixture.nativeElement);
+      fixture.detectChanges();
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+      await Promise.resolve();
+      expect(document.activeElement).not.toBe(opener);
+
+      (fixture.nativeElement as HTMLElement)
+        .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-cancel"]')
+        ?.click();
+      await fixture.whenStable();
+
+      expect(document.activeElement).toBe(opener);
+      (fixture.nativeElement as HTMLElement).remove();
+      opener.remove();
+    });
   });
 });

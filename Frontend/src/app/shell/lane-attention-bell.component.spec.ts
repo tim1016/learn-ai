@@ -188,4 +188,17 @@ describe('LaneAttentionBellComponent', () => {
     await fireEvent.keyDown(bellButton(), { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  it('hands the keyboard back to the bell when Escape closes the popover from inside it', async () => {
+    const { fixture } = await renderBell({ unknown: false, errorReason: null, items: [item()] });
+    await fireEvent.click(bellButton());
+    const link = screen.getByRole('dialog').querySelector('a');
+    link?.focus();
+
+    await fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await fixture.whenStable();
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(bellButton());
+  });
 });
