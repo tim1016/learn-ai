@@ -414,7 +414,8 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly checkingStatus = signal(false);
   /** The unknown outcome is offered its status read once no Deploy is on its way. */
   protected readonly canCheckStatus = computed(() => this.outcomeUnknown() && !this.submitting());
-  /** The `?submission=` this page last wrote, just before sending it. */
+  /** The `?submission=` this page last wrote as its own: just before sending
+   * it, or to keep an unsettled key in the address. */
   private readonly writtenKey = signal<string | null>(null);
   /** A `?submission=` this page opened on and did not send, now held as the
    * form's own key until its read settles it (see the adoption effect). */
@@ -932,11 +933,14 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   protected async newDeployment(): Promise<void> {
-    // The recovery hint leaves the URL first, so the form returns without a
-    // recovery read flashing in between.
+    // A settled recovery hint leaves the URL first, so the form returns
+    // without a recovery read flashing in between. An unsettled key stays
+    // there as the form's own, the record a reload reads (B2-1).
+    const unsettled = this.outcomeUnknown() ? this.submissionKey() : null;
+    if (unsettled !== null) this.ownSubmissionKey(unsettled);
     await this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { [SUBMISSION_PARAM]: null, [DEPLOY_AGAIN_QUERY_PARAM]: null },
+      queryParams: { [SUBMISSION_PARAM]: unsettled, [DEPLOY_AGAIN_QUERY_PARAM]: null },
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
@@ -993,6 +997,16 @@ export class AlpacaDeployWorkflowComponent {
       untracked(() => {
         if (key !== null && key === this.adoptedKey() && key === this.submissionKey()) this.releaseSubmission();
       });
+    });
+    // The address is the only record of an unsettled key that a reload keeps.
+    // Any way onto the page that drops it — the header's Deploy a bot, Deploy
+    // again, coming back later — has it written back as the form's own
+    // (B2-1). A key the address already names is left for the recovery read.
+    effect(() => {
+      const unsettled = this.outcomeUnknown() && this.restoredDraftKey() === this.draftKey() ? this.submissionKey() : null;
+      const named = this.queryParams().get(SUBMISSION_PARAM);
+      if (unsettled === null || (named !== null && SUBMISSION_KEY_RE.test(named))) return;
+      untracked(() => void this.writeSubmissionParam(unsettled));
     });
 
     effect(() => {
@@ -1522,13 +1536,20 @@ export class AlpacaDeployWorkflowComponent {
 
   /** Names `key` in the URL — the hint a reload reads — as this page's own. */
   private async writeSubmissionParam(key: string): Promise<void> {
-    this.writtenKey.set(key);
+    this.ownSubmissionKey(key);
     await this.router.navigate([], {
       relativeTo: this.route,
       queryParams: { [SUBMISSION_PARAM]: key },
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
+  }
+
+  /** `key` is this page's own from here: the page reads it only when the
+   * owner asks, so no recovery section shows it again. */
+  private ownSubmissionKey(key: string): void {
+    this.writtenKey.set(key);
+    this.adoptedKey.set(null);
   }
 
   private focusAfterRender(focus: () => void): void {

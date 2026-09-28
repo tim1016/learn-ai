@@ -1,7 +1,8 @@
 import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
-import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter, Router, type ParamMap } from '@angular/router';
 import axe from 'axe-core';
 import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -208,6 +209,38 @@ async function renderWithQuery(service: ServiceDouble, query: Record<string, str
   return { ...rendered, queryParamMap };
 }
 
+/** The page opened at `query`, as a reload of that address opens it. Its
+ * router double merges every rewrite into `url.query`: the address a later
+ * reload would open. */
+async function openAt(service: ServiceDouble, query: Record<string, string>) {
+  const rendered = await renderWithQuery(service, query);
+  const url = { query: { ...query } };
+  vi.spyOn(rendered.fixture.debugElement.injector.get(Router), 'navigate').mockImplementation(async (_commands, extras) => {
+    const merged: Record<string, unknown> = { ...url.query, ...extras?.queryParams };
+    const next = Object.fromEntries(
+      Object.entries(merged).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+    arriveAt({ url, queryParamMap: rendered.queryParamMap }, next);
+    return true;
+  });
+  return { ...rendered, url };
+}
+
+/** A link into the page at `query` — the header's Deploy a bot is `{}`. */
+function arriveAt(
+  page: { url: { query: Record<string, string> }; queryParamMap: BehaviorSubject<ParamMap> },
+  query: Record<string, string>,
+): void {
+  page.url.query = { ...query };
+  page.queryParamMap.next(convertToParamMap(query));
+}
+
+/** A full reload: a fresh root injector, so no session draft, at `query`. */
+async function reloadAt(service: ServiceDouble, query: Record<string, string>) {
+  TestBed.resetTestingModule();
+  return openAt(service, query);
+}
+
 /** Type a dollar amount into Money and wait for its preview to answer. */
 async function chooseMoney(amount = '1000.00'): Promise<void> {
   fireEvent.input(screen.getByLabelText(/\(USD\)$/), { target: { value: amount } });
@@ -246,6 +279,17 @@ async function lostThenEdited(service: ServiceDouble) {
   await chooseMoney('1200.00');
   await rendered.fixture.whenStable();
   return rendered;
+}
+
+/** A $1,000 Deploy whose answer was lost, on a page opened with no query. */
+async function lostOnAPage(service: ServiceDouble) {
+  const page = await openAt(service, {});
+  await screen.findByRole('heading', { name: 'What' });
+  await page.fixture.whenStable();
+  await chooseMoney('1000.00');
+  fireEvent.click(deployButton());
+  await screen.findByRole('alert', { name: 'Outcome unknown' });
+  return { page, sent: submittedBody(service).submission_key };
 }
 
 function submittedBody(service: ServiceDouble, call = 0): DeploySubmissionBody {
@@ -896,15 +940,9 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
-  /** A reload onto `?submission=reloaded-submission-1`, whose URL the router double rewrites. */
-  async function reloadOnto(service: ServiceDouble) {
-    const rendered = await renderWithQuery(service, { submission: 'reloaded-submission-1' });
-    vi.spyOn(rendered.fixture.debugElement.injector.get(Router), 'navigate').mockImplementation(async (_commands, extras) => {
-      const submission = extras?.queryParams?.['submission'];
-      rendered.queryParamMap.next(convertToParamMap(typeof submission === 'string' ? { submission } : {}));
-      return true;
-    });
-    return rendered;
+  /** A reload onto `?submission=reloaded-submission-1`. */
+  function reloadOnto(service: ServiceDouble) {
+    return openAt(service, { submission: 'reloaded-submission-1' });
   }
 
   /** Deploy from the form. No `whenStable`: a read left unanswered keeps the
@@ -916,6 +954,82 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     fireEvent.click(deployButton());
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(1));
   }
+
+  /** Leave a recovery read that shows `message` for the form. */
+  async function prepareFromTheRecovery(message: string) {
+    const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
+    await within(recovery).findByText(message);
+    fireEvent.click(within(recovery).getByRole('button', { name: 'Prepare a new deployment' }));
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+  }
+
+  /** A reload whose key reads `in_flight`, prepared from, then reloaded again. */
+  async function reloadAfterPreparing() {
+    const service = mockService();
+    service.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
+    const { url } = await reloadOnto(service);
+    await prepareFromTheRecovery(IN_FLIGHT.message);
+    const reloaded = mockService();
+    reloaded.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
+    await reloadAt(reloaded, url.query);
+    return reloaded;
+  }
+
+  // B2-1 (final): the address is the only record of an unsettled key a
+  // reload keeps, so no way back to the form drops it.
+  it('sends the reloaded key after Prepare a new deployment and a second reload', async () => {
+    const reloaded = await reloadAfterPreparing();
+
+    await vi.waitFor(() => expect(reloaded.getDeploySubmission).toHaveBeenCalledWith(expect.anything(), 'reloaded-submission-1'));
+    await prepareFromTheRecovery(IN_FLIGHT.message);
+    await deployFromTheForm(reloaded);
+
+    expect(submittedBody(reloaded).submission_key).toBe('reloaded-submission-1');
+  });
+
+  it('sends a lost Deploy’s key after the header’s Deploy a bot and a reload', async () => {
+    const { page, sent } = await lostOnAPage(mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 })));
+    arriveAt(page, {});
+    await page.fixture.whenStable();
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+
+    const reloaded = mockService();
+    reloaded.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
+    await reloadAt(reloaded, page.url.query);
+    await vi.waitFor(() => expect(reloaded.getDeploySubmission).toHaveBeenCalledWith(expect.anything(), sent));
+    await prepareFromTheRecovery(IN_FLIGHT.message);
+    await deployFromTheForm(reloaded);
+
+    expect(submittedBody(reloaded).submission_key).toBe(sent);
+  });
+
+  it('writes a lost Deploy’s key back into the address when the header’s Deploy a bot drops it', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    const { page, sent } = await lostOnAPage(service);
+
+    arriveAt(page, {});
+
+    await vi.waitFor(() => expect(page.url.query).toEqual({ submission: sent }));
+    expect(within(await screen.findByRole('alert', { name: 'Outcome unknown' }))
+      .getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    expect(screen.queryByRole('status', { name: 'Checking the recorded deployment' })).toBeNull();
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+  });
+
+  it('sends the reloaded key after a second reload that kept it in the address', async () => {
+    const service = mockService();
+    service.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
+    await reloadOnto(service);
+    await screen.findByRole('status', { name: 'Checking the recorded deployment' });
+    const reloaded = mockService();
+    reloaded.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
+    await reloadAt(reloaded, { submission: 'reloaded-submission-1' });
+
+    await prepareFromTheRecovery(IN_FLIGHT.message);
+    await deployFromTheForm(reloaded);
+
+    expect(submittedBody(reloaded).submission_key).toBe('reloaded-submission-1');
+  });
 
   // B2-1: the reload's key is the only memory of a Deploy the page may have
   // started. Until its read settles it, every way back to the form resends it.
@@ -937,31 +1051,37 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
       read: (service: ServiceDouble) => service.getDeploySubmission.mockReturnValue(new Promise(() => undefined)),
       shows: 'Checking never starts a second bot. The recorded result shows whether money was set aside and the bot started.',
     },
-  ])('prepares a new deployment on the reloaded key while its read is $kind', async ({ read, shows }) => {
+  ])('prepares a new deployment on the reloaded key, kept in the address, while its read is $kind', async ({ read, shows }) => {
     const service = mockService();
     read(service);
-    await reloadOnto(service);
+    const { url } = await reloadOnto(service);
 
     const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
     await within(recovery).findByText(shows);
     fireEvent.click(within(recovery).getByRole('button', { name: 'Prepare a new deployment' }));
-    // The fresh form holds the reloaded Deploy's key, with its status read.
+    // The fresh form holds the reloaded Deploy's key, with its status read,
+    // and the address a reload opens still names it.
     await screen.findByRole('heading', { name: 'What' });
     expect(within(await screen.findByRole('alert', { name: 'Outcome unknown' }))
       .getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    expect(url.query).toEqual({ submission: 'reloaded-submission-1' });
+    expect(screen.queryByRole('status', { name: 'Checking the recorded deployment' })).toBeNull();
     await deployFromTheForm(service);
 
     expect(submittedBody(service).submission_key).toBe('reloaded-submission-1');
   });
 
-  it('keeps the reloaded key when the owner leaves the recovery by the header’s Deploy link', async () => {
+  it('keeps the reloaded key, and writes it back into the address, when the owner leaves the recovery by the header’s Deploy link', async () => {
     const service = mockService();
     service.getDeploySubmission.mockResolvedValue(IN_FLIGHT);
-    const { queryParamMap } = await reloadOnto(service);
+    const page = await reloadOnto(service);
     const recovery = await screen.findByRole('status', { name: 'Checking the recorded deployment' });
     await within(recovery).findByText(IN_FLIGHT.message);
 
-    queryParamMap.next(convertToParamMap({}));
+    arriveAt(page, {});
+    await vi.waitFor(() => expect(page.url.query).toEqual({ submission: 'reloaded-submission-1' }));
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+    expect(screen.queryByRole('status', { name: 'Checking the recorded deployment' })).toBeNull();
     await deployFromTheForm(service);
 
     expect(submittedBody(service).submission_key).toBe('reloaded-submission-1');
@@ -988,10 +1108,11 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
   ])('prepares a new deployment on a new key once the reloaded read is settled as $kind', async ({ read, shows }) => {
     const service = mockService();
     read(service);
-    await reloadOnto(service);
+    const { url } = await reloadOnto(service);
 
     await screen.findByText(shows);
     fireEvent.click(screen.getByRole('button', { name: 'Prepare a new deployment' }));
+    await vi.waitFor(() => expect(url.query).toEqual({}));
     await deployFromTheForm(service);
 
     expect(submittedBody(service).submission_key).not.toBe('reloaded-submission-1');
@@ -1123,6 +1244,28 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
     expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
   });
 
+  it('keeps a lost Deploy’s key in the address, and sends it, when Deploy again opens the form', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    service.getDeployPrefill.mockResolvedValue(PREFILL);
+    const { page, sent } = await lostOnAPage(service);
+
+    arriveAt(page, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await vi.waitFor(() => expect(page.url.query).toEqual({ from: PREFILL.source_strategy_instance_id, submission: sent }));
+    await page.fixture.whenStable();
+    await vi.waitFor(() => expect(symbolPicker(page.fixture).symbol()).toBe('QQQ'));
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+
+    expect(submittedBody(service, 1)).toMatchObject({
+      submission_key: sent,
+      strategy_key: PREFILL.strategy_key,
+      symbol: PREFILL.symbol,
+      replaces_strategy_instance_id: PREFILL.source_strategy_instance_id,
+    });
+  });
+
   it('says when the earlier bot’s settings cannot be read, and offers a fresh form', async () => {
     const service = mockService();
     service.getDeployPrefill.mockRejectedValue(new HttpErrorResponse({
@@ -1215,6 +1358,36 @@ describe('AlpacaDeployWorkflowComponent — a lost Deploy across leaving and com
 
     expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
     expect(service.getDeploySubmission).not.toHaveBeenCalled();
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — an unsettled key in the address', () => {
+  it('writes a lost Deploy’s key back into the address when the owner returns without it', async () => {
+    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
+    const { fixture } = await render(DeployHostComponent, {
+      providers: [
+        ...fakePickerWorld().providers,
+        provideFleetDirectory(),
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+    });
+    const router = fixture.debugElement.injector.get(Router);
+    await screen.findByRole('heading', { name: 'What' });
+    await fixture.whenStable();
+    await chooseMoney('1000.00');
+    fireEvent.click(deployButton());
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+    const sent = submittedBody(service).submission_key;
+
+    fixture.componentInstance.shown.set(false);
+    await fixture.whenStable();
+    await router.navigateByUrl('/');
+    fixture.componentInstance.shown.set(true);
+    await fixture.whenStable();
+
+    await screen.findByRole('alert', { name: 'Outcome unknown' });
+    await vi.waitFor(() => expect(router.url).toBe(`/?submission=${sent}`));
   });
 });
 
