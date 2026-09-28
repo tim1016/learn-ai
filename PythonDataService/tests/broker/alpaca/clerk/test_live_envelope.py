@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
@@ -100,6 +103,45 @@ def test_the_fill_visibility_grace_is_positive_and_shorter_than_one_sync_interva
     over-reservation is bounded by the cadence, not by the margin.
     """
     assert 0 < FILL_VISIBILITY_GRACE_MS < ENVELOPE_SYNC_INTERVAL_S * 1_000
+
+
+# The cushion factor above the measured worst case that #2487's grace floor
+# is derived from. The committed fixture's worst *provable* visibility bound
+# (answer-time censored at the receipt; see its attribution.md) is 329 ms
+# after the fill's stream receipt, with reads themselves p95 438 ms apart —
+# so the bound is already quantization-dominated. The factor keeps the
+# margin an order of magnitude over everything observed because the equity
+# engine the envelope gates is unmeasured and Alpaca publishes no ordering
+# promise; the margin's cost stays bounded by one 15 s observation of
+# over-reservation. Raising or lowering either number requires re-measuring
+# (``scripts/measure_fill_to_cash_visibility.py``) and re-deriving this
+# comment, not editing the assertion.
+FILL_VISIBILITY_GRACE_CUSHION_FACTOR = 10
+_FILL_VISIBILITY_FIXTURE = (
+    Path(__file__).resolve().parents[3]
+    / "fixtures"
+    / "alpaca"
+    / "fill_visibility"
+    / "paper-btcusd-2026-09-28.json"
+)
+
+
+def test_the_fill_visibility_grace_covers_the_measured_maximum_plus_cushion() -> None:
+    """#2487: the grace is confirmed by measurement, never shrunk below it.
+
+    Loads the committed measurement fixture and pins the grace's safety
+    floor: the constant must cover the fixture's worst observed visibility
+    bound by at least the documented cushion factor. A grace tightened below
+    this floor fails here until a fresh measurement re-derives it.
+    """
+    report = json.loads(_FILL_VISIBILITY_FIXTURE.read_text())
+    measured = report["distribution"]
+    assert measured["count"] >= 40, "the fixture is the evidence; do not trim its sample"
+    observed_max_ms = measured["max_ms"]
+    assert observed_max_ms is not None
+    assert (
+        observed_max_ms * FILL_VISIBILITY_GRACE_CUSHION_FACTOR <= FILL_VISIBILITY_GRACE_MS
+    )
 
 
 def test_an_observation_trusts_only_fills_recorded_a_grace_before_its_reads() -> None:
