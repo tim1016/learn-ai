@@ -164,7 +164,7 @@ async def test_shadow_verdict_reports_budget_readiness_without_reading_retired_r
     assert current.deployment_readiness == "ready"
     assert current.budget_authority_version == 2
     assert "own reviewed budget" in current.detail
-    assert not {"armed_instance_count", "envelope_state", "shadow_state"}.intersection(current.model_dump())
+    assert not {"armed_instance_count", "envelope_state", "shadow_state", "envelope_agreement"}.intersection(current.model_dump())
     assert retired.read_text() == "corrupt old permission\n"
     runtime.envelope_sync.discard_observation()
     unknown = alpaca_live_verdict(settings=_live(), runtime=runtime, now_ms=_NOW)

@@ -87,11 +87,6 @@ def alpaca_live_verdict(
         "clerk_refusal_reason_code": refusal,
         "budget_authority_version": version,
         "deployment_readiness": readiness,
-        "envelope_agreement": (
-            runtime.clerk.live_envelope.agreement
-            if runtime is not None and runtime.clerk is not None and runtime.clerk.live_envelope is not None
-            else "not_applicable"
-        ),
         "loss_hold": hold,
         "observed_at_ms": now_ms,
     }
