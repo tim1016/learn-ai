@@ -1340,6 +1340,16 @@
         "additionalProperties": false,
         "description": "Closed account-scoped command for the production Alpaca deploy page.",
         "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentBudgetInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "carryover_policy": {
             "default": "FORBID",
             "enum": [
@@ -6461,6 +6471,103 @@
           "observed_at_ms"
         ],
         "title": "BrokerPosition",
+        "type": "object"
+      },
+      "BudgetDeployCommandReceipt": {
+        "additionalProperties": false,
+        "description": "Recoverable durable result; process absence never fabricates launch.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "committed_usd": {
+            "title": "Committed Usd",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "pending",
+              "success",
+              "failure"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "panel_path": {
+            "title": "Panel Path",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "deployed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "outcome",
+          "receipt_id",
+          "recorded_at_ms",
+          "command_id",
+          "strategy_instance_id",
+          "run_id",
+          "account_id",
+          "world",
+          "committed_usd",
+          "message",
+          "explanation",
+          "next_action",
+          "panel_path"
+        ],
+        "title": "BudgetDeployCommandReceipt",
         "type": "object"
       },
       "BuildFromCsvRequest": {
@@ -13695,6 +13802,354 @@
           }
         },
         "title": "DeflatedSharpeResponse",
+        "type": "object"
+      },
+      "DeploymentBudgetInput": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_usd": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "live_confirmation": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Confirmation"
+          },
+          "review_token": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Token"
+          },
+          "risk_revision": {
+            "minimum": 0.0,
+            "title": "Risk Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amount_usd",
+          "risk_revision"
+        ],
+        "title": "DeploymentBudgetInput",
+        "type": "object"
+      },
+      "DeploymentBudgetPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Text"
+          },
+          "custody_account_id": {
+            "title": "Custody Account Id",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "estimated_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Price Usd"
+          },
+          "minimum_budget_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Budget Usd"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "review_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Token"
+          },
+          "risk_revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Risk Revision",
+            "type": "integer"
+          },
+          "shortcuts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentBudgetShortcut"
+            },
+            "title": "Shortcuts",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "unreserved_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreserved Usd"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "world",
+          "custody_account_id"
+        ],
+        "title": "DeploymentBudgetPreview",
+        "type": "object"
+      },
+      "DeploymentBudgetShortcut": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_usd": {
+            "title": "Amount Usd",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "quarter",
+              "half",
+              "all",
+              "position_headroom"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "amount_usd",
+          "explanation"
+        ],
+        "title": "DeploymentBudgetShortcut",
+        "type": "object"
+      },
+      "DeploymentBudgetView": {
+        "additionalProperties": false,
+        "description": "All dollars are authored by Python, including display rounding.",
+        "properties": {
+          "committed_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed Usd"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "entry_eligible": {
+            "default": false,
+            "title": "Entry Eligible",
+            "type": "boolean"
+          },
+          "fees_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees Usd"
+          },
+          "free_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Usd"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "pending_orders_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Orders Usd"
+          },
+          "position_cost_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Cost Usd"
+          },
+          "realized_gross_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Gross Usd"
+          },
+          "released_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Released Usd"
+          },
+          "shortfall_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortfall Usd"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable",
+              "legacy"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "world": {
+            "enum": [
+              "real_paper",
+              "real_live",
+              "shadow",
+              "synthetic"
+            ],
+            "title": "World",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "detail",
+          "strategy_instance_id",
+          "world"
+        ],
+        "title": "DeploymentBudgetView",
         "type": "object"
       },
       "DeploymentFeeAttribution": {
@@ -42702,6 +43157,8 @@
           "ATTRIBUTED_RESIDUE_DISCHARGED",
           "COMMAND_REJECTED",
           "CUSTODY_SUBJECT_REGISTERED",
+          "DEPLOY_COMMITTED",
+          "DEPLOY_LAUNCHED",
           "ENTER_ACCEPTED",
           "ENTER_SUBMISSION_REFUSED",
           "ENTER_UNFILLED",
@@ -52094,7 +52551,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                    }
+                  ],
+                  "title": "Response Deploy Bot Scoped Api Brokers  Broker  Accounts  Account Id  Bots Post"
                 }
               }
             },
@@ -52189,6 +52654,83 @@
           }
         },
         "summary": "Preview the exact Start admission used by execution",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/budget-preview": {
+      "post": {
+        "operationId": "preview_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots_budget_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlpacaPaperDeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBudgetPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review server-calculated dollars for the exact deployment",
         "tags": [
           "broker-v2-panel"
         ]
@@ -52972,6 +53514,82 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/budget": {
+      "get": {
+        "operationId": "read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBudgetView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Deployment Budget Scoped",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
       "get": {
         "operationId": "get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get",
@@ -53149,6 +53767,82 @@
           }
         },
         "summary": "LIVE chart pane: today's IBKR bars + fill markers (\u00a78)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-command": {
+      "get": {
+        "operationId": "read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Deployment Command Scoped",
         "tags": [
           "broker-v2-panel"
         ]
@@ -55749,6 +56443,98 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/budget-preview": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/budget-preview (deploy).",
+        "operationId": "fleet_bot_budget_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_budget_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Budget Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/catalog": {
       "get": {
         "description": "Fleet-routed GET /accounts/{account_id}/bots/catalog (bot_panel_read).",
@@ -56902,6 +57688,90 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/budget": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/budget (bot_panel_read).",
+        "operationId": "fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Budget Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/history": {
       "get": {
         "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/history (bot_panel_read).",
@@ -57149,6 +58019,90 @@
           }
         },
         "summary": "Fleet Bot Decision Evidence",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-command": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-command (bot_panel_read).",
+        "operationId": "fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Deploy Command Read",
         "tags": [
           "broker-clerks"
         ]

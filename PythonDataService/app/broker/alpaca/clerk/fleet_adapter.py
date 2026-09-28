@@ -408,6 +408,9 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.DEPLOY,
             account=True,
         ),
+        _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, account=True),
+        _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
+        _op("bot_deploy_command_read", "GET", "/accounts/{account_id}/bots/{sid}/deploy-command", capability=Capability.BOT_PANEL_READ, account=True),
         _op(
             "bot_cohort_archive_read",
             "GET",

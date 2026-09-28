@@ -56,7 +56,7 @@ class ResolvedDeployParams:
     overrides, `symbol` excluded (it is carried on the binding separately).
     Storing the full set, not a sparse diff, means a later change to a
     strategy's registered defaults can never silently alter an
-    already-deployed instance's behavior on Resume.
+    already-deployed instance's sealed behavior.
     """
 
     effective: dict[str, Any]
@@ -870,7 +870,7 @@ def build_alpaca_paper_deploy_view(
         carryover_explanation=(
             "Carryover is globally disabled until a separately reviewed per-program "
             "replay and restart-safety qualification is complete. STOP with exposure "
-            "requires a Clerk-proven flatten before Resume."
+            "requires a Clerk-proven flatten before fresh deployment."
         ),
         allowed_actions=("deploy",) if eligibility.eligible or dry_run_eligibility.eligible else (),
     )

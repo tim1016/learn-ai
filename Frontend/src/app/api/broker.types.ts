@@ -1530,6 +1530,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/budget-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review server-calculated dollars for the exact deployment */
+        post: operations["preview_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots_budget_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/catalog": {
         parameters: {
             query?: never;
@@ -1659,6 +1676,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Deployment Budget Scoped */
+        get: operations["read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
         parameters: {
             query?: never;
@@ -1685,6 +1719,23 @@ export interface paths {
         };
         /** LIVE chart pane: today's IBKR bars + fill markers (§8) */
         get: operations["get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/deploy-command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Deployment Command Scoped */
+        get: operations["read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2259,6 +2310,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/budget-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Budget Preview
+         * @description Fleet-routed POST /accounts/{account_id}/bots/budget-preview (deploy).
+         */
+        post: operations["fleet_bot_budget_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_budget_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/catalog": {
         parameters: {
             query?: never;
@@ -2487,6 +2558,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Budget Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/budget (bot_panel_read).
+         */
+        get: operations["fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/history": {
         parameters: {
             query?: never;
@@ -2539,6 +2630,26 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/decision-evidence (custody_read).
          */
         get: operations["fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/deploy-command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Deploy Command Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/deploy-command (bot_panel_read).
+         */
+        get: operations["fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8391,6 +8502,7 @@ export interface components {
          * @description Closed account-scoped command for the production Alpaca deploy page.
          */
         AlpacaPaperDeployRequest: {
+            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
             /**
              * Carryover Policy
              * @default FORBID
@@ -10383,6 +10495,49 @@ export interface components {
             unrealized_pl: number;
             /** Unrealized Plpc */
             unrealized_plpc: number | null;
+        };
+        /**
+         * BudgetDeployCommandReceipt
+         * @description Recoverable durable result; process absence never fabricates launch.
+         */
+        BudgetDeployCommandReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Command Id */
+            command_id: string;
+            /** Committed Usd */
+            committed_usd: string;
+            /** Explanation */
+            explanation: string;
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "pending" | "success" | "failure";
+            /** Panel Path */
+            panel_path: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "deployed" | "failed";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
         };
         /**
          * BuildFromCsvRequest
@@ -13692,6 +13847,113 @@ export interface components {
              * @default false
              */
             valid?: boolean;
+        };
+        /** DeploymentBudgetInput */
+        DeploymentBudgetInput: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Live Confirmation */
+            live_confirmation?: string | null;
+            /** Review Token */
+            review_token?: string | null;
+            /** Risk Revision */
+            risk_revision: number;
+        };
+        /** DeploymentBudgetPreview */
+        DeploymentBudgetPreview: {
+            /** Confirmation Text */
+            confirmation_text?: string | null;
+            /** Custody Account Id */
+            custody_account_id: string;
+            /** Detail */
+            detail: string;
+            /** Estimated Price Usd */
+            estimated_price_usd?: string | null;
+            /** Minimum Budget Usd */
+            minimum_budget_usd?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+            /** Review Token */
+            review_token?: string | null;
+            /**
+             * Risk Revision
+             * @default 0
+             */
+            risk_revision?: number;
+            /**
+             * Shortcuts
+             * @default []
+             */
+            shortcuts?: components["schemas"]["DeploymentBudgetShortcut"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable";
+            /** Unreserved Usd */
+            unreserved_usd?: string | null;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
+        };
+        /** DeploymentBudgetShortcut */
+        DeploymentBudgetShortcut: {
+            /** Amount Usd */
+            amount_usd: string;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "quarter" | "half" | "all" | "position_headroom";
+            /** Label */
+            label: string;
+        };
+        /**
+         * DeploymentBudgetView
+         * @description All dollars are authored by Python, including display rounding.
+         */
+        DeploymentBudgetView: {
+            /** Committed Usd */
+            committed_usd?: string | null;
+            /** Detail */
+            detail: string;
+            /**
+             * Entry Eligible
+             * @default false
+             */
+            entry_eligible?: boolean;
+            /** Fees Usd */
+            fees_usd?: string | null;
+            /** Free Usd */
+            free_usd?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+            /** Pending Orders Usd */
+            pending_orders_usd?: string | null;
+            /** Position Cost Usd */
+            position_cost_usd?: string | null;
+            /** Realized Gross Usd */
+            realized_gross_usd?: string | null;
+            /** Released Usd */
+            released_usd?: string | null;
+            /** Shortfall Usd */
+            shortfall_usd?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "unavailable" | "legacy";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /**
+             * World
+             * @enum {string}
+             */
+            world: "real_paper" | "real_live" | "shadow" | "synthetic";
         };
         /** DeploymentFeeAttribution */
         DeploymentFeeAttribution: {
@@ -26339,7 +26601,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -30731,7 +30993,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AlpacaPaperDeployReceipt"];
+                    "application/json": components["schemas"]["AlpacaPaperDeployReceipt"] | components["schemas"]["BudgetDeployCommandReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -30770,6 +31032,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunAdmissionDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots_budget_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlpacaPaperDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBudgetPreview"];
                 };
             };
             /** @description Validation Error */
@@ -31150,6 +31450,41 @@ export interface operations {
             };
         };
     };
+    read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBudgetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get: {
         parameters: {
             query: {
@@ -31211,6 +31546,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChartLiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_deployment_command_scoped_api_brokers__broker__accounts__account_id__bots__sid__deploy_command_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -32372,6 +32742,45 @@ export interface operations {
             };
         };
     };
+    fleet_bot_budget_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_budget_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_bots_catalog_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_catalog_get: {
         parameters: {
             query?: never;
@@ -32862,6 +33271,42 @@ export interface operations {
             };
         };
     };
+    fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get: {
         parameters: {
             query?: never;
@@ -32935,6 +33380,42 @@ export interface operations {
         };
     };
     fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_deploy_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__deploy_command_get: {
         parameters: {
             query?: never;
             header?: {

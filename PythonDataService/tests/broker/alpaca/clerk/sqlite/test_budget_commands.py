@@ -29,7 +29,7 @@ TERMS = ExitTerms(band_multiple=2.0, spread_cap_bps=100.0, exit_allowance_bps=5.
 def _new_budget_repo(tmp_path: Path) -> ClerkSqliteRepository:
     repo = ClerkSqliteRepository.initialize(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
     append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON), expected_revision=0)
-    record_fee_evidence(repo, [], checked_at_ms=NOON)
+    record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
     for sid in ("a", "b"):
         repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"seal-{sid}", exit_terms=TERMS)
     return repo

@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.active_authority import (
     custody_world_or_paper,
     primary_custody_world,
 )
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
@@ -29,9 +30,11 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
 )
+from app.schemas.deployment_budget import DeploymentBudgetPreview
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.broker_v2_panel import budget_deploy
 from app.services.broker_v2_panel.panel_errors import (
     AccountMismatchError,
     PanelRunnerError,
@@ -182,6 +185,17 @@ async def get_alpaca_paper_deploy_view(
         custody_world=custody_world,
         golden_validation_scopes=await _current_golden_validation_scopes(symbol),
     )
+
+
+async def preview_alpaca_deployment_budget(
+    broker: str, account_id: str, request: AlpacaPaperDeployRequest,
+) -> DeploymentBudgetPreview:
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
+    resolved = _require_alpaca_deploy_request(view, request)
+    try:
+        return budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
+    except BudgetUnavailable as exc:
+        raise budget_deploy.budget_error(exc) from exc
 
 
 async def deploy_alpaca_paper_bot(

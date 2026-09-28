@@ -34,6 +34,7 @@ def submit_budgeted_deploy(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, lifecycle_run_id: str,
     world: AuthorityKind, committed_cents: int, configuration_hash: str, exit_terms_hash: str,
     risk_revision: int, actor: str, envelope: LiveEnvelopeGate, minimum_position_cost: Decimal,
+    request_fingerprint: str = "",
 ) -> CommandSubmission:
     """Reserve one budget and run atomically; launch outcome follows separately.
 
@@ -54,6 +55,7 @@ def submit_budgeted_deploy(
         idempotency_key=idempotency_key, payload_hash="", lifecycle_run_id=lifecycle_run_id,
         world=world, committed_cents=committed_cents, configuration_hash=configuration_hash,
         exit_terms_hash=exit_terms_hash, risk_revision=risk_revision, actor=actor,
+        request_fingerprint=request_fingerprint,
     )
     payload_hash = hashlib.sha256(canonicalize({**asdict(draft), "account_id": repo.account_id}).encode()).hexdigest()
     facts = DeployCommittedFacts(**{**asdict(draft), "payload_hash": payload_hash})

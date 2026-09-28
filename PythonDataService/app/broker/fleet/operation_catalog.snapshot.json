@@ -32,6 +32,16 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/authority-facts",
       "requires_account": true
     },
+    "bot_budget_preview": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/budget-preview",
+      "requires_account": true
+    },
+    "bot_budget_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/budget",
+      "requires_account": true
+    },
     "bot_chart_history": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/{sid}/chart/history",
@@ -70,6 +80,11 @@
     "bot_decision_evidence": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/{sid}/decision-evidence",
+      "requires_account": true
+    },
+    "bot_deploy_command_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/deploy-command",
       "requires_account": true
     },
     "bot_evidence": {

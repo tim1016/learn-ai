@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
+from app.schemas.deployment_budget import DeploymentBudgetInput
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
@@ -137,6 +138,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     # see `_validated_catalog_strategy_key` for exactly what "defined" means.
     strategy_key: str = Field(min_length=1, max_length=128)
     exit_terms: ExitTermsInput
+    budget: DeploymentBudgetInput | None = None
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"

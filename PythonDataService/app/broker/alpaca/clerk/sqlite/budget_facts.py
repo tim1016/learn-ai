@@ -20,6 +20,7 @@ class DeployCommittedFacts:
     exit_terms_hash: str
     risk_revision: int
     actor: str
+    request_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         if type(self.committed_cents) is not int or not 0 < self.committed_cents <= 2**63 - 1:

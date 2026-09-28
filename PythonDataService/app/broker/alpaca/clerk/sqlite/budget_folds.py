@@ -42,9 +42,9 @@ def fold_deploy_committed(conn: sqlite3.Connection, payload: dict[str, Any]) -> 
     )
     conn.execute(
         "INSERT INTO deployment_budgets (strategy_instance_id,command_id,run_id,world,committed_cents,"
-        "configuration_hash,exit_terms_hash,risk_revision,actor,committed_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "configuration_hash,exit_terms_hash,risk_revision,actor,request_fingerprint,committed_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (sid, payload["command_id"], payload["run_id"], facts.world, facts.committed_cents,
-         facts.configuration_hash, facts.exit_terms_hash, facts.risk_revision, facts.actor, payload["recorded_at_ms"]),
+         facts.configuration_hash, facts.exit_terms_hash, facts.risk_revision, facts.actor, facts.request_fingerprint, payload["recorded_at_ms"]),
     )
 
 
