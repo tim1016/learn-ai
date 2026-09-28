@@ -27,7 +27,8 @@
 
   <aside class="trader-rail" aria-label="Trader summary">
     <app-trader-metrics [panel]="panel()" />
-    @if (target()) {
+    @if (target(); as budgetTarget) {
+      <app-deployment-budget [target]="budgetTarget" [strategyInstanceId]="panel().strategy_instance_id" [revision]="panel().revision" />
       <app-fee-attribution [target]="target()" [strategyInstanceId]="panel().strategy_instance_id" />
     }
 

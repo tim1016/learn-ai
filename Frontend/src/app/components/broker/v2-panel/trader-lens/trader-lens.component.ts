@@ -1,4 +1,5 @@
 import type { ResourceTarget } from '../../../../fleet/resource-target';
+import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
 import { FeeAttributionComponent } from '../../fee-attribution/fee-attribution.component';
 import {
   ChangeDetectionStrategy,
@@ -40,6 +41,7 @@ import { RecentDecisionsListComponent } from './recent-decisions-list/recent-dec
   imports: [
     DualPaneChartComponent,
     FeeAttributionComponent,
+    DeploymentBudgetComponent,
     TradesTodayListComponent,
     TraderMetricsComponent,
     RecentDecisionsListComponent,

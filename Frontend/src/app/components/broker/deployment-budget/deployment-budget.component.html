@@ -1,0 +1,17 @@
+<section class="deployment-budget" aria-label="Deployment budget" aria-live="polite">
+  <h3>Deployment budget</h3>
+  @if (budget.isLoading()) { <p>Reading committed money…</p> }
+  @else if (budget.error()) { <p role="alert">Budget evidence is unavailable. Refresh before making another deployment.</p> }
+  @else if (view(); as report) {
+    <p>{{ report.detail }}</p>
+    <p>{{ worldLabels[report.world] | receiptLabel }} · {{ report.entry_eligible ? 'Entries eligible' : 'New entries unavailable' }}</p>
+    <dl>
+      @for (row of amounts(); track row.label) {
+        <dt>{{ row.label }}</dt><dd>{{ (row.amount === null || row.amount === undefined) ? 'Unknown' : (row.amount | currency:'USD') }}</dd>
+      }
+    </dl>
+    <p>Stopped does not mean flat or fully released. Use the position and order recovery controls to resolve remaining obligations.</p>
+    @if (report.observed_at_ms !== null) { <small>Observed <app-timestamp-display [value]="report.observed_at_ms" mode="local" /></small> }
+  }
+  <button type="button" (click)="budget.reload()" [disabled]="budget.isLoading()">Refresh budget</button>
+</section>

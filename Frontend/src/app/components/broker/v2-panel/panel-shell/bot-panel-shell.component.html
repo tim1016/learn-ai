@@ -38,10 +38,6 @@
     (retryRequested)="currentRun.reload()"
   />
 
-  @if (armingAvailable()) {
-    <app-live-arming [target]="target()" [sid]="sid()" (changed)="refreshArming()" />
-  }
-
   @if (actionReceipt(); as receipt) {
     <div class="panel-feedback">
       <app-panel-action-receipt

@@ -38,6 +38,39 @@ describe('BrokerV2PanelService run evidence', () => {
 
   afterEach(() => http.verify());
 
+  it('routes a read-only budget preview and preserves the consent string in the command envelope', async () => {
+    const body = {
+      strategy_instance_id: 'sid-001', strategy_key: 'deployment_validation' as const, symbol: 'SPY', execution_mode: 'paper' as const,
+      sizing: { preset: 'safe_canary' as const, quantity: 1 }, carryover_policy: 'FORBID' as const,
+      exit_terms: { exit_allowance_bps: 10, band_multiple: 2, spread_cap_bps: 10 },
+      budget: { amount_usd: '1234.56', risk_revision: 7, review_token: 'review-proof' },
+    };
+    const preview = service.previewBudget(target('PA9'), body);
+    const read = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/budget-preview');
+    expect(read.request.body).toEqual(body);
+    read.flush({ state: 'ready', review_token: 'review-proof' });
+    await preview;
+    const command = service.deployBudgetBot(target('PA9'), body);
+    const write = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots');
+    expect(write.request.body.budget).toEqual(body.budget);
+    expect(write.request.body.command_context.idempotency_key).toBe('command-key-1');
+    write.flush({ status: 'pending', committed_usd: '1234.56' });
+    await expect(command).resolves.toMatchObject({ status: 'pending', committed_usd: '1234.56' });
+  });
+
+  it('reads budget and durable deployment status through the selected account and escaped bot identity', async () => {
+    const budget = service.getBudget(target('PA9'), 'sid/1');
+    const money = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/budget');
+    expect(money.request.method).toBe('GET');
+    money.flush({ state: 'unavailable', free_usd: null });
+    await expect(budget).resolves.toMatchObject({ free_usd: null });
+    const command = service.getDeployCommand(target('PA9'), 'sid/1');
+    const status = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/deploy-command');
+    expect(status.request.method).toBe('GET');
+    status.flush({ status: 'pending' });
+    await expect(command).resolves.toMatchObject({ status: 'pending' });
+  });
+
   it('loads the current run from the clerk-scoped run endpoint', async () => {
     const response = service.getCurrentRun(
       resourceTarget('alpaca paper', CLERK, { accountId: 'account/1', entityId: 'sid/001' }),

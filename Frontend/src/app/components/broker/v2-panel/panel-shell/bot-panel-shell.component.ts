@@ -57,8 +57,6 @@ import {
   type ResourceTarget,
   withCommand,
 } from '../../../../fleet/resource-target';
-import { LiveArmingComponent } from '../../shared/live-arming/live-arming.component';
-import { AlpacaLiveVerdictService } from '../../../../services/alpaca-live-verdict.service';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import {
   fencedTarget,
@@ -167,7 +165,6 @@ function snapshotPrice(snapshot: StockTickerSnapshot | null): number | null {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ExtendedFlattenTicketComponent,
-    LiveArmingComponent,
     FlattenFillsComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
@@ -195,13 +192,6 @@ export class BotPanelShellComponent {
 
   // ── Services ──────────────────────────────────────────────────────────────
 
-  private readonly liveVerdicts = inject(AlpacaLiveVerdictService);
-  protected readonly armingAvailable = computed(() => {
-    const verdict = this.liveVerdicts.stateFor(this.clerkId()).verdict;
-    return this.panel()?.mode !== 'dry_run' && verdict?.clerk_authority === 'sqlite'
-      && (verdict.final_verdict === 'live-armed' || verdict.final_verdict === 'live-unarmed');
-  });
-  protected refreshArming(): void { void this.liveStore.refresh(); }
   private readonly panelSvc = inject(BrokerV2PanelService);
   private readonly brokers = inject(BrokersService);
   private readonly marketData = inject(MarketDataService);

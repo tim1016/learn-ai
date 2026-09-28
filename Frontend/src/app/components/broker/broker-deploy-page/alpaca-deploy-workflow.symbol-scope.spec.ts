@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BrokerV2PanelService,
   type DeployBotView,
+  type DeployBotBody,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 import {
@@ -82,7 +83,11 @@ function mockService(view: DeployBotView = DEPLOY_VIEW) {
   return {
     getDeployView: vi.fn().mockResolvedValue(view),
     previewStartAdmission: vi.fn().mockResolvedValue(ADMISSION_STUB),
-    deployBot: vi.fn(),
+    deployBudgetBot: vi.fn(),
+    previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
+      state: 'ready', detail: 'Money is ready.', world: 'real_paper', custody_account_id: 'PA9', risk_revision: 1,
+      shortcuts: [], review_token: body.budget ? 'reviewed-money' : null,
+    })),
   };
 }
 
@@ -402,6 +407,9 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       const view = await renderWorkflow(service);
       fireEvent.input(screen.getByLabelText('Bot name'), { target: { value: 'spy-scope-01' } });
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
+      fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '1000.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
+      await screen.findByText(/Reviewed budget:/);
       // Baseline: this ticket is otherwise deployable, so the assertion below
       // is about staleness and nothing else.
       expect(deployButton().hasAttribute('disabled')).toBe(false);
@@ -410,6 +418,8 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
       await typeSymbol(view, 'QQQ');
       await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
       await screen.findByRole('alert', { name: 'Deployment readiness is stale' });
+      fireEvent.click(screen.getByRole('button', { name: 'Review budget' }));
+      await screen.findByText(/Reviewed budget:/);
 
       expect(deployButton().hasAttribute('disabled')).toBe(true);
     } finally {

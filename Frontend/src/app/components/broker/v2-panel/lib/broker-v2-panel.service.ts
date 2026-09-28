@@ -75,6 +75,13 @@ function isUnroutedNotFound(error: unknown): boolean {
 
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
+export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
+export type DeploymentBudgetPreview = components['schemas']['DeploymentBudgetPreview'];
+export type DeploymentBudgetView = components['schemas']['DeploymentBudgetView'];
+export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput'];
+export const DEPLOYMENT_WORLD_LABELS: Readonly<Record<BudgetDeployReceipt['world'], string>> = {
+  real_paper: 'Paper', real_live: 'Live', shadow: 'Shadow', synthetic: 'Dry Run',
+};
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
 export type DeployStrategyParamsSchema = components['schemas']['StrategyParamsSchema'];
@@ -133,13 +140,22 @@ export class BrokerV2PanelService {
     );
   }
 
-  deployBot(target: ResourceTarget, body: DeployBotBody): Promise<DeployBotReceipt> {
-    return firstValueFrom(
-      this.http.post<DeployBotReceipt>(
-        operationUrl('bot_create', target),
-        this.commandBody(target, 'bot_action', body),
-      ),
-    );
+  deployBudgetBot(target: ResourceTarget, body: DeployBotBody & { budget: DeploymentBudgetInput }): Promise<BudgetDeployReceipt> {
+    return firstValueFrom(this.http.post<BudgetDeployReceipt>(
+      operationUrl('bot_create', target), this.commandBody(target, 'bot_action', body),
+    ));
+  }
+
+  previewBudget(target: ResourceTarget, body: DeployBotBody): Promise<DeploymentBudgetPreview> {
+    return firstValueFrom(this.http.post<DeploymentBudgetPreview>(operationUrl('bot_budget_preview', target), body));
+  }
+
+  getBudget(target: ResourceTarget, sid: string): Promise<DeploymentBudgetView> {
+    return firstValueFrom(this.http.get<DeploymentBudgetView>(operationUrl('bot_budget_read', { ...target, sid })));
+  }
+
+  getDeployCommand(target: ResourceTarget, sid: string): Promise<BudgetDeployReceipt> {
+    return firstValueFrom(this.http.get<BudgetDeployReceipt>(operationUrl('bot_deploy_command_read', { ...target, sid })));
   }
 
   previewStartAdmission(

@@ -1,0 +1,15 @@
+.deployment-budget {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  h3, p, dl { margin: 0; }
+  h3, dd { color: var(--text-primary); }
+  dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2) var(--space-3); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+  button { justify-self: start; }
+}
