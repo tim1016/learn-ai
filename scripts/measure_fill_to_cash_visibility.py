@@ -373,6 +373,9 @@ class TradeUpdatesStream:
         parsed = urlparse(self._url)
         raw = socket.create_connection((parsed.hostname, parsed.port or 443), timeout=timeout_s)
         context = ssl.create_default_context()
+        # A bare default context still admits TLSv1/1.1 negotiation on
+        # Python 3.9; pin the floor. Alpaca's endpoints are TLS 1.2+.
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         self._sock = context.wrap_socket(raw, server_hostname=parsed.hostname)
         self._sock.settimeout(SOCKET_TIMEOUT_S)
         key = base64.b64encode(os.urandom(16)).decode()
