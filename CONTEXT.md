@@ -70,6 +70,12 @@ is archived while the code it names still runs.
   reserved while the deployment runs.
 - **Released cash** — money no longer reserved by a stopped deployment.
   Outstanding orders, unobserved debits and unsettled fees remain separate claims.
+- **Fee provision** — an estimated fee claim held until the observed broker
+  charge replaces it. Priced by the canonical fee model at ENTER admission and,
+  for the unfilled remainder of a pending order, by its own conservative quote;
+  a stopped deployment's released cash still excludes its unsettled provisions.
+  See `docs/references/custody-budget-money.md` and
+  `docs/references/alpaca-fee-attribution.md`.
 - **Deployment consent** — the trader’s approval of one exact account, world,
   configuration, dollar budget, exit terms and current risk policy.
 - **Budget authority cutover** — the account’s irreversible switch from historical
