@@ -20,10 +20,10 @@ import { CurrentUrlService } from '../../../shell/current-url.service';
  * come from the same confirmed read rather than three of them.
  *
  * `clerkStatus` is the same rule applied to the Clerk↔broker reconciliation
- * read: the workspace's sync indicator and `AlpacaHoldBannerComponent` both
- * name this account's hold and reconciliation state, so both read the one
- * resource here rather than each polling `getClerkStatus` on its own (#2185
- * — the same fact was read three times on one screen).
+ * read: Activity's sync check names this account's reconciliation state from
+ * the one resource here, which the workspace re-reads on its poll, rather
+ * than polling `getClerkStatus` on its own (#2185 — the same fact was once
+ * read three times on one screen).
  *
  * `money` is the account-money read (PRD #2560 D12): the header's Free to
  * deploy, Cash, Equity and Today, and every money bar on the account's
