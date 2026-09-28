@@ -153,15 +153,48 @@ if [[ -z "$selection_json" ]]; then
   exit 1
 fi
 
-# The page the operator must use is clerk-scoped on fleet postures: the
-# compatibility /brokers/alpaca/settings URL renders
-# BrokerLaneUnavailableComponent there, while the real Settings page
-# lives under the clerk route (Frontend/src/app/app.routes.ts,
-# brokers/alpaca/clerks/:clerkId → settings).
-if [[ -n "$fleet_clerk_id" ]]; then
-  settings_url="http://localhost:4200/brokers/alpaca/clerks/$fleet_clerk_id/settings"
-else
-  settings_url="http://localhost:4200/brokers/alpaca/settings"
+# The page the operator must use is always clerk-scoped: Settings lives
+# only under the clerk route (Frontend/src/app/app.routes.ts,
+# brokers/alpaca/clerks/:clerkId → settings); there is no broker-wide
+# Settings page to fall back to. A fleet lane names its own clerk
+# (FLEET_CLERK_ID). The combined posture's worker does not, but it serves the
+# account directory itself, so its lane is the directory's one Alpaca lane.
+
+# The clerk id of the directory's only Alpaca lane (GET /api/broker-clerks on
+# stdin), or nothing when it lists none or several.
+single_alpaca_lane() {
+  python3 -c 'import json, sys
+lanes = [lane for lane in json.load(sys.stdin).get("clerks", []) if lane.get("broker") == "alpaca"]
+print(lanes[0]["clerk_id"] if len(lanes) == 1 else "")'
+}
+
+# This lane's Settings page, or a failure when no single lane can be named.
+settings_page_url() {
+  local clerk_id="$fleet_clerk_id"
+  if [[ -z "$clerk_id" ]]; then
+    local directory_json
+    directory_json="$(curl --fail --silent --show-error \
+      -H "X-Data-Plane-Control-Secret: $control_secret" "$data_plane_url/api/broker-clerks" 2>/dev/null || true)"
+    if [[ -n "$directory_json" ]]; then
+      clerk_id="$(printf '%s' "$directory_json" | single_alpaca_lane 2>/dev/null || true)"
+    fi
+  fi
+  [[ -n "$clerk_id" ]] || return 1
+  printf 'http://localhost:4200/brokers/alpaca/clerks/%s/settings' "$clerk_id"
+}
+
+if ! settings_url="$(settings_page_url)"; then
+  cat >&2 <<EOF
+This worker does not name its lane, and the account directory does not list
+exactly one Alpaca lane, so the Settings page cannot be opened for you. The
+worker is running. Finish by hand:
+  1. Open http://localhost:4200/brokers/alpaca and choose the Paper account.
+  2. Open Settings. Under Broker connection, stage the saved Live profile if
+     needed, then click Apply staged revision.
+  3. Run: ${compose_words[*]} restart $worker_service
+  4. On the same Settings page, read Last Apply under Broker connection.
+EOF
+  exit 1
 fi
 if command -v open >/dev/null 2>&1; then
   open "$settings_url"

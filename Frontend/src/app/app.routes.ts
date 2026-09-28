@@ -319,21 +319,19 @@ export const routes: Routes = [
     loadComponent: loadBrokerLaneUnavailable,
   },
   {
-    // The account Settings tab — including the broker configuration profiles
-    // (ADR 0060) under its Broker connection section. Declared before the desk
-    // so the intent of the deeper path is readable next to it; Angular would
-    // backtrack to it either way, since the desk route consumes no trailing
-    // segments.
-    //
-    // Delivery C: Settings is canonical only under an explicit clerk.
+    // Settings — the Configuration tab until PRD #2560 — belongs to one
+    // account's lane (FR-092) and lives only under its clerk. A broker-wide
+    // bookmark names no lane, so, like the retired Bots and Gallery
+    // choosers below, it lands on the account list, where choosing the
+    // account is choosing whose Settings to open — never a lane picked for
+    // the operator (FR-096).
     path: "brokers/alpaca/settings",
-    loadComponent: loadBrokerLaneUnavailable,
+    redirectTo: "/brokers/alpaca",
+    pathMatch: "full",
   },
   {
-    // The tab was Configuration until PRD #2560 (FR-092 keeps it
-    // lane-scoped); old bookmarks keep working.
     path: "brokers/alpaca/configuration",
-    redirectTo: "/brokers/alpaca/settings",
+    redirectTo: "/brokers/alpaca",
     pathMatch: "full",
   },
   {

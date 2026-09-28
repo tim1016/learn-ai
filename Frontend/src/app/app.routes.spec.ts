@@ -190,11 +190,25 @@ describe('routes', () => {
     expect(router.url).toBe('/brokers/alpaca');
   });
 
+  it.each([['/brokers/alpaca/settings'], ['/brokers/alpaca/configuration']])(
+    'lands the broker-wide Settings bookmark %s on the account list, never a dead page (#2567)',
+    async (from) => {
+      // Settings is one lane's page (FR-092); a bookmark naming no lane lands
+      // where the owner chooses the account, never on a page that cannot
+      // stage or Apply, and never on a lane picked for them (FR-096).
+      TestBed.configureTestingModule({ providers: appConfig.providers });
+      const router = TestBed.inject(Router);
+
+      await router.navigateByUrl(from);
+
+      expect(router.url).toBe('/brokers/alpaca');
+    },
+  );
+
   it.each([
-    ['/brokers/alpaca/configuration', '/brokers/alpaca/settings'],
     ['/brokers/ibkr/clerks/clrk_other/configuration', '/brokers/ibkr/clerks/clrk_other/settings'],
   ])('redirects the Configuration bookmark %s to its Settings equivalent %s (#2566)', async (from, to) => {
-    // Neither address can prove an Alpaca lane, so both still render the
+    // The address cannot prove an Alpaca lane, so it still renders the
     // in-place lane-unavailable page — under the Settings address.
     TestBed.configureTestingModule({ providers: appConfig.providers });
     const router = TestBed.inject(Router);
