@@ -182,3 +182,40 @@ supersedes account-level EXIT pricing with immutable registration terms,
 introduces profile v4 defaults and the acknowledged manual band override,
 and exposes the existing arming ceremony through the Live UI. Entry allowance
 semantics and the IBKR-data/Alpaca-orders boundary remain unchanged.
+
+### Simulation cash and risk amendment — 2026-09-27 (#2540 / #2546)
+
+This amendment supersedes Decision 4's mixed Shadow P&L reading. One
+`SimulatedAccountProjection` composes canonical effective fills, FIFO valuation,
+fee attribution and the calendar for both simulated worlds. It introduces no
+second position, fee or balance ledger.
+
+Shadow shares one `shadow:<live account>` pool: current observed real cash,
+minus its own cumulative BUY costs, plus its own SELL proceeds, minus settled
+modelled fees. Real cash changes affect reference capital available for new
+commitments; they never become simulated P&L. Real positions, unrealized P&L,
+`last_equity` and FEE activities cannot enter this projection. Open simulated
+lots use fresh retained IBKR marks. A missing, conflicting or stale mark makes
+new exposure unavailable, while custody effects and reductions still proceed.
+
+The initial positive risk capital is captured before the first simulated fill.
+Immutable `SIMULATION_SESSION_BASELINE` custody transitions retain this capital
+and each session's equity; they rebuild with the existing mirror. Later
+baselines use that initial capital plus cumulative own realized and marked open
+P&L minus modelled fees before the new ET session, with exact prior scheduled
+NYSE-close marks from the canonical calendar. A restart may reconstruct a
+missed boundary only from complete retained close evidence; it cannot invent a
+baseline or substitute current real equity. Changes to reference cash or risk
+limits cannot rewrite a retained baseline or clear a standing loss hold.
+
+Dry Run uses its explicitly reviewed starting cash: transient consent before
+Deploy commits, then the private account's durable committed cents. It retains
+its explicit exemption from the account daily-loss policy, rather than borrowing
+Live's policy or inventing an additional setting. This exemption does not waive
+cash affordability, modelled fees, coherent execution/price evidence or custody
+holds. Separate Dry Runs cannot pool cash with each other or their parent lane.
+
+The observation carries an exact simulated fill and settled-fee cutoff so the
+budget projection counts effects once. New executions invalidate the observation
+before another commitment. Its session and mark-expiry facts are rechecked at
+commit; a fresh observation cannot extend a stale price or a prior-day baseline.

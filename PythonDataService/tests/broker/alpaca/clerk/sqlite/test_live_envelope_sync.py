@@ -21,7 +21,6 @@ from typing import Any, Literal
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
-    ENVELOPE_SYNC_INTERVAL_S,
     FILL_VISIBILITY_GRACE_MS,
     LIVE_ENVELOPE_CASH_EXCEEDED,
     LIVE_ENVELOPE_UNOBSERVED,
@@ -132,7 +131,7 @@ async def make_sync() -> AsyncIterator[Callable[..., LiveEnvelopeSync]]:
         repository: ClerkSqliteRepository,
         read: _Read | _LiveBroker,
         *,
-        simulated: bool = True,
+        simulated: bool = False,
         **loop: Any,
     ) -> LiveEnvelopeSync:
         complete_fee_evidence(repository)
@@ -172,25 +171,6 @@ async def test_a_tick_publishes_a_fresh_observation_stamped_by_the_repo_clock(
     assert observation is not None and observation.observed_at_ms == NOON
     assert observation.cash_available_usd == 100_000.0
     assert observation.last_equity_usd == 100_000.0
-
-
-async def test_simulated_custody_subtracts_what_the_clerks_own_fills_would_have_spent(
-    day_pnl_repo: ClerkSqliteRepository,
-    seeded_open_buy: None,
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """Under simulated custody the broker's cash never moved (plan R2)."""
-    sync = make_sync(day_pnl_repo, _Read(), simulated=True)
-    await sync.tick()
-    shadow = sync.envelope.latest_observation()
-    assert shadow is not None and shadow.cash_available_usd == pytest.approx(99_000.0)
-    assert shadow.broker_cash_usd == pytest.approx(100_000.0)
-
-    real = make_sync(day_pnl_repo, _Read(), simulated=False)
-    await real.tick()
-    observation = real.envelope.latest_observation()
-    assert observation is not None
-    assert observation.cash_available_usd == pytest.approx(100_000.0)
 
 
 async def test_a_breach_raises_the_hold_once_and_the_sync_never_releases_it(
@@ -623,53 +603,6 @@ async def test_a_fill_recorded_just_before_the_read_is_issued_stays_reserved(
     with pytest.raises(AdmissionBlockedError) as refused:
         _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
     assert refused.value.decision.reason_code == LIVE_ENVELOPE_CASH_EXCEEDED
-
-
-async def test_under_shadow_a_mid_read_fill_counts_twice_until_the_next_observation(
-    envelope_repo: ClerkSqliteRepository,
-    envelope_clock: _TestClock,
-    two_active_instances: tuple[tuple[str, str], tuple[str, str]],
-    make_sync: Callable[..., LiveEnvelopeSync],
-) -> None:
-    """Shadow errs toward refusing, and recovers on the next observation.
-
-    Under simulated custody the broker's cash never moves, so the envelope
-    subtracts what the Clerk's own fills spent (plan R2) -- read *after* the
-    broker answered. A fill recorded mid-read is therefore in
-    ``cash_available`` and still reserved: counted twice, never zero times.
-    The account's true free cash is $1,000 and the envelope offers none, so
-    the second $1,000 ENTER is refused. The next observation, issued past the
-    fill-visibility grace, counts the fill once and admits it.
-    """
-    first_instance, second_instance = two_active_instances
-    first = _enter(
-        envelope_repo,
-        first_instance,
-        symbol="SPY",
-        envelope=_observed_gate(cash=2_000.0, simulated=True),
-    )
-    read = _FillLandsMidRead(
-        clock=envelope_clock,
-        cash=2_000.0,
-        during="account",
-        record_fill=_fill_all_ten(envelope_repo, envelope_clock, first),
-    )
-    sync = make_sync(envelope_repo, read, simulated=True)
-
-    mid_read = (await sync.observe()).observation
-    assert mid_read.cash_available_usd == pytest.approx(1_000.0)
-    assert envelope_repo.reserved_cash_usd(
-        seen_before_ms=mid_read.fills_seen_before_ms
-    ) == pytest.approx(1_000.0)
-    with pytest.raises(AdmissionBlockedError) as refused:
-        _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope)
-    assert refused.value.decision.reason_code == LIVE_ENVELOPE_UNOBSERVED
-
-    envelope_clock.advance(int(ENVELOPE_SYNC_INTERVAL_S * 1_000))
-    next_tick = (await sync.observe()).observation
-    assert next_tick.cash_available_usd == pytest.approx(1_000.0)
-    assert envelope_repo.reserved_cash_usd(seen_before_ms=next_tick.fills_seen_before_ms) == 0.0
-    assert _enter(envelope_repo, second_instance, symbol="QQQ", envelope=sync.envelope).created
 
 
 def _round_trip_closed_mid_read(

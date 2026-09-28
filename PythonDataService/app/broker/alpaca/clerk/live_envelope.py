@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.alpaca.clerk.money import cash_admits, notional
@@ -182,7 +183,7 @@ class AccountObservation:
     broker_cash_usd: float
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
     # under simulated custody (plan R2); equal to it under real custody.
-    cash_available_usd: float
+    cash_available_usd: float | Decimal
     last_equity_usd: float | None
     unrealized_pl_usd: float
     position_count: int
@@ -190,6 +191,12 @@ class AccountObservation:
     # Effective fill watermark before requesting broker unrealized P&L. A
     # subsequent execution can close a lot already included in that mark.
     risk_fill_sequence: int = 0
+    # Simulated cash is projected atomically from custody, including settled
+    # modelled fees. These explicit cutoffs prevent subtracting them twice.
+    simulation_cash_seen_before_ms: int | None = None
+    modelled_fees_seen_before_ms: int | None = None
+    simulation_session_start_ms: int | None = None
+    simulation_marks_valid_until_ms: int | None = None
 
     @property
     def fills_seen_before_ms(self) -> int:
@@ -203,7 +210,7 @@ class AccountObservation:
         refuses an ENTER that would have fit, where under-reserving admits one
         against cash already spent.
         """
-        return self.observed_at_ms - FILL_VISIBILITY_GRACE_MS
+        return self.simulation_cash_seen_before_ms if self.simulation_cash_seen_before_ms is not None else self.observed_at_ms - FILL_VISIBILITY_GRACE_MS
 
 
 @dataclass(frozen=True)

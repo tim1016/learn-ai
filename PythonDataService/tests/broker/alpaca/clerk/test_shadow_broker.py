@@ -161,11 +161,12 @@ def _retain(
     low: str | None = None,
     high: str | None = None,
     phase: str = "RTH",
+    provider: str = "fixture",
 ) -> RetainedSourceBar:
     start_ms = et_minute_of_day_ms(DAY, minute)
     return bars.append(
         MarketDataBar(
-            feed_id="fixture",
+            feed_id=provider,
             symbol="SPY",
             start_ms=start_ms,
             end_ms=start_ms + MINUTE_MS,

@@ -287,3 +287,15 @@ Risk commitment checks (`sqlite/risk_admission.py`) consume the same canonical
 inside the custody coordinator immediately before ENTER or budget commitment.
 Unknown totals cannot admit spending. This introduces no alternate P&L or fee
 engine and does not block custody evidence or risk-reducing operations.
+
+Shared simulation account valuation (#2546) is owned by
+`clerk/sqlite/simulated_account.py`, composed into `LiveEnvelopeSync` for Shadow
+and Dry Run. It combines canonical effective fills, FIFO and modelled fees with
+one typed retained session baseline. Shadow's reference is current real cash;
+its positions, marks and risk are simulated-only. Dry Run's reference is its
+private committed starting cash (explicit consent during pre-commit startup),
+with the documented daily-loss-policy exemption. No simulated authority may
+fall back to real-account positions or `last_equity`. This supersedes the mixed
+Shadow envelope reading described in the historical table above. Validation:
+`tests/broker/alpaca/clerk/sqlite/test_simulated_account.py` and the composed
+Shadow/synthetic runtime tests; provenance: `references/alpaca-live-envelope.md`.

@@ -23,6 +23,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_arming import LIVE_MODE_DISAGREEMENT
 from app.broker.alpaca.clerk.live_arming_gate import ArmingGate
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
@@ -34,6 +35,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     loss_breached,
     loss_limit_usd,
 )
+from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, RiskRevisionConflict, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.arming_refresh import ArmingRefresh, InstanceSeals
 from app.broker.alpaca.clerk.sqlite.day_pnl import DayPnl, day_pnl_at, risk_fill_sequence
@@ -41,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicPro
 from app.broker.alpaca.clerk.sqlite.facts import LossHoldClearBasis
 from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation, _custody_flat, observe_account_quiet
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, resolve_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
@@ -90,10 +93,15 @@ class EnvelopeReading:
     # surface that reports "unknown" has to name the right one.
     seal_readable: bool = True
     policy_revision: int | None = None
+    daily_loss_exempt: bool = False
 
     @property
     def breached(self) -> bool | None:
-        if self.day_pnl is None or not self.day_pnl.known or self.loss_limit_usd is None or not math.isfinite(self.day_pnl.total_usd):
+        if self.day_pnl is None or not self.day_pnl.known or not math.isfinite(self.day_pnl.total_usd):
+            return None
+        if self.daily_loss_exempt:
+            return False
+        if self.loss_limit_usd is None:
             return None
         return loss_breached(day_pnl_usd=self.day_pnl.total_usd, loss_limit_usd=self.loss_limit_usd)
 
@@ -192,8 +200,12 @@ class LiveEnvelopeSync:
         arming_ledger: LiveArmingLedger | None = None,
         arming_gate: ArmingGate | None = None,
         instance_seals: InstanceSeals | None = None,
+        simulation: SimulatedAccountProjection | None = None,
     ) -> None:
+        if repo.account_id.startswith(("sim:", "shadow:")) and simulation is None:
+            raise ValueError("Simulated custody requires its own cash and marked-risk projection")
         self._repo = repo
+        self._simulation = simulation
         self._read = read
         self.envelope = envelope
         self._interval_s = interval_s
@@ -222,8 +234,8 @@ class LiveEnvelopeSync:
         self._stopped = False
         # The broker account the last successful read described. Under shadow
         # that is the LIVE account, while ``self._repo.account_id`` is the
-        # ``shadow:`` custody namespace -- and every figure on a log line here
-        # is the former's. ``None`` until the first read returns.
+        # ``shadow:`` custody namespace. Money and P&L are projected from the
+        # selected custody world. ``None`` until the first read returns.
         self._observed_account_id: str | None = None
         self._last_reading: EnvelopeReading | None = None
 
@@ -246,25 +258,33 @@ class LiveEnvelopeSync:
         # (#2441).
         observed_at_ms = self._repo.clock()
         fill_sequence = risk_fill_sequence(self._repo)
+        if self._simulation is not None:
+            # Real positions and last_equity are never read into simulation.
+            try:
+                account = await self._read.get_account()
+                returned_at_ms = self._repo.clock()
+                self._observed_account_id = account.account_id
+                with self._repo._write_lock:
+                    observation = self._simulation.observe(reference_cash=account.cash,
+                        observed_at_ms=observed_at_ms, now_ms=returned_at_ms)
+                    return self._evaluate_observation(observation, now_ms=returned_at_ms)
+            except MoneyInputError as exc:
+                self.discard_observation()
+                raise SimulationEvidenceUnavailable(str(exc)) from exc
+            except BrokerError:
+                self.discard_observation()
+                raise
         account, positions = await asyncio.gather(
             self._read.get_account(), self._read.list_positions()
         )
         # The day-P&L window ends here, not at the stamp: a loss closed mid-read may be gone from positions.
         returned_at_ms = self._repo.clock()
         self._observed_account_id = account.account_id
-        # Under simulated custody the broker's cash never moved, so the
-        # envelope subtracts what the Clerk's own fills would have spent
-        # (plan R2); under real custody the broker's cash already reflects it.
-        spent = (
-            self._reader.account_net_cash_spent_usd()
-            if self.envelope.custody_is_simulated
-            else 0.0
-        )
         unrealized_pl_usd = float(sum(position.unrealized_pl for position in positions))
         observation = AccountObservation(
             observed_at_ms=observed_at_ms,
             broker_cash_usd=account.cash,
-            cash_available_usd=account.cash - spent,
+            cash_available_usd=account.cash,
             last_equity_usd=account.last_equity,
             unrealized_pl_usd=unrealized_pl_usd,
             position_count=len(positions),
@@ -280,21 +300,25 @@ class LiveEnvelopeSync:
         observation = replace(observation, risk_revision=revision)
         # Once explicit policy exists, the retired arming seal cannot override
         # account risk. Until then Live keeps its historical policy intact.
-        readable = policy is not None or (
+        synthetic = self._repo.account_id.startswith("sim:")
+        readable = synthetic or policy is not None or (
             self.envelope.values is not None and not self._seal_unreadable()
         )
         unjudgeable = self._noted_non_finite(_non_finite_risk_fields(
             cash=observation.broker_cash_usd,
             last_equity=observation.last_equity_usd,
             unrealized_pl=observation.unrealized_pl_usd,
-        )) or not readable
-        values = policy if policy is not None else (self.envelope.in_force if readable else None)
+        )) or not readable or (self._simulation is not None and (
+            observation.simulation_session_start_ms != et_day_window_ms(now_ms)[0]
+            or (observation.simulation_marks_valid_until_ms is not None and now_ms > observation.simulation_marks_valid_until_ms)
+        ))
+        values = policy if policy is not None else (self.envelope.in_force if readable and self.envelope.values is not None else None)
         reading = EnvelopeReading(
-            observation=observation, seal_readable=readable, policy_revision=revision,
+            observation=observation, seal_readable=readable, policy_revision=revision, daily_loss_exempt=synthetic,
             day_pnl=None if unjudgeable else day_pnl_at(
                 self._reader, self._repo, observation=observation, now_ms=now_ms,
             ),
-            loss_limit_usd=None if unjudgeable or observation.last_equity_usd is None else loss_limit_usd(
+            loss_limit_usd=None if unjudgeable or synthetic or observation.last_equity_usd is None else loss_limit_usd(
                 values, last_equity_usd=observation.last_equity_usd,
             ),
         )

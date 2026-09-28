@@ -181,8 +181,8 @@ async def select_shadow_clerk_runtime(
             live_envelope=LiveEnvelopeGate(
                 values=live_envelope_values, custody_is_simulated=True
             ),
-            # The envelope observes the live account's cash and positions
-            # (plan: unrealized is the live account's).
+            # Only base cash is read from Live. The common simulation
+            # projection owns Shadow marks, fees and retained risk capital.
             envelope_read=read,
             # ADR 0059 D3/R10: the sealed envelope comes from this account's
             # arming ledger, which is rooted on the LIVE account id -- not the
@@ -207,6 +207,11 @@ async def select_shadow_clerk_runtime(
             authority_generation=activation.authority_generation,
             db_identity_token=activation.db_identity_token,
         )
+    # Capture initial reference capital before any simulated fill exists.
+    # Missing marks on retained custody leave the authority installed but
+    # unready; they never manufacture a baseline after an evidence gap.
+    if composed.envelope_sync is not None:
+        await composed.envelope_sync.tick()
     return ActiveClerkRuntime(
         authority_kind="shadow",
         clerk=composed.facade,

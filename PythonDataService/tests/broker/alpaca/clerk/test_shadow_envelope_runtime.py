@@ -110,7 +110,7 @@ async def registered_running_bot(
         account_id=shadow_evidence_account_id_for_strategy(SID),
     )
     try:
-        yield _retain(bars, minute=DECISION_MINUTE, close=BAR_CLOSE)
+        yield _retain(bars, minute=DECISION_MINUTE, close=BAR_CLOSE, provider="ibkr")
     finally:
         bars.close()
 
@@ -202,8 +202,9 @@ async def test_an_unobserved_envelope_refuses_the_enter_as_a_rejected_receipt_no
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
     registered_running_bot: RetainedSourceBar,
 ) -> None:
-    """Before the first tick nothing is observed, and an unobserved envelope admits nothing."""
+    """Withdrawing activation's observation prevents any new entry."""
     runtime, _broker = shadow_runtime
+    runtime.envelope_sync.discard_observation()
 
     receipt = await _enter(runtime, registered_running_bot, quantity=1)
 
@@ -260,10 +261,9 @@ async def test_an_unjudgeable_tick_refuses_the_next_enter_end_to_end(
     flattened = await _exit(runtime, registered_running_bot, quantity=1)
     assert flattened.state.value == "flat", flattened.explanation
 
-    # No previous-close equity: there is no loss limit to judge against, so
-    # the account is unjudgeable and the observation is withdrawn (plan R3).
-    broker.last_equity_known = False
-    assert await runtime.envelope_sync.tick() == "unknown"
+    # Invalid reference cash withdraws the old observation immediately.
+    broker.cash = float("nan")
+    assert await runtime.envelope_sync.tick() == "read_failed"
 
     refused = await _enter(runtime, registered_running_bot, quantity=1, decision_id="d2")
     assert refused.state.value == "rejected"
@@ -321,10 +321,10 @@ async def test_a_second_enter_inside_one_sync_interval_is_refused_by_attributed_
     assert second.explanation.startswith("ATTRIBUTED_EXPOSURE_EXISTS:")
 
 
-async def test_the_shadow_envelope_observes_the_live_accounts_positions_not_the_synthesized_book(
+async def test_real_account_positions_cannot_create_a_shadow_hold(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
 ) -> None:
-    """Day P&L under shadow carries the live account's unrealized P&L (plan residual), so a live loss raises the hold."""
+    """PRD #2540 supersedes mixed-world P&L: real holdings are foreign."""
     runtime, broker = shadow_runtime
     assert runtime.envelope_sync is not None
     assert runtime.sqlite_repository is not None
@@ -332,14 +332,16 @@ async def test_the_shadow_envelope_observes_the_live_accounts_positions_not_the_
     assert await runtime.envelope_sync.tick() == "observed"
     assert runtime.envelope_sync.envelope.latest_observation().unrealized_pl_usd == 0.0
 
-    broker.unrealized = -5_000.0  # limit = min(0.05 × 100,000, 5,000) = 5,000; P&L −5,000 breaches
-    assert await runtime.envelope_sync.tick() == "hold_raised"
+    broker.unrealized = -5_000.0
+    broker.last_equity_known = False
+    assert await runtime.envelope_sync.tick() == "observed"
+    assert runtime.envelope_sync.envelope.latest_observation().unrealized_pl_usd == 0.0
     hold = runtime.sqlite_repository.active_uncertainty(
         scope="ACCOUNT_CLERK",
         reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
         strategy_instance_id=None,
     )
-    assert hold is not None
+    assert hold is None
 
 
 def _arm(

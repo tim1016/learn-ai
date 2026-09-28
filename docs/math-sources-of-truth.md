@@ -356,3 +356,9 @@ These are the remaining known cases where the Python-owns-all-math rule is viola
 5. **Hardcoded `r = 0.043`** in **6 production locations**: `app/research/options/iv_builder.py:18 DEFAULT_RISK_FREE_RATE`, `app/research/options/contract_finder.py:26 DEFAULT_RFR`, `app/models/strategy.py:48` (Pydantic Field default), `app/models/portfolio.py:97` and `:184` (two Pydantic Field defaults — same pattern, two model classes). `app/services/fred_service.py:32 FALLBACK_RATE = 0.043` is the canonical fallback path and is correct. **Migration: deferred** — full migration to FRED-interpolated rates tracked in `docs/math-rigor.md` Upgrade 4. Per finding F-0029.
 
 | Deployment fee attribution and pending provisions | `PythonDataService/app/services/alpaca_fee_attribution.py` | None; consumes the canonical regulatory model | PRD #2540 integer-cent largest remainder policy; `docs/references/alpaca-fee-attribution.md` | `tests/services/test_alpaca_fee_attribution.py`; independent exact-cent golden oracle | Canonical, exact cents; missing population/linkage/overlap remains unknown |
+
+### Shared simulated account valuation (#2546)
+
+| Concept | Canonical implementation | Legacy duplicates | Reference | Validation | Status |
+| --- | --- | --- | --- | --- | --- |
+| Shadow/Dry Run cash and retained equity | `PythonDataService/app/broker/alpaca/clerk/sqlite/simulated_account.py` composing effective fills, canonical FIFO, modelled fee attribution and NYSE calendar | Mixed real-account unrealized P&L path removed from `live_envelope_sync.py` | `docs/references/alpaca-live-envelope.md` — exact cash arithmetic and existing FIFO tolerance | `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_simulated_account.py` | canonical; private Dry Run or one shared Shadow pool, no new money ledger |

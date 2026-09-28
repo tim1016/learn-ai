@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_DISAGREEMENT,
     LIVE_ENVELOPE_UNOBSERVED,
@@ -54,10 +55,16 @@ def require_current_risk_admission(
         revision = None if policy is None else policy.revision
         if observation is None or observation.risk_revision != revision or observation.last_equity_usd is None:
             raise _refuse(envelope, LIVE_ENVELOPE_UNOBSERVED, "Fresh account evidence for the current risk limits is unavailable. Refresh account evidence.")
+        if repo.account_id.startswith(("sim:", "shadow:")) and (
+            observation.simulation_session_start_ms != et_day_window_ms(now_ms)[0]
+            or (observation.simulation_marks_valid_until_ms is not None and now_ms > observation.simulation_marks_valid_until_ms)
+        ):
+            raise _refuse(envelope, LIVE_ENVELOPE_UNOBSERVED, "Refresh the simulation session baseline and current market prices before deploying.")
         if observation.risk_fill_sequence != risk_fill_sequence(repo):
             raise _refuse(envelope, LIVE_ENVELOPE_UNOBSERVED, "Executions changed after the account observation. Refresh account evidence before deploying.")
+        synthetic = repo.account_id.startswith("sim:")
         values = policy if policy is not None else (envelope.in_force if envelope.values is not None else None)
-        if values is None:
+        if values is None and not synthetic:
             raise _refuse(envelope, LIVE_ENVELOPE_UNOBSERVED, "Apply account risk limits in Configuration before deploying.")
         if repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, strategy_instance_id=None) is not None:
             raise _refuse(envelope, LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, "The account loss hold stands. Review it in Configuration.")
@@ -68,6 +75,10 @@ def require_current_risk_admission(
             reader.close()
         if not pnl.known or not math.isfinite(observation.last_equity_usd):
             raise _refuse(envelope, LIVE_ENVELOPE_UNOBSERVED, "Current account loss evidence is incomplete. Refresh fees and reconcile executions before deploying.")
+        # Dry Run retains its explicit account-loss-policy exemption. Its
+        # private cash, fees, execution evidence and custody holds still gate.
+        if synthetic:
+            return observation
         limit = loss_limit_usd(values, last_equity_usd=observation.last_equity_usd)
         if loss_breached(day_pnl_usd=pnl.total_usd, loss_limit_usd=limit):
             cause = LossHoldCause(pnl.day_start_ms, pnl.total_usd, limit, observation.last_equity_usd, observation.observed_at_ms, revision)

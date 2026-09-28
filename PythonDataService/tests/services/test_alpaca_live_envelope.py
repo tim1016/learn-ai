@@ -2,12 +2,10 @@
 
 ``clear_loss_hold`` is the ONLY release for the loss hold Task 6's sync
 raises: it re-observes the account and refuses while the breach still
-stands. Every test here composes the real shadow authority from Task 7's
-harness -- the ``shadow_runtime`` fixture imported below -- so the wiring
-under test is the same ``ActiveClerkRuntime`` production selects, not a
-hand-built stand-in.
+stands. Every loss-clear test composes the real Live authority. Real broker losses belong
+only to real custody; Shadow's simulated losses have their own integration tests.
 
-No wall clock: the shadow repository is opened on a clock pinned to
+No wall clock: the custody repository is opened on a clock pinned to
 ``NOW_MS``, and every ``clear_loss_hold`` call in this file passes that same
 stamp explicitly.
 """
@@ -31,18 +29,30 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.services.alpaca_live_envelope import clear_loss_hold
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
+from tests.broker.alpaca.clerk.live_authority_fixtures import compose_live
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
-from tests.broker.alpaca.clerk.sqlite.conftest import TODAY_OPEN, _observe_foreign_order
+from tests.broker.alpaca.clerk.sqlite.conftest import TODAY_OPEN, _observe_foreign_order, complete_fee_evidence
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _Broker
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import (
     NOW_MS,
     _arm,
-    shadow_runtime,  # noqa: F401 — the composed-shadow fixture, reused as-is
 )
+
+
+@pytest.fixture()
+async def loss_runtime(tmp_path: Path) -> AsyncIterator[tuple[ActiveClerkRuntime, _LiveBroker]]:
+    broker = _LiveBroker(now_ms=NOW_MS)
+    runtime = await compose_live(tmp_path, broker, now_ms=NOW_MS, live_state_root=tmp_path / "runner")
+    assert runtime.authority_kind == "sqlite", runtime.startup_failure
+    complete_fee_evidence(runtime.sqlite_repository)
+    try:
+        yield runtime, broker
+    finally:
+        await runtime.close()
 
 
 def _hold(repository: ClerkSqliteRepository) -> dict | None:
@@ -80,9 +90,9 @@ async def paper_runtime(tmp_path: Path) -> AsyncIterator[ActiveClerkRuntime]:
 
 
 async def test_the_clear_refuses_while_the_breach_stands_then_clears_once_it_has_lifted(
-    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
 ) -> None:
-    runtime, broker = shadow_runtime
+    runtime, broker = loss_runtime
     broker.unrealized = -5_000.0
     assert await runtime.envelope_sync.tick() == "hold_raised"
     refused = await clear_loss_hold(runtime, now_ms=NOW_MS)
@@ -96,7 +106,7 @@ async def test_the_clear_refuses_while_the_breach_stands_then_clears_once_it_has
 
 
 async def test_the_clear_judges_the_sealed_limit_not_a_loosened_configured_one(
-    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
     tmp_path: Path,
 ) -> None:
     """The regression: raising the limit in the environment must not release a hold.
@@ -109,7 +119,7 @@ async def test_the_clear_judges_the_sealed_limit_not_a_loosened_configured_one(
     ``LIVE_ENVELOPE_DISAGREEMENT``, so the account was left holdless *and*
     unable to trade, and the next re-arm restored no hold.
     """
-    runtime, broker = shadow_runtime
+    runtime, broker = loss_runtime
     assert runtime.envelope_sync is not None
     _arm(tmp_path)
     broker.unrealized = -5_000.0  # limit = min(0.05 × 100,000, 5,000) = 5,000
@@ -134,11 +144,11 @@ async def test_the_clear_judges_the_sealed_limit_not_a_loosened_configured_one(
 
 
 async def test_a_looser_legacy_rearm_cannot_clear_the_original_loss_hold(
-    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
     tmp_path: Path,
 ) -> None:
     """#2543: historical arming cannot erase the retained loss threshold."""
-    runtime, broker = shadow_runtime
+    runtime, broker = loss_runtime
     assert runtime.envelope_sync is not None
     _arm(tmp_path)
     broker.unrealized = -5_000.0
@@ -155,9 +165,9 @@ async def test_a_looser_legacy_rearm_cannot_clear_the_original_loss_hold(
 
 
 async def test_the_clear_refuses_an_unknown_fact(
-    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
 ) -> None:
-    runtime, broker = shadow_runtime
+    runtime, broker = loss_runtime
     broker.unrealized = -5_000.0
     # Raise the hold first with the fact still known, then make it unknown:
     # an external order observed today (before NOW_MS, same ET day) makes the
@@ -173,7 +183,7 @@ async def test_the_clear_refuses_an_unknown_fact(
 
 
 async def test_the_clear_names_an_unreadable_arming_ledger_rather_than_the_broker_feed(
-    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
     tmp_path: Path,
 ) -> None:
     """The fourth unjudgeable cause reaches this screen, so it must be named here.
@@ -183,7 +193,7 @@ async def test_the_clear_names_an_unreadable_arming_ledger_rather_than_the_broke
     broker-side causes, and would have sent the operator to debug the feed
     while the actual fault was a corrupt ``live_arming.jsonl``.
     """
-    runtime, broker = shadow_runtime
+    runtime, broker = loss_runtime
     assert runtime.envelope_sync is not None
     _arm(tmp_path)
     broker.unrealized = -5_000.0
@@ -205,9 +215,9 @@ async def test_the_clear_names_an_unreadable_arming_ledger_rather_than_the_broke
 
 
 async def test_no_hold_is_reported_not_invented(
-    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811 — the imported fixture
+    loss_runtime: tuple[ActiveClerkRuntime, _LiveBroker],
 ) -> None:
-    runtime, _broker = shadow_runtime
+    runtime, _broker = loss_runtime
     assert (await clear_loss_hold(runtime, now_ms=NOW_MS)).outcome == "no_hold"
 
 

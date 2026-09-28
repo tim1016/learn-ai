@@ -1,0 +1,252 @@
+"""Shared simulated cash/risk is custody-owned, exact and isolated (#2546)."""
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import replace
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
+from app.broker.alpaca.clerk.sqlite.budget_projection import BudgetUnavailable
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.risk_admission import require_current_risk_admission
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
+from app.broker.contract.models import BrokerOrderLeg
+from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
+from app.marketdata.feed import MarketDataBar
+from app.services.source_bar_ledger import SourceBarLedger
+from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_SID, NOON, _append_day_pnl_slice, _TestClock
+from tests.broker.alpaca.clerk.sqlite.test_account_risk_policy import _hold
+from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+from tests.broker.alpaca.clerk.sqlite.test_live_envelope_sync import _Read
+
+type ShadowContext = tuple[ClerkSqliteRepository, SimulatedAccountProjection, _TestClock]
+
+
+@pytest.fixture
+def shadow(tmp_path: Path) -> Iterator[ShadowContext]:
+    clock = _TestClock(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
+    append_risk_policy(repo, policy=AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON), expected_revision=0)
+    projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
+    projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    try:
+        yield repo, projection, clock
+    finally:
+        repo.close()
+
+
+def _deploy(repo: ClerkSqliteRepository, projection: SimulatedAccountProjection, *, sid: str = DAY_PNL_SID, cents: int = 100_000, reference: int = 1000) -> LiveEnvelopeGate:
+    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"seal-{sid}", exit_terms=TERMS)
+    policy = repo.account_risk_policy()
+    observation = projection.observe(reference_cash=reference, observed_at_ms=repo.clock(), now_ms=repo.clock())
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
+    gate.publish(replace(observation, risk_revision=None if policy is None else policy.revision))
+    submit_budgeted_deploy(repo, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}", world="synthetic" if repo.account_id.startswith("sim:") else "shadow",
+        committed_cents=cents, configuration_hash=f"seal-{sid}", exit_terms_hash=canonical_sha256(TERMS.model_dump(mode="json")),
+        risk_revision=0 if policy is None else policy.revision, actor="owner", envelope=gate, minimum_position_cost=Decimal("100.01"))
+    return gate
+
+
+def _enter(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, quantity: int = 2) -> EnterSubmission:
+    return accept_enter(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID, decision_id="one-buy",
+        lifecycle_run_id=f"run-{DAY_PNL_SID}", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity),
+        reference_price=100, envelope=gate)
+
+
+def _fill(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key: str, side: str, quantity: int, price: int) -> None:
+    _append_day_pnl_slice(repo, accepted, execution_id=key, side=side, quantity=quantity, price=price, occurred_at_ms=repo.clock())
+
+
+def _mark(root: Path, account: str, *, at_ms: int, price: int, provider: str = "ibkr") -> None:
+    bars = SourceBarLedger(artifacts_root=root, account_id=account)
+    try:
+        bars.append(MarketDataBar(feed_id=provider, symbol="SPY", start_ms=at_ms-60_000, end_ms=at_ms,
+            open=Decimal(price), high=Decimal(price), low=Decimal(price), close=Decimal(price), volume=100,
+            fetched_at_ms=at_ms, session_phase="RTH"), run_id="marks")
+    finally:
+        bars.close()
+
+
+def test_shadow_cash_and_baseline_are_own_economics_not_reference_changes(shadow: ShadowContext, tmp_path: Path) -> None:
+    repo, projection, clock = shadow
+    gate = _deploy(repo, projection)
+    accepted = _enter(repo, gate)
+    _fill(repo, accepted, key="buy", side="BUY", quantity=2, price=100)
+    _fill(repo, accepted, key="sell", side="SELL", quantity=1, price=120)
+    evidence = shadow_evidence_account_id_for_strategy(DAY_PNL_SID)
+    _mark(tmp_path, evidence, at_ms=clock(), price=130)
+    current = projection.observe(reference_cash=1200, observed_at_ms=clock(), now_ms=clock())
+    assert current.cash_available_usd == Decimal("1120")
+    assert current.last_equity_usd == 1000  # reference deposit never resets risk
+    assert current.unrealized_pl_usd == pytest.approx(30, abs=1e-9, rel=0)
+    assert current.fills_seen_before_ms == clock() + 1
+    assert repo.reserved_cash_decimal(seen_before_ms=current.fills_seen_before_ms) == 0
+    assert current.modelled_fees_seen_before_ms == clock() + 1
+    close = previous_completed_session_close_ms(NOON + 86_400_000)
+    _mark(tmp_path, evidence, at_ms=close, price=130)
+    clock.advance(86_400_000)
+    repo.revive_execution_lease()
+    _mark(tmp_path, evidence, at_ms=clock(), price=131)
+    tomorrow = projection.observe(reference_cash=1500, observed_at_ms=clock(), now_ms=clock())
+    # SEC ceil(120*.0000206)=.01; TAF ceil(1*.000195)=.01; CAT ceil(3*.000003)=.01.
+    assert tomorrow.cash_available_usd == Decimal("1419.97")
+    assert tomorrow.last_equity_usd == pytest.approx(1049.97, abs=1e-9, rel=0)
+
+
+async def test_real_unrealized_is_never_shadow_profit_or_loss(shadow: ShadowContext, tmp_path: Path) -> None:
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection))
+    _fill(repo, accepted, key="buy", side="BUY", quantity=2, price=100)
+    _mark(tmp_path, shadow_evidence_account_id_for_strategy(DAY_PNL_SID), at_ms=clock(), price=40)
+    read = _Read(cash=1000, unrealized=9999, last_equity=2_000_000)
+    sync = LiveEnvelopeSync(repo=repo, read=read, envelope=LiveEnvelopeGate(values=None, custody_is_simulated=True), simulation=projection)
+    try:
+        assert await sync.tick() == "hold_raised"
+        assert _hold(repo) is not None
+        reading = await sync.observe()
+        assert reading.observation.unrealized_pl_usd == pytest.approx(-120, abs=1e-9, rel=0)
+        assert reading.observation.last_equity_usd == 1000
+        assert reading.breached
+    finally:
+        await sync.stop()
+
+
+def test_two_shadow_deployments_share_one_pool(shadow: ShadowContext) -> None:
+    repo, projection, _ = shadow
+    _deploy(repo, projection, sid="one", cents=60_000)
+    with pytest.raises(BudgetUnavailable, match="unreserved"):
+        _deploy(repo, projection, sid="two", cents=60_000)
+    assert repo.deployment_budget("two") is None
+
+
+def test_private_starting_cash_is_exact_and_independent(tmp_path: Path) -> None:
+    for sid, cash in (("dry-one", Decimal("1000.01")), ("dry-two", Decimal("2000.02"))):
+        repo = ClerkSqliteRepository.initialize(account_id=f"sim:{sid}", artifacts_root=tmp_path, clock=_TestClock(NOON))
+        try:
+            projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=cash)
+            observation = projection.observe(reference_cash=9_000_000, observed_at_ms=NOON, now_ms=NOON)
+            assert observation.cash_available_usd == cash
+            assert not any(row["transition_kind"] == "SIMULATION_SESSION_BASELINE" for row in repo.custody_transitions())
+            gate = _deploy(repo, projection, sid=sid, cents=int(cash*100))
+            assert require_current_risk_admission(repo, envelope=gate, now_ms=NOON).cash_available_usd == cash
+            # Durable consent, not a changed process-local seed, wins on reopen.
+            restarted = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=Decimal(1))
+            assert restarted.observe(reference_cash=0, observed_at_ms=NOON, now_ms=NOON).cash_available_usd == cash
+        finally:
+            repo.close()
+
+
+def test_missing_wrong_provider_stale_marks_and_gap_baseline_refuse(shadow: ShadowContext, tmp_path: Path) -> None:
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection))
+    _fill(repo, accepted, key="buy", side="BUY", quantity=2, price=100)
+    with pytest.raises(SimulationEvidenceUnavailable):
+        projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    evidence = shadow_evidence_account_id_for_strategy(DAY_PNL_SID)
+    _mark(tmp_path, evidence, at_ms=clock(), price=100, provider="fixture")
+    with pytest.raises(SimulationEvidenceUnavailable):
+        projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    _mark(tmp_path, evidence, at_ms=clock(), price=100)
+    clock.advance(81_000)
+    with pytest.raises(SimulationEvidenceUnavailable):
+        projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    clock.advance(86_400_000)
+    repo.revive_execution_lease()
+    _mark(tmp_path, evidence, at_ms=clock(), price=100)
+    with pytest.raises(SimulationEvidenceUnavailable):
+        projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+
+
+def test_retained_baseline_survives_rebuild_and_real_cash_change(tmp_path: Path) -> None:
+    clock = _TestClock(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
+    projection = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
+    expected = projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock())
+    path = repo.db_path
+    repo.close()
+    path.rename(path.with_suffix(".prior"))
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="shadow:LIVE", artifacts_root=tmp_path, clock=clock)
+    try:
+        fresh = SimulatedAccountProjection(repo=rebuilt, artifacts_root=tmp_path).observe(reference_cash=2000, observed_at_ms=clock(), now_ms=clock())
+        assert fresh.last_equity_usd == expected.last_equity_usd == 1000
+        assert fresh.cash_available_usd == Decimal(2000)
+    finally:
+        rebuilt.close()
+
+
+def test_private_budget_proves_initial_baseline_if_crash_preceded_first_projection(tmp_path: Path) -> None:
+    clock = _TestClock(NOON)
+    repo = ClerkSqliteRepository.initialize(account_id=f"sim:{DAY_PNL_SID}", artifacts_root=tmp_path, clock=clock)
+    try:
+        before_commit = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path, initial_cash=Decimal("1000.01"))
+        gate = _deploy(repo, before_commit, cents=100_001)
+        accepted = _enter(repo, gate)
+        _fill(repo, accepted, key="filled-before-restart", side="BUY", quantity=2, price=100)
+        _mark(tmp_path, repo.account_id, at_ms=clock(), price=101, provider="fixture")
+        assert not any(row["transition_kind"] == "SIMULATION_SESSION_BASELINE" for row in repo.custody_transitions())
+        restored = SimulatedAccountProjection(repo=repo, artifacts_root=tmp_path)
+        observation = restored.observe(reference_cash=0, observed_at_ms=clock(), now_ms=clock())
+        assert observation.cash_available_usd == Decimal("800.01")
+        assert observation.last_equity_usd == pytest.approx(1000.01, abs=1e-9, rel=0)
+        assert observation.unrealized_pl_usd == pytest.approx(2, abs=1e-9, rel=0)
+        assert sum(row["transition_kind"] == "SIMULATION_SESSION_BASELINE" for row in repo.custody_transitions()) == 1
+    finally:
+        repo.close()
+
+
+def test_a_fresh_observation_cannot_outlive_its_mark_or_session(shadow: ShadowContext, tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.et_day import et_day_window_ms
+    from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+
+    repo, projection, clock = shadow
+    accepted = _enter(repo, _deploy(repo, projection))
+    _fill(repo, accepted, key="buy", side="BUY", quantity=2, price=100)
+    _mark(tmp_path, shadow_evidence_account_id_for_strategy(DAY_PNL_SID), at_ms=clock(), price=100)
+    clock.advance(70_000)
+    repo.revive_execution_lease()
+    observation = replace(projection.observe(reference_cash=1000, observed_at_ms=clock(), now_ms=clock()), risk_revision=1)
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
+    gate.publish(observation)
+    clock.advance(11_000)
+    assert gate.fresh_observation(clock()) is not None  # cash itself is only 11s old
+    with pytest.raises(AdmissionBlockedError, match="current market prices"):
+        require_current_risk_admission(repo, envelope=gate, now_ms=clock())
+    next_midnight = et_day_window_ms(clock())[1]
+    gate.publish(replace(observation, observed_at_ms=next_midnight-1, simulation_marks_valid_until_ms=next_midnight+60_000))
+    with pytest.raises(AdmissionBlockedError, match="session baseline"):
+        require_current_risk_admission(repo, envelope=gate, now_ms=next_midnight)
+
+
+async def test_synthetic_runtime_projects_transient_consent_before_the_budget_commit(tmp_path: Path) -> None:
+    from app.broker.alpaca.clerk.active_authority import (
+        activate_synthetic_clerk_authority,
+        select_synthetic_clerk_runtime,
+    )
+    from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
+
+    clock = _TestClock(NOON)
+    account_id = "sim:first-deploy"
+    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path, clock=clock)
+    broker = SyntheticBroker(account_id=account_id, clock=clock)
+    runtime = await select_synthetic_clerk_runtime(account_id=account_id, read=broker, trade=broker,
+        artifacts_root=tmp_path, simulation_initial_cash=Decimal("500.01"),
+        repository_opener=lambda account, root: ClerkSqliteRepository.open(account_id=account, artifacts_root=root, clock=clock))
+    try:
+        assert runtime.authority_kind == "synthetic", runtime.startup_failure
+        assert runtime.envelope_sync is not None
+        observation = runtime.envelope_sync.envelope.fresh_observation(clock())
+        assert observation is not None and observation.cash_available_usd == Decimal("500.01")
+        assert runtime.clerk.live_envelope is runtime.envelope_sync.envelope
+        assert (await runtime.envelope_sync.observe()).daily_loss_exempt
+        assert runtime.sqlite_repository.account_risk_policy() is None
+    finally:
+        await runtime.close()

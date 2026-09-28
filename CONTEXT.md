@@ -473,6 +473,10 @@ so they survive a broker change.
   fill model. It never submits. This is an *account world*, not the IBKR-era
   per-run `submit_mode: shadow` / `execution_source: shadow_sim` above: those
   name one run's adapter, this names whose account the custody is.
+  Its shared cash pool uses current real reference cash adjusted by its own
+  effective fills and modelled settled fees. Its loss policy uses only its own
+  marked FIFO P&L and retained session equity, never real positions or P&L.
+  Reference-cash changes cannot reset that baseline or clear a standing hold.
   _Avoid_: dry run on live, paper on live, observation mode
 - **Mode agreement** — the three-way match of configured mode, live activation,
   and broker-observed mode that a live authority requires before it can exist.
@@ -2148,3 +2152,11 @@ How an operator moves around one broker account's pages. The account, not the pa
   prefill future deployments and never modify an existing bot. An acknowledged
   manual band override is an audited exception for one EXIT, not a terms edit.
   [Decision](docs/architecture/adrs/0045-exposure-lifecycle-closure.md#immutable-exit-terms-deployment-and-arming-2026-09-25-prd-2504).
+
+- **Simulation session baseline** — an immutable custody fact retaining the
+  simulated world's initial risk capital and each ET session's equity. Later
+  baselines require canonical prior NYSE-close marks for every carried lot;
+  absent evidence is unknown. Shadow reference-cash changes do not rewrite it.
+  Private Dry Run starting cash comes from its own Deploy commitment; Dry Run
+  is exempt from account daily-loss policy but retains cash, fee, evidence and
+  custody-hold admission.

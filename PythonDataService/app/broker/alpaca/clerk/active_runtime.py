@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
@@ -50,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseHeld,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.sqlite.stream_health_sync import StreamHealthHoldSync
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.synthetic_activation import (
@@ -277,6 +279,7 @@ async def compose_repository_runtime(
     arming_ledger: LiveArmingLedger | None = None,
     arming_gate: ArmingGate | None = None,
     instance_seals: InstanceSeals | None = None,
+    simulation_initial_cash: Decimal | None = None,
 ) -> _ComposedAuthority:
     """Open the account's repository and stand up its Clerk, sweep and hold sync.
 
@@ -286,8 +289,8 @@ async def compose_repository_runtime(
 
     ``envelope_read`` is the port the envelope observes when it is not the
     Clerk's own read port -- the shadow authority passes the live account's
-    read so cash and positions are the real account's while custody stays
-    synthesized.
+    read as the reference cash source. Simulated positions, fees and risk
+    come exclusively from its own custody and retained market-data evidence.
 
     ``arming_ledger`` is the account's sealed-arming evidence (ADR 0059 D3). The
     envelope sync re-reads it every tick so an arming performed by the
@@ -390,9 +393,8 @@ async def compose_repository_runtime(
         # the hold sync has one -- the reconcile loop's backoff reaches 300 s
         # on failure, and a losing day must not wait that long to be judged.
         # Unstarted here too: `start_background_taps()` is the one start seam.
-        # The envelope judges the account the money is in. Under shadow that
-        # is the live account (cash and positions), not the synthesized
-        # book, whose positions never mark to market.
+        # Shadow takes only reference cash from the real account. The shared
+        # simulated projection values its own custody with retained marks.
         envelope_sync = (
             None
             if live_envelope is None
@@ -407,6 +409,8 @@ async def compose_repository_runtime(
                 arming_ledger=arming_ledger,
                 arming_gate=arming_gate,
                 instance_seals=instance_seals,
+                simulation=(SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash)
+                    if repository.account_id.startswith(("sim:", "shadow:")) else None),
             )
         )
         if not repository.account_id.startswith(("sim:", "shadow:")):
