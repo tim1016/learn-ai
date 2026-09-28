@@ -997,6 +997,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation/shadow-activation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate Shadow Authority */
+        post: operations["activate_shadow_authority_api_brokers_alpaca_accounts__account_id__live_graduation_shadow_activation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
         parameters: {
             query?: never;
@@ -3266,6 +3283,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/live-graduation/plan (custody_command).
          */
         post: operations["fleet_live_graduation_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation/shadow-activation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Shadow Activate
+         * @description Fleet-routed POST /accounts/{account_id}/live-graduation/shadow-activation (custody_command).
+         */
+        post: operations["fleet_shadow_activate_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_shadow_activation_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -18844,7 +18881,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "review_available" | "graduated" | "blocked";
+            state: "activation_available" | "review_available" | "graduated" | "blocked";
         };
         /**
          * LiveGreeksRequest
@@ -24277,6 +24314,25 @@ export interface components {
             kind: "SetHoldings";
         };
         /**
+         * ShadowActivationOutcome
+         * @description Durable isolated activation, returned before the supervised restart.
+         */
+        ShadowActivationOutcome: {
+            /** Account Id */
+            account_id: string;
+            /** Activated At Ms */
+            activated_at_ms: number;
+            /** Activation Sha256 */
+            activation_sha256: string;
+            /** Message */
+            message: string;
+            /**
+             * State
+             * @constant
+             */
+            state: "restart_scheduled";
+        };
+        /**
          * SharpeCiResponse
          * @description Lo (2002) confidence interval for the annualised Sharpe ratio.
          */
@@ -26761,7 +26817,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -30013,6 +30069,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiveGraduationPlanView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_shadow_authority_api_brokers_alpaca_accounts__account_id__live_graduation_shadow_activation_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowActivationOutcome"];
                 };
             };
             /** @description Validation Error */
@@ -34719,6 +34808,45 @@ export interface operations {
         };
     };
     fleet_live_graduation_plan_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_plan_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_shadow_activate_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_shadow_activation_post: {
         parameters: {
             query?: never;
             header?: {

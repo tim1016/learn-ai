@@ -610,8 +610,12 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/accounts/{account_id}/live-graduation",
             capability=Capability.CUSTODY_READ,
-            account=True,
+            readiness=_CONFIGURATION,
+            account=False,
         ),
+        _op("shadow_activate", "POST", "/accounts/{account_id}/live-graduation/shadow-activation",
+            capability=Capability.CUSTODY_COMMAND, idempotency=_ONE_SHOT,
+            readiness=_CONFIGURATION, account=False),
         _op(
             "live_graduation_plan",
             "POST",

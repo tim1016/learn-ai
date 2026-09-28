@@ -145,8 +145,7 @@ async def select_shadow_clerk_runtime(
             "SHADOW_ACTIVATION_REQUIRED",
             account_id=shadow.account_id,
             recovery=(
-                "Explicitly activate the shadow authority for this live account "
-                "(scripts.manage_alpaca_shadow activate) before starting shadow custody."
+                "Open this account’s Configuration and choose Activate Shadow."
             ),
         )
 
@@ -235,7 +234,7 @@ async def activate_shadow_clerk_authority(
     """Explicitly initialize and durably activate the shadow authority for one live account.
 
     No startup path calls this; the operator does, once, through
-    ``scripts.manage_alpaca_shadow activate``. The custody database it creates
+    Configuration (or the recovery CLI). The custody database it creates
     is the shadow world's own -- the live account's authority is untouched.
     """
     record = await activate_isolated_authority(

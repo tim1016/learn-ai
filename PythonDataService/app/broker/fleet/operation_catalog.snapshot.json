@@ -430,7 +430,7 @@
     "live_graduation_status": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/live-graduation",
-      "requires_account": true
+      "requires_account": false
     },
     "live_verdict": {
       "method": "GET",
@@ -505,6 +505,11 @@
     "positions_read": {
       "method": "GET",
       "path_template": "/positions",
+      "requires_account": false
+    },
+    "shadow_activate": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/live-graduation/shadow-activation",
       "requires_account": false
     }
   }

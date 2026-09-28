@@ -40,9 +40,10 @@ const PLAN: LiveGraduationPlan = {
   consequence: 'Graduation changes custody but deploys and arms nothing.',
 };
 
-async function renderGraduation() {
+async function renderGraduation(status: LiveGraduationStatus = STATUS) {
   const service = {
-    readStatus: vi.fn().mockResolvedValue(STATUS),
+    readStatus: vi.fn().mockResolvedValue(status),
+    activateShadow: vi.fn().mockResolvedValue({ state: 'restart_scheduled' }),
     prepare: vi.fn().mockResolvedValue(PLAN),
     apply: vi.fn().mockResolvedValue({ state: 'restart_scheduled' }),
   };
@@ -63,6 +64,28 @@ async function renderGraduation() {
 }
 
 describe('LiveGraduationComponent', () => {
+  it('offers explicit Shadow activation while the lane has no custody authority', async () => {
+    const { fixture, service } = await renderGraduation({ ...STATUS, authority: 'unavailable', state: 'activation_available', headline: 'Activate Shadow for this account' });
+    expect(screen.queryByRole('button', { name: 'Review Live graduation' })).toBeNull();
+    expect(service.activateShadow).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Activate Shadow and restart' }));
+    await fixture.whenStable();
+    expect(service.activateShadow).toHaveBeenCalledOnce();
+    expect(service.activateShadow.mock.calls[0][0]).toMatchObject({ clerkId: 'clrk_live', accountId: ACCOUNT });
+    expect(await screen.findByText(/Restarting the clerk safely/)).toBeTruthy();
+    expect(service.apply).not.toHaveBeenCalled();
+  });
+
+  it('keeps refused activation visible and never retries it automatically', async () => {
+    const { fixture, service } = await renderGraduation({ ...STATUS, authority: 'unavailable', state: 'activation_available' });
+    service.activateShadow.mockRejectedValue(new Error('connection failed'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Activate Shadow and restart' }));
+    await fixture.whenStable();
+    expect((await screen.findByRole('alert')).textContent).toContain('Refresh its status before retrying');
+    expect(service.activateShadow).toHaveBeenCalledOnce();
+    expect((screen.getByRole('button', { name: 'Activate Shadow and restart' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('keeps graduation distinct from deploy and arming, then requires an explicit acknowledgement', async () => {
     const { fixture, service } = await renderGraduation();
 

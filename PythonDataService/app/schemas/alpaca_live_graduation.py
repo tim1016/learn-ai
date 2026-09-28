@@ -17,7 +17,7 @@ class LiveGraduationStatus(BaseModel):
     account_id: str
     configured_mode: Literal["live"]
     authority: Literal["shadow", "live", "unavailable"]
-    state: Literal["review_available", "graduated", "blocked"]
+    state: Literal["activation_available", "review_available", "graduated", "blocked"]
     headline: str
     detail: str
     next_action: str | None
@@ -68,3 +68,15 @@ class LiveGraduationApplyOutcome(BaseModel):
     activated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     message: str
 
+
+
+class ShadowActivationOutcome(BaseModel):
+    """Durable isolated activation, returned before the supervised restart."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str
+    state: Literal["restart_scheduled"]
+    activation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    activated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    message: str

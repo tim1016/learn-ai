@@ -380,7 +380,7 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     # this seam, and its start/stop order is semantic -- it holds a second
     # projection handle on the repository, so it starts first and stops first.
     # Stated exactly once, in `_ordered_taps`, and read by all three sites.
-    assert source.count("(envelope_sync, hold_sync, sweep)") == 1, (
+    assert source.count("(fee_sync, envelope_sync, hold_sync, sweep)") == 1, (
         "the tap order belongs in one tuple; three hand-kept branch orders is "
         "what `_ordered_taps` exists to retire"
     )
@@ -391,7 +391,7 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     start_taps_body = source[
         source.index("def start_background_taps") : source.index("async def close")
     ]
-    assert start_taps_body.count("sweep=None)") >= 1, (
+    assert "sweep=None" in start_taps_body, (
         "`start_background_taps` must not start the reconciliation sweep, or "
         "the periodic sweep races the boot reconciliation pass"
     )

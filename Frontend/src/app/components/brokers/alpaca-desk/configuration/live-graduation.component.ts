@@ -19,11 +19,11 @@ import {
   type LiveGraduationPlan,
 } from './live-graduation.service';
 
-type CeremonyPhase = 'idle' | 'planning' | 'review' | 'applying' | 'restarting';
+type CeremonyPhase = 'idle' | 'planning' | 'review' | 'activating' | 'applying' | 'restarting';
 
 function refusalMessage(error: unknown): string {
   if (!(error instanceof HttpErrorResponse)) {
-    return 'The graduation ceremony did not complete. Nothing was forced.';
+    return 'The account authority action did not complete. Refresh its status before retrying.';
   }
   const detail = error.error?.detail;
   const message = typeof detail?.message === 'string' ? detail.message : error.message;
@@ -50,6 +50,7 @@ export class LiveGraduationComponent {
   protected readonly plan = signal<LiveGraduationPlan | null>(null);
   protected readonly acknowledged = signal(false);
   protected readonly refusal = signal<string | null>(null);
+  private readonly restartTarget = signal<'shadow' | 'live'>('live');
   private pollHandle: ReturnType<typeof setInterval> | null = null;
 
   protected readonly status = resource({
@@ -57,7 +58,7 @@ export class LiveGraduationComponent {
     loader: ({ params }) => this.service.readStatus(params.clerkId, params.accountId),
   });
   protected readonly busy = computed(() =>
-    ['planning', 'applying', 'restarting'].includes(this.phase()),
+    ['planning', 'activating', 'applying', 'restarting'].includes(this.phase()),
   );
   protected reviewExpired(): boolean {
     const plan = this.plan();
@@ -75,7 +76,8 @@ export class LiveGraduationComponent {
       this.resetCeremony();
     });
     effect(() => {
-      if (this.status.hasValue() && this.status.value().state === 'graduated') {
+      if (this.status.hasValue() && (this.status.value().state === 'graduated' ||
+        (this.restartTarget() === 'shadow' && this.phase() === 'restarting' && this.status.value().state === 'review_available'))) {
         this.resetCeremony();
       }
     });
@@ -88,6 +90,27 @@ export class LiveGraduationComponent {
     this.acknowledged.set(false);
     this.refusal.set(null);
     this.stopPolling();
+  }
+
+  protected activateShadow(): void {
+    if (this.busy() || !this.status.hasValue() || this.status.value().state !== 'activation_available') return;
+    const target = this.commandTarget();
+    this.phase.set('activating');
+    this.refusal.set(null);
+    this.restartTarget.set('shadow');
+    void this.service.activateShadow(target).then(
+      () => {
+        if (!this.isCurrent(target)) return;
+        this.phase.set('restarting');
+        this.beginPolling();
+      },
+      (error: unknown) => {
+        if (!this.isCurrent(target)) return;
+        this.refusal.set(refusalMessage(error));
+        this.phase.set('idle');
+        this.status.reload();
+      },
+    );
   }
 
   protected prepareReview(): void {
@@ -124,6 +147,7 @@ export class LiveGraduationComponent {
       return;
     }
     const target = this.commandTarget();
+    this.restartTarget.set('live');
     this.phase.set('applying');
     this.refusal.set(null);
     void this.service.apply(target, plan).then(

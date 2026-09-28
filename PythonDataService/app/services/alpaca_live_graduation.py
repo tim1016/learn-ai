@@ -55,6 +55,7 @@ from app.schemas.alpaca_live_graduation import (
     LiveGraduationStatus,
 )
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
+from app.services.alpaca_shadow_activation import inactive_shadow_status
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,9 @@ class AlpacaLiveGraduationService:
                 detail="No active authority can prove which account world this worker currently serves.",
                 next_action="Restore the clerk and refresh this page.",
             )
+        activation = inactive_shadow_status(account_id, runtime)
+        if activation is not None:
+            return activation
         if runtime.selected_account_authority_kind == "real_live":
             return LiveGraduationStatus(
                 account_id=self._served_account(runtime.selected_account_id, account_id),

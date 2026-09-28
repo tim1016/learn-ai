@@ -24741,6 +24741,7 @@
           },
           "state": {
             "enum": [
+              "activation_available",
               "review_available",
               "graduated",
               "blocked"
@@ -37957,6 +37958,44 @@
         "title": "SetHoldings",
         "type": "object"
       },
+      "ShadowActivationOutcome": {
+        "additionalProperties": false,
+        "description": "Durable isolated activation, returned before the supervised restart.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "activated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Activated At Ms",
+            "type": "integer"
+          },
+          "activation_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Activation Sha256",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "state": {
+            "const": "restart_scheduled",
+            "title": "State"
+          }
+        },
+        "required": [
+          "account_id",
+          "state",
+          "activation_sha256",
+          "activated_at_ms",
+          "message"
+        ],
+        "title": "ShadowActivationOutcome",
+        "type": "object"
+      },
       "SharpeCiResponse": {
         "description": "Lo (2002) confidence interval for the annualised Sharpe ratio.",
         "properties": {
@@ -43411,6 +43450,7 @@
           "RECONCILIATION_ATTEMPTED",
           "RUN_STARTED",
           "RUN_STOPPED",
+          "SIMULATION_SESSION_BASELINE",
           "STRATEGY_INSTANCE_REGISTERED",
           "STRATEGY_INSTANCE_RETIRED",
           "UNCERTAINTY_RAISED",
@@ -50679,6 +50719,66 @@
           }
         },
         "summary": "Prepare Live Graduation",
+        "tags": [
+          "alpaca-live-graduation"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/live-graduation/shadow-activation": {
+      "post": {
+        "operationId": "activate_shadow_authority_api_brokers_alpaca_accounts__account_id__live_graduation_shadow_activation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShadowActivationOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Shadow Authority",
         "tags": [
           "alpaca-live-graduation"
         ]
@@ -60953,6 +61053,98 @@
           }
         },
         "summary": "Fleet Live Graduation Plan",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/live-graduation/shadow-activation": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/live-graduation/shadow-activation (custody_command).",
+        "operationId": "fleet_shadow_activate_api_brokers__broker__clerks__clerk_id__accounts__account_id__live_graduation_shadow_activation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Shadow Activate",
         "tags": [
           "broker-clerks"
         ]

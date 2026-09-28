@@ -219,3 +219,21 @@ The observation carries an exact simulated fill and settled-fee cutoff so the
 budget projection counts effects once. New executions invalidate the observation
 before another commitment. Its session and mark-expiry facts are rechecked at
 commit; a fresh observation cannot extend a stale price or a prior-day baseline.
+
+### Shadow activation through Configuration — 2026-09-27 (#2546)
+
+A configured Live lane without Shadow custody offers **Activate Shadow and
+restart** on its existing Configuration authority rail. The command verifies
+the effective pinned account, fresh broker Live identity, positive initial
+reference capital, and the existing empty Clerk-order namespace proof. It
+shares the graduation mutation fence, rejects a changed binding or existing
+Live activation, and never accepts caller-authored account evidence or paths.
+The durable isolated activation and initial risk baseline precede the supervised
+restart. Nothing is deployed and no real order permission is created.
+
+A new empty Shadow database adopts budget authorization as part of that
+explicit action, preserving the activation receipt and configured owner as its
+proof. Existing run/order history requires the visible guarded budget upgrade;
+activation cannot convert historical grants into commitments. Configuration
+status and activation remain routable while execution is unavailable, with the
+account pin checked inside the lane. The activation CLI remains recovery-only.

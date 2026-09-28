@@ -299,3 +299,11 @@ fall back to real-account positions or `last_equity`. This supersedes the mixed
 Shadow envelope reading described in the historical table above. Validation:
 `tests/broker/alpaca/clerk/sqlite/test_simulated_account.py` and the composed
 Shadow/synthetic runtime tests; provenance: `references/alpaca-live-envelope.md`.
+
+Shadow activation's user entry point is the account Configuration authority
+rail. `services/alpaca_shadow_activation.py` orchestrates the existing isolated
+activation writer after fresh account/namespace evidence; the fleet operation
+uses configuration readiness and validates the exact pinned account locally.
+It captures the initial baseline and adopts budget authorization only for an
+empty account, then requests the existing supervised restart. It creates no
+run or real execution permission.
