@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
     SchemaVersionMismatch,
 )
+from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 
 ACCOUNT_ID = "PA-TEST"
 SID_A = "spy-bot"
@@ -64,7 +65,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_includes_the_durable_cash_reservations() -> None:
-    assert schema.SCHEMA_VERSION == 19
+    assert schema.SCHEMA_VERSION == 21
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -913,6 +914,7 @@ def test_v16_upgrade_adds_only_replaceable_recovery_freshness(tmp_path: Path) ->
     repository.close()
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
     with sqlite3.connect(db_path) as conn:
+        remove_budget_schema_for_legacy_fixture(conn)
         conn.execute("DROP TABLE exit_recovery_checks")
         conn.execute("UPDATE control_meta SET schema_version = 16 WHERE id = 1")
     migrated = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)

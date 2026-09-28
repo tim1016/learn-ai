@@ -21,6 +21,7 @@ from pathlib import Path
 from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 from tests.broker.alpaca.clerk.sqlite.test_folds_execution import (
     _repository_for_strategy,
     _simulated_aggregate,
@@ -323,6 +324,7 @@ def _rewind_to_v13(db_path: Path) -> None:
     """Make a real v14 file look like the v13 file a prior build left behind."""
     conn = sqlite3.connect(db_path)
     try:
+        remove_budget_schema_for_legacy_fixture(conn)
         conn.executescript(
             "DROP INDEX IF EXISTS ux_fills_execution_id;\n"
             "ALTER TABLE fills RENAME TO fills_v14;\n"

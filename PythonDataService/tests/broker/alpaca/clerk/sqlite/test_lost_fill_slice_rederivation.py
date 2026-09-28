@@ -46,6 +46,7 @@ from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
+from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     ACCOUNT_ID,
     WATCHDOG_RUN,
@@ -788,6 +789,7 @@ def test_v15_migration_adds_the_fill_indexes(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     conn = repo._conn
     try:
+        remove_budget_schema_for_legacy_fixture(conn)
         for index in sorted(_FILL_INDEXES):
             conn.execute(f"DROP INDEX {index}")
         conn.execute("UPDATE control_meta SET schema_version = 14 WHERE id = 1")

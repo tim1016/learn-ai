@@ -44,6 +44,7 @@ from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
+from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
@@ -1206,6 +1207,7 @@ def test_v16_migration_adds_the_unfoldable_order_indexes(tmp_path: Path) -> None
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     conn = repo._conn
     try:
+        remove_budget_schema_for_legacy_fixture(conn)
         for index in sorted(_UNFOLDABLE_INDEXES):
             conn.execute(f"DROP INDEX {index}")
         conn.execute("UPDATE control_meta SET schema_version = 15 WHERE id = 1")
@@ -1213,7 +1215,7 @@ def test_v16_migration_adds_the_unfoldable_order_indexes(tmp_path: Path) -> None
 
         schema.migrate_schema(conn, from_version=15)
 
-        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == 18
+        assert conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == schema.SCHEMA_VERSION
         names = {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
         }

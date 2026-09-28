@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -47,6 +48,17 @@ class _TestClock:
 def complete_fee_evidence(repo: ClerkSqliteRepository, activities: tuple[BrokerActivity, ...] = ()) -> None:
     """Explicit successful broker activity evidence, never a production fallback."""
     record_fee_evidence(repo, activities, checked_at_ms=repo.clock(), history_complete=True)
+
+
+def remove_budget_schema_for_legacy_fixture(conn: sqlite3.Connection) -> None:
+    """Restore the pre-budget shape before exercising an earlier migration."""
+    assert not conn.execute("SELECT 1 FROM deployment_budgets LIMIT 1").fetchone()
+    conn.execute("DROP TABLE deployment_budgets")
+    conn.execute("DROP TABLE account_risk_policy")
+    conn.execute("ALTER TABLE envelope_reservations DROP COLUMN exact_reference_price")
+    conn.execute("ALTER TABLE envelope_reservations DROP COLUMN fee_provision_cents")
+    conn.execute("DROP TRIGGER trg_budget_authority_monotonic")
+    conn.execute("ALTER TABLE control_meta DROP COLUMN authorization_version")
 
 
 def _clock_at(start_ms: int) -> _TestClock:
